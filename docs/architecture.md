@@ -44,11 +44,22 @@ appropriate (`LocalBusiness` on `/`, `Service` on the service page,
    the site.
 2. **build** — `astro build`; fails on type or build errors.
 3. **test** — Playwright runs against the built site served by
-   `astro preview` (never the dev server), at desktop (1280×800) and mobile
-   (390×844) viewports. It asserts 2xx/404 statuses, exactly one `<h1>` per
-   page, correct titles, CTA visibility, working navigation and internal
-   links, Article JSON-LD, and zero page/console errors. Full-page
-   screenshots are written to `sites/starter/qa-artifacts/`.
+   `astro preview` in the foreground with Playwright-owned process lifetime
+   (`ASTRO_PREVIEW_BACKGROUND=0`, `reuseExistingServer: false`, and configurable
+   `FACTORY_QA_PORT`), across desktop (1280×800) and mobile (390×844) viewports.
+   It independently asserts:
+   - 200 OK / 404 HTTP response status across all routes;
+   - zero console errors or unhandled page errors (including on 404);
+   - exact per-page `<title>`, meta `description`, and Open Graph tags;
+   - exactly one canonical `<link>` matching configured origin and path;
+   - exactly one semantic `<h1>` per page with expected text;
+   - parseable JSON-LD structured data (`LocalBusiness` on `/`, `Service` on
+     `/services/example`, `Article` on `/blog/example`) with verified schema
+     types and canonical identity URLs;
+   - local responsive images (`astro:assets` generated WebP, non-empty `alt`,
+     explicit `width`/`height`, `srcset`, `sizes`, and eager/lazy loading);
+   - working internal links, CTA buttons, and navigation;
+   - full-page screenshots written to `sites/starter/qa-artifacts/`.
 
 ## Next vertical slice (PR #2)
 

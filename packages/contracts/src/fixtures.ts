@@ -6,9 +6,9 @@ export const exampleSiteTask: SiteTask = {
   siteId: "demo",
   page: {
     type: "service",
-    slug: "/roof-repair",
+    slug: "/services/roof-repair",
     title: "Roof Repair",
-    description: "Professional roof repair services",
+    description: "Professional roof repair and replacement services in Boulder, Colorado.",
     sections: ["hero", "benefits", "faq", "cta"],
   },
 };

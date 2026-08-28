@@ -11,8 +11,8 @@ playwright-report/
 qa-artifacts/
 
 # environment
-.env
-.env.production
+.env*
+!.env.example
 
 # logs
 *.log

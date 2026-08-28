@@ -1,0 +1,42 @@
+---
+import "../styles/global.css";
+import Header from "../components/Header.astro";
+import Footer from "../components/Footer.astro";
+
+interface Props {
+  /** Page title without the site-name suffix. */
+  title: string;
+  description: string;
+  /** Optional JSON-LD object, rendered as application/ld+json. */
+  jsonLd?: Record<string, unknown>;
+}
+
+const { title, description, jsonLd } = Astro.props;
+
+const siteName = "Summit Roofing Co.";
+const fullTitle = `${title} | ${siteName}`;
+const canonicalUrl = new URL(Astro.url.pathname, Astro.site ?? Astro.url.origin);
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonicalUrl.href} />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonicalUrl.href} />
+    {jsonLd && <script type="application/ld+json" is:inline set:html={JSON.stringify(jsonLd)} />}
+  </head>
+  <body class="flex min-h-screen flex-col bg-white text-slate-800 antialiased">
+    <Header siteName={siteName} />
+    <main class="flex-1">
+      <slot />
+    </main>
+    <Footer siteName={siteName} />
+  </body>
+</html>

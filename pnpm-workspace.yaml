@@ -1,0 +1,9 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "sites/*"
+allowBuilds:
+  # esbuild's postinstall verifies its platform binary (used by tsx/vite).
+  esbuild: true
+minimumReleaseAgeExclude:
+  - astro@7.2.9

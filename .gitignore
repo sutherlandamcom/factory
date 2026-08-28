@@ -1,0 +1,21 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+.astro/
+
+# QA artifacts (regenerated on every test run)
+test-results/
+playwright-report/
+qa-artifacts/
+
+# environment
+.env
+.env.production
+
+# logs
+*.log
+
+# Factory runtime evidence (runs, patches, logs)
+.factory/

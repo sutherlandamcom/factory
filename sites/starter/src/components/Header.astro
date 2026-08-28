@@ -1,0 +1,32 @@
+---
+interface Props {
+  siteName: string;
+}
+
+const { siteName } = Astro.props;
+
+const navItems = [
+  { label: "Home", href: "/" },
+  { label: "Services", href: "/services/example" },
+  { label: "Blog", href: "/blog/example" },
+];
+---
+
+<header class="border-b border-slate-200 bg-white">
+  <div class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-4 px-4 py-4">
+    <a href="/" class="text-lg font-bold text-slate-900">{siteName}</a>
+    <nav aria-label="Main navigation">
+      <ul class="flex gap-6 text-sm font-medium">
+        {
+          navItems.map((item) => (
+            <li>
+              <a href={item.href} class="text-slate-600 hover:text-slate-900">
+                {item.label}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </nav>
+  </div>
+</header>

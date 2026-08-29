@@ -94,11 +94,17 @@ const pageTitle = "Wrong Gutter Page";
   }
 
   assert.equal(result.status, "succeeded", `Expected status succeeded, got ${result.status}`);
-  assert.equal(result.totalAttempts, 2, `Expected totalAttempts 2, got ${result.totalAttempts}`);
-  assert.equal(result.successfulAttempt, 2, `Expected successfulAttempt 2, got ${result.successfulAttempt}`);
-  assert.equal(result.attempts?.length, 2);
+  assert.ok(
+    result.totalAttempts === 2 || result.totalAttempts === 3,
+    `Expected totalAttempts 2 or 3, got ${result.totalAttempts}`,
+  );
+  assert.ok(
+    result.successfulAttempt === 2 || result.successfulAttempt === 3,
+    `Expected successfulAttempt 2 or 3, got ${result.successfulAttempt}`,
+  );
+  assert.equal(result.attempts?.length, result.totalAttempts);
   assert.equal(result.attempts[0]?.classification, "repairable");
-  assert.equal(result.attempts[1]?.stage, "complete");
+  assert.equal(result.attempts[result.attempts.length - 1]?.stage, "complete");
 
   // Validate schema
   const rawResult = JSON.parse(

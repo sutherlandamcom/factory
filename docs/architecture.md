@@ -1,6 +1,6 @@
 # Factory architecture
 
-## What exists today (PR #3)
+## What exists today (execution trust hardening)
 
 Factory is a pnpm monorepo with three packages:
 
@@ -23,7 +23,7 @@ slashes).
 
 `TaskResult` is the structured run outcome:
 - `status`: `"succeeded" | "failed" | "needs_review"`
-- `finalStage`: `"validation" | "preflight" | "worktree" | "dependencies" | "codex" | "scope" | "qa" | "verify" | "complete"`
+- `finalStage`: `"validation" | "preflight" | "isolation" | "worktree" | "dependencies" | "codex" | "scope" | "integrity" | "qa" | "verify" | "complete"`
 - `baseCommit`: Git commit SHA of the base
 - `totalAttempts`: number of Codex execution attempts executed (max 3)
 - `successfulAttempt`: attempt number that succeeded (nullable)

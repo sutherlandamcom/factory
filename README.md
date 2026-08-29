@@ -3,7 +3,7 @@
 Factory is an autonomous system for creating, publishing, and operating
 SEO/content websites. This repository currently contains:
 
-**structured SiteTask → isolated Codex execution → Astro website change → static/type checks → build → Playwright QA → task verification → structured TaskResult**
+**structured SiteTask → isolated Codex execution → Astro website change → mechanical scope check → Factory QA → task verification → [bounded repair loop: up to 3 attempts] → structured TaskResult**
 
 See `docs/architecture.md` for the design.
 
@@ -48,7 +48,7 @@ All commands run from the repository root.
 | `pnpm test` | Factory unit tests (deterministic, no Codex calls) + Playwright QA against the **built** site |
 | `pnpm qa` | `check` → `build` → `test` in one command |
 | `pnpm factory` | Run the Factory control-plane CLI |
-| `pnpm factory site-task <task.json>` | Execute one SiteTask end to end (requires Codex auth) |
+| `pnpm factory site-task <task.json>` | Execute one SiteTask end to end with bounded automatic repair (requires Codex auth) |
 
 ## Running a site-task
 
@@ -58,21 +58,33 @@ pnpm factory site-task packages/contracts/fixtures/create-roof-repair.json
 
 The executor validates the task (Zod schema in `@factory/contracts`),
 verifies the working tree is clean, creates a detached git worktree at the
-current HEAD, installs dependencies **offline** from the pnpm store, runs the
-Codex CLI (`codex exec`) constrained to a workspace-write sandbox with
-network and web search disabled, mechanically rejects any change outside
-`sites/starter/src/`, runs the full `pnpm qa` pipeline itself in the
-worktree, verifies the built page exists and contains the task title, and
-writes a structured `TaskResult`. Exit code is 0 only on complete success.
+current HEAD, installs dependencies **offline** from the pnpm store, and runs a
+bounded execution & repair loop (max 3 total attempts):
 
-Run artifacts land in `.factory/runs/<runId>/` (gitignored): the task, base
-commit, raw Codex JSONL/stderr, the staged change list, `diff.patch`, QA
-stdout/stderr and screenshots, the verification result, and
-`task-result.json`. Temporary worktrees under `.factory/worktrees/` are
-always removed, on success and failure alike.
+1. **Attempt 1 (Initial)**: Runs Codex CLI (`codex exec`) in a sandbox (`-s workspace-write`, network & web search disabled).
+2. **Scope validation**: Mechanically verifies modified files remain inside `sites/starter/src/**`. Any out-of-scope modification fails immediately with `scope_violation` (never retried).
+3. **Factory QA Oracle**: Factory independently runs the authoritative QA suite (`pnpm check` → `pnpm build` → Playwright) outside the Codex sandbox.
+4. **Task verification**: Verifies the built page exists, contains the SiteTask title, and has a correct canonical link.
+5. **Automatic Repair Loop**: If QA or task verification fails with a repairable defect, Factory generates a structured `FailureReport` with bounded diagnostic excerpts (max 8 KB) and launches Attempt 2 (and Attempt 3 if needed) continuing from the failed workspace state.
+6. **Outcomes**:
+   - `succeeded`: Full verification passes on attempt 1, 2, or 3.
+   - `failed`: Non-repairable execution/input/security defect (invalid task, dirty baseline, scope violation, timeouts, codex process exit).
+   - `needs_review`: Bounded attempts exhausted (3 failed repair attempts) or no source progress made on repair.
+
+Run artifacts land in `.factory/runs/<runId>/` (gitignored):
+- `task.json`, `base-commit.txt`, `task-result.json`, `diff.patch`, `changed-files.txt`
+- `attempts/<attemptNumber>/`:
+  - `codex-output.jsonl`, `codex-stderr.txt`, `codex-version.txt`
+  - `changed-files.txt`, `diff.patch`
+  - `qa-stdout.txt`, `qa-stderr.txt`
+  - `task-verification.json`
+  - `failure-report.json` (when failing repairably)
+  - `attempt-result.json`
+
+Temporary worktrees under `.factory/worktrees/` are always removed at the end of the run.
 
 Timeouts are bounded and env-configurable: `FACTORY_DEPS_TIMEOUT_MS` (5 min),
-`FACTORY_CODEX_TIMEOUT_MS` (20 min), `FACTORY_QA_TIMEOUT_MS` (15 min).
+`FACTORY_CODEX_TIMEOUT_MS` (20 min), `FACTORY_QA_TIMEOUT_MS` (15 min), `FACTORY_MAX_ATTEMPTS` (default: 3).
 
 ## QA artifacts
 

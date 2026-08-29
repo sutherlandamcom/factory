@@ -12,9 +12,12 @@ interface TaskQaSpec {
 }
 
 const specPath = process.env.FACTORY_TASK_QA_SPEC;
-const spec = specPath
-  ? (JSON.parse(readFileSync(specPath, "utf8")) as TaskQaSpec)
+const parsedSpecs = specPath
+  ? (JSON.parse(readFileSync(specPath, "utf8")) as TaskQaSpec | TaskQaSpec[])
   : undefined;
+const specs: Array<TaskQaSpec | undefined> = parsedSpecs
+  ? Array.isArray(parsedSpecs) ? parsedSpecs : [parsedSpecs]
+  : [undefined];
 
 function watchForErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -29,10 +32,11 @@ function normalize(value: string | null): string {
   return (value ?? "").replace(/\s+/g, " ").trim();
 }
 
-test.describe("Factory task-aware generated page QA", () => {
+for (const configuredSpec of specs) {
+test.describe(`Factory task-aware generated page QA ${configuredSpec?.route ?? "disabled"}`, () => {
   test("requested route satisfies the generated-page policy", async ({ page }, testInfo) => {
-    test.skip(!spec, "Only enabled by Factory with a validated task QA specification");
-    const task = spec!;
+    test.skip(!configuredSpec, "Only enabled by Factory with a validated task QA specification");
+    const task = configuredSpec!;
     const errors = watchForErrors(page);
 
     await test.step(`response ${task.route}`, async () => {
@@ -170,8 +174,9 @@ test.describe("Factory task-aware generated page QA", () => {
     });
 
     await page.screenshot({
-      path: `qa-artifacts/task-page-${testInfo.project.name}.png`,
+      path: `qa-artifacts/task-page-${task.route.replace(/[^a-z0-9]+/gi, "-")}-${testInfo.project.name}.png`,
       fullPage: true,
     });
   });
 });
+}

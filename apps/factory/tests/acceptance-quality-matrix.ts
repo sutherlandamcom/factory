@@ -92,32 +92,37 @@ async function main() {
     });
     assert.equal(install.exitCode, 0, install.stderr);
 
-    const pagePath = path.join(worktree, "sites/starter/src/pages/services/quality-matrix.astro");
-    await mkdir(path.dirname(pagePath), { recursive: true });
-
+    const specs = [];
     for (const [index, scenario] of scenarios.entries()) {
+      const slug = `/services/quality-matrix-${index + 1}`;
+      const pagePath = path.join(worktree, `sites/starter/src/pages${slug}.astro`);
+      await mkdir(path.dirname(pagePath), { recursive: true });
       await writeFile(pagePath, scenario.mutate(validPage()), "utf8");
       const scenarioTask = scenario.sections
-        ? { ...task, page: { ...task.page, sections: scenario.sections } }
-        : task;
-      const specPath = path.join(tempDir, `${index + 1}.json`);
-      await writeFile(specPath, JSON.stringify(createTaskQaSpec(scenarioTask), null, 2), "utf8");
-      const result = await runProcess(
-        "pnpm",
-        ["--filter", "@factory/site-starter", "exec", "playwright", "test", "tests/task-page.qa.spec.ts"],
-        {
-          cwd: worktree,
-          env: buildChildEnv(process.env, {
-            CI: "1",
-            PUBLIC_SITE_URL: "https://test.example.com",
-            FACTORY_TASK_QA_SPEC: specPath,
-            FACTORY_QA_PORT: String(4400 + index),
-          }),
-          timeoutMs: 180_000,
-        },
-      );
-      assert.notEqual(result.exitCode, 0, `${scenario.defect} unexpectedly passed dynamic QA`);
-      const output = `${result.stdout}\n${result.stderr}`;
+        ? { ...task, page: { ...task.page, slug, sections: scenario.sections } }
+        : { ...task, page: { ...task.page, slug } };
+      specs.push(createTaskQaSpec(scenarioTask));
+    }
+
+    const specPath = path.join(tempDir, "quality-matrix.json");
+    await writeFile(specPath, JSON.stringify(specs, null, 2), "utf8");
+    const result = await runProcess(
+      "pnpm",
+      ["--filter", "@factory/site-starter", "exec", "playwright", "test", "tests/task-page.qa.spec.ts"],
+      {
+        cwd: worktree,
+        env: buildChildEnv(process.env, {
+          CI: "1",
+          PUBLIC_SITE_URL: "https://test.example.com",
+          FACTORY_TASK_QA_SPEC: specPath,
+          FACTORY_QA_PORT: "4490",
+        }),
+        timeoutMs: 300_000,
+      },
+    );
+    assert.notEqual(result.exitCode, 0, "defect matrix unexpectedly passed dynamic QA");
+    const output = `${result.stdout}\n${result.stderr}`;
+    for (const scenario of scenarios) {
       assert.match(output, new RegExp(scenario.gate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `${scenario.defect} did not report ${scenario.gate}`);
       results.push({ defect: scenario.defect, oldResult: "FALSE PASS", newResult: "FAIL", gate: scenario.gate });
     }

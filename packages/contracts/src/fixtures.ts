@@ -1,7 +1,11 @@
-import type { SiteTask } from "./site-task.js";
+import { siteTaskSchema, type SiteTask } from "./site-task.js";
 
-/** Example SiteTask: a service page for a fictional local-service business. */
-export const exampleSiteTask: SiteTask = {
+/**
+ * Example SiteTask: a service page for a fictional local-service business.
+ * Kept in sync with the canonical JSON fixture at
+ * `packages/contracts/fixtures/create-roof-repair.json`.
+ */
+export const exampleSiteTask: SiteTask = siteTaskSchema.parse({
   type: "create_page",
   siteId: "demo",
   page: {
@@ -11,4 +15,4 @@ export const exampleSiteTask: SiteTask = {
     description: "Professional roof repair and replacement services in Boulder, Colorado.",
     sections: ["hero", "benefits", "faq", "cta"],
   },
-};
+});

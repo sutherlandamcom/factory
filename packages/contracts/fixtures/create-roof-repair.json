@@ -1,0 +1,11 @@
+{
+  "type": "create_page",
+  "siteId": "demo",
+  "page": {
+    "type": "service",
+    "slug": "/services/roof-repair",
+    "title": "Roof Repair",
+    "description": "Professional roof repair services",
+    "sections": ["hero", "benefits", "faq", "cta"]
+  }
+}

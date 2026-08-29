@@ -1,93 +1,159 @@
+import { z } from "zod";
+
 /**
  * SiteTask — the machine-readable unit of work the Factory control plane
  * hands to an executor. v0 supports exactly one task type: create_page.
  *
- * PR #1 defines plain TypeScript types. External JSON inputs at the PR #2
- * trust boundary must be strictly validated before execution according to the
- * validation rules documented below.
+ * Schemas are the source of truth; TypeScript types are derived from them so
+ * runtime validation and static types can never drift apart.
  */
 
-/**
- * Valid page types supported by the starter site template.
- *
- * Page type semantics:
- * - "homepage": Root landing page. Must map to slug "/". Generates LocalBusiness JSON-LD.
- * - "service": Commercial service page. Slug must start with "/services/" or be a rooted single-level path (e.g. "/services/roof-repair"). Generates Service JSON-LD.
- * - "article": Informational article. Slug must start with "/blog/" (e.g. "/blog/signs-of-roof-damage"). Generates Article JSON-LD.
- */
-export type PageType = "homepage" | "service" | "article";
+export const MAX_TASK_PAYLOAD_BYTES = 64 * 1024; // 64 KB
 
-/**
- * Finite section vocabulary supported by the starter template component library.
- * Sections are rendered in the exact array sequence specified.
- * Duplicate section identifiers are forbidden within a single page definition.
- */
-export type SectionType =
-  | "hero"
-  | "feature_cards"
-  | "content_section"
-  | "benefits"
-  | "faq"
-  | "cta";
+export const pageTypeSchema = z.enum(["homepage", "service", "article"]);
+
+export const sectionTypeSchema = z.enum([
+  "hero",
+  "feature_cards",
+  "content_section",
+  "benefits",
+  "faq",
+  "cta",
+]);
 
 /**
  * Logical identifier for the target site configuration.
- *
- * VALIDATION CONTRACT for siteId:
- * - Must be an allowlisted logical string identifier (e.g. "demo", "summit-roofing").
- * - Must NEVER be a filesystem path (no "/", "\\", ".", "..").
- * - Allowed format: lowercase alphanumeric words separated by single hyphens: `^[a-z0-9]+(?:-[a-z0-9]+)*$` (length: 1-64 chars).
+ * Must be lowercase alphanumeric words separated by single hyphens.
+ * No path traversal, slashes, backslashes, dots, or spaces.
  */
-export type SiteId = string;
+export const siteIdSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, {
+    message:
+      'siteId must be lowercase alphanumeric words separated by single hyphens (e.g. "demo", "summit-roofing")',
+  });
 
 /**
- * Normalized origin-relative URL path.
- *
- * VALIDATION CONTRACT for slug:
- * - Must be a rooted, normalized origin-relative URL path starting with a single "/".
- * - Must NOT contain a scheme (http://, https://), host, port, query string (?foo), fragment (#bar), or backslash (\).
- * - Must NOT contain path traversal segments (/../ or /./) or consecutive slashes (//).
- * - For page.type === "homepage", slug MUST be "/".
- * - For page.type === "service", slug MUST be under "/services/" (e.g. "/services/roof-repair").
- * - For page.type === "article", slug MUST be under "/blog/" (e.g. "/blog/roof-care").
- * - Allowed format: lowercase alphanumeric segments separated by single hyphens and slashes: `^/(?:[a-z0-9]+(?:-[a-z0-9]+)*(?:/[a-z0-9]+(?:-[a-z0-9]+)*)*)?$`
+ * Conservative slug rule:
+ * - Rooted normalized lowercase path starting with "/".
+ * - Exactly "/" or lowercase alphanumerics separated by single "/" or "-".
+ * - Rules out scheme, host, query ("?"), fragment ("#"), backslashes ("\\"),
+ *   traversal ("..", "."), consecutive slashes ("//"), and trailing slashes.
  */
-export type Slug = string;
+export const slugSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^\/(?:|[a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)*)$/, {
+    message:
+      'slug must be a rooted lowercase path like "/" or "/services/roof-repair" (only [a-z0-9], single "/" or "-" separators)',
+  });
 
-export interface SitePage {
-  /** Page type determining layout, route conventions, and structured data. */
-  type: PageType;
+export const sitePageSchema = z
+  .object({
+    type: pageTypeSchema,
+    /** Absolute URL path, e.g. "/services/roof-repair" or "/". */
+    slug: slugSchema,
+    /** Primary title of the page (1-200 chars). */
+    title: z.string().trim().min(1, "title cannot be empty").max(200, "title cannot exceed 200 characters"),
+    /** Meta description for the page (1-500 chars). */
+    description: z
+      .string()
+      .trim()
+      .min(1, "description cannot be empty")
+      .max(500, "description cannot exceed 500 characters"),
+    /** Ordered list of unique section identifiers the page is composed of (1-20 sections). */
+    sections: z
+      .array(sectionTypeSchema)
+      .min(1, "at least one section is required")
+      .max(20, "maximum 20 sections allowed"),
+  })
+  .strict()
+  .superRefine((data, ctx) => {
+    // 1. Enforce unique sections (no duplicates)
+    const seen = new Set<string>();
+    for (let i = 0; i < data.sections.length; i++) {
+      const section = data.sections[i]!;
+      if (seen.has(section)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `duplicate section "${section}" is forbidden`,
+          path: ["sections", i],
+        });
+      }
+      seen.add(section);
+    }
 
-  /** Normalized origin-relative URL path (e.g. "/" or "/services/roof-repair"). */
-  slug: Slug;
+    // 2. Coherent page-type / slug relationships
+    if (data.type === "homepage") {
+      if (data.slug !== "/") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `homepage slug must be exactly "/" (got "${data.slug}")`,
+          path: ["slug"],
+        });
+      }
+    } else if (data.type === "service") {
+      if (!data.slug.startsWith("/services/") || data.slug === "/services/") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `service page slug must start with "/services/<name>" (got "${data.slug}")`,
+          path: ["slug"],
+        });
+      }
+    } else if (data.type === "article") {
+      if (!data.slug.startsWith("/blog/") || data.slug === "/blog/") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `article page slug must start with "/blog/<name>" (got "${data.slug}")`,
+          path: ["slug"],
+        });
+      }
+    }
+  });
 
-  /**
-   * Primary title of the page.
-   * - Drives the single `<h1>` on the page.
-   * - Used as the base HTML `<title>` (formatted as `${title} | ${siteName}`).
-   * - Non-empty string, maximum 200 characters.
-   */
-  title: string;
+export const createPageTaskSchema = z
+  .object({
+    type: z.literal("create_page"),
+    siteId: siteIdSchema,
+    page: sitePageSchema,
+  })
+  .strict();
 
-  /**
-   * Meta description for search engines and social cards (OG description).
-   * - Non-empty string, maximum 500 characters.
-   */
-  description: string;
+export const siteTaskSchema = createPageTaskSchema;
 
-  /**
-   * Ordered, unique list of section identifiers composing the page body.
-   * - Rendered in the specified sequence.
-   * - Must contain at least one section.
-   * - Duplicate section identifiers are forbidden.
-   */
-  sections: readonly SectionType[];
+export type PageType = z.infer<typeof pageTypeSchema>;
+export type SectionType = z.infer<typeof sectionTypeSchema>;
+export type SiteId = z.infer<typeof siteIdSchema>;
+export type Slug = z.infer<typeof slugSchema>;
+export type SitePage = z.infer<typeof sitePageSchema>;
+export type CreatePageTask = z.infer<typeof createPageTaskSchema>;
+export type SiteTask = z.infer<typeof siteTaskSchema>;
+
+/** Parse unknown JSON or object into a SiteTask; throws ZodError or Error on invalid input. */
+export function parseSiteTask(input: unknown): SiteTask {
+  if (input === null || input === undefined) {
+    throw new Error("SiteTask input cannot be null or undefined");
+  }
+
+  let rawJson: string;
+  let parsedObj: unknown;
+
+  if (typeof input === "string") {
+    if (input.length > MAX_TASK_PAYLOAD_BYTES) {
+      throw new Error(`SiteTask payload size (${input.length} bytes) exceeds maximum allowed ${MAX_TASK_PAYLOAD_BYTES} bytes`);
+    }
+    rawJson = input;
+    parsedObj = JSON.parse(input);
+  } else {
+    rawJson = JSON.stringify(input);
+    if (rawJson.length > MAX_TASK_PAYLOAD_BYTES) {
+      throw new Error(`SiteTask payload size (${rawJson.length} bytes) exceeds maximum allowed ${MAX_TASK_PAYLOAD_BYTES} bytes`);
+    }
+    parsedObj = input;
+  }
+
+  return siteTaskSchema.parse(parsedObj);
 }
-
-export interface CreatePageTask {
-  type: "create_page";
-  siteId: SiteId;
-  page: SitePage;
-}
-
-export type SiteTask = CreatePageTask;

@@ -21,6 +21,7 @@ export type {
 export {
   attemptKindSchema,
   attemptResultSchema,
+  attemptIntegrityOutcomeSchema,
   attemptScopeOutcomeSchema,
   changeSetSchema,
   codexOutcomeSchema,
@@ -35,6 +36,7 @@ export {
 export type {
   AttemptKind,
   AttemptResult,
+  AttemptIntegrityOutcome,
   AttemptScopeOutcome,
   ChangeSet,
   CodexOutcome,

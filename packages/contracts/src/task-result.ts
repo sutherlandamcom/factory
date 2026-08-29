@@ -23,8 +23,10 @@ export const taskStageSchema = z.enum([
   "preflight",
   "worktree",
   "dependencies",
+  "isolation",
   "codex",
   "scope",
+  "integrity",
   "qa",
   "verify",
   "complete",
@@ -41,6 +43,11 @@ export const qaOutcomeSchema = z.object({
   passed: z.boolean(),
   exitCode: z.number().int().nullable(),
   timedOut: z.boolean(),
+  foundationPassed: z.boolean().optional(),
+  dynamicPassed: z.boolean().optional(),
+  failureGate: z.enum(["foundation", "dynamic"]).optional(),
+  foundationArtifact: z.string().optional(),
+  dynamicArtifact: z.string().optional(),
 });
 
 export const taskVerificationSchema = z.object({
@@ -65,6 +72,13 @@ export const attemptScopeOutcomeSchema = z.object({
   violations: z.array(z.string()),
 });
 
+export const attemptIntegrityOutcomeSchema = z.object({
+  passed: z.boolean(),
+  violations: z.array(z.string()),
+  baselineArtifact: z.string(),
+  currentArtifact: z.string(),
+});
+
 export const attemptResultSchema = z.object({
   attemptNumber: z.number().int().positive(),
   kind: attemptKindSchema,
@@ -74,6 +88,7 @@ export const attemptResultSchema = z.object({
   durationMs: z.number().int().nonnegative(),
   codex: codexOutcomeSchema.optional(),
   scope: attemptScopeOutcomeSchema.optional(),
+  integrity: attemptIntegrityOutcomeSchema.optional(),
   qa: qaOutcomeSchema.optional(),
   taskVerification: taskVerificationSchema.optional(),
   changes: changeSetSchema.optional(),
@@ -119,5 +134,6 @@ export type TaskVerification = z.infer<typeof taskVerificationSchema>;
 export type ChangeSet = z.infer<typeof changeSetSchema>;
 export type TaskError = z.infer<typeof taskErrorSchema>;
 export type AttemptScopeOutcome = z.infer<typeof attemptScopeOutcomeSchema>;
+export type AttemptIntegrityOutcome = z.infer<typeof attemptIntegrityOutcomeSchema>;
 export type AttemptResult = z.infer<typeof attemptResultSchema>;
 export type TaskResult = z.infer<typeof taskResultSchema>;

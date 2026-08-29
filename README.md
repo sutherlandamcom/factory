@@ -3,7 +3,7 @@
 Factory is an autonomous system for creating, publishing, and operating
 SEO/content websites. This repository currently contains:
 
-**structured SiteTask → isolated Codex execution → Astro website change → mechanical scope check → Factory QA → task verification → [bounded repair loop: up to 3 attempts] → structured TaskResult**
+**structured SiteTask → strong-isolation gate → isolated Codex execution → exact-target scope/integrity checks → Foundation QA → dynamic task-page QA → semantic verification → bounded repair → structured TaskResult**
 
 See `docs/architecture.md` for the design.
 
@@ -11,9 +11,9 @@ See `docs/architecture.md` for the design.
 
 - Node.js >=22.12.0
 - pnpm 11 (`corepack enable` if needed)
-- Codex CLI (`@openai/codex`, pinned as a root devDependency) plus valid Codex
-  auth in `~/.codex/` (`codex login`) — required only for real site-task runs,
-  not for tests or QA.
+- Codex CLI (`@openai/codex`, pinned as a root devDependency). Real site-task
+  execution is currently fail-closed because this host has no approved OCI
+  isolation backend; tests and QA do not require Codex auth.
 
 ## Install
 
@@ -56,19 +56,24 @@ All commands run from the repository root.
 pnpm factory site-task packages/contracts/fixtures/create-roof-repair.json
 ```
 
-The executor validates the task (Zod schema in `@factory/contracts`),
-verifies the working tree is clean, creates a detached git worktree at the
-current HEAD, installs dependencies **offline** from the pnpm store, and runs a
-bounded execution & repair loop (max 3 total attempts):
+The executor validates the task and verifies the working tree is clean. Before
+creating a worker it requires a strong outer isolation backend. The current
+host has no supported Docker/Podman/Lima-compatible runtime, so the CLI returns
+`strong_execution_isolation_unavailable` with the explicit blocker
+`STRONG_EXECUTION_ISOLATION_UNAVAILABLE`; it never falls back to host-readable
+`workspace-write` execution.
 
-1. **Attempt 1 (Initial)**: Runs Codex CLI (`codex exec`) in a sandbox (`-s workspace-write`, network & web search disabled).
-2. **Scope validation**: Mechanically verifies modified files remain inside `sites/starter/src/**`. Any out-of-scope modification fails immediately with `scope_violation` (never retried).
-3. **Factory QA Oracle**: Factory independently runs the authoritative QA suite (`pnpm check` → `pnpm build` → Playwright) outside the Codex sandbox.
-4. **Task verification**: Verifies the built page exists, contains the SiteTask title, and has a correct canonical link.
-5. **Automatic Repair Loop**: If QA or task verification fails with a repairable defect, Factory generates a structured `FailureReport` with bounded diagnostic excerpts (max 8 KB) and launches Attempt 2 (and Attempt 3 if needed) continuing from the failed workspace state.
-6. **Outcomes**:
+With an approved backend, the bounded loop remains specified as follows:
+
+1. **Attempt 1 (Initial)**: Runs Codex only inside the approved outer isolation boundary; the inner Codex sandbox must retain disabled tool network and web search.
+2. **Exact scope validation**: Derives one page path from the validated slug and evaluates NUL-delimited Git delete/add evidence, modes, and filesystem types. Renames, symlinks, executables, gitlinks, and unrelated pages fail terminally.
+3. **Ignored-input integrity**: Compares content-hashed ignored/build-input state around Codex, including `.env*`, `.astro`, and `node_modules`. Mutations fail terminally before QA.
+4. **Factory QA Oracle**: Runs unchanged Foundation `pnpm qa`, then Factory-owned dynamic Playwright QA for the requested route on desktop and mobile.
+5. **Task verification**: Parses fresh built HTML and checks exact semantic title, H1, description, canonical origin/path, and route existence.
+6. **Automatic Repair Loop**: Dynamic/static quality failures produce a bounded `FailureReport` and can retry; security failures never retry.
+7. **Outcomes**:
    - `succeeded`: Full verification passes on attempt 1, 2, or 3.
-   - `failed`: Non-repairable execution/input/security defect (invalid task, dirty baseline, scope violation, timeouts, codex process exit).
+  - `failed`: Non-repairable execution/input/security defect (including unavailable isolation, scope/type violation, ignored-input mutation, timeout, or Codex exit).
    - `needs_review`: Bounded attempts exhausted (3 failed repair attempts) or no source progress made on repair.
 
 Run artifacts land in `.factory/runs/<runId>/` (gitignored):
@@ -76,7 +81,8 @@ Run artifacts land in `.factory/runs/<runId>/` (gitignored):
 - `attempts/<attemptNumber>/`:
   - `codex-output.jsonl`, `codex-stderr.txt`, `codex-version.txt`
   - `changed-files.txt`, `diff.patch`
-  - `qa-stdout.txt`, `qa-stderr.txt`
+  - `git-evidence.raw.z`, `integrity-baseline.json`, `integrity-current.json`
+  - `foundation-qa-*.txt`, `dynamic-qa-*.txt`, `task-qa-spec.json`, aggregate `qa-*.txt`
   - `task-verification.json`
   - `failure-report.json` (when failing repairably)
   - `attempt-result.json`

@@ -89,11 +89,14 @@ export function classifyFailure(
     errorCode === "worktree_failed" ||
     errorCode === "dependency_prepare_failed" ||
     errorCode === "dependency_prepare_timeout" ||
+    errorCode === "strong_execution_isolation_unavailable" ||
     errorCode === "codex_environment_failed" ||
     errorCode === "codex_failed" ||
     errorCode === "codex_timeout" ||
     errorCode === "qa_timeout" ||
     errorCode === "cleanup_failed" ||
+    errorCode === "integrity_violation" ||
+    errorCode === "git_evidence_invalid" ||
     errorCode === "internal_error"
   ) {
     return "non_repairable";
@@ -121,6 +124,7 @@ export function buildFailureReport(params: {
   stderr?: string;
   targetSlug: string;
   changedFiles?: string[];
+  authorizedScope?: string;
 }): FailureReport {
   const combinedLog = `${params.stdout ?? ""}\n${params.stderr ?? ""}`.trim();
   const excerpt = combinedLog.length > 0 ? sanitizeExcerpt(combinedLog) : params.message;
@@ -136,6 +140,6 @@ export function buildFailureReport(params: {
     failingAssertions: failingAssertions.length > 0 ? failingAssertions : undefined,
     targetSlug: params.targetSlug,
     changedFiles: params.changedFiles,
-    authorizedScope: "sites/starter/src/**",
+    authorizedScope: params.authorizedScope,
   };
 }

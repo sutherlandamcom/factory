@@ -145,8 +145,9 @@ test("QA failure with maxAttempts=1 fails with needs_review", async () => {
     runId: "qa-fail",
     maxAttempts: 1,
     codexRunner: mockCodex(async (req) => {
+      await mkdir(path.join(req.worktreePath, "sites", "starter", "src", "pages", "services"), { recursive: true });
       await writeFile(
-        path.join(req.worktreePath, "sites", "starter", "src", "pages", "ok.astro"),
+        path.join(req.worktreePath, "sites", "starter", "src", "pages", "services", "roof-repair.astro"),
         "<h1>ok</h1>\n",
       );
     }),
@@ -208,7 +209,7 @@ test("invalid task input fails validation without touching git", async () => {
   assert.equal(gitIn(repo, ["status", "--porcelain"]), "");
 });
 
-test("missing codex binary fails closed with codex_environment_failed", async () => {
+test("default real Codex runner fails closed without strong isolation", async () => {
   const repo = await makeTempRepo();
   const { createCodexRunner } = await import("../src/executor/codex.js");
   const runner = createCodexRunner({ codexPath: "/nonexistent/codex" });
@@ -220,6 +221,49 @@ test("missing codex binary fails closed with codex_environment_failed", async ()
         runDir: repo,
         timeoutMs: 1000,
       }),
-    (err: unknown) => err instanceof FactoryError && err.code === "codex_environment_failed",
+    (err: unknown) => err instanceof FactoryError && err.code === "strong_execution_isolation_unavailable",
   );
+});
+
+test("CLI execution records isolation blocker before invoking Codex", async () => {
+  const repo = await makeTempRepo();
+  const result = await runSiteTask(TASK, {
+    repoRoot: repo,
+    runId: "isolation-unavailable",
+    prepareDependenciesFn: noopDeps,
+  });
+  assert.equal(result.status, "failed");
+  assert.equal(result.finalStage, "isolation");
+  assert.equal(result.error?.code, "strong_execution_isolation_unavailable");
+  assert.match(result.error!.message, /STRONG_EXECUTION_ISOLATION_UNAVAILABLE/);
+  assert.equal(result.totalAttempts, 0);
+});
+
+test("ignored input mutation is terminal and never reaches QA or repair", async () => {
+  const repo = await makeTempRepo();
+  let codexCalls = 0;
+  let qaCalls = 0;
+  const result = await runSiteTask(TASK, {
+    repoRoot: repo,
+    runId: "integrity-violation",
+    codexRunner: mockCodex(async (request) => {
+      codexCalls++;
+      const target = path.join(request.worktreePath, "sites/starter/src/pages/services/roof-repair.astro");
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, "<h1>Roof Repair</h1>\n");
+      await writeFile(path.join(request.worktreePath, ".env"), "PUBLIC_SITE_URL=https://evil.invalid\n");
+    }),
+    prepareDependenciesFn: noopDeps,
+    runQaFn: async () => {
+      qaCalls++;
+      return { passed: true, exitCode: 0, timedOut: false };
+    },
+    verifyFn: passVerify,
+  });
+  assert.equal(result.status, "failed");
+  assert.equal(result.finalStage, "integrity");
+  assert.equal(result.error?.code, "integrity_violation");
+  assert.equal(result.attempts?.[0]?.classification, "non_repairable");
+  assert.equal(codexCalls, 1);
+  assert.equal(qaCalls, 0);
 });

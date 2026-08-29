@@ -1,70 +1,149 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { collectChanges } from "../src/executor/scope.js";
+import { exampleSiteTask } from "@factory/contracts";
+import { collectChanges, createPageTargetPath, parseRawDiffZ } from "../src/executor/scope.js";
 import { createWorktree, removeWorktree } from "../src/executor/worktree.js";
 import { gitIn, makeTempRepo } from "./helpers.js";
 
-test("allowed path under sites/starter/src/ is accepted", async () => {
+async function withWorktree(name: string, run: (repo: string, worktree: string) => Promise<void>) {
   const repo = await makeTempRepo();
-  const wt = await createWorktree(repo, gitIn(repo, ["rev-parse", "HEAD"]), "scope-ok");
+  const worktree = await createWorktree(repo, gitIn(repo, ["rev-parse", "HEAD"]), name);
   try {
-    await writeFile(
-      path.join(wt, "sites", "starter", "src", "pages", "index.astro"),
-      "---\n---\n<h1>Changed</h1>\n",
-    );
-    const result = await collectChanges(wt);
-    assert.deepEqual(result.changedFiles, ["sites/starter/src/pages/index.astro"]);
-    assert.deepEqual(result.violations, []);
+    await run(repo, worktree);
   } finally {
-    await removeWorktree(repo, wt);
+    await removeWorktree(repo, worktree);
   }
+}
+
+async function writeTarget(worktree: string, content = "---\n---\n<h1>Roof Repair</h1>\n") {
+  const target = path.join(worktree, createPageTargetPath(exampleSiteTask));
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, content);
+  return target;
+}
+
+test("validated task derives exactly one create_page target", () => {
+  assert.equal(createPageTargetPath(exampleSiteTask), "sites/starter/src/pages/services/roof-repair.astro");
+  assert.equal(createPageTargetPath({ ...exampleSiteTask, page: { ...exampleSiteTask.page, type: "homepage", slug: "/" } }), "sites/starter/src/pages/index.astro");
+  assert.equal(createPageTargetPath({ ...exampleSiteTask, page: { ...exampleSiteTask.page, slug: "/services/roof/repair" } }), "sites/starter/src/pages/services/roof/repair.astro");
 });
 
-test("untracked new file in scope is detected and lands in the patch", async () => {
-  const repo = await makeTempRepo();
-  const wt = await createWorktree(repo, gitIn(repo, ["rev-parse", "HEAD"]), "scope-new");
-  try {
-    const newPage = path.join(wt, "sites", "starter", "src", "pages", "services", "roof-repair.astro");
-    const { mkdir } = await import("node:fs/promises");
-    await mkdir(path.dirname(newPage), { recursive: true });
-    await writeFile(newPage, "---\n---\n<h1>Roof Repair</h1>\n");
-    const result = await collectChanges(wt);
-    assert.deepEqual(result.changedFiles, ["sites/starter/src/pages/services/roof-repair.astro"]);
+test("exact target regular file is accepted and patch is binary-safe", async () => {
+  await withWorktree("scope-target", async (_repo, worktree) => {
+    await writeTarget(worktree);
+    const result = await collectChanges(worktree, exampleSiteTask);
+    assert.deepEqual(result.changedFiles, [createPageTargetPath(exampleSiteTask)]);
     assert.deepEqual(result.violations, []);
-    // New (previously untracked) file content must be in the binary patch.
-    assert.match(result.patch, /diff --git a\/sites\/starter\/src\/pages\/services\/roof-repair\.astro/);
     assert.match(result.patch, /Roof Repair/);
-    assert.match(result.nameStatus, /^A\t/);
-  } finally {
-    await removeWorktree(repo, wt);
+    assert.ok(result.rawEvidence.includes("\0"));
+  });
+});
+
+test("unrelated source page is rejected for create_page", async () => {
+  await withWorktree("scope-unrelated", async (_repo, worktree) => {
+    await writeFile(path.join(worktree, "sites/starter/src/pages/index.astro"), "<h1>changed</h1>\n");
+    const result = await collectChanges(worktree, exampleSiteTask);
+    assert.ok(result.violations.some((value) => value.includes("path not authorized")));
+  });
+});
+
+test("root-to-target rename evaluates both deletion and addition", async () => {
+  await withWorktree("scope-rename-root", async (_repo, worktree) => {
+    const target = path.join(worktree, createPageTargetPath(exampleSiteTask));
+    await mkdir(path.dirname(target), { recursive: true });
+    gitIn(worktree, ["mv", "package.json", createPageTargetPath(exampleSiteTask)]);
+    const result = await collectChanges(worktree, exampleSiteTask);
+    assert.deepEqual(result.changedFiles.sort(), ["package.json", createPageTargetPath(exampleSiteTask)].sort());
+    assert.ok(result.violations.some((value) => value.startsWith("package.json:")));
+  });
+});
+
+test("rename between explicitly allowed regular paths is represented as delete plus add", async () => {
+  await withWorktree("scope-rename-allowed", async (_repo, worktree) => {
+    const source = "sites/starter/src/pages/index.astro";
+    const destination = "sites/starter/src/pages/renamed.astro";
+    gitIn(worktree, ["mv", source, destination]);
+    const result = await collectChanges(worktree, [source, destination]);
+    assert.deepEqual(result.violations, []);
+    assert.deepEqual(result.changes.map((change) => change.status).sort(), ["A", "D"]);
+  });
+});
+
+test("copy, deletion, and binary additions are evaluated without rename heuristics", async () => {
+  await withWorktree("scope-copy", async (_repo, worktree) => {
+    const target = createPageTargetPath(exampleSiteTask);
+    await mkdir(path.dirname(path.join(worktree, target)), { recursive: true });
+    await copyFile(path.join(worktree, "sites/starter/src/pages/index.astro"), path.join(worktree, target));
+    const result = await collectChanges(worktree, exampleSiteTask);
+    assert.deepEqual(result.violations, []);
+    assert.equal(result.changes[0]?.status, "A");
+  });
+
+  await withWorktree("scope-delete", async (_repo, worktree) => {
+    const homepageTask = { ...exampleSiteTask, page: { ...exampleSiteTask.page, type: "homepage" as const, slug: "/" } };
+    gitIn(worktree, ["rm", "sites/starter/src/pages/index.astro"]);
+    const result = await collectChanges(worktree, homepageTask);
+    assert.deepEqual(result.violations, []);
+    assert.equal(result.changes[0]?.status, "D");
+  });
+
+  await withWorktree("scope-binary", async (_repo, worktree) => {
+    await writeTarget(worktree, "\u0000\u0001\u0002binary");
+    const result = await collectChanges(worktree, exampleSiteTask);
+    assert.deepEqual(result.violations, []);
+    assert.match(result.patch, /GIT binary patch/);
+  });
+});
+
+test("symlinks to external and denied repository paths fail mechanically", async () => {
+  for (const [name, target] of [["external", "/tmp/factory-synthetic-canary"], ["denied", "../../../../../package.json"]] as const) {
+    await withWorktree(`scope-symlink-${name}`, async (_repo, worktree) => {
+      const file = path.join(worktree, createPageTargetPath(exampleSiteTask));
+      await mkdir(path.dirname(file), { recursive: true });
+      await symlink(target, file);
+      const result = await collectChanges(worktree, exampleSiteTask);
+      assert.ok(result.violations.some((value) => value.includes("120000")));
+      assert.ok(result.violations.some((value) => value.includes("not a regular file")));
+    });
   }
 });
 
-test("change outside the allowed scope is a violation", async () => {
-  const repo = await makeTempRepo();
-  const wt = await createWorktree(repo, gitIn(repo, ["rev-parse", "HEAD"]), "scope-bad");
-  try {
-    await writeFile(path.join(wt, "package.json"), '{"name":"pwned"}\n');
-    const result = await collectChanges(wt);
-    assert.deepEqual(result.violations, ["package.json"]);
-    assert.deepEqual(result.changedFiles, ["package.json"]);
-  } finally {
-    await removeWorktree(repo, wt);
-  }
+test("executable and gitlink modes are rejected", async () => {
+  await withWorktree("scope-executable", async (_repo, worktree) => {
+    const target = await writeTarget(worktree);
+    await chmod(target, 0o755);
+    const result = await collectChanges(worktree, exampleSiteTask);
+    assert.ok(result.violations.some((value) => value.includes("100755")));
+  });
+
+  await withWorktree("scope-gitlink", async (_repo, worktree) => {
+    const target = createPageTargetPath(exampleSiteTask);
+    const embedded = path.join(worktree, target);
+    await mkdir(embedded, { recursive: true });
+    gitIn(embedded, ["init", "-q"]);
+    gitIn(embedded, ["config", "user.email", "test@factory.local"]);
+    gitIn(embedded, ["config", "user.name", "Factory Test"]);
+    await writeFile(path.join(embedded, "file.txt"), "embedded\n");
+    gitIn(embedded, ["add", "file.txt"]);
+    gitIn(embedded, ["commit", "-q", "-m", "embedded"]);
+    const result = await collectChanges(worktree, exampleSiteTask);
+    assert.ok(result.violations.some((value) => value.includes("160000")));
+  });
 });
 
-test("staging is evidence-only: nothing is committed", async () => {
-  const repo = await makeTempRepo();
-  const headBefore = gitIn(repo, ["rev-parse", "HEAD"]);
-  const wt = await createWorktree(repo, headBefore, "scope-nocommit");
-  try {
-    await writeFile(path.join(wt, "sites", "starter", "src", "pages", "y.astro"), "<h1>y</h1>\n");
-    await collectChanges(wt);
-    assert.equal(gitIn(wt, ["rev-parse", "HEAD"]), headBefore);
-  } finally {
-    await removeWorktree(repo, wt);
-  }
-  assert.equal(gitIn(repo, ["rev-parse", "HEAD"]), headBefore);
+test("NUL parser preserves spaces, Unicode, tabs, and newlines", () => {
+  const paths = ["space name.astro", "café.astro", "tab\tname.astro", "line\nname.astro"];
+  const raw = paths.map((file) => `:000000 100644 ${"0".repeat(40)} ${"1".repeat(40)} A\0${file}\0`).join("");
+  assert.deepEqual(parseRawDiffZ(raw).map((change) => change.path), paths);
+});
+
+test("staging remains evidence-only", async () => {
+  await withWorktree("scope-no-commit", async (repo, worktree) => {
+    const head = gitIn(repo, ["rev-parse", "HEAD"]);
+    await writeTarget(worktree);
+    await collectChanges(worktree, exampleSiteTask);
+    assert.equal(gitIn(worktree, ["rev-parse", "HEAD"]), head);
+  });
 });

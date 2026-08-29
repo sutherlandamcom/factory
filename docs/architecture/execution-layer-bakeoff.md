@@ -161,3 +161,31 @@ Destroy Worktree & Clean Process Lifecycle
 - Cloudflare deployment (deferred to PR #5).
 - SEO / Firecrawl data ingestion (deferred to PR #6).
 - Multi-site scheduling or web API servers.
+
+---
+
+## Decision Update — 2026-08-29: Host-Read Evidence Invalidates Candidate 1
+
+The original decision selected a local detached worktree plus Codex's native
+`workspace-write` sandbox. Subsequent live adversarial testing proved that the
+Codex tool process could read unrelated host files, including synthetic
+canaries outside the worktree, and could copy their contents into an authorized
+source file. The worktree and native sandbox therefore protect source state and
+most writes, but do not provide the required host-read boundary.
+
+The preferred replacement remains one mature local OCI/container runtime with
+narrow mounts: the worktree, isolated `/tmp` and HOME, minimal read-only Codex
+auth/config, no Docker or SSH-agent socket, and no broad `/Users` mount. Factory
+QA stays on the host after Codex exits; the inner Codex sandbox continues to
+disable tool network and web search without blocking model-service connectivity.
+
+Environment inspection found no Docker, Podman, nerdctl, Colima, Lima, Finch,
+or equivalent supported runtime installed. No external software was installed
+without authorization, and an unverified container adapter was not introduced.
+The implemented decision is therefore fail-closed: production execution returns
+`STRONG_EXECUTION_ISOLATION_UNAVAILABLE` before invoking Codex. Deterministic
+tests may inject a fake runner, but there is no host-shared production fallback.
+
+This leaves real create-page, real repair, and live host canary acceptance
+`NOT VERIFIED` until an approved isolation backend is available. The prior
+decision remains in this record as historical context rather than being erased.

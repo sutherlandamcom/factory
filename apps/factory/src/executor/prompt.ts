@@ -1,17 +1,19 @@
 import type { SiteTask } from "@factory/contracts";
 import type { FailureReport } from "./classify.js";
+import { createPageTargetPath } from "./scope.js";
 
 /**
  * Mechanically generated Codex prompt for a validated SiteTask (Attempt 1).
  */
 export function buildCodexPrompt(task: SiteTask): string {
+  const targetPath = createPageTargetPath(task);
   return `You are the Factory site engineering worker. Implement exactly one SiteTask in this repository.
 
 ## Rules (all mandatory)
 
 - Follow the repository's AGENTS.md.
 - Implement ONLY the supplied SiteTask — nothing else.
-- Modify only the requested Astro page implementation under sites/starter/src/. Reuse existing components (sites/starter/src/components/) and layouts instead of inventing new ones.
+- Modify only ${targetPath}. Reuse existing components and layouts without editing them.
 - Do NOT redesign or touch unrelated pages.
 - Do NOT install dependencies or change any package manifest (package.json, pnpm-lock.yaml, pnpm-workspace.yaml).
 - Do NOT change the Factory control plane (apps/factory) or the contracts package (packages/contracts).
@@ -28,13 +30,14 @@ export function buildCodexPrompt(task: SiteTask): string {
 ${JSON.stringify(task, null, 2)}
 \`\`\`
 
-Create the page for the given slug using the existing page patterns in this repo (see sites/starter/src/pages/services/example.astro). The page must use the SiteTask title as its visible heading and metadata title, the description as the meta description, and compose the listed sections from existing components. Reuse existing local image assets for any imagery. When you are done, stop — no summary of unrelated ideas, no extra files.`;
+Create or replace exactly ${targetPath} using the existing page patterns. The page must use the SiteTask title as its visible heading and metadata title, the description as the meta description, and compose the listed sections from existing components. Reuse existing local image assets for any imagery. When you are done, stop — no summary of unrelated ideas, no extra files.`;
 }
 
 /**
  * Mechanically generated Codex prompt for a repair attempt (Attempt > 1).
  */
 export function buildRepairPrompt(task: SiteTask, report: FailureReport): string {
+  const targetPath = createPageTargetPath(task);
   const assertionsBlock =
     report.failingAssertions && report.failingAssertions.length > 0
       ? `\n### Key Failing Assertions / Errors:\n${report.failingAssertions.map((a) => `- ${a}`).join("\n")}\n`
@@ -55,7 +58,7 @@ Your goal is to inspect the current implementation in the repository and FIX THE
 
 - Follow the repository's AGENTS.md.
 - Fix ONLY the reported defects for the SiteTask — do not rewrite working code unnecessarily.
-- Modify only files under sites/starter/src/. Reuse existing components (sites/starter/src/components/) and layouts.
+- Modify only ${targetPath}. Reuse existing components and layouts without editing them.
 - Do NOT redesign or touch unrelated pages.
 - Do NOT install dependencies or change any package manifest (package.json, pnpm-lock.yaml, pnpm-workspace.yaml).
 - Do NOT change the Factory control plane (apps/factory) or the contracts package (packages/contracts).
@@ -81,5 +84,5 @@ ${assertionsBlock}
 ${report.excerpt}
 \`\`\`
 
-Inspect the modified files in sites/starter/src/ for "${task.page.slug}", repair the implementation to resolve all errors above, and stop when done.`;
+Inspect ${targetPath}, repair the implementation to resolve all errors above, and stop when done.`;
 }

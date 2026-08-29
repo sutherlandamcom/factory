@@ -14,12 +14,13 @@ import { FactoryError } from "./errors.js";
 import { preflight } from "./preflight.js";
 import { createWorktree, removeWorktree } from "./worktree.js";
 import { prepareDependencies } from "./deps.js";
-import { createCodexRunner, type CodexRunner } from "./codex.js";
+import { assertStrongExecutionIsolationAvailable, createCodexRunner, type CodexRunner } from "./codex.js";
 import { buildCodexPrompt, buildRepairPrompt } from "./prompt.js";
 import { buildFailureReport, classifyFailure, type FailureReport } from "./classify.js";
-import { collectChanges } from "./scope.js";
+import { collectChanges, createPageTargetPath } from "./scope.js";
 import { runQa } from "./qa.js";
 import { verifyCreatePage } from "./verify.js";
+import { captureIntegritySnapshot, compareIntegritySnapshots } from "./integrity.js";
 
 export interface ExecutorTimeouts {
   depsMs: number;
@@ -31,10 +32,15 @@ export interface ExecutorTimeouts {
 export interface ExecutorDeps {
   codexRunner?: CodexRunner;
   prepareDependenciesFn?: (worktreePath: string, timeoutMs: number) => Promise<void>;
-  runQaFn?: (worktreePath: string, runDir: string, timeoutMs: number) => Promise<{
+  runQaFn?: (worktreePath: string, runDir: string, timeoutMs: number, task: SiteTask) => Promise<{
     passed: boolean;
     exitCode: number | null;
     timedOut: boolean;
+    foundationPassed?: boolean;
+    dynamicPassed?: boolean;
+    failureGate?: "foundation" | "dynamic";
+    foundationArtifact?: string;
+    dynamicArtifact?: string;
   }>;
   verifyFn?: (worktreePath: string, task: SiteTask) => Promise<{ passed: boolean; details: string }>;
   timeouts?: Partial<ExecutorTimeouts>;
@@ -149,6 +155,12 @@ export async function runSiteTask(
     }
     await writeFile(path.join(runDir, "base-commit.txt"), `${baseCommit}\n`, "utf8");
 
+    // Unsafe host-shared Codex execution is never an implicit fallback.
+    if (!opts.codexRunner) {
+      stage = "isolation";
+      assertStrongExecutionIsolationAvailable();
+    }
+
     // 3. Detached temp worktree at exactly baseCommit.
     stage = "worktree";
     worktreePath = await createWorktree(repoRoot, baseCommit, runId);
@@ -169,11 +181,16 @@ export async function runSiteTask(
       const kind: "initial" | "repair" = attemptNumber === 1 ? "initial" : "repair";
       let attemptCodex: AttemptResult["codex"];
       let attemptScope: AttemptResult["scope"];
+      let attemptIntegrity: AttemptResult["integrity"];
       let attemptQa: AttemptResult["qa"];
       let attemptVerification: AttemptResult["taskVerification"];
       let attemptChanges: AttemptResult["changes"];
       let attemptClassification: FailureClassification | undefined;
       let attemptError: { code: string; message: string } | undefined;
+
+      const integrityBaseline = await captureIntegritySnapshot(worktreePath);
+      const integrityBaselinePath = path.join(attemptDir, "integrity-baseline.json");
+      await writeFile(integrityBaselinePath, JSON.stringify(integrityBaseline, null, 2), "utf8");
 
       stage = "codex";
       const codexRunner =
@@ -191,6 +208,7 @@ export async function runSiteTask(
         runDir: attemptDir,
         timeoutMs: timeouts.codexMs,
       });
+      stage = "codex";
 
       attemptCodex = {
         exitCode: codexResult.exitCode,
@@ -247,9 +265,10 @@ export async function runSiteTask(
 
       // 6. Mechanical change discovery + write-scope enforcement.
       stage = "scope";
-      const scopeResult = await collectChanges(worktreePath);
+      const scopeResult = await collectChanges(worktreePath, task);
       lastScopeResult = scopeResult;
       await writeFile(path.join(attemptDir, "changed-files.txt"), scopeResult.nameStatus, "utf8");
+      await writeFile(path.join(attemptDir, "git-evidence.raw.z"), scopeResult.rawEvidence, "utf8");
       const attemptPatchPath = path.join(attemptDir, "diff.patch");
       await writeFile(attemptPatchPath, scopeResult.patch, "utf8");
 
@@ -266,7 +285,7 @@ export async function runSiteTask(
       if (scopeResult.violations.length > 0) {
         attemptError = {
           code: "scope_violation",
-          message: `changes outside allowed scope (sites/starter/src/): ${scopeResult.violations.join(", ")}`,
+          message: `unauthorized path or file type: ${scopeResult.violations.join(", ")}`,
         };
         attemptClassification = "non_repairable";
         fail(attemptError.code, attemptError.message);
@@ -289,6 +308,44 @@ export async function runSiteTask(
         break;
       }
 
+      // 7. Ignored/build-input integrity — defense in depth before any QA runs.
+      stage = "integrity";
+      const integrityCurrent = await captureIntegritySnapshot(worktreePath);
+      const integrityCurrentPath = path.join(attemptDir, "integrity-current.json");
+      await writeFile(integrityCurrentPath, JSON.stringify(integrityCurrent, null, 2), "utf8");
+      const integrity = compareIntegritySnapshots(integrityBaseline, integrityCurrent);
+      attemptIntegrity = {
+        passed: integrity.passed,
+        violations: integrity.violations,
+        baselineArtifact: path.relative(repoRoot, integrityBaselinePath),
+        currentArtifact: path.relative(repoRoot, integrityCurrentPath),
+      };
+      if (!integrity.passed) {
+        attemptError = {
+          code: "integrity_violation",
+          message: `ignored/build-input state changed during Codex execution: ${integrity.violations.join(", ")}`,
+        };
+        attemptClassification = "non_repairable";
+        fail(attemptError.code, attemptError.message);
+        status = "failed";
+        await recordAttempt(attemptDir, {
+          attemptNumber,
+          kind,
+          stage: "integrity",
+          startedAt: attemptStartedAt.toISOString(),
+          finishedAt: new Date().toISOString(),
+          durationMs: new Date().getTime() - attemptStartedAt.getTime(),
+          codex: attemptCodex,
+          scope: attemptScope,
+          integrity: attemptIntegrity,
+          changes: attemptChanges,
+          classification: attemptClassification,
+          error: attemptError,
+          artifacts: { attemptDirectory: path.relative(repoRoot, attemptDir) },
+        });
+        break;
+      }
+
       // Progress check: on repair attempts, verify changes were made.
       if (attemptNumber > 1) {
         if (scopeResult.patch === previousPatch || scopeResult.changedFiles.length === 0) {
@@ -308,6 +365,7 @@ export async function runSiteTask(
             durationMs: new Date().getTime() - attemptStartedAt.getTime(),
             codex: attemptCodex,
             scope: attemptScope,
+            integrity: attemptIntegrity,
             changes: attemptChanges,
             classification: attemptClassification,
             error: attemptError,
@@ -318,11 +376,20 @@ export async function runSiteTask(
       }
       previousPatch = scopeResult.patch;
 
-      // 7. Independent Factory QA in the worktree.
+      // 8. Foundation regression QA plus dynamic task-page QA.
       stage = "qa";
       const qaRunner = opts.runQaFn ?? runQa;
-      const qaResult = await qaRunner(worktreePath, attemptDir, timeouts.qaMs);
-      attemptQa = { passed: qaResult.passed, exitCode: qaResult.exitCode, timedOut: qaResult.timedOut };
+      const qaResult = await qaRunner(worktreePath, attemptDir, timeouts.qaMs, task);
+      attemptQa = {
+        passed: qaResult.passed,
+        exitCode: qaResult.exitCode,
+        timedOut: qaResult.timedOut,
+        ...(qaResult.foundationPassed !== undefined ? { foundationPassed: qaResult.foundationPassed } : {}),
+        ...(qaResult.dynamicPassed !== undefined ? { dynamicPassed: qaResult.dynamicPassed } : {}),
+        ...(qaResult.failureGate ? { failureGate: qaResult.failureGate } : {}),
+        ...(qaResult.foundationArtifact ? { foundationArtifact: qaResult.foundationArtifact } : {}),
+        ...(qaResult.dynamicArtifact ? { dynamicArtifact: qaResult.dynamicArtifact } : {}),
+      };
       lastQaOutcome = attemptQa;
 
       if (qaResult.timedOut) {
@@ -339,6 +406,7 @@ export async function runSiteTask(
           durationMs: new Date().getTime() - attemptStartedAt.getTime(),
           codex: attemptCodex,
           scope: attemptScope,
+          integrity: attemptIntegrity,
           qa: attemptQa,
           changes: attemptChanges,
           classification: attemptClassification,
@@ -355,7 +423,7 @@ export async function runSiteTask(
         if (attemptNumber >= maxAttempts) {
           attemptError = {
             code: "qa_failed",
-            message: `Factory QA exited ${qaResult.exitCode} in worktree (attempts exhausted)`,
+            message: `${qaResult.failureGate ?? "Factory"} QA exited ${qaResult.exitCode} in worktree (attempts exhausted)`,
           };
           attemptClassification = "exhausted";
           fail(attemptError.code, attemptError.message);
@@ -369,6 +437,7 @@ export async function runSiteTask(
             durationMs: new Date().getTime() - attemptStartedAt.getTime(),
             codex: attemptCodex,
             scope: attemptScope,
+            integrity: attemptIntegrity,
             qa: attemptQa,
             changes: attemptChanges,
             classification: attemptClassification,
@@ -380,7 +449,7 @@ export async function runSiteTask(
 
         attemptError = {
           code: "qa_failed",
-          message: `Factory QA exited ${qaResult.exitCode} in worktree`,
+          message: `${qaResult.failureGate ?? "Factory"} QA exited ${qaResult.exitCode} in worktree for ${task.page.slug}`,
         };
         attemptClassification = "repairable";
         failureReport = buildFailureReport({
@@ -393,6 +462,7 @@ export async function runSiteTask(
           stderr: qaStderr,
           targetSlug: task.page.slug,
           changedFiles: scopeResult.changedFiles,
+          authorizedScope: createPageTargetPath(task),
         });
 
         await writeFile(
@@ -410,6 +480,7 @@ export async function runSiteTask(
           durationMs: new Date().getTime() - attemptStartedAt.getTime(),
           codex: attemptCodex,
           scope: attemptScope,
+          integrity: attemptIntegrity,
           qa: attemptQa,
           changes: attemptChanges,
           classification: attemptClassification,
@@ -419,7 +490,7 @@ export async function runSiteTask(
         continue;
       }
 
-      // 8. Task-specific verification against the worktree build output.
+      // 9. Task-specific semantic verification against fresh build output.
       stage = "verify";
       const verifier = opts.verifyFn ?? verifyCreatePage;
       const verification = await verifier(worktreePath, task);
@@ -449,6 +520,7 @@ export async function runSiteTask(
             durationMs: new Date().getTime() - attemptStartedAt.getTime(),
             codex: attemptCodex,
             scope: attemptScope,
+            integrity: attemptIntegrity,
             qa: attemptQa,
             taskVerification: attemptVerification,
             changes: attemptChanges,
@@ -472,6 +544,7 @@ export async function runSiteTask(
           message: verification.details,
           targetSlug: task.page.slug,
           changedFiles: scopeResult.changedFiles,
+          authorizedScope: createPageTargetPath(task),
         });
 
         await writeFile(
@@ -489,6 +562,7 @@ export async function runSiteTask(
           durationMs: new Date().getTime() - attemptStartedAt.getTime(),
           codex: attemptCodex,
           scope: attemptScope,
+          integrity: attemptIntegrity,
           qa: attemptQa,
           taskVerification: attemptVerification,
           changes: attemptChanges,
@@ -512,6 +586,7 @@ export async function runSiteTask(
         durationMs: new Date().getTime() - attemptStartedAt.getTime(),
         codex: attemptCodex,
         scope: attemptScope,
+        integrity: attemptIntegrity,
         qa: attemptQa,
         taskVerification: attemptVerification,
         changes: attemptChanges,
@@ -545,6 +620,7 @@ export async function runSiteTask(
   // Persist top-level aggregated artifacts
   if (lastScopeResult) {
     await writeFile(path.join(runDir, "changed-files.txt"), lastScopeResult.nameStatus, "utf8");
+    await writeFile(path.join(runDir, "git-evidence.raw.z"), lastScopeResult.rawEvidence, "utf8");
     await writeFile(path.join(runDir, "diff.patch"), lastScopeResult.patch, "utf8");
   }
 

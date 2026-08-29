@@ -39,30 +39,30 @@ The canonical create_page fixture is `packages/contracts/fixtures/create-roof-re
 `pnpm factory site-task <task.json>` runs one SiteTask end to end with a bounded automatic repair loop:
 
 ```
-validate → clean-repo preflight → detached git worktree at HEAD →
-pnpm install --offline --frozen-lockfile →
+validate → clean-repo preflight → strong-execution-isolation gate →
+detached git worktree at HEAD → pnpm install --offline --frozen-lockfile →
 [Bounded Loop: Attempt 1..3]
-  Codex exec (Attempt 1: initial prompt / Attempt > 1: repair prompt) →
-  mechanical scope enforcement →
-  Factory QA in the worktree →
-  task-specific verification →
+  isolated Codex exec (Attempt 1: initial / Attempt > 1: repair) →
+  exact-target Git mode/scope enforcement → ignored-input integrity →
+  Foundation QA → dynamic requested-route QA → semantic verification →
   [If QA/verify defect: create structured FailureReport & continue attempt]
 → final diff.patch + TaskResult → cleanup
 ```
 
-- **Isolation**: a single detached worktree under `.factory/worktrees/<runId>/` is created once for the entire parent run. Attempt 2 and Attempt 3 build directly upon the workspace modifications of prior attempts. Temporary worktrees are always removed in a `finally` block upon run completion.
+- **Isolation**: a detached worktree is source-state isolation, not host-read isolation. Real Codex execution requires a separately verified OCI/container boundary. No supported runtime is installed on the current host, so the CLI fails before worktree creation with `STRONG_EXECUTION_ISOLATION_UNAVAILABLE`; it does not invoke the former host-shared runner.
 - **Dependency prep**: Factory (never Codex) installs dependencies offline from the pnpm store against the committed lockfile once per run.
-- **Codex adapter** (`src/executor/codex.ts`): direct `codex exec --ephemeral --json -s workspace-write -C <worktree>` with `approval_policy="never"`, `sandbox_workspace_write.network_access=false`, and `tools.web_search=false` config overrides. Environment is sanitized to an allowlist (no API keys, no tokens).
-- **Scope enforcement**: after each Codex attempt, mechanical staging discovery inspects all modified/added paths. Only `sites/starter/src/**` is authorized. Any edit outside this scope triggers an immediate terminal failure (`scope_violation`) with no repair retries.
-- **Independent QA Oracle**: Factory independently runs the full QA suite (`pnpm check` → `pnpm build` → Playwright) outside the Codex sandbox and never trusts model self-reports.
-- **Task verification**: verifies the built `dist/<slug>/index.html` exists, contains the exact SiteTask title, and has a correct canonical `<link>`.
+- **Layered sandbox policy**: any future outer backend must expose only the worktree, an isolated temporary directory/HOME, and minimal read-only Codex auth/config. The inner Codex policy must keep approvals disabled, shell network disabled, and web search disabled. Necessary Codex authentication remains a residual readable secret inside that isolated runtime.
+- **Scope enforcement**: the validated slug maps to exactly one writable `.astro` page. NUL-delimited `git diff --raw -z --no-renames` makes every rename source/destination visible as delete/add; only regular non-executable `100644` files pass. Symlinks, gitlinks, special modes, and unrelated source paths are terminal violations.
+- **Ignored-input integrity**: Factory snapshots ignored state after dependency preparation and before each attempt, hashes contents/types/modes (including `.env*`, `.astro`, and `node_modules`), and compares immediately after Codex. Only explicit generated QA/build artifact directories are excluded.
+- **Independent QA Oracle**: unchanged Foundation `pnpm qa` runs first. Factory then creates a validated task QA spec outside the worktree and runs immutable Playwright assertions for the requested route on desktop and mobile: response/errors, exact metadata/H1/canonical/OG, page-type JSON-LD, requested CTA/FAQ, bounded internal links, image semantics, meaningful body content, and mobile overflow.
+- **Task verification**: a dependency-free semantic extractor checks fresh built HTML for exact title, one exact H1, description, canonical origin/path, and route existence. Comments, scripts, JSON blobs, footer text, and unrelated body text cannot satisfy title checks.
 - **Bounded Repair Loop**:
   - `MAX_ATTEMPTS = 3` (Attempt 1 = initial, Attempt 2 = repair 1, Attempt 3 = repair 2; Attempt 4 is impossible).
-  - **Repairable defects**: `qa_failed` (Astro typecheck/build error, Playwright test failure) and `verification_failed` (missing route, title mismatch, canonical error).
-  - **Terminal failures (stop immediately)**: `invalid_task`, `dirty_working_tree`, `worktree_failed`, `dependency_prepare_failed`, `scope_violation`, `codex_failed`, timeouts (`codex_timeout`, `qa_timeout`).
+  - **Repairable defects**: Foundation/dynamic `qa_failed` and semantic `verification_failed`.
+  - **Terminal failures (stop immediately)**: input/preflight/dependency failures, `strong_execution_isolation_unavailable`, `scope_violation`, `integrity_violation`, unsafe file modes/types, Codex failures, and timeouts.
   - **FailureReport**: structured, bounded diagnostic report (max 8 KB excerpt, secrets scrubbed, ANSI stripped) embedded in the repair prompt.
   - **No-progress detection**: if a repair attempt produces an identical patch or makes no source changes, the loop stops early with `needs_review` and `no_repair_progress`.
-- **Artifacts**: `.factory/runs/<runId>/` holds `task.json`, `base-commit.txt`, `task-result.json`, `diff.patch`, `changed-files.txt`, and per-attempt subdirectories `attempts/<attemptNumber>/` containing `codex-output.jsonl`, `codex-stderr.txt`, `changed-files.txt`, `diff.patch`, `qa-stdout.txt`, `qa-stderr.txt`, `task-verification.json`, `failure-report.json`, and `attempt-result.json`.
+- **Artifacts**: existing task/result/patch/Codex artifacts remain. Each attempted change additionally records escaped changed-path evidence, raw NUL-delimited Git evidence, pre/post integrity manifests, the Factory-owned task QA spec, separate Foundation/dynamic QA logs, screenshots/traces, and bounded failure reports.
 
 ### Starter site (`sites/starter`)
 

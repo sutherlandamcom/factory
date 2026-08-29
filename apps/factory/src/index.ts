@@ -50,6 +50,7 @@ async function main(argv: string[]): Promise<number> {
   console.log(`status:       ${result.status}`);
   console.log(`finalStage:   ${result.finalStage}`);
   console.log(`baseCommit:   ${result.baseCommit || "(unresolved)"}`);
+  console.log(`attempts:     total=${result.totalAttempts}${result.successfulAttempt ? ` succeededOn=${result.successfulAttempt}` : ""}`);
   console.log(`duration:     ${result.durationMs}ms`);
   console.log(`artifacts:    ${result.artifacts.runDirectory}`);
   if (result.changes) {

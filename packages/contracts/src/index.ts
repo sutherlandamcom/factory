@@ -19,8 +19,12 @@ export type {
   Slug,
 } from "./site-task.js";
 export {
+  attemptKindSchema,
+  attemptResultSchema,
+  attemptScopeOutcomeSchema,
   changeSetSchema,
   codexOutcomeSchema,
+  failureClassificationSchema,
   qaOutcomeSchema,
   taskErrorSchema,
   taskResultSchema,
@@ -29,8 +33,12 @@ export {
   taskVerificationSchema,
 } from "./task-result.js";
 export type {
+  AttemptKind,
+  AttemptResult,
+  AttemptScopeOutcome,
   ChangeSet,
   CodexOutcome,
+  FailureClassification,
   QaOutcome,
   TaskError,
   TaskResult,

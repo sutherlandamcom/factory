@@ -1,9 +1,8 @@
 import type { SiteTask } from "@factory/contracts";
+import type { FailureReport } from "./classify.js";
 
 /**
- * Mechanically generated Codex prompt for a validated SiteTask. The task
- * JSON is embedded verbatim; the constraint list is fixed and deliberately
- * redundant with the sandbox + post-hoc scope enforcement.
+ * Mechanically generated Codex prompt for a validated SiteTask (Attempt 1).
  */
 export function buildCodexPrompt(task: SiteTask): string {
   return `You are the Factory site engineering worker. Implement exactly one SiteTask in this repository.
@@ -21,6 +20,7 @@ export function buildCodexPrompt(task: SiteTask): string {
 - Do NOT run pnpm install or any package manager — dependencies are already installed.
 - Do NOT commit, push, stash, or otherwise run git-mutating commands.
 - Do NOT access the network; it is disabled.
+- Do NOT attempt to run "pnpm qa" or launch background dev/preview servers; sandbox blocks network sockets. Factory runs the authoritative QA oracle outside the sandbox.
 
 ## SiteTask (authoritative, validated JSON)
 
@@ -29,4 +29,57 @@ ${JSON.stringify(task, null, 2)}
 \`\`\`
 
 Create the page for the given slug using the existing page patterns in this repo (see sites/starter/src/pages/services/example.astro). The page must use the SiteTask title as its visible heading and metadata title, the description as the meta description, and compose the listed sections from existing components. Reuse existing local image assets for any imagery. When you are done, stop — no summary of unrelated ideas, no extra files.`;
+}
+
+/**
+ * Mechanically generated Codex prompt for a repair attempt (Attempt > 1).
+ */
+export function buildRepairPrompt(task: SiteTask, report: FailureReport): string {
+  const assertionsBlock =
+    report.failingAssertions && report.failingAssertions.length > 0
+      ? `\n### Key Failing Assertions / Errors:\n${report.failingAssertions.map((a) => `- ${a}`).join("\n")}\n`
+      : "";
+
+  const changedBlock =
+    report.changedFiles && report.changedFiles.length > 0
+      ? `\n### Modified Files From Previous Attempt:\n${report.changedFiles.map((f) => `- ${f}`).join("\n")}\n`
+      : "";
+
+  return `You are the Factory site engineering worker. This is REPAIR ATTEMPT #${report.attemptNumber} for an existing SiteTask.
+
+The previous attempt implemented the page but failed Factory verification at stage: **${report.failingStage}** with code **${report.failureCode}**.
+
+Your goal is to inspect the current implementation in the repository and FIX THE REPORTED DEFECTS while preserving the original SiteTask intent.
+
+## Rules (all mandatory)
+
+- Follow the repository's AGENTS.md.
+- Fix ONLY the reported defects for the SiteTask — do not rewrite working code unnecessarily.
+- Modify only files under sites/starter/src/. Reuse existing components (sites/starter/src/components/) and layouts.
+- Do NOT redesign or touch unrelated pages.
+- Do NOT install dependencies or change any package manifest (package.json, pnpm-lock.yaml, pnpm-workspace.yaml).
+- Do NOT change the Factory control plane (apps/factory) or the contracts package (packages/contracts).
+- Do NOT change tests, QA configuration, Playwright config, or weaken QA in any way.
+- Do NOT change configuration files unless the task explicitly requires it.
+- Do NOT run pnpm install or any package manager — dependencies are already installed.
+- Do NOT commit, push, stash, or otherwise run git-mutating commands.
+- Do NOT access the network; it is disabled.
+- Do NOT attempt to run "pnpm qa" or launch background dev/preview servers; sandbox blocks network sockets. Factory runs the authoritative QA oracle outside the sandbox.
+
+## Target SiteTask
+
+\`\`\`json
+${JSON.stringify(task, null, 2)}
+\`\`\`
+${changedBlock}
+## Failure Report from Previous Attempt (Stage: ${report.failingStage})
+
+Summary: ${report.summary}
+${assertionsBlock}
+### Verification Output Excerpt:
+\`\`\`
+${report.excerpt}
+\`\`\`
+
+Inspect the modified files in sites/starter/src/ for "${task.page.slug}", repair the implementation to resolve all errors above, and stop when done.`;
 }

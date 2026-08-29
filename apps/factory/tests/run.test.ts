@@ -57,6 +57,8 @@ test("happy path: succeeded TaskResult, patch artifact, cleanup", async () => {
 
   assert.equal(result.status, "succeeded");
   assert.equal(result.finalStage, "complete");
+  assert.equal(result.totalAttempts, 1);
+  assert.equal(result.successfulAttempt, 1);
   assert.equal(result.baseCommit, gitIn(repo, ["rev-parse", "HEAD"]));
   assert.deepEqual(result.changes?.changedFiles, ["sites/starter/src/pages/services/roof-repair.astro"]);
 
@@ -136,11 +138,12 @@ test("scope violation fails with evidence preserved before cleanup", async () =>
   assert.ok(!existsSync(path.join(repo, ".factory", "worktrees", "scope-violation")));
 });
 
-test("QA failure fails the run even when Codex succeeded", async () => {
+test("QA failure with maxAttempts=1 fails with needs_review", async () => {
   const repo = await makeTempRepo();
   const result = await runSiteTask(TASK, {
     repoRoot: repo,
     runId: "qa-fail",
+    maxAttempts: 1,
     codexRunner: mockCodex(async (req) => {
       await writeFile(
         path.join(req.worktreePath, "sites", "starter", "src", "pages", "ok.astro"),
@@ -151,23 +154,24 @@ test("QA failure fails the run even when Codex succeeded", async () => {
     runQaFn: async () => ({ passed: false, exitCode: 1, timedOut: false }),
     verifyFn: passVerify,
   });
-  assert.equal(result.status, "failed");
+  assert.equal(result.status, "needs_review");
   assert.equal(result.finalStage, "qa");
   assert.equal(result.error?.code, "qa_failed");
   assert.equal(result.qa?.passed, false);
 });
 
-test("task verification failure fails the run after QA passes", async () => {
+test("task verification failure with maxAttempts=1 fails with needs_review", async () => {
   const repo = await makeTempRepo();
   const result = await runSiteTask(TASK, {
     repoRoot: repo,
     runId: "verify-fail",
+    maxAttempts: 1,
     codexRunner: mockCodex(async () => {}),
     prepareDependenciesFn: noopDeps,
     runQaFn: passQa,
     verifyFn: async () => ({ passed: false, details: "expected built page missing" }),
   });
-  assert.equal(result.status, "failed");
+  assert.equal(result.status, "needs_review");
   assert.equal(result.finalStage, "verify");
   assert.equal(result.error?.code, "verification_failed");
   assert.equal(result.taskVerification?.passed, false);

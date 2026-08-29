@@ -137,8 +137,23 @@ async function main() {
     console.table(results);
     console.log("12/12 defects rejected; false passes after remediation: 0");
   } finally {
-    await removeWorktree(repoRoot, worktree);
-    await rm(tempDir, { recursive: true, force: true });
+    try {
+      // Astro 7 backgrounds preview servers. Playwright normally stops its
+      // webServer, but an intentionally failing matrix can leave that daemon
+      // behind unless Factory stops it from the originating site directory.
+      await runProcess(
+        "pnpm",
+        ["--filter", "@factory/site-starter", "exec", "astro", "preview", "stop"],
+        {
+          cwd: worktree,
+          env: buildChildEnv(),
+          timeoutMs: 30_000,
+        },
+      );
+    } finally {
+      await removeWorktree(repoRoot, worktree);
+      await rm(tempDir, { recursive: true, force: true });
+    }
   }
 }
 

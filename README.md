@@ -74,7 +74,14 @@ With an approved backend, the bounded loop remains specified as follows:
 7. **Outcomes**:
    - `succeeded`: Full verification passes on attempt 1, 2, or 3.
   - `failed`: Non-repairable execution/input/security defect (including unavailable isolation, scope/type violation, ignored-input mutation, timeout, or Codex exit).
-   - `needs_review`: Bounded attempts exhausted (3 failed repair attempts) or no source progress made on repair.
+  - `needs_review`: Bounded attempts exhausted (3 failed repair attempts) or no source progress made on repair.
+
+Factory's module rule is **READ MANY / WRITE FEW**. The version-controlled
+registry contains only current modules; accepted contracts, control-plane,
+configuration, QA, and repository-policy areas are protected by default.
+`create_page` receives write authority only for its exact target page. Reading
+or importing another module never grants permission to modify it, and tasks
+cannot declare a broader policy in their input.
 
 Run artifacts land in `.factory/runs/<runId>/` (gitignored):
 - `task.json`, `base-commit.txt`, `task-result.json`, `diff.patch`, `changed-files.txt`

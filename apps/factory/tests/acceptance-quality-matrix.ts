@@ -55,7 +55,7 @@ const jsonLd = { "@context": "https://schema.org", "@type": "Service", serviceTy
 const scenarios: Array<{ defect: string; gate: string; mutate: (source: string) => string; sections?: SiteTask["page"]["sections"] }> = [
   { defect: "no H1", gate: "h1-count", mutate: (s) => s.replace("<h1>Quality Matrix Service</h1>", "<div>Quality Matrix Service</div>") },
   { defect: "no meta description", gate: "description", mutate: (s) => s.replace('content="A deterministic generated page used to verify Factory dynamic quality policy." />\n    <link', 'content="" />\n    <link') },
-  { defect: "missing required Open Graph metadata", gate: "og:title-count", mutate: (s) => s.replace(/    <meta property="og:title"[^\n]+\n/, "") },
+  { defect: "missing required Open Graph metadata", gate: "og:title", mutate: (s) => s.replace(/    <meta property="og:title"[^\n]+\n/, "") },
   { defect: "malformed JSON-LD", gate: "json-ld-parse", mutate: (s) => s.replace("set:html={JSON.stringify(jsonLd)}", 'set:html={"{"}') },
   { defect: "missing required CTA", gate: "cta", mutate: (s) => s.replace('      <a href="/">Return to the homepage</a>\n', "") },
   { defect: "broken internal link", gate: "internal-link", mutate: (s) => s.replace('href="/"', 'href="/missing-quality-matrix-target"') },

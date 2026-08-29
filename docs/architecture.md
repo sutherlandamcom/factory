@@ -36,6 +36,24 @@ The canonical create_page fixture is `packages/contracts/fixtures/create-roof-re
 
 ### Control plane + executor (`apps/factory`)
 
+#### Protected modules and task write policy
+
+**Accepted Factory modules are protected by default. AI tasks receive explicit
+write authority over only the modules/paths required for that task. Cross-module
+changes must be declared explicitly rather than performed incidentally.** The
+execution principle is **READ MANY / WRITE FEW**: understanding or importing a
+module does not grant write authority to it.
+
+The small TypeScript registry contains only modules that exist today:
+`contracts`, `control-plane`, `site-source`, `site-configuration`,
+`quality-oracle`, and `repository-policy`. Contracts, executor/security code,
+tests/Playwright policy, site configuration, and repository policy are protected
+from ordinary tasks. `create_page` derives one immutable `TaskWritePolicy` whose
+only writable path is the exact page mapped from its validated slug. The same
+policy supplies the prompt boundary and post-execution Git validator; a task has
+no input field capable of widening it. Future modules register only when they
+actually exist, and explicit cross-module migration workflows are deferred.
+
 `pnpm factory site-task <task.json>` runs one SiteTask end to end with a bounded automatic repair loop:
 
 ```

@@ -17,10 +17,11 @@ import { prepareDependencies } from "./deps.js";
 import { assertStrongExecutionIsolationAvailable, createCodexRunner, type CodexRunner } from "./codex.js";
 import { buildCodexPrompt, buildRepairPrompt } from "./prompt.js";
 import { buildFailureReport, classifyFailure, type FailureReport } from "./classify.js";
-import { collectChanges, createPageTargetPath } from "./scope.js";
+import { collectChanges } from "./scope.js";
 import { runQa } from "./qa.js";
 import { verifyCreatePage } from "./verify.js";
 import { captureIntegritySnapshot, compareIntegritySnapshots } from "./integrity.js";
+import { deriveTaskWritePolicy } from "./module-policy.js";
 
 export interface ExecutorTimeouts {
   depsMs: number;
@@ -105,6 +106,7 @@ export async function runSiteTask(
   let stage: TaskStage = "validation";
   let baseCommit = "";
   let task: SiteTask | undefined;
+  let writePolicy: ReturnType<typeof deriveTaskWritePolicy> | undefined;
   let worktreePath: string | undefined;
   let error: { code: string; message: string } | undefined;
   let status: TaskStatus = "failed";
@@ -133,6 +135,7 @@ export async function runSiteTask(
     // 1. Validation — before any worktree/Codex/modification.
     try {
       task = parseSiteTask(taskInput);
+      writePolicy = deriveTaskWritePolicy(task);
     } catch (err) {
       fail("invalid_task", err instanceof Error ? err.message : String(err));
       throw new FactoryError("invalid_task", error!.message);
@@ -199,8 +202,8 @@ export async function runSiteTask(
 
       const prompt =
         attemptNumber === 1
-          ? buildCodexPrompt(task)
-          : buildRepairPrompt(task, failureReport!);
+          ? buildCodexPrompt(task, writePolicy)
+          : buildRepairPrompt(task, failureReport!, writePolicy);
 
       const codexResult = await codexRunner({
         worktreePath,
@@ -265,7 +268,7 @@ export async function runSiteTask(
 
       // 6. Mechanical change discovery + write-scope enforcement.
       stage = "scope";
-      const scopeResult = await collectChanges(worktreePath, task);
+      const scopeResult = await collectChanges(worktreePath, writePolicy);
       lastScopeResult = scopeResult;
       await writeFile(path.join(attemptDir, "changed-files.txt"), scopeResult.nameStatus, "utf8");
       await writeFile(path.join(attemptDir, "git-evidence.raw.z"), scopeResult.rawEvidence, "utf8");
@@ -462,7 +465,7 @@ export async function runSiteTask(
           stderr: qaStderr,
           targetSlug: task.page.slug,
           changedFiles: scopeResult.changedFiles,
-          authorizedScope: createPageTargetPath(task),
+          authorizedScope: writePolicy.writablePaths.join(", "),
         });
 
         await writeFile(
@@ -544,7 +547,7 @@ export async function runSiteTask(
           message: verification.details,
           targetSlug: task.page.slug,
           changedFiles: scopeResult.changedFiles,
-          authorizedScope: createPageTargetPath(task),
+          authorizedScope: writePolicy.writablePaths.join(", "),
         });
 
         await writeFile(

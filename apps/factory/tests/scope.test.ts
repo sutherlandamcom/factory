@@ -3,9 +3,12 @@ import { chmod, copyFile, mkdir, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { exampleSiteTask } from "@factory/contracts";
-import { collectChanges, createPageTargetPath, parseRawDiffZ } from "../src/executor/scope.js";
+import { collectChanges, parseRawDiffZ } from "../src/executor/scope.js";
+import { createPageTargetPath, deriveTaskWritePolicy } from "../src/executor/module-policy.js";
 import { createWorktree, removeWorktree } from "../src/executor/worktree.js";
 import { gitIn, makeTempRepo } from "./helpers.js";
+
+const POLICY = deriveTaskWritePolicy(exampleSiteTask);
 
 async function withWorktree(name: string, run: (repo: string, worktree: string) => Promise<void>) {
   const repo = await makeTempRepo();
@@ -33,7 +36,7 @@ test("validated task derives exactly one create_page target", () => {
 test("exact target regular file is accepted and patch is binary-safe", async () => {
   await withWorktree("scope-target", async (_repo, worktree) => {
     await writeTarget(worktree);
-    const result = await collectChanges(worktree, exampleSiteTask);
+    const result = await collectChanges(worktree, POLICY);
     assert.deepEqual(result.changedFiles, [createPageTargetPath(exampleSiteTask)]);
     assert.deepEqual(result.violations, []);
     assert.match(result.patch, /Roof Repair/);
@@ -44,8 +47,30 @@ test("exact target regular file is accepted and patch is binary-safe", async () 
 test("unrelated source page is rejected for create_page", async () => {
   await withWorktree("scope-unrelated", async (_repo, worktree) => {
     await writeFile(path.join(worktree, "sites/starter/src/pages/index.astro"), "<h1>changed</h1>\n");
-    const result = await collectChanges(worktree, exampleSiteTask);
+    const result = await collectChanges(worktree, POLICY);
     assert.ok(result.violations.some((value) => value.includes("path not authorized")));
+  });
+});
+
+test("the authoritative TaskWritePolicy rejects every protected current module", async () => {
+  await withWorktree("scope-protected-modules", async (_repo, worktree) => {
+    const denied = [
+      "sites/starter/src/components/Hero.astro",
+      "apps/factory/src/executor/run.ts",
+      "packages/contracts/src/site-task.ts",
+      "sites/starter/tests/qa.spec.ts",
+      "sites/starter/playwright.config.ts",
+      "AGENTS.md",
+    ];
+    for (const relative of denied) {
+      const file = path.join(worktree, relative);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, `protected mutation: ${relative}\n`);
+    }
+    const result = await collectChanges(worktree, POLICY);
+    for (const relative of denied) {
+      assert.ok(result.violations.some((value) => value.startsWith(`${relative}:`)), relative);
+    }
   });
 });
 
@@ -54,7 +79,7 @@ test("root-to-target rename evaluates both deletion and addition", async () => {
     const target = path.join(worktree, createPageTargetPath(exampleSiteTask));
     await mkdir(path.dirname(target), { recursive: true });
     gitIn(worktree, ["mv", "package.json", createPageTargetPath(exampleSiteTask)]);
-    const result = await collectChanges(worktree, exampleSiteTask);
+    const result = await collectChanges(worktree, POLICY);
     assert.deepEqual(result.changedFiles.sort(), ["package.json", createPageTargetPath(exampleSiteTask)].sort());
     assert.ok(result.violations.some((value) => value.startsWith("package.json:")));
   });
@@ -76,7 +101,7 @@ test("copy, deletion, and binary additions are evaluated without rename heuristi
     const target = createPageTargetPath(exampleSiteTask);
     await mkdir(path.dirname(path.join(worktree, target)), { recursive: true });
     await copyFile(path.join(worktree, "sites/starter/src/pages/index.astro"), path.join(worktree, target));
-    const result = await collectChanges(worktree, exampleSiteTask);
+    const result = await collectChanges(worktree, POLICY);
     assert.deepEqual(result.violations, []);
     assert.equal(result.changes[0]?.status, "A");
   });
@@ -84,14 +109,14 @@ test("copy, deletion, and binary additions are evaluated without rename heuristi
   await withWorktree("scope-delete", async (_repo, worktree) => {
     const homepageTask = { ...exampleSiteTask, page: { ...exampleSiteTask.page, type: "homepage" as const, slug: "/" } };
     gitIn(worktree, ["rm", "sites/starter/src/pages/index.astro"]);
-    const result = await collectChanges(worktree, homepageTask);
+    const result = await collectChanges(worktree, deriveTaskWritePolicy(homepageTask));
     assert.deepEqual(result.violations, []);
     assert.equal(result.changes[0]?.status, "D");
   });
 
   await withWorktree("scope-binary", async (_repo, worktree) => {
     await writeTarget(worktree, "\u0000\u0001\u0002binary");
-    const result = await collectChanges(worktree, exampleSiteTask);
+    const result = await collectChanges(worktree, POLICY);
     assert.deepEqual(result.violations, []);
     assert.match(result.patch, /GIT binary patch/);
   });
@@ -103,7 +128,7 @@ test("symlinks to external and denied repository paths fail mechanically", async
       const file = path.join(worktree, createPageTargetPath(exampleSiteTask));
       await mkdir(path.dirname(file), { recursive: true });
       await symlink(target, file);
-      const result = await collectChanges(worktree, exampleSiteTask);
+      const result = await collectChanges(worktree, POLICY);
       assert.ok(result.violations.some((value) => value.includes("120000")));
       assert.ok(result.violations.some((value) => value.includes("not a regular file")));
     });
@@ -114,7 +139,7 @@ test("executable and gitlink modes are rejected", async () => {
   await withWorktree("scope-executable", async (_repo, worktree) => {
     const target = await writeTarget(worktree);
     await chmod(target, 0o755);
-    const result = await collectChanges(worktree, exampleSiteTask);
+    const result = await collectChanges(worktree, POLICY);
     assert.ok(result.violations.some((value) => value.includes("100755")));
   });
 
@@ -128,7 +153,7 @@ test("executable and gitlink modes are rejected", async () => {
     await writeFile(path.join(embedded, "file.txt"), "embedded\n");
     gitIn(embedded, ["add", "file.txt"]);
     gitIn(embedded, ["commit", "-q", "-m", "embedded"]);
-    const result = await collectChanges(worktree, exampleSiteTask);
+    const result = await collectChanges(worktree, POLICY);
     assert.ok(result.violations.some((value) => value.includes("160000")));
   });
 });
@@ -143,7 +168,7 @@ test("staging remains evidence-only", async () => {
   await withWorktree("scope-no-commit", async (repo, worktree) => {
     const head = gitIn(repo, ["rev-parse", "HEAD"]);
     await writeTarget(worktree);
-    await collectChanges(worktree, exampleSiteTask);
+    await collectChanges(worktree, POLICY);
     assert.equal(gitIn(worktree, ["rev-parse", "HEAD"]), head);
   });
 });

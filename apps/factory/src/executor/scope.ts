@@ -1,9 +1,9 @@
 import { lstat } from "node:fs/promises";
 import path from "node:path";
-import type { SiteTask } from "@factory/contracts";
 import { FactoryError } from "./errors.js";
 import { buildChildEnv } from "./env.js";
 import { runProcess } from "./process.js";
+import { policyAllowsWrite, type TaskWritePolicy } from "./module-policy.js";
 
 export interface GitChange {
   status: string;
@@ -39,12 +39,6 @@ async function git(cwd: string, args: string[]): Promise<string> {
     );
   }
   return result.stdout;
-}
-
-/** Deterministically maps a validated create_page task to its only writable source file. */
-export function createPageTargetPath(task: SiteTask): string {
-  if (task.page.slug === "/") return "sites/starter/src/pages/index.astro";
-  return `sites/starter/src/pages/${task.page.slug.slice(1)}.astro`;
 }
 
 /** Parse `git diff --raw -z` output. Rename detection is disabled by the caller. */
@@ -86,11 +80,10 @@ function modeViolation(change: GitChange): string | undefined {
 /** Stages and evaluates every affected path using NUL-delimited evidence. */
 export async function collectChanges(
   worktreePath: string,
-  taskOrAllowedPaths: SiteTask | readonly string[],
+  policyOrAllowedPaths: TaskWritePolicy | readonly string[],
 ): Promise<ChangeScopeResult> {
-  const allowedPaths = Array.isArray(taskOrAllowedPaths)
-    ? new Set(taskOrAllowedPaths)
-    : new Set([createPageTargetPath(taskOrAllowedPaths as SiteTask)]);
+  const policy = Array.isArray(policyOrAllowedPaths) ? undefined : policyOrAllowedPaths as TaskWritePolicy;
+  const allowedPaths = Array.isArray(policyOrAllowedPaths) ? new Set(policyOrAllowedPaths) : undefined;
 
   await git(worktreePath, ["add", "-A"]);
   const rawEvidence = await git(worktreePath, [
@@ -101,7 +94,9 @@ export async function collectChanges(
   const violations: string[] = [];
 
   for (const change of changes) {
-    if (!allowedPaths.has(change.path)) violations.push(`${change.path}: path not authorized`);
+    if (!(policy ? policyAllowsWrite(policy, change.path) : allowedPaths!.has(change.path))) {
+      violations.push(`${change.path}: path not authorized by TaskWritePolicy`);
+    }
     const invalidMode = modeViolation(change);
     if (invalidMode) violations.push(invalidMode);
     if (change.status !== "D") {

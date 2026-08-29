@@ -1,12 +1,12 @@
 import type { SiteTask } from "@factory/contracts";
 import type { FailureReport } from "./classify.js";
-import { createPageTargetPath } from "./scope.js";
+import type { TaskWritePolicy } from "./module-policy.js";
 
 /**
  * Mechanically generated Codex prompt for a validated SiteTask (Attempt 1).
  */
-export function buildCodexPrompt(task: SiteTask): string {
-  const targetPath = createPageTargetPath(task);
+export function buildCodexPrompt(task: SiteTask, policy: TaskWritePolicy): string {
+  const targetPath = policy.writablePaths[0]!;
   return `You are the Factory site engineering worker. Implement exactly one SiteTask in this repository.
 
 ## Rules (all mandatory)
@@ -36,8 +36,8 @@ Create or replace exactly ${targetPath} using the existing page patterns. The pa
 /**
  * Mechanically generated Codex prompt for a repair attempt (Attempt > 1).
  */
-export function buildRepairPrompt(task: SiteTask, report: FailureReport): string {
-  const targetPath = createPageTargetPath(task);
+export function buildRepairPrompt(task: SiteTask, report: FailureReport, policy: TaskWritePolicy): string {
+  const targetPath = policy.writablePaths[0]!;
   const assertionsBlock =
     report.failingAssertions && report.failingAssertions.length > 0
       ? `\n### Key Failing Assertions / Errors:\n${report.failingAssertions.map((a) => `- ${a}`).join("\n")}\n`

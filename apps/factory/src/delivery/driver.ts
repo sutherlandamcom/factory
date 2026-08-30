@@ -93,6 +93,50 @@ async function resolveSite(store: FactoryStore, siteKey: string): Promise<SiteRe
   return resolved.site;
 }
 
+async function reconcilePendingDeployment(input: {
+  store: FactoryStore;
+  repoRoot: string;
+  siteKey: string;
+  stale: DeploymentRecord;
+}): Promise<{ result: DeploymentResult; worktree: string }> {
+  const artifacts = path.join(
+    input.repoRoot,
+    input.stale.artifactDirectory ?? path.join(".factory", "deployments", input.stale.id),
+  );
+  await mkdir(artifacts, { recursive: true });
+  let worktree: string | null = null;
+  try {
+    worktree = await prepareAcceptedWorktree(
+      input.repoRoot,
+      input.stale.sourceCommit,
+      `reconcile-${input.stale.id}`,
+    );
+    const reconciled = await workflow({
+      store: input.store,
+      repoRoot: input.repoRoot,
+      worktree,
+      artifacts,
+      productionUrl: input.stale.productionUrl,
+    }).reconcile(input.stale);
+    const result = resultFromRecord(reconciled, input.siteKey);
+    await writeResult(artifacts, result);
+    return { result, worktree };
+  } catch (error) {
+    if (worktree) await removeWorktree(input.repoRoot, worktree);
+    throw error;
+  }
+}
+
+export async function executeExplicitRollbackBoundary<T>(input: {
+  findPending: () => Promise<DeploymentRecord | null>;
+  reconcilePending: (stale: DeploymentRecord) => Promise<T>;
+  beginHistoricalRollback: () => Promise<T>;
+}): Promise<T> {
+  const stale = await input.findPending();
+  if (stale) return await input.reconcilePending(stale);
+  return await input.beginHistoricalRollback();
+}
+
 export interface ExplicitRollbackPlan {
   sourceCommit: string;
   artifactDigest: string;
@@ -154,19 +198,14 @@ export async function runProductionDelivery(input: {
     // recovery invocation never starts a second deployment implicitly.
     const stale = await store.findLatestUnverifiedDeployment(site.id);
     if (stale) {
-      const artifacts = path.join(input.repoRoot, stale.artifactDirectory ?? path.join(".factory", "deployments", stale.id));
-      await mkdir(artifacts, { recursive: true });
-      worktree = await prepareAcceptedWorktree(input.repoRoot, stale.sourceCommit, `reconcile-${stale.id}`);
-      const reconciled = await workflow({
+      const recovery = await reconcilePendingDeployment({
         store,
         repoRoot: input.repoRoot,
-        worktree,
-        artifacts,
-        productionUrl: stale.productionUrl,
-      }).reconcile(stale);
-      const result = resultFromRecord(reconciled, input.siteKey);
-      await writeResult(artifacts, result);
-      return result;
+        siteKey: input.siteKey,
+        stale,
+      });
+      worktree = recovery.worktree;
+      return recovery.result;
     }
 
     const id = deploymentId();
@@ -232,84 +271,99 @@ export async function runExplicitRollback(input: {
     const site = await resolveSite(store, input.siteKey);
     const target = requireDeliveryTarget(site);
     await resolveTrustedControlPlaneSource(input.repoRoot);
-    const id = deploymentId();
-    const artifacts = artifactDirectory(input.repoRoot, id);
-    await mkdir(artifacts.absolute, { recursive: true });
-    const controlPlaneProvider = new WranglerClient(
-      path.join(input.repoRoot, "sites", "starter"),
-      artifacts.absolute,
-    );
-    await controlPlaneProvider.assertTargetExists(target.workerName);
-    const active = await controlPlaneProvider.currentProductionVersion(target.workerName);
-    const effectiveRecord = await store.findLatestKnownGoodDeployment(
-      site.id,
-      target.workerName,
-      target.productionUrl,
-    );
-    const canonicalVerified = await store.listCanonicalVerifiedDeployments(
-      site.id,
-      target.workerName,
-      target.productionUrl,
-    );
-    const rollback = resolveExplicitRollbackPlan({
-      actualVersion: active,
-      effectiveRecord,
-      canonicalVerified,
-    });
-    worktree = await prepareAcceptedWorktree(input.repoRoot, rollback.qaSourceCommit, `rollback-${id}`);
-    const provider = new WranglerClient(path.join(worktree, "sites", "starter"), artifacts.absolute);
-    await provider.assertTargetExists(target.workerName);
-    const activeBeforeMutation = await provider.currentProductionVersion(target.workerName);
-    if (activeBeforeMutation !== active) {
-      throw new FactoryError(
-        "deployment_drift",
-        "Cloudflare production version changed while the rollback was being prepared.",
-      );
-    }
+    return await executeExplicitRollbackBoundary({
+      findPending: async () => await store.findLatestUnverifiedDeployment(site.id),
+      reconcilePending: async (stale) => {
+        const recovery = await reconcilePendingDeployment({
+          store,
+          repoRoot: input.repoRoot,
+          siteKey: input.siteKey,
+          stale,
+        });
+        worktree = recovery.worktree;
+        return recovery.result;
+      },
+      beginHistoricalRollback: async () => {
+        const id = deploymentId();
+        const artifacts = artifactDirectory(input.repoRoot, id);
+        await mkdir(artifacts.absolute, { recursive: true });
+        const controlPlaneProvider = new WranglerClient(
+          path.join(input.repoRoot, "sites", "starter"),
+          artifacts.absolute,
+        );
+        await controlPlaneProvider.assertTargetExists(target.workerName);
+        const active = await controlPlaneProvider.currentProductionVersion(target.workerName);
+        const effectiveRecord = await store.findLatestKnownGoodDeployment(
+          site.id,
+          target.workerName,
+          target.productionUrl,
+        );
+        const canonicalVerified = await store.listCanonicalVerifiedDeployments(
+          site.id,
+          target.workerName,
+          target.productionUrl,
+        );
+        const rollback = resolveExplicitRollbackPlan({
+          actualVersion: active,
+          effectiveRecord,
+          canonicalVerified,
+        });
+        worktree = await prepareAcceptedWorktree(input.repoRoot, rollback.qaSourceCommit, `rollback-${id}`);
+        const provider = new WranglerClient(path.join(worktree, "sites", "starter"), artifacts.absolute);
+        await provider.assertTargetExists(target.workerName);
+        const activeBeforeMutation = await provider.currentProductionVersion(target.workerName);
+        if (activeBeforeMutation !== active) {
+          throw new FactoryError(
+            "deployment_drift",
+            "Cloudflare production version changed while the rollback was being prepared.",
+          );
+        }
 
-    let record = await store.createDeployment({
-      id,
-      siteId: site.id,
-      sourceCommit: rollback.sourceCommit,
-      workerName: target.workerName,
-      productionUrl: target.productionUrl,
-      artifactDirectory: artifacts.relative,
+        let record = await store.createDeployment({
+          id,
+          siteId: site.id,
+          sourceCommit: rollback.sourceCommit,
+          workerName: target.workerName,
+          productionUrl: target.productionUrl,
+          artifactDirectory: artifacts.relative,
+        });
+        record = await store.updateDeployment({
+          id,
+          status: "promoting",
+          artifactDigest: rollback.artifactDigest,
+          versionId: rollback.versionId,
+          previousVersionId: rollback.versionId,
+        });
+        try {
+          await provider.rollback(target.workerName, rollback.versionId);
+          const qa = await runRemoteQa({
+            worktree,
+            targetUrl: target.productionUrl,
+            productionUrl: target.productionUrl,
+            artifactDirectory: artifacts.absolute,
+            phase: "rollback",
+          });
+          record = await store.updateDeployment({
+            id,
+            status: qa.passed ? "rolled_back" : "needs_review",
+            rolledBack: qa.passed,
+            verifiedAt: qa.passed ? new Date() : null,
+            errorCode: qa.passed ? null : "rollback_qa_failed",
+            errorMessage: qa.passed ? null : "Explicit rollback mutation completed but production QA failed.",
+          });
+        } catch (error) {
+          record = await store.updateDeployment({
+            id,
+            status: "needs_review",
+            errorCode: error instanceof FactoryError ? error.code : "rollback_failed",
+            errorMessage: error instanceof Error ? error.message : String(error),
+          });
+        }
+        const result = resultFromRecord(record, input.siteKey);
+        await writeResult(artifacts.absolute, result);
+        return result;
+      },
     });
-    record = await store.updateDeployment({
-      id,
-      status: "promoting",
-      artifactDigest: rollback.artifactDigest,
-      versionId: rollback.versionId,
-      previousVersionId: rollback.versionId,
-    });
-    try {
-      await provider.rollback(target.workerName, rollback.versionId);
-      const qa = await runRemoteQa({
-        worktree,
-        targetUrl: target.productionUrl,
-        productionUrl: target.productionUrl,
-        artifactDirectory: artifacts.absolute,
-        phase: "rollback",
-      });
-      record = await store.updateDeployment({
-        id,
-        status: qa.passed ? "rolled_back" : "needs_review",
-        rolledBack: qa.passed,
-        verifiedAt: qa.passed ? new Date() : null,
-        errorCode: qa.passed ? null : "rollback_qa_failed",
-        errorMessage: qa.passed ? null : "Explicit rollback mutation completed but production QA failed.",
-      });
-    } catch (error) {
-      record = await store.updateDeployment({
-        id,
-        status: "needs_review",
-        errorCode: error instanceof FactoryError ? error.code : "rollback_failed",
-        errorMessage: error instanceof Error ? error.message : String(error),
-      });
-    }
-    const result = resultFromRecord(record, input.siteKey);
-    await writeResult(artifacts.absolute, result);
-    return result;
   } finally {
     if (worktree) await removeWorktree(input.repoRoot, worktree);
     await lock.release();

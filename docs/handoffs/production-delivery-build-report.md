@@ -42,6 +42,30 @@ only those trust and provenance gaps:
 The exact remediated candidate SHA is the PR #4 head named in the final build
 handoff and CI evidence. It is intentionally not embedded in its own commit.
 
+## Final crash-safety re-QA remediation
+
+Independent re-QA reviewed
+`bfbb1cb2ad477301c4b0d726f5f698e96f0a8644`. The earlier three P1 findings
+and one P2 finding passed, but re-QA found one new P1: explicit rollback could
+bypass an unresolved `promoting` or unverified `promoted` deployment and start
+a second historical production mutation.
+
+Both production entry points now reuse one pending-deployment reconciliation
+routine. After the accepted control-plane and site preflight, explicit rollback
+checks `findLatestUnverifiedDeployment(site.id)`. If a dangerous row exists,
+the invocation runs the existing `ProductionDelivery.reconcile(...)`, writes
+and returns that stale row's result, and does not enter historical rollback.
+Only an invocation with no pending dangerous row may retain the accepted
+provider-drift, canonical-target, target-source worktree, exact rollback, and
+production-QA path.
+
+Four focused regression tests cover a pre-promotion crash with the previous
+version active, a post-promotion crash with the candidate active, unrelated
+provider drift, and the no-stale historical path. The three pending-state
+cases assert zero historical starts and zero second rollback mutations. The
+exact final candidate SHA is recorded in PR #4, CI evidence, and the final
+handoff because a commit cannot embed its own hash.
+
 ## Delivered architecture
 
 Factory now has a narrow trusted operation that fetches `origin`, resolves
@@ -130,8 +154,8 @@ constraint, and known-good provenance. Full commands and their final results
 are:
 
 ```text
-FACTORY_QA_PORT=4327 pnpm qa
-  PASS — check/build complete, Factory tests 128/128,
+FACTORY_QA_PORT=4332 pnpm qa
+  PASS — check/build complete, Factory tests 132/132,
          Playwright 8 passed / 2 intentional task-QA skips
 
 FACTORY_TEST_DATABASE_URL=postgresql://...@localhost:54329/factory_test \
@@ -143,7 +167,7 @@ pnpm --filter @factory/factory exec wrangler deploy --dry-run \
   PASS — Wrangler 4.127.1 read 23 static assets, no bindings
 ```
 
-The current remediated count is Factory tests 128/128. An initial local
+The current remediated count is Factory tests 132/132. An initial local
 Playwright run on default port 4321 had two desktop metadata waits time out
 while both equivalent mobile cases passed. Inspection confirmed the rendered
 metadata was present; a clean isolated-port Playwright run passed 8/8, followed
@@ -174,4 +198,4 @@ or permanent copy of `dist/`.
 - No automatic deploy-on-merge, dashboard, scheduler, multi-provider layer,
   environment/release platform, canary, or generic recovery engine.
 
-Terminal implementation status: `IMPLEMENTATION COMPLETE — PENDING INDEPENDENT QA`.
+Terminal implementation status: `IMPLEMENTATION COMPLETE — PENDING FINAL INDEPENDENT QA`.

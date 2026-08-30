@@ -13,12 +13,13 @@ test("registry contains only current repository modules", () => {
   assert.deepEqual(MODULE_REGISTRY.map((module) => module.id), [
     "contracts",
     "control-plane",
+    "persistence",
     "site-source",
     "site-configuration",
     "quality-oracle",
     "repository-policy",
   ]);
-  assert.ok(!MODULE_REGISTRY.some((module) => /seo|research|content|deployment|persistence/.test(module.id)));
+  assert.ok(!MODULE_REGISTRY.some((module) => /seo|research|content|deployment/.test(module.id)));
 });
 
 test("create_page has READ MANY / WRITE ONE exact-page authority", () => {
@@ -37,6 +38,7 @@ test("create_page cannot write protected or unrelated paths", () => {
     "sites/starter/src/pages/index.astro",
     "sites/starter/src/components/Hero.astro",
     "apps/factory/src/executor/run.ts",
+    "apps/factory/src/persistence/schema.ts",
     "packages/contracts/src/site-task.ts",
     "sites/starter/tests/qa.spec.ts",
     "sites/starter/playwright.config.ts",

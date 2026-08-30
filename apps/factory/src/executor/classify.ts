@@ -20,9 +20,17 @@ export function stripAnsi(text: string): string {
   return text.replace(/\u001B\[[0-9;]*[a-zA-Z]/g, "");
 }
 
+/** Redact sensitive database passwords and credentials from log excerpts. */
+export function scrubSecrets(text: string): string {
+  return text.replace(
+    /((?:postgres|postgresql):\/\/[^:]+:)([^@]+)(@)/gi,
+    "$1***$3",
+  );
+}
+
 /** Sanitize and truncate raw log text into a compact excerpt (max 8KB). */
 export function sanitizeExcerpt(raw: string, maxChars: number = MAX_FAILURE_EXCERPT_CHARS): string {
-  const clean = stripAnsi(raw).trim();
+  const clean = scrubSecrets(stripAnsi(raw)).trim();
   if (clean.length <= maxChars) {
     return clean;
   }
@@ -132,7 +140,7 @@ export function buildFailureReport(params: {
   authorizedScope?: string;
 }): FailureReport {
   const combinedLog = `${params.stdout ?? ""}\n${params.stderr ?? ""}`.trim();
-  const excerpt = combinedLog.length > 0 ? sanitizeExcerpt(combinedLog) : params.message;
+  const excerpt = combinedLog.length > 0 ? sanitizeExcerpt(combinedLog) : scrubSecrets(params.message);
   const failingAssertions = extractFailingAssertions(params.stdout ?? "", params.stderr ?? "");
 
   return {
@@ -140,7 +148,7 @@ export function buildFailureReport(params: {
     attemptNumber: params.attemptNumber,
     failingStage: params.failingStage,
     failureCode: params.failureCode,
-    summary: params.message,
+    summary: scrubSecrets(params.message),
     excerpt,
     failingAssertions: failingAssertions.length > 0 ? failingAssertions : undefined,
     targetSlug: params.targetSlug,

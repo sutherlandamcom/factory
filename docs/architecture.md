@@ -102,6 +102,76 @@ layouts (`Layout`, `ArticleLayout`). Routes: `/`, `/services/example`,
    then Playwright runs against the built site served by `astro preview` in
    the foreground across desktop (1280×800) and mobile (390×844) viewports.
 
-## Next vertical slice (PR #4 — future, not implemented)
+## Persistent control plane (`apps/factory/src/persistence`)
 
-Future vertical slices (publishing, deployment, multi-site management, automated task generation, patch promotion) will build on the validated PR #3 bounded execution and repair loop.
+### Architectural decision record (ADR): minimal operational-state layer
+
+- **Context**: Factory execution must be durable, inspectable, idempotent, and restart-safe. While execution artifacts (patches, QA reports, transcripts, traces) belong on the local filesystem, operational lifecycle state must survive host/process restarts and provide concurrency safety.
+- **Decision**: Integrate a minimal, strongly typed PostgreSQL persistence layer into `apps/factory` using **Drizzle ORM** (`drizzle-orm` + `drizzle-kit`) and `node-postgres` (`pg`).
+- **ORM Selection Rationales**:
+  - Drizzle provides TypeScript-first schema definitions with zero code generation requirement at runtime.
+  - SQL check constraints (`attempts_attempt_number_bounds`, non-negative durations/tokens), composite unique indexes, and cascade foreign keys are fully expressible in schema.
+  - Generates transparent, reviewable standard SQL migrations in `apps/factory/drizzle/`.
+  - Zero heavy runtime engine/binary bloat compared to Prisma; minimal dependency footprint.
+
+### Data model & relational structure
+
+The control plane persists exactly 7 tables:
+
+```
+[projects]
+   └── [sites] (unique project_id + key)
+          └── [runs] (idempotency_key unique, base_commit, status, duration)
+                 ├── [tasks] (run_id FK, site_id FK, type, payload, status)
+                 │      └── [attempts] (1..3 bounds, kind, stage, status, classification)
+                 │             ├── [quality_results] (gate, passed, failure_gate, details)
+                 │             └── [model_invocations] (provider, runtime, tokens, cost, duration)
+```
+
+- `projects`: Business/domain grouping (e.g. `summit-roofing`). Unique `key`.
+- `sites`: Individual websites registered within a project (e.g. `starter`). Unique `(project_id, key)` composite index.
+- `runs`: Top-level durable execution instance. Unique `idempotency_key = sha256(siteKey + taskJson + baseCommit)`. Status: `running | succeeded | failed | interrupted | needs_review`.
+- `tasks`: Individual unit of work within a run (e.g. `create_page` with full JSON payload).
+- `attempts`: Bounded Codex attempt record (enforced `attempt_number BETWEEN 1 AND 3` via SQL CHECK constraint). Stores start/finish timestamps, duration, exit classification, and error excerpts.
+- `quality_results`: Structured evaluation from each quality gate (`scope`, `integrity`, `foundation_qa`, `dynamic_qa`, `semantic_verification`, `patch_replay`).
+- `model_invocations`: Audit trail of model executions (tokens, durations, runtime provider).
+
+### Single-writer concurrency control
+
+- Active execution is guarded by PostgreSQL session-level advisory locks using `pg_try_advisory_lock(1428570001)`.
+- The lock is acquired on a dedicated `pg.Client` session before crash recovery or run initialization and held until execution cleanup finishes.
+- If another process attempts to run concurrently, it immediately receives `control_plane_busy` and fails closed without mutating state.
+
+### Crash & restart recovery
+
+- On startup (under the advisory lock), the control plane automatically scans for orphaned executions left in `running` state by a previous process crash or SIGKILL.
+- Atomic recovery transaction updates stale `runs`, `tasks`, and `attempts` to status `interrupted` with `errorMessage = "control_plane_restart"`.
+- Recovery does **not** automatically retry or invoke Attempt 2; historical execution records are preserved accurately for post-mortem inspection.
+
+### Security & secret isolation boundary
+
+- Hard isolation rule: Database credentials (`FACTORY_DATABASE_URL`, `DATABASE_URL`, `PGPASSWORD`, etc.) are stripped and blocked at all execution boundaries:
+  1. Never exposed to child environments (scrubbed by strict allowlist in `apps/factory/src/executor/env.ts`).
+  2. Never mounted into the Colima QEMU VM or Docker worker container.
+  3. Never leaked into prompt texts, `FailureReport`, `TaskResult`, or `.factory/runs/` artifacts.
+  4. Redacted from all CLI logs and error messages using regex URI sanitization.
+- Fail closed: If `FACTORY_DATABASE_URL` is missing or invalid for production `site-task` execution, Factory fails closed immediately with `database_unconfigured` / `database_connection_failed`.
+
+### Separation of DB operational state and filesystem artifacts
+
+- **Database**: Stores operational lifecycle state, relational integrity, attempt numbers, timing metrics, gate verdicts, model audit metadata, and relative artifact pointers (`artifact_directory`).
+- **Filesystem (`.factory/runs/<runId>/`)**: Stores heavy, binary, or unstructured artifacts (diff patches, raw Git evidence, Playwright traces/screenshots, task specs, and logs).
+
+### CLI operational command set
+
+```bash
+pnpm factory db check               # Verify database connectivity and schema readiness
+pnpm factory db migrate             # Run versioned Drizzle SQL migrations
+pnpm factory project create <key> <name>   # Create a project
+pnpm factory site register <proj> <key> <name>  # Register a site in a project
+pnpm factory run show <runId>       # Inspect complete relational state and attempt history
+```
+
+## Next vertical slice (PR #5 — future, not implemented)
+
+Future vertical slices (publishing, deployment, multi-site management, automated task generation, patch promotion) will build on the validated PR #4 persistent control plane.

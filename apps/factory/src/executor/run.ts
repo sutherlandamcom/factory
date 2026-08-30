@@ -36,6 +36,45 @@ export interface ExecutorTimeouts {
   qaMs: number;
 }
 
+export interface ExecutorLifecycleObserver {
+  onAttemptStarted?: (info: {
+    attemptNumber: number;
+    kind: "initial" | "repair";
+    stage: TaskStage;
+    startedAt: Date;
+    attemptDir: string;
+  }) => Promise<void>;
+  onModelInvocation?: (info: {
+    attemptNumber: number;
+    provider: string;
+    model?: string | null;
+    runtime: string;
+    runtimeVersion?: string | null;
+    methodologyVersion?: string | null;
+    status: "running" | "succeeded" | "failed" | "interrupted";
+    startedAt: Date;
+    finishedAt?: Date | null;
+    durationMs?: number | null;
+    inputTokens?: number | null;
+    outputTokens?: number | null;
+    totalTokens?: number | null;
+    costMicros?: number | null;
+    errorCode?: string | null;
+    artifactRef?: string | null;
+  }) => Promise<void>;
+  onQualityGateEvaluated?: (info: {
+    attemptNumber: number;
+    gate: string;
+    passed: boolean;
+    summary?: string | null;
+    artifactRef?: string | null;
+  }) => Promise<void>;
+  onAttemptCompleted?: (info: {
+    attemptNumber: number;
+    attemptResult: AttemptResult;
+  }) => Promise<void>;
+}
+
 /** Injectable boundaries — tests substitute deterministic fakes. */
 export interface ExecutorDeps {
   codexRunner?: CodexRunner;
@@ -56,6 +95,7 @@ export interface ExecutorDeps {
   maxAttempts?: number;
   /** Fixed runId for tests; a timestamped id is generated otherwise. */
   runId?: string;
+  lifecycle?: ExecutorLifecycleObserver;
 }
 
 export interface RunSiteTaskOptions extends ExecutorDeps {
@@ -146,6 +186,12 @@ export async function runSiteTask(
       JSON.stringify(result, null, 2),
       "utf8",
     );
+    if (opts.lifecycle?.onAttemptCompleted) {
+      await opts.lifecycle.onAttemptCompleted({
+        attemptNumber: result.attemptNumber,
+        attemptResult: result,
+      });
+    }
   };
 
   try {
@@ -212,6 +258,16 @@ export async function runSiteTask(
       let attemptClassification: FailureClassification | undefined;
       let attemptError: { code: string; message: string } | undefined;
 
+      if (opts.lifecycle?.onAttemptStarted) {
+        await opts.lifecycle.onAttemptStarted({
+          attemptNumber,
+          kind,
+          stage: "codex",
+          startedAt: attemptStartedAt,
+          attemptDir,
+        });
+      }
+
       const integrityBaseline = await captureIntegritySnapshot(worktreePath);
       const integrityBaselinePath = path.join(attemptDir, "integrity-baseline.json");
       await writeFile(integrityBaselinePath, JSON.stringify(integrityBaseline, null, 2), "utf8");
@@ -246,6 +302,21 @@ export async function runSiteTask(
       await writeFile(path.join(attemptDir, "codex-stderr.txt"), codexResult.stderr, "utf8");
       if (codexResult.version) {
         await writeFile(path.join(attemptDir, "codex-version.txt"), `${codexResult.version}\n`, "utf8");
+      }
+
+      if (opts.lifecycle?.onModelInvocation) {
+        await opts.lifecycle.onModelInvocation({
+          attemptNumber,
+          provider: "openai",
+          runtime: "codex-cli",
+          runtimeVersion: codexResult.version ?? null,
+          status: codexResult.timedOut ? "failed" : codexResult.exitCode === 0 ? "succeeded" : "failed",
+          startedAt: attemptStartedAt,
+          finishedAt: new Date(),
+          durationMs: new Date().getTime() - attemptStartedAt.getTime(),
+          errorCode: codexResult.timedOut ? "codex_timeout" : codexResult.exitCode !== 0 ? "codex_failed" : null,
+          artifactRef: path.relative(repoRoot, path.join(attemptDir, "codex-output.jsonl")),
+        });
       }
 
       if (codexResult.timedOut) {
@@ -307,6 +378,19 @@ export async function runSiteTask(
         patchPath: path.relative(repoRoot, attemptPatchPath),
       };
 
+      if (opts.lifecycle?.onQualityGateEvaluated) {
+        await opts.lifecycle.onQualityGateEvaluated({
+          attemptNumber,
+          gate: "scope",
+          passed: scopeResult.violations.length === 0,
+          summary:
+            scopeResult.violations.length === 0
+              ? `Changed files: ${scopeResult.changedFiles.join(", ") || "(none)"}`
+              : `Unauthorized paths: ${scopeResult.violations.join(", ")}`,
+          artifactRef: path.relative(repoRoot, attemptPatchPath),
+        });
+      }
+
       if (scopeResult.violations.length > 0) {
         attemptError = {
           code: "scope_violation",
@@ -345,6 +429,18 @@ export async function runSiteTask(
         baselineArtifact: path.relative(repoRoot, integrityBaselinePath),
         currentArtifact: path.relative(repoRoot, integrityCurrentPath),
       };
+
+      if (opts.lifecycle?.onQualityGateEvaluated) {
+        await opts.lifecycle.onQualityGateEvaluated({
+          attemptNumber,
+          gate: "integrity",
+          passed: integrity.passed,
+          summary: integrity.passed
+            ? "Ignored/build-input state unmodified"
+            : `Integrity violations: ${integrity.violations.join(", ")}`,
+          artifactRef: path.relative(repoRoot, integrityCurrentPath),
+        });
+      }
       if (!integrity.passed) {
         attemptError = {
           code: "integrity_violation",
@@ -416,6 +512,18 @@ export async function runSiteTask(
         ...(qaResult.dynamicArtifact ? { dynamicArtifact: qaResult.dynamicArtifact } : {}),
       };
       lastQaOutcome = attemptQa;
+
+      if (opts.lifecycle?.onQualityGateEvaluated) {
+        await opts.lifecycle.onQualityGateEvaluated({
+          attemptNumber,
+          gate: qaResult.failureGate === "dynamic" ? "dynamic_qa" : "foundation_qa",
+          passed: qaResult.passed,
+          summary: qaResult.passed
+            ? "QA checks passed"
+            : `QA exited ${qaResult.exitCode}${qaResult.failureGate ? ` on ${qaResult.failureGate}` : ""}`,
+          artifactRef: qaResult.dynamicArtifact ?? qaResult.foundationArtifact ?? null,
+        });
+      }
 
       if (qaResult.timedOut) {
         attemptError = { code: "qa_timeout", message: `Factory QA timed out after ${timeouts.qaMs}ms` };
@@ -527,6 +635,16 @@ export async function runSiteTask(
         "utf8",
       );
 
+      if (opts.lifecycle?.onQualityGateEvaluated) {
+        await opts.lifecycle.onQualityGateEvaluated({
+          attemptNumber,
+          gate: "semantic_verification",
+          passed: verification.passed,
+          summary: verification.details,
+          artifactRef: path.relative(repoRoot, path.join(attemptDir, "task-verification.json")),
+        });
+      }
+
       if (!verification.passed) {
         if (attemptNumber >= maxAttempts) {
           attemptError = {
@@ -616,6 +734,16 @@ export async function runSiteTask(
         JSON.stringify(replayResult, null, 2),
         "utf8",
       );
+
+      if (opts.lifecycle?.onQualityGateEvaluated) {
+        await opts.lifecycle.onQualityGateEvaluated({
+          attemptNumber,
+          gate: "patch_replay",
+          passed: replayResult.passed,
+          summary: replayResult.details,
+          artifactRef: path.relative(repoRoot, path.join(attemptDir, "replay-verification.json")),
+        });
+      }
 
       if (!replayResult.passed) {
         if (attemptNumber >= maxAttempts) {

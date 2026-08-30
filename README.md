@@ -11,6 +11,7 @@ See `docs/architecture.md` for the design.
 
 - Node.js >=22.12.0
 - pnpm 11 (`corepack enable` if needed)
+- PostgreSQL 18 (e.g. via local Postgres or Docker container)
 - Codex CLI authentication (`@openai/codex` is pinned at `0.150.1`). Factory
   copies only `auth.json` into an ephemeral worker-specific runtime directory.
 - Colima + Docker CLI, using the dedicated `factory-sandbox` profile below.
@@ -19,6 +20,30 @@ See `docs/architecture.md` for the design.
 
 ```bash
 pnpm install
+```
+
+## Database setup (PostgreSQL 18)
+
+Factory uses a minimal, durable PostgreSQL operational-state layer. Set `FACTORY_DATABASE_URL` in `.env`:
+
+```bash
+# Example local PostgreSQL connection
+FACTORY_DATABASE_URL="postgresql://factory:factory_password@localhost:5432/factory"
+FACTORY_TEST_DATABASE_URL="postgresql://factory:factory_test_password@localhost:5432/factory_test"
+```
+
+Apply database migrations:
+
+```bash
+pnpm factory db migrate
+pnpm factory db check
+```
+
+Register your initial project and site:
+
+```bash
+pnpm factory project create default "Default Project"
+pnpm factory site register default starter "Starter Template"
 ```
 
 ## Strong execution isolation
@@ -90,7 +115,13 @@ All commands run from the repository root.
 | `pnpm test` | Factory unit tests (deterministic, no Codex calls) + Playwright QA against the **built** site |
 | `pnpm qa` | `check` → `build` → `test` in one command |
 | `pnpm factory` | Run the Factory control-plane CLI |
-| `pnpm factory site-task <task.json>` | Execute one SiteTask end to end with bounded automatic repair (requires Codex auth) |
+| `pnpm factory site-task <task.json>` | Execute one SiteTask end to end with persisted state & bounded repair (requires DB + Codex auth) |
+| `pnpm factory db check` | Check PostgreSQL database connection and schema state |
+| `pnpm factory db migrate` | Run versioned Drizzle SQL migrations against configured database |
+| `pnpm factory project create <key> <name>` | Create a project in the control plane database |
+| `pnpm factory site register <proj> <key> <name>` | Register a site under a project |
+| `pnpm factory run show <runId>` | Inspect durable run state, attempt breakdown, quality gates, and model metrics |
+| `pnpm --filter @factory/factory test:persistence` | Run real PostgreSQL persistence integration tests |
 
 ## Running a site-task
 
@@ -98,7 +129,7 @@ All commands run from the repository root.
 pnpm factory site-task packages/contracts/fixtures/create-roof-repair.json
 ```
 
-The executor validates the task and verifies the working tree is clean. Before
+The executor validates the task, verifies working tree cleanliness, acquires the PostgreSQL advisory lock, recovers any interrupted stale runs, verifies site registration, and records the initial Run and Task. Before
 creating a worker it verifies the exact dedicated Colima mounts, Linux Docker
 server, inner-sandbox user-namespace policy, and pinned worker image. A missing or unsafe profile returns
 `STRONG_EXECUTION_ISOLATION_UNAVAILABLE`; Factory never falls back to
@@ -119,7 +150,7 @@ With an approved backend, the bounded loop remains specified as follows:
 
 Factory's module rule is **READ MANY / WRITE FEW**. The version-controlled
 registry contains only current modules; accepted contracts, control-plane,
-configuration, QA, and repository-policy areas are protected by default.
+persistence, configuration, QA, and repository-policy areas are protected by default.
 `create_page` receives write authority only for its exact target page. Reading
 or importing another module never grants permission to modify it, and tasks
 cannot declare a broader policy in their input.
@@ -158,6 +189,8 @@ Traces and error contexts for failed tests land in
 Copy `.env.example` to `.env` in the repository root (or create `sites/starter/.env`)
 to configure environment variables.
 
+- **`FACTORY_DATABASE_URL`**: PostgreSQL connection string for Factory persistent control plane (e.g. `postgresql://factory:password@localhost:5432/factory`). Required for production `site-task` execution.
+- **`FACTORY_TEST_DATABASE_URL`**: Optional PostgreSQL connection string used for integration tests (`test:persistence`).
 - **`PUBLIC_SITE_URL`**: Canonical origin of the site. Used for canonical `<link>`,
   Open Graph URLs, and JSON-LD `@id` / `url` properties.
   - **Local default**: `http://localhost:4321` when unset.
@@ -168,3 +201,4 @@ to configure environment variables.
     origin (`https://test.example.com`) by default to assert correct canonical generation.
 - **`FACTORY_QA_PORT`**: Optional TCP port for Playwright preview server (default: `4321`).
   Allows isolated concurrent QA runs across separate worktrees.
+

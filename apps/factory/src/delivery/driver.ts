@@ -28,7 +28,7 @@ function deploymentId(): string {
   return `deployment-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
 }
 
-function artifactDirectory(repoRoot: string, id: string): { absolute: string; relative: string } {
+export function artifactDirectory(repoRoot: string, id: string): { absolute: string; relative: string } {
   const relative = path.join(".factory", "deployments", id);
   return { absolute: path.join(repoRoot, relative), relative };
 }

@@ -111,6 +111,26 @@ pnpm factory rollback <siteKey>
 
 The Cloudflare Worker, production hostname, DNS/routes, and certificates must
 already be provisioned. Factory performs no bootstrap infrastructure changes.
+The provisioned target must additionally have version preview URLs enabled
+(`previews_enabled=true` on its workers.dev subdomain, `workers.dev` enabled as
+required by the configured target): preview QA against the uploaded version is
+a mandatory pre-promotion gate, and `wrangler versions upload` does not change
+Worker settings. Factory fails closed (`provider_output_invalid`) when the
+provider cannot return a version preview URL.
+
+### Repository-root remediation rollout note
+
+Runtime evidence and worktrees resolve beneath the canonical Git repository
+top-level (`.factory/`), never beneath `apps/factory/.factory/`. Environments
+that ran delivery commands before this remediation via the documented root
+script may have legacy evidence at the un-ignored `apps/factory/.factory/`
+path; because the clean-control-plane preflight scans the whole tree with
+`--untracked-files=all`, any leftover must be relocated (for example into the
+root-level `.factory/` evidence hierarchy) or removed once, before the next
+`deploy` or `rollback`, or the preflight will fail closed with
+`control_plane_unaccepted`. Adding an ignore rule for the legacy path is
+intentionally not done: it would conceal the incorrect root rather than fix
+it.
 
 ## Credential boundary
 

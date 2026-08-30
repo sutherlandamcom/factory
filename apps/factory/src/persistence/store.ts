@@ -102,6 +102,13 @@ export class FactoryStore {
     key: string;
     name: string;
   }): Promise<SiteRecord> {
+    const existing = await this.findSiteByGlobalKey(input.key);
+    if (existing) {
+      throw new FactoryError(
+        "site_already_exists",
+        `Site with key '${input.key}' is already registered under project '${existing.project.key}'.`,
+      );
+    }
     const project = await this.getProjectByKey(input.projectKey);
     if (!project) {
       throw new FactoryError(
@@ -128,13 +135,18 @@ export class FactoryStore {
     key: string;
     name?: string;
   }): Promise<{ site: SiteRecord; project: ProjectRecord }> {
-    const project = await this.ensureProject({ key: input.projectKey });
-    const [existing] = await this.db
-      .select()
-      .from(sites)
-      .where(and(eq(sites.projectId, project.id), eq(sites.key, input.key)));
-    if (existing) return { site: existing, project };
+    const existing = await this.findSiteByGlobalKey(input.key);
+    if (existing) {
+      if (existing.project.key !== input.projectKey) {
+        throw new FactoryError(
+          "site_ownership_conflict",
+          `Site key '${input.key}' is already registered under project '${existing.project.key}'. Cannot register under '${input.projectKey}'.`,
+        );
+      }
+      return existing;
+    }
 
+    const project = await this.ensureProject({ key: input.projectKey });
     const id = randomUUID();
     const [created] = await this.db
       .insert(sites)
@@ -150,13 +162,9 @@ export class FactoryStore {
   }
 
   async getSiteByKey(projectKey: string, siteKey: string): Promise<SiteRecord | null> {
-    const project = await this.getProjectByKey(projectKey);
-    if (!project) return null;
-    const [row] = await this.db
-      .select()
-      .from(sites)
-      .where(and(eq(sites.projectId, project.id), eq(sites.key, siteKey)));
-    return row ?? null;
+    const resolved = await this.findSiteByGlobalKey(siteKey);
+    if (!resolved || resolved.project.key !== projectKey) return null;
+    return resolved.site;
   }
 
   async findSiteByGlobalKey(siteKey: string): Promise<{ site: SiteRecord; project: ProjectRecord } | null> {
@@ -170,6 +178,12 @@ export class FactoryStore {
       .where(eq(sites.key, siteKey));
 
     if (rows.length === 0) return null;
+    if (rows.length > 1) {
+      throw new FactoryError(
+        "persistence_state_invalid",
+        `Ambiguous site key '${siteKey}': multiple sites found with the same key.`,
+      );
+    }
     return rows[0]!;
   }
 

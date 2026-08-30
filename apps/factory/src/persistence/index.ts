@@ -73,3 +73,10 @@ export {
   runPersistedSiteTask,
   type PersistedRunOptions,
 } from "./driver.js";
+
+export {
+  reconstructTaskResultFromPersistence,
+  resolveDurableTaskResult,
+  type RunDetails,
+} from "./reconstruct.js";
+

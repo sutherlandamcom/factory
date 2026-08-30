@@ -10,6 +10,7 @@ import { acquireControlPlaneLock } from "./lock.js";
 import { recoverStaleExecutionState } from "./recovery.js";
 import { FactoryStore, computeIdempotencyKey } from "./store.js";
 import { DatabaseLifecycleObserver } from "./lifecycle.js";
+import { resolveDurableTaskResult } from "./reconstruct.js";
 
 export interface PersistedRunOptions extends RunSiteTaskOptions {
   idempotencyKey?: string;
@@ -90,32 +91,23 @@ export async function runPersistedSiteTask(
     const existingRun = await store.findRunByIdempotencyKey(idempotencyKey);
     if (existingRun) {
       if (existingRun.status !== "running") {
-        // Return existing persisted result from artifacts or database
-        const existingRunDir = path.join(repoRoot, ".factory", "runs", existingRun.id);
-        try {
-          const rawResult = await readFile(path.join(existingRunDir, "task-result.json"), "utf8");
-          return JSON.parse(rawResult) as TaskResult;
-        } catch {
-          // If artifact is missing, construct minimal TaskResult matching DB state
-          return {
-            runId: existingRun.id,
-            status: existingRun.status as TaskResult["status"],
-            finalStage: existingRun.status === "succeeded" ? "complete" : "validation",
-            taskType,
-            siteId: site.key,
-            baseCommit: existingRun.baseCommit,
-            startedAt: existingRun.startedAt.toISOString(),
-            finishedAt: existingRun.finishedAt?.toISOString() ?? new Date().toISOString(),
-            durationMs: existingRun.durationMs ?? 0,
-            totalAttempts: 0,
-            successfulAttempt: null,
-            attempts: [],
-            artifacts: { runDirectory: path.relative(repoRoot, existingRunDir) },
-            ...(existingRun.errorCode
-              ? { error: { code: existingRun.errorCode, message: existingRun.errorMessage ?? "" } }
-              : {}),
-          };
+        const details = await store.getRunDetails(existingRun.id);
+        if (!details) {
+          throw new FactoryError(
+            "persistence_state_invalid",
+            `Run '${existingRun.id}' exists but detailed records could not be loaded.`,
+          );
         }
+
+        const existingRunDir = path.join(repoRoot, ".factory", "runs", existingRun.id);
+        let rawResult: string | null = null;
+        try {
+          rawResult = await readFile(path.join(existingRunDir, "task-result.json"), "utf8");
+        } catch {
+          rawResult = null;
+        }
+
+        return resolveDurableTaskResult(details, repoRoot, rawResult);
       } else {
         throw new FactoryError(
           "run_already_in_progress",

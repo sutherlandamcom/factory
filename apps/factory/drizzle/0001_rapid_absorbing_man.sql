@@ -1,0 +1,1 @@
+ALTER TABLE "sites" ADD CONSTRAINT "sites_key_unique" UNIQUE("key");

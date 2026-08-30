@@ -153,8 +153,84 @@ All 10 integration tests run against real PostgreSQL 18 and pass:
 
 ---
 
-## 11. Conclusion & Terminal Status
+---
 
-The Persistent Control Plane implementation is complete, thoroughly verified with real PostgreSQL 18, and ready for independent review.
+## 11. Independent QA Remediation (PR #3 Targeted Fixes)
 
-`PERSISTENT CONTROL PLANE IMPLEMENTATION COMPLETE — PENDING INDEPENDENT QA`
+Following independent QA of the initial Persistent Control Plane implementation, three P1 findings were addressed in a targeted remediation:
+
+### 11.1 P1-1 — Global Site Identity across Projects
+
+- **Problem**: `sites` table enforced unique constraint only per-project `(project_id, key)`, allowing ambiguous site resolution for the globally-scoped `SiteTask.siteId`.
+- **Remediation**:
+  - `sites.key` made globally unique in PostgreSQL schema (`sites_key_unique` constraint via migration `0001_rapid_absorbing_man.sql`).
+  - `findSiteByGlobalKey` enforces deterministic exact site lookup (returns `null` or exact unique record, fails closed on multiple).
+  - Attempting to register an already-used site key under another project fails cleanly with `site_already_exists`.
+  - Idempotency key generation incorporates globally unique site identity, ensuring distinct sites with identical payloads never collide.
+
+### 11.2 P1-2 — Durable Idempotent TaskResult Reconstruction
+
+- **Problem**: When `task-result.json` artifact was missing or corrupt, idempotent re-execution returned an unvalidated fallback with fake 0 attempts, violating contract and losing historical context.
+- **Remediation**:
+  - Re-execution checks durable PostgreSQL state as operational source of truth.
+  - If `task-result.json` exists, it is parsed and validated with `taskResultSchema.safeParse` and cross-checked against DB truth.
+  - If artifact is missing, malformed JSON, schema-invalid, or contradicts DB truth, `resolveDurableTaskResult` reconstructs the complete `TaskResult` graph (all attempts, classifications, timing, quality gates, and error details) purely from PostgreSQL state.
+  - `successfulAttempt` derived accurately from the attempt that actually succeeded (or `null` if none).
+  - Reconstructed `TaskResult` validated against `taskResultSchema` (fails closed with `persistence_state_invalid` on invalid state).
+
+### 11.3 P1-3 — Advisory Lock PoolClient Leak on Error Paths
+
+- **Problem**: In `acquireControlPlaneLock`, if the acquisition query threw an error or connection was busy, the checked-out `PoolClient` was not consistently released, risking pool exhaustion.
+- **Remediation**:
+  - Explicit client ownership transfer pattern with `try/finally` block.
+  - Every checked-out `PoolClient` is guaranteed released exactly once unless transferred to the returned `ControlPlaneLockHandle`.
+  - Acquisition query errors, busy lock failures, and unlock query exceptions all cleanly release the client back to the pool.
+  - `lock.release()` is strictly idempotent.
+
+---
+
+## 12. Updated Complete Test Matrix
+
+### 12.1 Persistence Integration Tests (`test:persistence`)
+
+All 14 integration tests run against real PostgreSQL 18 and pass:
+
+| # | Test Name | Result |
+| --- | --- | --- |
+| 1 | `attempts & constraints: attempt limit (1..3), unique attempts, and transaction rollback` | **PASSED** |
+| 2 | `execution integration: happy path persists Run, Task, Attempt, QualityResults, ModelInvocation` | **PASSED** |
+| 3 | `execution integration: scope violation terminal failure persists failed state without retry` | **PASSED** |
+| 4 | `execution integration: bounded repair loop (Attempt 1 QA failure -> Attempt 2 success)` | **PASSED** |
+| 5 | `execution integration: unregistered site fails closed before Codex` | **PASSED** |
+| 6 | `idempotency: sequential and concurrent idempotency deduplication` | **PASSED** |
+| 7 | `idempotency fallback: missing artifact reconstructs accurate multi-attempt TaskResult from DB` | **PASSED** |
+| 8 | `idempotency fallback: malformed, invalid, or contradicting artifact yields to DB truth` | **PASSED** |
+| 9 | `idempotency fallback: terminal failure run with missing artifact reconstructs failure details` | **PASSED** |
+| 10 | `advisory lock: single-writer session lock blocks concurrent writer and releases cleanly` | **PASSED** |
+| 11 | `advisory lock error paths: client release and leak-free ownership invariants` | **PASSED** |
+| 12 | `recovery: stale running Run/Task/Attempt marked interrupted on restart without auto-attempt-2` | **PASSED** |
+| 13 | `project & site: global site key uniqueness across projects and deterministic resolution` | **PASSED** |
+| 14 | `schema & migrations: clean DB migration succeeds and is idempotent` | **PASSED** |
+
+### 12.2 Factory Unit & Regression Tests (`pnpm test`)
+
+- **Total Tests**: 99 tests
+- **Passed**: 99 (100%)
+- **Failed**: 0
+- **Regressions**: 0
+
+### 12.3 Full QA Pipeline (`pnpm qa`)
+
+- **Check**: Typecheck passed across `@factory/contracts`, `sites/starter`, and `@factory/factory`.
+- **Build**: Astro static site build succeeded.
+- **Unit Tests**: 99 tests passed.
+- **Playwright QA**: 8 passed, 2 skipped across desktop and mobile viewports.
+
+---
+
+## 13. Conclusion & Terminal Status
+
+The Persistent Control Plane targeted remediation is complete, all 3 P1 QA findings are resolved and covered by adversarial tests, and all Factory regressions pass.
+
+`PERSISTENT CONTROL PLANE REMEDIATION COMPLETE — PENDING INDEPENDENT QA`
+

@@ -26,7 +26,7 @@ export const sites = pgTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id),
-    key: text("key").notNull(),
+    key: text("key").notNull().unique(),
     name: text("name").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),

@@ -8,6 +8,13 @@
       "when": 1788101167157,
       "tag": "0000_glorious_forgotten_one",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788103232772,
+      "tag": "0001_rapid_absorbing_man",
+      "breakpoints": true
     }
   ]
 }

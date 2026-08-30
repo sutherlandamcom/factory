@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type pg from "pg";
 import { setupMigratedTestDatabase } from "./helpers.js";
 import { acquireControlPlaneLock, withControlPlaneLock } from "../../src/persistence/lock.js";
 import { recoverStaleExecutionState } from "../../src/persistence/recovery.js";
@@ -31,10 +32,107 @@ test("advisory lock: single-writer session lock blocks concurrent writer and rel
     // 4. Second writer can now acquire lock successfully
     const lock2 = await acquireControlPlaneLock(dbInst.pool);
     assert.ok(lock2);
+
+    // 5. Idempotent double release
     await lock2.release();
+    await lock2.release(); // Must not throw or error
   } finally {
     await dbInst.close();
   }
+});
+
+test("advisory lock error paths: client release and leak-free ownership invariants", async () => {
+  // A: pool.connect() succeeds, client.query(pg_try_advisory_lock) throws -> client.release called exactly once
+  let releaseCallsA = 0;
+  const mockPoolA = {
+    connect: async () => ({
+      query: async () => {
+        throw new Error("Simulated query network failure");
+      },
+      release: () => {
+        releaseCallsA++;
+      },
+    }),
+  } as unknown as pg.Pool;
+
+  await assert.rejects(
+    async () => {
+      await acquireControlPlaneLock(mockPoolA);
+    },
+    (err: Error) => err.message === "Simulated query network failure",
+  );
+  assert.equal(releaseCallsA, 1, "client.release must be called exactly once when lock query throws");
+
+  // B: lock query returns acquired = false -> client.release called exactly once, throws control_plane_busy
+  let releaseCallsB = 0;
+  const mockPoolB = {
+    connect: async () => ({
+      query: async () => ({
+        rows: [{ acquired: false }],
+      }),
+      release: () => {
+        releaseCallsB++;
+      },
+    }),
+  } as unknown as pg.Pool;
+
+  await assert.rejects(
+    async () => {
+      await acquireControlPlaneLock(mockPoolB);
+    },
+    (err: unknown) => err instanceof FactoryError && err.code === "control_plane_busy",
+  );
+  assert.equal(releaseCallsB, 1, "client.release must be called exactly once when lock is busy");
+
+  // C & D: lock succeeds -> release called once and twice -> client.release called exactly once
+  let releaseCallsC = 0;
+  let unlockQueryCalls = 0;
+  const mockPoolC = {
+    connect: async () => ({
+      query: async (sql: string) => {
+        if (sql.includes("pg_advisory_unlock")) {
+          unlockQueryCalls++;
+          return { rows: [] };
+        }
+        return { rows: [{ acquired: true }] };
+      },
+      release: () => {
+        releaseCallsC++;
+      },
+    }),
+  } as unknown as pg.Pool;
+
+  const lockHandle = await acquireControlPlaneLock(mockPoolC);
+  assert.equal(releaseCallsC, 0, "client must not be released while lock is actively held");
+
+  await lockHandle.release();
+  assert.equal(unlockQueryCalls, 1, "pg_advisory_unlock must be queried on release");
+  assert.equal(releaseCallsC, 1, "client.release must be called on first release");
+
+  // Second release must be a no-op (idempotent)
+  await lockHandle.release();
+  assert.equal(releaseCallsC, 1, "client.release must NOT be called a second time");
+  assert.equal(unlockQueryCalls, 1, "pg_advisory_unlock must NOT be called a second time");
+
+  // E: unlock query throws -> client is still released
+  let releaseCallsE = 0;
+  const mockPoolE = {
+    connect: async () => ({
+      query: async (sql: string) => {
+        if (sql.includes("pg_advisory_unlock")) {
+          throw new Error("Simulated unlock failure");
+        }
+        return { rows: [{ acquired: true }] };
+      },
+      release: () => {
+        releaseCallsE++;
+      },
+    }),
+  } as unknown as pg.Pool;
+
+  const lockHandleE = await acquireControlPlaneLock(mockPoolE);
+  await lockHandleE.release();
+  assert.equal(releaseCallsE, 1, "client.release must still be called even if unlock query throws");
 });
 
 test("recovery: stale running Run/Task/Attempt marked interrupted on restart without auto-attempt-2", async () => {

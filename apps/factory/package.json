@@ -6,13 +6,21 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "check": "tsc --noEmit",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/*.test.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/index.ts db migrate",
+    "db:check": "tsx src/index.ts db check",
+    "test:persistence": "tsx --test --test-concurrency=1 tests/persistence/*.test.ts"
   },
   "dependencies": {
-    "@factory/contracts": "workspace:*"
+    "@factory/contracts": "workspace:*",
+    "drizzle-orm": "0.45.2",
+    "pg": "8.23.0"
   },
   "devDependencies": {
     "@types/node": "^26.3.0",
+    "@types/pg": "^8.23.1",
+    "drizzle-kit": "0.31.10",
     "tsx": "^4.23.12",
     "typescript": "^5.9.3"
   }

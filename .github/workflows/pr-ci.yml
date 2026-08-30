@@ -13,9 +13,24 @@ permissions:
 
 jobs:
   qa:
-    name: Factory QA
+    name: Factory QA & Persistence Acceptance
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: factory
+          POSTGRES_PASSWORD: factory_test_password
+          POSTGRES_DB: factory_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout repository
@@ -38,3 +53,8 @@ jobs:
 
       - name: Run Factory QA (check -> build -> test)
         run: pnpm qa
+
+      - name: Run Persistence Integration Tests (Real PostgreSQL 18)
+        env:
+          FACTORY_TEST_DATABASE_URL: postgresql://factory:factory_test_password@localhost:5432/factory_test
+        run: pnpm --filter @factory/factory run test:persistence

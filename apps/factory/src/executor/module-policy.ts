@@ -3,6 +3,7 @@ import type { SiteTask } from "@factory/contracts";
 export type ModuleId =
   | "contracts"
   | "control-plane"
+  | "persistence"
   | "site-source"
   | "site-configuration"
   | "quality-oracle"
@@ -18,7 +19,13 @@ export interface FactoryModule {
 /** Only modules that exist in the current repository are registered. */
 export const MODULE_REGISTRY: readonly FactoryModule[] = Object.freeze([
   { id: "contracts", ownedPaths: ["packages/contracts/"], protected: true, ordinaryTaskWritable: false },
-  { id: "control-plane", ownedPaths: ["apps/factory/"], protected: true, ordinaryTaskWritable: false },
+  { id: "control-plane", ownedPaths: ["apps/factory/src/executor/", "apps/factory/src/index.ts", "apps/factory/tests/"], protected: true, ordinaryTaskWritable: false },
+  {
+    id: "persistence",
+    ownedPaths: ["apps/factory/src/persistence/", "apps/factory/drizzle/", "apps/factory/drizzle.config.ts"],
+    protected: true,
+    ordinaryTaskWritable: false,
+  },
   { id: "site-source", ownedPaths: ["sites/starter/src/"], protected: false, ordinaryTaskWritable: true },
   {
     id: "site-configuration",

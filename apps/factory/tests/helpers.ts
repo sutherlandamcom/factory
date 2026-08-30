@@ -23,7 +23,7 @@ export async function makeTempRepo(): Promise<string> {
   gitIn(dir, ["config", "user.name", "Factory Test"]);
   await writeFile(
     path.join(dir, ".gitignore"),
-    "node_modules/\ndist/\n.astro/\ntest-results/\nqa-artifacts/\n.env*\n.factory/\n",
+    "node_modules/\n/.pnpm-store/\n/sites/starter/dist/\n/sites/starter/.astro/\n/sites/starter/test-results/\n/sites/starter/playwright-report/\n/sites/starter/qa-artifacts/\n.env*\n!.env.example\n*.log\n/.factory/\n",
     "utf8",
   );
   await mkdir(path.join(dir, "sites", "starter", "src", "pages"), { recursive: true });

@@ -172,3 +172,27 @@ test("staging remains evidence-only", async () => {
     assert.equal(gitIn(worktree, ["rev-parse", "HEAD"]), head);
   });
 });
+
+test("nested helper named dist/helper.ts or .factory/hidden.ts in source is staged and rejected by scope", async () => {
+  await withWorktree("scope-nested-helper", async (_repo, worktree) => {
+    await writeTarget(worktree);
+    const nestedDistHelper = path.join(worktree, "sites", "starter", "src", "pages", "services", "dist", "helper.ts");
+    await mkdir(path.dirname(nestedDistHelper), { recursive: true });
+    await writeFile(nestedDistHelper, "export const helper = 'evil';\n");
+
+    const nestedFactoryHelper = path.join(worktree, "sites", "starter", "src", "pages", "services", ".factory", "hidden.ts");
+    await mkdir(path.dirname(nestedFactoryHelper), { recursive: true });
+    await writeFile(nestedFactoryHelper, "export const hidden = 'secret';\n");
+
+    const result = await collectChanges(worktree, POLICY);
+    assert.ok(
+      result.violations.some((v) => v.includes("sites/starter/src/pages/services/dist/helper.ts")),
+      "nested dist helper must be flagged as scope violation",
+    );
+    assert.ok(
+      result.violations.some((v) => v.includes("sites/starter/src/pages/services/.factory/hidden.ts")),
+      "nested .factory helper must be flagged as scope violation",
+    );
+  });
+});
+

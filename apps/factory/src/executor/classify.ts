@@ -83,6 +83,7 @@ export function classifyFailure(
 
   if (
     errorCode === "invalid_task" ||
+    errorCode === "invalid_configuration" ||
     errorCode === "dirty_working_tree" ||
     errorCode === "repo_not_found" ||
     errorCode === "head_unresolvable" ||
@@ -107,6 +108,10 @@ export function classifyFailure(
   }
 
   if (stage === "verify" && errorCode === "verification_failed") {
+    return "repairable";
+  }
+
+  if (stage === "replay" && errorCode === "replay_failed") {
     return "repairable";
   }
 

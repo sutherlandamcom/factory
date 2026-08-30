@@ -35,6 +35,7 @@ function mockCodex(
 const noopDeps = async () => {};
 const passQa = async () => ({ passed: true, exitCode: 0, timedOut: false });
 const passVerify = async () => ({ passed: true, details: "mock verification passed" });
+const passReplay = async () => ({ passed: true, details: "mock replay passed" });
 
 function runDirOf(repo: string, runId: string): string {
   return path.join(repo, ".factory", "runs", runId);
@@ -53,6 +54,7 @@ test("happy path: succeeded TaskResult, patch artifact, cleanup", async () => {
     prepareDependenciesFn: noopDeps,
     runQaFn: passQa,
     verifyFn: passVerify,
+    verifyReplayFn: passReplay,
   });
 
   assert.equal(result.status, "succeeded");
@@ -85,6 +87,7 @@ test("codex process failure normalizes to codex_failed with cleanup", async () =
     prepareDependenciesFn: noopDeps,
     runQaFn: passQa,
     verifyFn: passVerify,
+    verifyReplayFn: passReplay,
   });
   assert.equal(result.status, "failed");
   assert.equal(result.finalStage, "codex");
@@ -103,6 +106,7 @@ test("codex timeout normalizes to codex_timeout", async () => {
     prepareDependenciesFn: noopDeps,
     runQaFn: passQa,
     verifyFn: passVerify,
+    verifyReplayFn: passReplay,
   });
   assert.equal(result.status, "failed");
   assert.equal(result.error?.code, "codex_timeout");
@@ -124,6 +128,7 @@ test("scope violation fails with evidence preserved before cleanup", async () =>
     prepareDependenciesFn: noopDeps,
     runQaFn: passQa,
     verifyFn: passVerify,
+    verifyReplayFn: passReplay,
   });
   assert.equal(result.status, "failed");
   assert.equal(result.finalStage, "scope");
@@ -154,6 +159,7 @@ test("QA failure with maxAttempts=1 fails with needs_review", async () => {
     prepareDependenciesFn: noopDeps,
     runQaFn: async () => ({ passed: false, exitCode: 1, timedOut: false }),
     verifyFn: passVerify,
+    verifyReplayFn: passReplay,
   });
   assert.equal(result.status, "needs_review");
   assert.equal(result.finalStage, "qa");
@@ -171,6 +177,7 @@ test("task verification failure with maxAttempts=1 fails with needs_review", asy
     prepareDependenciesFn: noopDeps,
     runQaFn: passQa,
     verifyFn: async () => ({ passed: false, details: "expected built page missing" }),
+    verifyReplayFn: passReplay,
   });
   assert.equal(result.status, "needs_review");
   assert.equal(result.finalStage, "verify");
@@ -188,6 +195,7 @@ test("dirty working tree fails preflight before any worktree exists", async () =
     prepareDependenciesFn: noopDeps,
     runQaFn: passQa,
     verifyFn: passVerify,
+    verifyReplayFn: passReplay,
   });
   assert.equal(result.status, "failed");
   assert.equal(result.finalStage, "preflight");
@@ -252,6 +260,7 @@ test("ignored input mutation is terminal and never reaches QA or repair", async 
       return { passed: true, exitCode: 0, timedOut: false };
     },
     verifyFn: passVerify,
+    verifyReplayFn: passReplay,
   });
   assert.equal(result.status, "failed");
   assert.equal(result.finalStage, "integrity");
@@ -260,3 +269,220 @@ test("ignored input mutation is terminal and never reaches QA or repair", async 
   assert.equal(codexCalls, 1);
   assert.equal(qaCalls, 0);
 });
+
+test("programmatic maxAttempts > 3 is rejected before Codex with 0 invocations", async () => {
+  const repo = await makeTempRepo();
+  let codexInvocations = 0;
+  const result = await runSiteTask(TASK, {
+    repoRoot: repo,
+    runId: "attempt-bound-programmatic",
+    maxAttempts: 4,
+    codexRunner: mockCodex(async () => {
+      codexInvocations++;
+    }),
+    prepareDependenciesFn: noopDeps,
+  });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.finalStage, "validation");
+  assert.equal(result.error?.code, "invalid_configuration");
+  assert.match(result.error!.message, /maxAttempts must be an integer between 1 and 3/);
+  assert.equal(codexInvocations, 0);
+  assert.equal(result.totalAttempts, 0);
+});
+
+test("FACTORY_MAX_ATTEMPTS=4 env is rejected before Codex with 0 invocations", async () => {
+  const repo = await makeTempRepo();
+  const oldEnv = process.env.FACTORY_MAX_ATTEMPTS;
+  process.env.FACTORY_MAX_ATTEMPTS = "4";
+  let codexInvocations = 0;
+
+  try {
+    const result = await runSiteTask(TASK, {
+      repoRoot: repo,
+      runId: "attempt-bound-env-4",
+      codexRunner: mockCodex(async () => {
+        codexInvocations++;
+      }),
+      prepareDependenciesFn: noopDeps,
+    });
+
+    assert.equal(result.status, "failed");
+    assert.equal(result.finalStage, "validation");
+    assert.equal(result.error?.code, "invalid_configuration");
+    assert.match(result.error!.message, /FACTORY_MAX_ATTEMPTS cannot exceed hard ceiling of 3/);
+    assert.equal(codexInvocations, 0);
+    assert.equal(result.totalAttempts, 0);
+  } finally {
+    if (oldEnv === undefined) delete process.env.FACTORY_MAX_ATTEMPTS;
+    else process.env.FACTORY_MAX_ATTEMPTS = oldEnv;
+  }
+});
+
+test("FACTORY_MAX_ATTEMPTS=1000 env is rejected before Codex with 0 invocations", async () => {
+  const repo = await makeTempRepo();
+  const oldEnv = process.env.FACTORY_MAX_ATTEMPTS;
+  process.env.FACTORY_MAX_ATTEMPTS = "1000";
+  let codexInvocations = 0;
+
+  try {
+    const result = await runSiteTask(TASK, {
+      repoRoot: repo,
+      runId: "attempt-bound-env-1000",
+      codexRunner: mockCodex(async () => {
+        codexInvocations++;
+      }),
+      prepareDependenciesFn: noopDeps,
+    });
+
+    assert.equal(result.status, "failed");
+    assert.equal(result.finalStage, "validation");
+    assert.equal(result.error?.code, "invalid_configuration");
+    assert.equal(codexInvocations, 0);
+    assert.equal(result.totalAttempts, 0);
+  } finally {
+    if (oldEnv === undefined) delete process.env.FACTORY_MAX_ATTEMPTS;
+    else process.env.FACTORY_MAX_ATTEMPTS = oldEnv;
+  }
+});
+
+test("invalid FACTORY_MAX_ATTEMPTS (0, -1, abc) are rejected before Codex", async () => {
+  const repo = await makeTempRepo();
+  const oldEnv = process.env.FACTORY_MAX_ATTEMPTS;
+
+  for (const badValue of ["0", "-1", "abc", "3.5"]) {
+    process.env.FACTORY_MAX_ATTEMPTS = badValue;
+    let codexInvocations = 0;
+
+    try {
+      const result = await runSiteTask(TASK, {
+        repoRoot: repo,
+        runId: `attempt-bound-invalid-${badValue}`,
+        codexRunner: mockCodex(async () => {
+          codexInvocations++;
+        }),
+        prepareDependenciesFn: noopDeps,
+      });
+
+      assert.equal(result.status, "failed");
+      assert.equal(result.finalStage, "validation");
+      assert.equal(result.error?.code, "invalid_configuration");
+      assert.equal(codexInvocations, 0);
+    } finally {
+      if (oldEnv === undefined) delete process.env.FACTORY_MAX_ATTEMPTS;
+      else process.env.FACTORY_MAX_ATTEMPTS = oldEnv;
+    }
+  }
+});
+
+test("valid maxAttempts values 1, 2, and 3 are accepted and behave correctly", async () => {
+  const repo = await makeTempRepo();
+  for (const validVal of [1, 2, 3]) {
+    let codexInvocations = 0;
+    const result = await runSiteTask(TASK, {
+      repoRoot: repo,
+      runId: `valid-attempts-${validVal}`,
+      maxAttempts: validVal,
+      codexRunner: mockCodex(async (req) => {
+        codexInvocations++;
+        const page = path.join(req.worktreePath, "sites", "starter", "src", "pages", "services", "roof-repair.astro");
+        await mkdir(path.dirname(page), { recursive: true });
+        await writeFile(page, "---\n---\n<h1>Roof Repair</h1>\n");
+      }),
+      prepareDependenciesFn: noopDeps,
+      runQaFn: passQa,
+      verifyFn: passVerify,
+      verifyReplayFn: passReplay,
+    });
+    assert.equal(result.status, "succeeded");
+    assert.equal(result.totalAttempts, 1);
+    assert.equal(codexInvocations, 1);
+  }
+});
+
+test("taskResultSchema rejects impossible attempt histories", () => {
+  const validBase = {
+    runId: "run-test",
+    status: "succeeded",
+    finalStage: "complete",
+    taskType: "create_page",
+    siteId: "demo",
+    baseCommit: "a".repeat(40),
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+    durationMs: 1000,
+    totalAttempts: 1,
+    successfulAttempt: 1,
+    attempts: [
+      {
+        attemptNumber: 1,
+        kind: "initial",
+        stage: "complete",
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        durationMs: 1000,
+        artifacts: { attemptDirectory: ".factory/runs/run-test/attempts/1" },
+      },
+    ],
+    artifacts: { runDirectory: ".factory/runs/run-test" },
+  };
+
+  // Valid parses cleanly
+  assert.doesNotThrow(() => taskResultSchema.parse(validBase));
+
+  // totalAttempts: 4 rejected
+  assert.throws(() => taskResultSchema.parse({ ...validBase, totalAttempts: 4 }));
+
+  // successfulAttempt: 4 rejected
+  assert.throws(() => taskResultSchema.parse({ ...validBase, successfulAttempt: 4 }));
+
+  // attempt with attemptNumber: 4 rejected
+  assert.throws(() =>
+    taskResultSchema.parse({
+      ...validBase,
+      attempts: [{ ...validBase.attempts[0], attemptNumber: 4 }],
+    }),
+  );
+
+  // four-item attempts array rejected
+  const attemptItem = (n: number) => ({
+    attemptNumber: n,
+    kind: n === 1 ? ("initial" as const) : ("repair" as const),
+    stage: "qa" as const,
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+    durationMs: 100,
+    artifacts: { attemptDirectory: `.factory/runs/run-test/attempts/${n}` },
+  });
+
+  assert.throws(() =>
+    taskResultSchema.parse({
+      ...validBase,
+      totalAttempts: 4,
+      attempts: [attemptItem(1), attemptItem(2), attemptItem(3), attemptItem(4)],
+    }),
+  );
+
+  // successfulAttempt > totalAttempts rejected
+  assert.throws(() =>
+    taskResultSchema.parse({
+      ...validBase,
+      totalAttempts: 1,
+      successfulAttempt: 2,
+    }),
+  );
+
+  // Attempt kind mismatch (attempt 1 must be initial, attempt 2 must be repair)
+  assert.throws(() =>
+    taskResultSchema.parse({
+      ...validBase,
+      totalAttempts: 2,
+      successfulAttempt: 2,
+      attempts: [
+        { ...attemptItem(1), kind: "repair" },
+        { ...attemptItem(2), kind: "repair" },
+      ],
+    }),
+  );
+});
+

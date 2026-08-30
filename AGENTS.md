@@ -49,6 +49,16 @@ human or an agent executing a `SiteTask`.
   dev server. Screenshot artifacts land in `sites/starter/qa-artifacts/`
   (gitignored, regenerated every run).
 
+## Agent and merge governance
+
+- **Build agents**:
+  - May: inspect, implement, test, commit, push feature/fix branches, create/update pull requests.
+  - Must NOT: merge their own PRs, push implementation directly to `main`, or declare their own work independently accepted.
+  - Terminal state: `IMPLEMENTATION COMPLETE — PENDING INDEPENDENT QA`.
+- **Independent QA**:
+  - Runs separately and independently against an exact candidate commit SHA.
+  - Only after an explicit, independent GO verdict may the PR merge into `main`.
+
 ## Repository layout
 
 - `apps/factory` — the Factory control plane (CLI).

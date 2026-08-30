@@ -85,3 +85,70 @@ The first aggregate `pnpm test` attempt had two desktop `page.goto` timeouts aft
 The earlier 2026-08-29 handoff correctly recorded `STRONG_EXECUTION_ISOLATION_UNAVAILABLE` before runtime authorization. That historical state is superseded by the installed, validated, fail-closed Colima boundary and the three now-completed live gates: isolated create-page success, real Codex repair after dynamic failure, and host read/write canary isolation.
 
 The implementation does not claim that Docker alone is an absolute security boundary. Acceptance rests on the dedicated QEMU VM's narrow host mounts, hardened worker settings, inner Codex policy, and Factory's post-execution mechanical checks as independent layers. Runtime/profile drift still produces `STRONG_EXECUTION_ISOLATION_UNAVAILABLE`; there is no host-shared fallback. Independent QA remains intentionally separate from this implementation handoff.
+
+---
+
+## Post-merge independent QA remediation — 2026-08-30
+
+Branch: `fix/post-merge-hardening-remediation`
+
+Base commit: `9d8852e2b935207b07b043cf056a9899935a2762` (Merge PR #1 into `main`)
+
+Status: **HARDENING REMEDIATION COMPLETE — PENDING INDEPENDENT QA**
+
+### Independent QA findings addressed
+
+1. **Finding P1-A (Attempt Ceiling Hardening)**: The previous implementation allowed configuration (`FACTORY_MAX_ATTEMPTS` and `opts.maxAttempts`) to set arbitrary attempt limits above 3.
+2. **Finding P1-B (Ignored Output Exclusions & Self-Containment)**: The previous implementation matched path segments like `dist`, `.factory`, and `qa-artifacts` unanchored, allowing potential false-passes where a nested ignored helper inside source territory could participate in a local build but be absent from the generated patch.
+3. **Finding P1-C / Process (GitHub PR CI & Merge Governance)**: The repository lacked an independent GitHub Actions PR gate and explicit process rules preventing build agents from merging their own PRs.
+
+### Remediations implemented
+
+#### 1. Hard 3-attempt ceiling (`MAX_TOTAL_ATTEMPTS = 3`)
+- Defined `MAX_TOTAL_ATTEMPTS = 3` and `DEFAULT_MAX_ATTEMPTS = 3` in `@factory/contracts` as the authoritative single source of truth.
+- Implemented `validateMaxAttempts`: callers/operators may lower the limit (`1`, `2`, `3`), but values `> 3` (e.g. `4`, `1000`) or invalid inputs (`0`, `-1`, `abc`) fail closed immediately before Codex with code `invalid_configuration` (0 Codex invocations).
+- Hardened `taskResultSchema` and `attemptResultSchema` Zod contracts:
+  - `totalAttempts: z.number().int().min(0).max(MAX_TOTAL_ATTEMPTS)`
+  - `successfulAttempt: z.number().int().min(1).max(MAX_TOTAL_ATTEMPTS).nullable().optional()`
+  - `attemptNumber: z.number().int().min(1).max(MAX_TOTAL_ATTEMPTS)`
+  - `attempts: z.array(attemptResultSchema).max(MAX_TOTAL_ATTEMPTS).optional()`
+  - SuperRefine validation enforcing `successfulAttempt <= totalAttempts`, attempt array length matching `totalAttempts`, 1-based attempt sequence, and attempt kind constraints (Attempt 1 = `"initial"`, subsequent = `"repair"`).
+
+#### 2. Exact anchored output roots and `.gitignore`
+- Replaced segment-based matching with `TRUSTED_FACTORY_OUTPUT_ROOTS` in `apps/factory/src/executor/integrity.ts`:
+  - `.factory/**`
+  - `sites/starter/dist/**`
+  - `sites/starter/.astro/**`
+  - `sites/starter/test-results/**`
+  - `sites/starter/playwright-report/**`
+  - `sites/starter/qa-artifacts/**`
+- Anchored root `.gitignore` rules (e.g. `/sites/starter/dist/`, `/.factory/`) so nested source directories like `sites/starter/src/pages/services/dist/helper.ts` are never ignored.
+- Added regression tests verifying that nested files named `dist/helper.ts` or `.factory/hidden.ts` inside source territory trigger immediate scope violations if unignored, or integrity violations if ignored.
+
+#### 3. Production patch self-containment verification (Replay)
+- Implemented `verifyPatchReplay` in `apps/factory/src/executor/replay.ts`:
+  - Creates a separate disposable worktree at `baseCommit`.
+  - Applies cumulative binary-safe `diff.patch` via `git apply --binary`.
+  - Runs offline dependency preparation.
+  - Executes `pnpm check` and `pnpm build` in the pristine replay worktree.
+  - Guaranteed disposable worktree removal in all execution paths (`finally`).
+- Integrated into `runSiteTask` as the final quality gate before declaring `status = "succeeded"`.
+- Replay failure enters the bounded repair loop if attempts remain, or marks `needs_review` when exhausted.
+
+#### 4. GitHub PR CI workflow & merge governance
+- Created `.github/workflows/pr-ci.yml` running on `pull_request` (target `main`) and `push` (`main`) with Node 22, pnpm 11.3.0, Playwright Chromium, and `pnpm qa`.
+- Documented merge governance in `AGENTS.md`: Build agents may inspect, implement, test, commit, push feature/fix branches, and create PRs, but MUST NOT merge their own PRs or push directly to `main`. Terminal state is `IMPLEMENTATION COMPLETE — PENDING INDEPENDENT QA`.
+- Probed GitHub repository rulesets / branch protection APIs: returned HTTP 403 ("Upgrade to GitHub Pro or make this repository public to enable this feature"). Exact limitation documented.
+
+### Test summary
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Contracts check | Exit 0 | `pnpm --filter @factory/contracts run check` |
+| Factory test suite | Exit 0 | 95/95 tests passed |
+| Starter site Playwright QA | Exit 0 | 8 passed, 2 skipped (expected without task spec) |
+| Composite QA (`pnpm qa`) | Exit 0 | Check, build, Factory 95/95, Playwright 8/8 |
+| Attempt ceiling adversarial tests | Pass | Programmatic & env > 3 rejected before Codex (0 calls); schema rejects 4 |
+| Nested ignored helper test | Pass | Scope & integrity violations catch nested `dist/helper.ts` and `.factory/hidden.ts` |
+| Patch replay self-containment test | Pass | 5/5 replay tests pass: clean replay pass, broken patch fail, cleanup guarantee |
+

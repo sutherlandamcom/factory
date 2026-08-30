@@ -4,12 +4,43 @@
 
 - Starting accepted SHA: `aec6ab20cbb35df24278599b077cb5a53f4e5da3`
 - Branch: `feat/production-delivery-mvp`
+- Independently reviewed failing SHA: `c9679ad71e76ff58948cf009a87570ce7b2ba2d0`
 - Candidate HEAD SHA: report the exact PR head SHA in the PR and final handoff;
   a commit cannot embed its own hash without changing that hash.
 - Provider: Cloudflare Workers Static Assets
 - Wrangler: `4.127.1` (exactly pinned)
 - Live Cloudflare smoke test: not performed; normal PR QA uses deterministic
   provider substitutes and no production credentials.
+
+## Independent QA remediation
+
+The reviewed candidate had three P1 findings and one P2 finding. This
+remediation keeps PR #4 and its delivery architecture intact while closing
+only those trust and provenance gaps:
+
+- explicit rollback compares Cloudflare's actual active version with
+  Factory's effective expected version before target selection or mutation;
+  disagreement fails as `deployment_drift` with no rollback mutation;
+- `verified` plus `productionVerified=true` rows with complete version and
+  artifact provenance are the only canonical explicit-history targets;
+  `rolled_back` rows still describe effective production state through
+  `previousVersionId`, but can never donate rollback provenance;
+- the rollback target is resolved before worktree preparation, and rollback
+  QA runs from the canonical target row's exact `sourceCommit`;
+- source resolution accepts one effective fetch URL only for
+  `github.com/sutherlandamcom/factory`, rejects credential-bearing, local,
+  other-repository, and ambiguous remotes without echoing their value, and
+  fetches main with the explicit refspec
+  `+refs/heads/main:refs/remotes/origin/main`;
+- deploy, reconciliation, and explicit rollback require the running control
+  plane to be clean and at freshly fetched authoritative `origin/main` before
+  any Wrangler interaction;
+- pull-request CI checks out `${{ github.event.pull_request.head.sha }}` (with
+  `${{ github.sha }}` for push events), prints `CHECKED_OUT_SHA`, and fails if
+  `git rev-parse HEAD` differs from the expected event SHA.
+
+The exact remediated candidate SHA is the PR #4 head named in the final build
+handoff and CI evidence. It is intentionally not embedded in its own commit.
 
 ## Delivered architecture
 
@@ -84,20 +115,23 @@ invocation does not silently start another deployment.
 
 ## Evidence and tests
 
-Unit coverage includes accepted `origin/main` selection, stable artifact
+Unit coverage includes authoritative remote identity, explicit `origin/main`
+fetching, clean accepted control-plane enforcement, stable artifact
 digests, missing/invalid target configuration, credential isolation, malformed
 and stale structured output, split-traffic drift, preview-QA promotion blocking,
 exact-version promotion, production-QA gating, exact known-good rollback,
-first-deployment failure without rollback, crash reconciliation, protected
-module ownership, and remote Playwright mode without a local server.
+explicit rollback drift blocking, canonical rollback provenance, external
+bootstrap exclusion, rollback QA source binding, first-deployment failure
+without rollback, crash reconciliation, exact-head CI checkout, protected module
+ownership, and remote Playwright mode without a local server.
 
 Real PostgreSQL 18 coverage validates the migration, target snapshot, status
 constraint, and known-good provenance. Full commands and their final results
 are:
 
 ```text
-pnpm qa
-  PASS — check/build complete, Factory tests 121/121,
+FACTORY_QA_PORT=4327 pnpm qa
+  PASS — check/build complete, Factory tests 128/128,
          Playwright 8 passed / 2 intentional task-QA skips
 
 FACTORY_TEST_DATABASE_URL=postgresql://...@localhost:54329/factory_test \
@@ -108,6 +142,13 @@ pnpm --filter @factory/factory exec wrangler deploy --dry-run \
   --config sites/starter/wrangler.jsonc ...
   PASS — Wrangler 4.127.1 read 23 static assets, no bindings
 ```
+
+The current remediated count is Factory tests 128/128. An initial local
+Playwright run on default port 4321 had two desktop metadata waits time out
+while both equivalent mobile cases passed. Inspection confirmed the rendered
+metadata was present; a clean isolated-port Playwright run passed 8/8, followed
+by the complete isolated-port `pnpm qa` PASS recorded above. No QA oracle or
+site source was changed in response.
 
 ## Deployment evidence
 

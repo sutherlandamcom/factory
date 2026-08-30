@@ -35,6 +35,16 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact checked-out SHA
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          echo "CHECKED_OUT_SHA=${actual_sha}"
+          test "${actual_sha}" = "${EXPECTED_SHA}"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

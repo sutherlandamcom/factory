@@ -63,6 +63,39 @@ test("delivery persistence snapshots target configuration and known-good provena
       "version-1",
     );
 
+    const rollbackEvent = await store.createDeployment({
+      id: "deployment-persistence-rollback-event",
+      siteId: site.id,
+      sourceCommit: "c".repeat(40),
+      workerName: "delivery-site",
+      productionUrl: "https://example.com",
+      artifactDirectory: ".factory/deployments/deployment-persistence-rollback-event",
+    });
+    await store.updateDeployment({
+      id: rollbackEvent.id,
+      status: "promoting",
+      artifactDigest: "d".repeat(64),
+      versionId: "failed-version-2",
+      previousVersionId: "version-1",
+    });
+    await store.updateDeployment({
+      id: rollbackEvent.id,
+      status: "rolled_back",
+      rolledBack: true,
+      verifiedAt: new Date("2100-01-01T00:00:00.000Z"),
+    });
+    assert.equal(
+      (await store.findLatestKnownGoodDeployment(site.id, "delivery-site", "https://example.com"))?.id,
+      rollbackEvent.id,
+      "a verified rollback event is the latest effective production state",
+    );
+    assert.deepEqual(
+      (await store.listCanonicalVerifiedDeployments(site.id, "delivery-site", "https://example.com"))
+        .map((row) => row.id),
+      [deployment.id],
+      "rollback event rows must never become canonical release provenance",
+    );
+
     await store.setSiteDeliveryConfiguration({
       siteKey: site.key,
       cloudflareWorkerName: "delivery-site-new",
@@ -75,6 +108,11 @@ test("delivery persistence snapshots target configuration and known-good provena
       await store.findLatestKnownGoodDeployment(site.id, "delivery-site-new", "https://new.example.com"),
       null,
       "known-good versions must not cross delivery target snapshots",
+    );
+    assert.deepEqual(
+      await store.listCanonicalVerifiedDeployments(site.id, "delivery-site-new", "https://new.example.com"),
+      [],
+      "canonical history must remain scoped to the snapshotted target",
     );
   } finally {
     await dbInst.close();

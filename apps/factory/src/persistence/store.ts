@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { eq, and, asc, desc, inArray } from "drizzle-orm";
+import { eq, and, asc, desc, inArray, isNotNull } from "drizzle-orm";
 import type { DeploymentStatus } from "@factory/contracts";
 import type { FactoryDb } from "./db.js";
 import {
@@ -300,7 +300,7 @@ export class FactoryStore {
     return row ?? null;
   }
 
-  async listKnownGoodDeployments(
+  async listCanonicalVerifiedDeployments(
     siteId: string,
     workerName: string,
     productionUrl: string,
@@ -313,7 +313,10 @@ export class FactoryStore {
           eq(deployments.siteId, siteId),
           eq(deployments.workerName, workerName),
           eq(deployments.productionUrl, productionUrl),
-          inArray(deployments.status, ["verified", "rolled_back"]),
+          eq(deployments.status, "verified"),
+          eq(deployments.productionVerified, true),
+          isNotNull(deployments.versionId),
+          isNotNull(deployments.artifactDigest),
         ),
       )
       .orderBy(desc(deployments.verifiedAt), desc(deployments.createdAt));

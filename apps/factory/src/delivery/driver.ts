@@ -20,7 +20,7 @@ import {
   assertAcceptedSourceUnchanged,
   prepareAcceptedWorktree,
   removeWorktree,
-  resolveAcceptedSource,
+  resolveTrustedControlPlaneSource,
 } from "./source.js";
 import { WranglerClient } from "./wrangler.js";
 
@@ -93,6 +93,46 @@ async function resolveSite(store: FactoryStore, siteKey: string): Promise<SiteRe
   return resolved.site;
 }
 
+export interface ExplicitRollbackPlan {
+  sourceCommit: string;
+  artifactDigest: string;
+  versionId: string;
+  qaSourceCommit: string;
+}
+
+export function resolveExplicitRollbackPlan(input: {
+  actualVersion: string | null;
+  effectiveRecord: DeploymentRecord | null;
+  canonicalVerified: readonly DeploymentRecord[];
+}): ExplicitRollbackPlan {
+  const expectedVersion = knownGoodVersion(input.effectiveRecord);
+  if (expectedVersion === null || input.actualVersion !== expectedVersion) {
+    throw new FactoryError(
+      "deployment_drift",
+      "Cloudflare production version does not match Factory's effective known-good version.",
+    );
+  }
+  const canonical = input.canonicalVerified.find((record) =>
+    record.status === "verified"
+      && record.productionVerified
+      && record.versionId !== null
+      && record.artifactDigest !== null
+      && record.versionId !== input.actualVersion,
+  );
+  if (!canonical?.versionId || !canonical.artifactDigest) {
+    throw new FactoryError(
+      "rollback_target_unavailable",
+      "No earlier canonical verified Cloudflare version is available.",
+    );
+  }
+  return {
+    sourceCommit: canonical.sourceCommit,
+    artifactDigest: canonical.artifactDigest,
+    versionId: canonical.versionId,
+    qaSourceCommit: canonical.sourceCommit,
+  };
+}
+
 export async function runProductionDelivery(input: {
   repoRoot: string;
   siteKey: string;
@@ -108,6 +148,7 @@ export async function runProductionDelivery(input: {
     const store = new FactoryStore(db.db);
     const site = await resolveSite(store, input.siteKey);
     const target = requireDeliveryTarget(site);
+    const sourceCommit = await resolveTrustedControlPlaneSource(input.repoRoot);
 
     // Reconcile only dangerous persisted states and return their outcome. A
     // recovery invocation never starts a second deployment implicitly.
@@ -128,7 +169,6 @@ export async function runProductionDelivery(input: {
       return result;
     }
 
-    const sourceCommit = await resolveAcceptedSource(input.repoRoot);
     const id = deploymentId();
     const artifacts = artifactDirectory(input.repoRoot, id);
     await mkdir(artifacts.absolute, { recursive: true });
@@ -191,32 +231,46 @@ export async function runExplicitRollback(input: {
     const store = new FactoryStore(db.db);
     const site = await resolveSite(store, input.siteKey);
     const target = requireDeliveryTarget(site);
-    const sourceCommit = await resolveAcceptedSource(input.repoRoot);
+    await resolveTrustedControlPlaneSource(input.repoRoot);
     const id = deploymentId();
     const artifacts = artifactDirectory(input.repoRoot, id);
     await mkdir(artifacts.absolute, { recursive: true });
-    worktree = await prepareAcceptedWorktree(input.repoRoot, sourceCommit, `rollback-${id}`);
-    const provider = new WranglerClient(path.join(worktree, "sites", "starter"), artifacts.absolute);
-    await provider.assertTargetExists(target.workerName);
-    const active = await provider.currentProductionVersion(target.workerName);
-    const trusted = await store.listKnownGoodDeployments(
+    const controlPlaneProvider = new WranglerClient(
+      path.join(input.repoRoot, "sites", "starter"),
+      artifacts.absolute,
+    );
+    await controlPlaneProvider.assertTargetExists(target.workerName);
+    const active = await controlPlaneProvider.currentProductionVersion(target.workerName);
+    const effectiveRecord = await store.findLatestKnownGoodDeployment(
       site.id,
       target.workerName,
       target.productionUrl,
     );
-    const rollbackSource = trusted.find((record) => {
-      const version = knownGoodVersion(record);
-      return version !== null && version !== active;
+    const canonicalVerified = await store.listCanonicalVerifiedDeployments(
+      site.id,
+      target.workerName,
+      target.productionUrl,
+    );
+    const rollback = resolveExplicitRollbackPlan({
+      actualVersion: active,
+      effectiveRecord,
+      canonicalVerified,
     });
-    const rollbackVersion = knownGoodVersion(rollbackSource ?? null);
-    if (!rollbackSource || !rollbackVersion) {
-      throw new FactoryError("rollback_target_unavailable", "No earlier trusted known-good Cloudflare version is available.");
+    worktree = await prepareAcceptedWorktree(input.repoRoot, rollback.qaSourceCommit, `rollback-${id}`);
+    const provider = new WranglerClient(path.join(worktree, "sites", "starter"), artifacts.absolute);
+    await provider.assertTargetExists(target.workerName);
+    const activeBeforeMutation = await provider.currentProductionVersion(target.workerName);
+    if (activeBeforeMutation !== active) {
+      throw new FactoryError(
+        "deployment_drift",
+        "Cloudflare production version changed while the rollback was being prepared.",
+      );
     }
 
     let record = await store.createDeployment({
       id,
       siteId: site.id,
-      sourceCommit: rollbackSource.sourceCommit,
+      sourceCommit: rollback.sourceCommit,
       workerName: target.workerName,
       productionUrl: target.productionUrl,
       artifactDirectory: artifacts.relative,
@@ -224,12 +278,12 @@ export async function runExplicitRollback(input: {
     record = await store.updateDeployment({
       id,
       status: "promoting",
-      artifactDigest: rollbackSource.artifactDigest,
-      versionId: rollbackVersion,
-      previousVersionId: rollbackVersion,
+      artifactDigest: rollback.artifactDigest,
+      versionId: rollback.versionId,
+      previousVersionId: rollback.versionId,
     });
     try {
-      await provider.rollback(target.workerName, rollbackVersion);
+      await provider.rollback(target.workerName, rollback.versionId);
       const qa = await runRemoteQa({
         worktree,
         targetUrl: target.productionUrl,

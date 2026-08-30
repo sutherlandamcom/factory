@@ -1,43 +1,93 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { execFileSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { resolveAcceptedSource } from "../src/delivery/source.js";
+import type { ProcessResult } from "../src/executor/process.js";
+import {
+  ACCEPTED_MAIN_FETCH_ARGS,
+  assertAuthoritativeOrigin,
+  assertTrustedControlPlaneState,
+  resolveAcceptedSource,
+  resolveTrustedControlPlaneSource,
+  type GitRunner,
+} from "../src/delivery/source.js";
 
-function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+const accepted = "a".repeat(40);
+
+function result(stdout = ""): ProcessResult {
+  return { exitCode: 0, signal: null, stdout, stderr: "", timedOut: false };
 }
 
-test("delivery resolves only exact fetched origin/main, never local HEAD", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "factory-delivery-source-"));
-  try {
-    const remote = path.join(root, "remote.git");
-    const seed = path.join(root, "seed");
-    const checkout = path.join(root, "checkout");
-    git(root, "init", "--bare", remote);
-    git(root, "init", seed);
-    git(seed, "config", "user.email", "factory@example.com");
-    git(seed, "config", "user.name", "Factory Test");
-    await writeFile(path.join(seed, "accepted.txt"), "accepted\n");
-    git(seed, "add", "accepted.txt");
-    git(seed, "commit", "-m", "accepted");
-    git(seed, "branch", "-M", "main");
-    git(seed, "remote", "add", "origin", remote);
-    git(seed, "push", "-u", "origin", "main");
-    git(root, "clone", remote, checkout);
-    git(checkout, "config", "user.email", "factory@example.com");
-    git(checkout, "config", "user.name", "Factory Test");
-    git(checkout, "switch", "-c", "local-only", "origin/main");
-    await writeFile(path.join(checkout, "local.txt"), "not accepted\n");
-    git(checkout, "add", "local.txt");
-    git(checkout, "commit", "-m", "local only");
+function scriptedGit(outputs: ProcessResult[]): { runner: GitRunner; calls: readonly string[][] } {
+  const calls: string[][] = [];
+  return {
+    calls,
+    runner: async (args) => {
+      calls.push([...args]);
+      const next = outputs.shift();
+      assert.ok(next, `Unexpected Git invocation: ${args.join(" ")}`);
+      return next;
+    },
+  };
+}
 
-    const accepted = git(checkout, "rev-parse", "origin/main");
-    assert.notEqual(git(checkout, "rev-parse", "HEAD"), accepted);
-    assert.equal(await resolveAcceptedSource(checkout), accepted);
-  } finally {
-    await rm(root, { recursive: true, force: true });
+test("accepted source validates the effective origin before an explicit main fetch", async () => {
+  const git = scriptedGit([
+    result("https://github.com/sutherlandamcom/factory.git\n"),
+    result(),
+    result(`${accepted}\n`),
+  ]);
+  assert.equal(await resolveAcceptedSource("/repo", git.runner), accepted);
+  assert.deepEqual(git.calls, [
+    ["remote", "get-url", "--all", "origin"],
+    [...ACCEPTED_MAIN_FETCH_ARGS],
+    ["rev-parse", "--verify", "origin/main^{commit}"],
+  ]);
+});
+
+test("authoritative origin accepts only canonical GitHub HTTPS and SSH spellings", () => {
+  for (const url of [
+    "https://github.com/sutherlandamcom/factory",
+    "https://github.com/sutherlandamcom/factory.git",
+    "git@github.com:sutherlandamcom/factory.git",
+    "ssh://git@github.com/sutherlandamcom/factory.git",
+  ]) {
+    assert.doesNotThrow(() => assertAuthoritativeOrigin(url));
   }
+});
+
+test("invalid, credential-bearing, local, and ambiguous origins fail before fetch without disclosure", async () => {
+  for (const remote of [
+    "https://github.com/attacker/factory.git",
+    "https://token-secret@github.com/sutherlandamcom/factory.git",
+    "file:///tmp/factory.git",
+    "/tmp/factory.git",
+    "https://github.com/sutherlandamcom/factory.git\ngit@github.com:sutherlandamcom/factory.git",
+  ]) {
+    const git = scriptedGit([result(`${remote}\n`)]);
+    await assert.rejects(
+      resolveAcceptedSource("/repo", git.runner),
+      (error: unknown) => {
+        const value = error as { code?: string; message?: string };
+        return value.code === "accepted_source_remote_mismatch"
+          && !value.message?.includes("token-secret");
+      },
+    );
+    assert.deepEqual(git.calls, [["remote", "get-url", "--all", "origin"]]);
+  }
+});
+
+test("trusted control plane requires accepted HEAD and a clean nonignored worktree", async () => {
+  const clean = scriptedGit([
+    result("git@github.com:sutherlandamcom/factory.git\n"), result(), result(`${accepted}\n`),
+    result(`${accepted}\n`), result(),
+  ]);
+  assert.equal(await resolveTrustedControlPlaneSource("/repo", clean.runner), accepted);
+
+  assert.throws(
+    () => assertTrustedControlPlaneState(accepted, "b".repeat(40), ""),
+    (error: unknown) => (error as { code?: string }).code === "control_plane_unaccepted",
+  );
+  assert.throws(
+    () => assertTrustedControlPlaneState(accepted, accepted, "?? untracked.txt\n"),
+    (error: unknown) => (error as { code?: string }).code === "control_plane_unaccepted",
+  );
 });

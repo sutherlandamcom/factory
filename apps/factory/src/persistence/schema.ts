@@ -9,6 +9,7 @@ import {
   jsonb,
   unique,
   check,
+  index,
 } from "drizzle-orm/pg-core";
 
 export const projects = pgTable("projects", {
@@ -28,11 +29,48 @@ export const sites = pgTable(
       .references(() => projects.id),
     key: text("key").notNull().unique(),
     name: text("name").notNull(),
+    cloudflareWorkerName: text("cloudflare_worker_name"),
+    productionUrl: text("production_url"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     unique("sites_project_id_key_unique").on(table.projectId, table.key),
+  ],
+);
+
+export const deployments = pgTable(
+  "deployments",
+  {
+    id: text("id").primaryKey(),
+    siteId: text("site_id")
+      .notNull()
+      .references(() => sites.id),
+    sourceCommit: text("source_commit").notNull(),
+    artifactDigest: text("artifact_digest"),
+    versionId: text("version_id"),
+    previewUrl: text("preview_url"),
+    previousVersionId: text("previous_version_id"),
+    workerName: text("worker_name").notNull(),
+    productionUrl: text("production_url").notNull(),
+    status: text("status").notNull(),
+    previewVerified: boolean("preview_verified").notNull().default(false),
+    productionVerified: boolean("production_verified").notNull().default(false),
+    rolledBack: boolean("rolled_back").notNull().default(false),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    artifactDirectory: text("artifact_directory"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    promotedAt: timestamp("promoted_at", { withTimezone: true }),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("deployments_site_id_created_at_idx").on(table.siteId, table.createdAt),
+    check(
+      "deployments_status_valid",
+      sql`${table.status} IN ('preparing', 'uploaded', 'preview_verified', 'promoting', 'promoted', 'verified', 'rolled_back', 'failed', 'needs_review')`,
+    ),
   ],
 );
 
@@ -200,6 +238,9 @@ export type InsertProject = typeof projects.$inferInsert;
 
 export type SiteRecord = typeof sites.$inferSelect;
 export type InsertSite = typeof sites.$inferInsert;
+
+export type DeploymentRecord = typeof deployments.$inferSelect;
+export type InsertDeployment = typeof deployments.$inferInsert;
 
 export type RunRecord = typeof runs.$inferSelect;
 export type InsertRun = typeof runs.$inferInsert;

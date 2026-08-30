@@ -5,6 +5,10 @@ SEO/content websites. This repository currently contains:
 
 **structured SiteTask → strong-isolation gate → isolated Codex execution → exact-target scope/integrity checks → Foundation QA → dynamic task-page QA → semantic verification → bounded repair → structured TaskResult**
 
+and a separate trusted Production Delivery operation:
+
+**accepted `origin/main` → one build → artifact digest → immutable Cloudflare version → preview QA → same-version production promotion → production QA / exact-version rollback**
+
 See `docs/architecture.md` for the design.
 
 ## Prerequisites
@@ -15,6 +19,9 @@ See `docs/architecture.md` for the design.
 - Codex CLI authentication (`@openai/codex` is pinned at `0.150.1`). Factory
   copies only `auth.json` into an ephemeral worker-specific runtime directory.
 - Colima + Docker CLI, using the dedicated `factory-sandbox` profile below.
+- A pre-provisioned Cloudflare Worker, production hostname, and trusted
+  `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` environment for delivery.
+  Factory does not provision accounts, DNS, routes, domains, or certificates.
 
 ## Install
 
@@ -120,6 +127,9 @@ All commands run from the repository root.
 | `pnpm factory db migrate` | Run versioned Drizzle SQL migrations against configured database |
 | `pnpm factory project create <key> <name>` | Create a project in the control plane database |
 | `pnpm factory site register <proj> <key> <name>` | Register a site under a project |
+| `pnpm factory site delivery set <siteKey> --worker <name> --production-url <https://origin>` | Persist a site's pre-provisioned Cloudflare target |
+| `pnpm factory deploy <siteKey>` | Deliver exact current `origin/main` through preview and production QA |
+| `pnpm factory rollback <siteKey>` | Roll back to an earlier Factory-verified Cloudflare version and verify production |
 | `pnpm factory run show <runId>` | Inspect durable run state, attempt breakdown, quality gates, and model metrics |
 | `pnpm --filter @factory/factory test:persistence` | Run real PostgreSQL persistence integration tests |
 
@@ -201,4 +211,48 @@ to configure environment variables.
     origin (`https://test.example.com`) by default to assert correct canonical generation.
 - **`FACTORY_QA_PORT`**: Optional TCP port for Playwright preview server (default: `4321`).
   Allows isolated concurrent QA runs across separate worktrees.
+- **`FACTORY_QA_BASE_URL`**: Trusted internal QA override. When set to a
+  credential-free HTTPS origin, Playwright targets that remote preview or
+  production origin and does not start local Astro preview. Delivery sets it
+  automatically; normal operators should not need it.
+- **`CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`**: Required only by the
+  trusted Wrangler subprocess used for `deploy` and `rollback`. These values
+  are never forwarded to SiteTask/Codex, dependency installation, site build,
+  Playwright, PostgreSQL, results, or `.factory` evidence.
 
+## Production Delivery MVP
+
+Wrangler is pinned to `4.127.1`. Apply migrations, register a site, and store
+its delivery target once:
+
+```bash
+pnpm factory db migrate
+pnpm factory site delivery set starter \
+  --worker summit-roofing \
+  --production-url https://www.example.com
+```
+
+The Worker and production domain must already exist. Delivery fails closed as
+`deployment_target_unconfigured` when the target cannot be resolved; it never
+attempts infrastructure provisioning.
+
+```bash
+pnpm factory deploy starter
+pnpm factory rollback starter
+```
+
+`deploy` fetches `origin`, resolves exact current `origin/main`, and creates a
+disposable detached worktree. It installs the frozen dependency graph, builds
+the site exactly once with the configured production canonical origin, hashes
+sorted paths plus contents in `dist/`, uploads one immutable Worker version,
+and runs the existing Playwright oracle against its version preview. Only that
+preview-verified version ID may be promoted. Provider success alone is not
+success: production must pass the same oracle before the deployment becomes
+`verified`.
+
+If production QA fails, Factory rolls back only to a recorded known-good
+version ID and verifies production again. A missing safe target, provider
+drift, rollback failure, or ambiguous crash state becomes `needs_review`.
+Bounded sanitized evidence is stored under
+`.factory/deployments/<deploymentId>/`; the complete `dist/` tree is not
+retained.

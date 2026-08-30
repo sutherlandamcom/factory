@@ -15,7 +15,23 @@ function resolvePort(): number {
 }
 
 const port = resolvePort();
-const baseUrl = `http://localhost:${port}`;
+const remoteBaseUrl = process.env.FACTORY_QA_BASE_URL;
+function resolveBaseUrl(): string {
+  if (!remoteBaseUrl) return `http://localhost:${port}`;
+  const url = new URL(remoteBaseUrl);
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    (url.pathname !== "/" && url.pathname !== "")
+  ) {
+    throw new Error("FACTORY_QA_BASE_URL must be a credential-free HTTPS origin.");
+  }
+  return url.origin;
+}
+const baseUrl = resolveBaseUrl();
 const testOrigin = process.env.PUBLIC_SITE_URL || "https://test.example.com";
 
 /**
@@ -49,15 +65,17 @@ export default defineConfig({
       },
     },
   ],
-  webServer: {
-    command: `pnpm run build && pnpm run preview --port ${port}`,
-    url: baseUrl,
-    reuseExistingServer: false,
-    timeout: 180_000,
-    env: {
-      ...process.env,
-      ASTRO_PREVIEW_BACKGROUND: "0",
-      PUBLIC_SITE_URL: testOrigin,
-    },
-  },
+  webServer: remoteBaseUrl
+    ? undefined
+    : {
+        command: `pnpm run build && pnpm run preview --port ${port}`,
+        url: baseUrl,
+        reuseExistingServer: false,
+        timeout: 180_000,
+        env: {
+          ...process.env,
+          ASTRO_PREVIEW_BACKGROUND: "0",
+          PUBLIC_SITE_URL: testOrigin,
+        },
+      },
 });

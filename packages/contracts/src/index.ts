@@ -54,3 +54,11 @@ export type {
   TaskVerification,
 } from "./task-result.js";
 export { exampleSiteTask } from "./fixtures.js";
+export {
+  deploymentResultSchema,
+  deploymentStatusSchema,
+} from "./deployment-result.js";
+export type {
+  DeploymentResult,
+  DeploymentStatus,
+} from "./deployment-result.js";

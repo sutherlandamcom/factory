@@ -7,6 +7,13 @@ import { createDatabaseInstance } from "./persistence/db.js";
 import { migrateDb } from "./persistence/migrate.js";
 import { FactoryStore } from "./persistence/store.js";
 import { FactoryError } from "./executor/errors.js";
+import {
+  runExplicitRollback,
+  runProductionDelivery,
+  validateProductionUrl,
+  validateWorkerName,
+} from "./delivery/index.js";
+import type { DeploymentResult } from "@factory/contracts";
 import pkg from "../package.json" with { type: "json" };
 
 const USAGE = `Factory persistent control plane v${pkg.version}
@@ -22,6 +29,12 @@ Usage:
       Create a Factory project boundary in PostgreSQL
   pnpm factory site register <key> --project <projectKey> --name <name>
       Register a site in PostgreSQL for task execution
+  pnpm factory site delivery set <siteKey> --worker <workerName> --production-url <https://origin>
+      Configure the provisioned Cloudflare delivery target for a site
+  pnpm factory deploy <siteKey>
+      Build accepted origin/main once, verify its version preview, then promote and verify production
+  pnpm factory rollback <siteKey>
+      Roll production back to an earlier Factory-verified Cloudflare version and verify it
   pnpm factory run show <runId>
       Inspect historical execution records and quality evidence
   pnpm factory
@@ -30,6 +43,22 @@ Usage:
 Example task: packages/contracts/fixtures/create-roof-repair.json
 Run artifacts: .factory/runs/<runId>/ (gitignored)
 `;
+
+function printDeployment(result: DeploymentResult): void {
+  console.log(`deploymentId:       ${result.deploymentId}`);
+  console.log(`site:               ${result.siteId}`);
+  console.log(`status:             ${result.status}`);
+  console.log(`sourceCommit:       ${result.sourceCommit}`);
+  console.log(`artifactDigest:     ${result.artifactDigest ?? "(not built)"}`);
+  console.log(`versionId:          ${result.versionId ?? "(not uploaded)"}`);
+  console.log(`previewUrl:         ${result.previewUrl ?? "(not uploaded)"}`);
+  console.log(`productionUrl:      ${result.productionUrl}`);
+  console.log(`previousVersionId:  ${result.previousVersionId ?? "(none)"}`);
+  console.log(`previewVerified:    ${result.previewVerified}`);
+  console.log(`productionVerified: ${result.productionVerified}`);
+  console.log(`rolledBack:         ${result.rolledBack}`);
+  if (result.error) console.error(`error:               [${result.error.code}] ${result.error.message}`);
+}
 
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
@@ -99,6 +128,34 @@ async function main(argv: string[]): Promise<number> {
 
     if (command === "site") {
       const sub = rest[0];
+      if (sub === "delivery" && rest[1] === "set") {
+        const siteKey = rest[2];
+        let worker = "";
+        let productionUrl = "";
+        for (let i = 3; i < rest.length; i++) {
+          if (rest[i] === "--worker" && rest[i + 1]) worker = rest[++i]!;
+          else if (rest[i] === "--production-url" && rest[i + 1]) productionUrl = rest[++i]!;
+        }
+        if (!siteKey || !worker || !productionUrl) {
+          console.error("Usage: pnpm factory site delivery set <siteKey> --worker <workerName> --production-url <https://origin>");
+          return 2;
+        }
+        const validatedWorker = validateWorkerName(worker);
+        const validatedUrl = validateProductionUrl(productionUrl);
+        const config = resolveDatabaseConfig({ requireConfigured: true });
+        const dbInst = createDatabaseInstance(config);
+        try {
+          const site = await new FactoryStore(dbInst.db).setSiteDeliveryConfiguration({
+            siteKey,
+            cloudflareWorkerName: validatedWorker,
+            productionUrl: validatedUrl,
+          });
+          console.log(`SITE DELIVERY CONFIGURED: key=${site.key} worker=${site.cloudflareWorkerName} production=${site.productionUrl}`);
+          return 0;
+        } finally {
+          await dbInst.close();
+        }
+      }
       if (sub === "register") {
         let key = "";
         let projectKey = "default";
@@ -137,6 +194,18 @@ async function main(argv: string[]): Promise<number> {
       }
       console.error("Usage: pnpm factory site register <key> --project <projectKey> --name <name>");
       return 2;
+    }
+
+    if (command === "deploy" && rest.length === 1) {
+      const result = await runProductionDelivery({ repoRoot: process.cwd(), siteKey: rest[0]! });
+      printDeployment(result);
+      return result.status === "verified" ? 0 : 1;
+    }
+
+    if (command === "rollback" && rest.length === 1) {
+      const result = await runExplicitRollback({ repoRoot: process.cwd(), siteKey: rest[0]! });
+      printDeployment(result);
+      return result.status === "rolled_back" ? 0 : 1;
     }
 
     if (command === "run") {

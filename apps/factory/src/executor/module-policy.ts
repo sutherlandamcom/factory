@@ -4,6 +4,7 @@ export type ModuleId =
   | "contracts"
   | "control-plane"
   | "persistence"
+  | "production-delivery"
   | "site-source"
   | "site-configuration"
   | "quality-oracle"
@@ -23,6 +24,12 @@ export const MODULE_REGISTRY: readonly FactoryModule[] = Object.freeze([
   {
     id: "persistence",
     ownedPaths: ["apps/factory/src/persistence/", "apps/factory/drizzle/", "apps/factory/drizzle.config.ts"],
+    protected: true,
+    ordinaryTaskWritable: false,
+  },
+  {
+    id: "production-delivery",
+    ownedPaths: ["apps/factory/src/delivery/", "sites/starter/wrangler.jsonc"],
     protected: true,
     ordinaryTaskWritable: false,
   },

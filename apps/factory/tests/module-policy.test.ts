@@ -14,12 +14,13 @@ test("registry contains only current repository modules", () => {
     "contracts",
     "control-plane",
     "persistence",
+    "production-delivery",
     "site-source",
     "site-configuration",
     "quality-oracle",
     "repository-policy",
   ]);
-  assert.ok(!MODULE_REGISTRY.some((module) => /seo|research|content|deployment/.test(module.id)));
+  assert.ok(!MODULE_REGISTRY.some((module) => /seo|research|content/.test(module.id)));
 });
 
 test("create_page has READ MANY / WRITE ONE exact-page authority", () => {
@@ -39,10 +40,12 @@ test("create_page cannot write protected or unrelated paths", () => {
     "sites/starter/src/components/Hero.astro",
     "apps/factory/src/executor/run.ts",
     "apps/factory/src/persistence/schema.ts",
+    "apps/factory/src/delivery/service.ts",
     "packages/contracts/src/site-task.ts",
     "sites/starter/tests/qa.spec.ts",
     "sites/starter/playwright.config.ts",
     "sites/starter/astro.config.ts",
+    "sites/starter/wrangler.jsonc",
     "AGENTS.md",
     "package.json",
     "pnpm-lock.yaml",
@@ -67,6 +70,7 @@ test("protected path ownership is separate from read and write authority", () =>
   assert.deepEqual(owningModules("packages/contracts/src/site-task.ts"), ["contracts"]);
   assert.deepEqual(owningModules("sites/starter/tests/qa.spec.ts"), ["quality-oracle"]);
   assert.deepEqual(owningModules("sites/starter/src/components/Hero.astro"), ["site-source"]);
+  assert.deepEqual(owningModules("sites/starter/wrangler.jsonc"), ["production-delivery"]);
   assert.equal(MODULE_REGISTRY.find((module) => module.id === "contracts")?.protected, true);
   assert.equal(MODULE_REGISTRY.find((module) => module.id === "contracts")?.ordinaryTaskWritable, false);
 });

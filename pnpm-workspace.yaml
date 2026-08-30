@@ -5,5 +5,7 @@ packages:
 allowBuilds:
   # esbuild's postinstall verifies its platform binary (used by tsx/vite).
   esbuild: true
+  # Wrangler's pinned workerd runtime verifies its platform binary at install.
+  workerd: true
 minimumReleaseAgeExclude:
   - astro@7.2.9

@@ -1,0 +1,9 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "factory-delivery-target",
+  "compatibility_date": "2026-08-30",
+  "preview_urls": true,
+  "assets": {
+    "directory": "./dist"
+  }
+}

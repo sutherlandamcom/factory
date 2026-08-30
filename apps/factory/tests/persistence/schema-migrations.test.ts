@@ -15,7 +15,7 @@ test("schema & migrations: clean DB migration succeeds and is idempotent", async
     const secondRun = await migrateDb(dbInst.db);
     assert.equal(secondRun.applied, true);
 
-    // 3. Verify all 7 tables exist
+    // 3. Verify all 8 tables exist
     const tablesRes = await dbInst.pool.query<{ table_name: string }>(`
       SELECT table_name
       FROM information_schema.tables
@@ -26,6 +26,7 @@ test("schema & migrations: clean DB migration succeeds and is idempotent", async
 
     const expectedTables = [
       "attempts",
+      "deployments",
       "model_invocations",
       "projects",
       "quality_results",
@@ -62,6 +63,10 @@ test("schema & migrations: clean DB migration succeeds and is idempotent", async
     assert.ok(
       constraintNames.includes("model_invocations_duration_ms_non_negative"),
       "model_invocations_duration_ms_non_negative check constraint must exist",
+    );
+    assert.ok(
+      constraintNames.includes("deployments_status_valid"),
+      "deployments_status_valid check constraint must exist",
     );
   } finally {
     await dbInst.close();

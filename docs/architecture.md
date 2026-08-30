@@ -172,6 +172,53 @@ pnpm factory site register <proj> <key> <name>  # Register a site in a project
 pnpm factory run show <runId>       # Inspect complete relational state and attempt history
 ```
 
-## Next vertical slice (PR #5 — future, not implemented)
+## Production Delivery MVP
 
-Future vertical slices (publishing, deployment, multi-site management, automated task generation, patch promotion) will build on the validated PR #4 persistent control plane.
+Production Delivery is a trusted Factory control-plane operation, not a
+`SiteTask` and not a Codex operation. Its module owns
+`apps/factory/src/delivery/` and `sites/starter/wrangler.jsonc`; both are
+protected from ordinary task writes.
+
+```text
+fetch origin
+  → exact origin/main SHA in disposable worktree
+  → frozen dependency install
+  → ONE Astro build with PUBLIC_SITE_URL=production origin
+  → deterministic SHA-256 over sorted dist paths + contents
+  → wrangler versions upload
+  → existing Playwright QA at immutable version preview
+  → persist promoting crash boundary
+  → verify actual Cloudflare production state / drift
+  → wrangler versions deploy exact-candidate@100% -y
+  → existing Playwright QA at production hostname
+  → verified OR exact known-good rollback + rollback QA
+```
+
+Wrangler `4.127.1` is pinned. The static-only JSONC configuration contains no
+runtime `main` and no route/domain provisioning. The Worker and production
+hostname are prerequisites stored once on nullable `sites` columns. The single
+new `deployments` table snapshots source SHA, artifact digest, immutable
+version IDs, target identity, status, error summary, and timestamps.
+
+Mutation commands use a fresh `WRANGLER_OUTPUT_FILE_PATH` and structurally
+validate NDJSON. Production state reads use Wrangler's native JSON output;
+`deployments list --json` is used because it represents an empty first
+deployment without parsing human error text. Wrangler 4.127.1 orders that list
+oldest-to-newest, so Factory checks the final record and requires exactly one
+version at 100% traffic.
+
+The generic executor environment remains unchanged and excludes
+`CLOUDFLARE_*`. A separate narrow environment exists only around the trusted
+Wrangler subprocess. Site build and remote Playwright environments receive the
+production URL but no provider credentials.
+
+The existing PostgreSQL session advisory lock serializes task execution,
+delivery, rollback, and reconciliation. `promoting` is persisted before the
+production mutation. A later invocation reconciles only `promoting` or
+`promoted` rows against real provider state, resuming verification when the
+candidate is active, recognizing an already-restored previous version, and
+otherwise failing closed as `deployment_drift` / `needs_review`.
+
+Explicitly deferred: account/DNS/domain provisioning, automatic deployment on
+merge, Cloudflare Access, multi-provider abstractions, environments/releases
+platforms, dashboards, queues, schedules, and gradual/canary rollout.

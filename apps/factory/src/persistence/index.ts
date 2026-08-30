@@ -16,6 +16,7 @@ export {
 export {
   projects,
   sites,
+  deployments,
   runs,
   tasks,
   attempts,
@@ -25,6 +26,8 @@ export {
   type InsertProject,
   type SiteRecord,
   type InsertSite,
+  type DeploymentRecord,
+  type InsertDeployment,
   type RunRecord,
   type InsertRun,
   type TaskRecord,
@@ -79,4 +82,3 @@ export {
   resolveDurableTaskResult,
   type RunDetails,
 } from "./reconstruct.js";
-

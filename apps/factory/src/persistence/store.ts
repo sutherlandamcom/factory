@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { eq, and, asc } from "drizzle-orm";
+import { eq, and, asc, desc, inArray } from "drizzle-orm";
+import type { DeploymentStatus } from "@factory/contracts";
 import type { FactoryDb } from "./db.js";
 import {
   projects,
   sites,
+  deployments,
   runs,
   tasks,
   attempts,
@@ -11,6 +13,7 @@ import {
   modelInvocations,
   type ProjectRecord,
   type SiteRecord,
+  type DeploymentRecord,
   type RunRecord,
   type TaskRecord,
   type AttemptRecord,
@@ -22,6 +25,28 @@ import { FactoryError } from "../executor/errors.js";
 
 const MAX_ERROR_MESSAGE_LENGTH = 4096;
 const MAX_SUMMARY_LENGTH = 1024;
+
+const DEPLOYMENT_TRANSITIONS: Record<DeploymentStatus, readonly DeploymentStatus[]> = {
+  preparing: ["preparing", "uploaded", "promoting", "failed"],
+  uploaded: ["preview_verified", "failed"],
+  preview_verified: ["promoting", "failed"],
+  promoting: ["promoted", "verified", "rolled_back", "needs_review"],
+  promoted: ["verified", "rolled_back", "needs_review"],
+  verified: [],
+  rolled_back: [],
+  failed: [],
+  needs_review: [],
+};
+
+export function assertDeploymentTransition(from: string, to: DeploymentStatus): void {
+  const allowed = DEPLOYMENT_TRANSITIONS[from as DeploymentStatus];
+  if (!allowed?.includes(to)) {
+    throw new FactoryError(
+      "deployment_transition_invalid",
+      `Invalid deployment status transition '${from}' -> '${to}'.`,
+    );
+  }
+}
 
 export function truncateBounded(str: string | undefined | null, maxLen: number): string | null {
   if (!str) return null;
@@ -190,6 +215,151 @@ export class FactoryStore {
       );
     }
     return rows[0]!;
+  }
+
+  async setSiteDeliveryConfiguration(input: {
+    siteKey: string;
+    cloudflareWorkerName: string;
+    productionUrl: string;
+  }): Promise<SiteRecord> {
+    const resolved = await this.findSiteByGlobalKey(input.siteKey);
+    if (!resolved) {
+      throw new FactoryError("unknown_site", `Site '${input.siteKey}' is not registered.`);
+    }
+    const [updated] = await this.db
+      .update(sites)
+      .set({
+        cloudflareWorkerName: input.cloudflareWorkerName,
+        productionUrl: input.productionUrl,
+        updatedAt: new Date(),
+      })
+      .where(eq(sites.id, resolved.site.id))
+      .returning();
+    if (!updated) throw new FactoryError("persistence_write_failed", "Failed to configure site delivery");
+    return updated;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Production delivery
+  // ---------------------------------------------------------------------------
+
+  async createDeployment(input: {
+    id: string;
+    siteId: string;
+    sourceCommit: string;
+    workerName: string;
+    productionUrl: string;
+    artifactDirectory: string;
+  }): Promise<DeploymentRecord> {
+    const [created] = await this.db
+      .insert(deployments)
+      .values({ ...input, status: "preparing" })
+      .returning();
+    if (!created) throw new FactoryError("persistence_write_failed", "Failed to create deployment");
+    return created;
+  }
+
+  async getDeployment(id: string): Promise<DeploymentRecord | null> {
+    const [row] = await this.db.select().from(deployments).where(eq(deployments.id, id));
+    return row ?? null;
+  }
+
+  async findLatestUnverifiedDeployment(siteId: string): Promise<DeploymentRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(deployments)
+      .where(
+        and(
+          eq(deployments.siteId, siteId),
+          inArray(deployments.status, ["promoting", "promoted"]),
+        ),
+      )
+      .orderBy(desc(deployments.createdAt))
+      .limit(1);
+    return row ?? null;
+  }
+
+  async findLatestKnownGoodDeployment(
+    siteId: string,
+    workerName: string,
+    productionUrl: string,
+  ): Promise<DeploymentRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(deployments)
+      .where(
+        and(
+          eq(deployments.siteId, siteId),
+          eq(deployments.workerName, workerName),
+          eq(deployments.productionUrl, productionUrl),
+          inArray(deployments.status, ["verified", "rolled_back"]),
+        ),
+      )
+      .orderBy(desc(deployments.verifiedAt), desc(deployments.createdAt))
+      .limit(1);
+    return row ?? null;
+  }
+
+  async listKnownGoodDeployments(
+    siteId: string,
+    workerName: string,
+    productionUrl: string,
+  ): Promise<DeploymentRecord[]> {
+    return await this.db
+      .select()
+      .from(deployments)
+      .where(
+        and(
+          eq(deployments.siteId, siteId),
+          eq(deployments.workerName, workerName),
+          eq(deployments.productionUrl, productionUrl),
+          inArray(deployments.status, ["verified", "rolled_back"]),
+        ),
+      )
+      .orderBy(desc(deployments.verifiedAt), desc(deployments.createdAt));
+  }
+
+  async updateDeployment(input: {
+    id: string;
+    status: DeploymentStatus;
+    artifactDigest?: string | null;
+    versionId?: string | null;
+    previewUrl?: string | null;
+    previousVersionId?: string | null;
+    errorCode?: string | null;
+    errorMessage?: string | null;
+    promotedAt?: Date | null;
+    verifiedAt?: Date | null;
+    previewVerified?: boolean;
+    productionVerified?: boolean;
+    rolledBack?: boolean;
+  }): Promise<DeploymentRecord> {
+    const existing = await this.getDeployment(input.id);
+    if (!existing) throw new FactoryError("persistence_write_failed", `Deployment '${input.id}' not found`);
+    assertDeploymentTransition(existing.status, input.status);
+    const [updated] = await this.db
+      .update(deployments)
+      .set({
+        status: input.status,
+        updatedAt: new Date(),
+        ...(input.artifactDigest !== undefined ? { artifactDigest: input.artifactDigest } : {}),
+        ...(input.versionId !== undefined ? { versionId: input.versionId } : {}),
+        ...(input.previewUrl !== undefined ? { previewUrl: input.previewUrl } : {}),
+        ...(input.previousVersionId !== undefined ? { previousVersionId: input.previousVersionId } : {}),
+        ...(input.errorCode !== undefined ? { errorCode: input.errorCode } : {}),
+        ...(input.errorMessage !== undefined
+          ? { errorMessage: truncateBounded(input.errorMessage, MAX_ERROR_MESSAGE_LENGTH) }
+          : {}),
+        ...(input.promotedAt !== undefined ? { promotedAt: input.promotedAt } : {}),
+        ...(input.verifiedAt !== undefined ? { verifiedAt: input.verifiedAt } : {}),
+        ...(input.previewVerified !== undefined ? { previewVerified: input.previewVerified } : {}),
+        ...(input.productionVerified !== undefined ? { productionVerified: input.productionVerified } : {}),
+        ...(input.rolledBack !== undefined ? { rolledBack: input.rolledBack } : {}),
+      })
+      .where(eq(deployments.id, input.id))
+      .returning();
+    if (!updated) throw new FactoryError("persistence_write_failed", `Deployment '${input.id}' not found`);
+    return updated;
   }
 
   // ---------------------------------------------------------------------------

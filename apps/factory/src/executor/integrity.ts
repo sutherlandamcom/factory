@@ -21,16 +21,20 @@ export interface IntegrityComparison {
   violations: string[];
 }
 
-const EXCLUDED_FACTORY_OUTPUT_SEGMENTS = new Set([
-  "dist",
-  "test-results",
-  "playwright-report",
-  "qa-artifacts",
-]);
+export const TRUSTED_FACTORY_OUTPUT_ROOTS = [
+  ".factory",
+  "sites/starter/dist",
+  "sites/starter/.astro",
+  "sites/starter/test-results",
+  "sites/starter/playwright-report",
+  "sites/starter/qa-artifacts",
+] as const;
 
-function isFactoryOutput(relativePath: string): boolean {
-  const segments = relativePath.split("/");
-  return segments.includes(".factory") || segments.some((segment) => EXCLUDED_FACTORY_OUTPUT_SEGMENTS.has(segment));
+export function isFactoryOutput(relativePath: string): boolean {
+  const normalized = relativePath.replace(/\\/g, "/");
+  return TRUSTED_FACTORY_OUTPUT_ROOTS.some(
+    (root) => normalized === root || normalized.startsWith(`${root}/`),
+  );
 }
 
 async function ignoredPaths(worktreePath: string): Promise<string[]> {

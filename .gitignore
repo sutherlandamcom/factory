@@ -1,15 +1,15 @@
 # dependencies
 node_modules/
-.pnpm-store/
+/.pnpm-store/
 
 # build output
-dist/
-.astro/
+/sites/starter/dist/
+/sites/starter/.astro/
 
 # QA artifacts (regenerated on every test run)
-test-results/
-playwright-report/
-qa-artifacts/
+/sites/starter/test-results/
+/sites/starter/playwright-report/
+/sites/starter/qa-artifacts/
 
 # environment
 .env*
@@ -19,4 +19,4 @@ qa-artifacts/
 *.log
 
 # Factory runtime evidence (runs, patches, logs)
-.factory/
+/.factory/

@@ -26,6 +26,7 @@ function runDirOf(repo: string, runId: string): string {
 }
 
 const noopDeps = async () => {};
+const passReplay = async () => ({ passed: true, details: "mock replay passed" });
 
 test("Scenario A: initial attempt succeeds -> totalAttempts = 1, status = succeeded", async () => {
   const repo = await makeTempRepo();
@@ -44,6 +45,7 @@ test("Scenario A: initial attempt succeeds -> totalAttempts = 1, status = succee
     prepareDependenciesFn: noopDeps,
     runQaFn: async () => ({ passed: true, exitCode: 0, timedOut: false }),
     verifyFn: async () => ({ passed: true, details: "mock verification passed" }),
+    verifyReplayFn: passReplay,
   });
 
   assert.equal(result.status, "succeeded");
@@ -90,6 +92,7 @@ test("Scenario B: 1 repair succeeds after QA failure -> totalAttempts = 2, statu
       return { passed: true, exitCode: 0, timedOut: false };
     },
     verifyFn: async () => ({ passed: true, details: "mock verification passed" }),
+    verifyReplayFn: passReplay,
   });
 
   assert.equal(result.status, "succeeded");
@@ -130,6 +133,7 @@ test("Scenario C: third attempt succeeds (2 failures -> Attempt 3 passes) -> sta
       return { passed: true, exitCode: 0, timedOut: false };
     },
     verifyFn: async () => ({ passed: true, details: "mock verification passed" }),
+    verifyReplayFn: passReplay,
   });
 
   assert.equal(result.status, "succeeded");
@@ -160,6 +164,7 @@ test("Scenario D: max attempts exhausted (3 attempts fail repairably) -> needs_r
     prepareDependenciesFn: noopDeps,
     runQaFn: async () => ({ passed: false, exitCode: 1, timedOut: false }),
     verifyFn: async () => ({ passed: true, details: "mock verification passed" }),
+    verifyReplayFn: passReplay,
   });
 
   assert.equal(result.status, "needs_review");
@@ -192,6 +197,7 @@ test("Scenario E: scope violation on Attempt 1 stops immediately without retry",
     prepareDependenciesFn: noopDeps,
     runQaFn: async () => ({ passed: true, exitCode: 0, timedOut: false }),
     verifyFn: async () => ({ passed: true, details: "mock verification passed" }),
+    verifyReplayFn: passReplay,
   });
 
   assert.equal(result.status, "failed");
@@ -231,6 +237,7 @@ test("Scenario F: scope violation on Attempt 2 stops immediately without further
       return { passed: true, exitCode: 0, timedOut: false };
     },
     verifyFn: async () => ({ passed: true, details: "mock verification passed" }),
+    verifyReplayFn: passReplay,
   });
 
   assert.equal(result.status, "failed");
@@ -262,6 +269,7 @@ test("Scenario G: no-progress / zero-diff on repair stops early with needs_revie
     prepareDependenciesFn: noopDeps,
     runQaFn: async () => ({ passed: false, exitCode: 1, timedOut: false }),
     verifyFn: async () => ({ passed: true, details: "mock verification passed" }),
+    verifyReplayFn: passReplay,
   });
 
   assert.equal(result.status, "needs_review");
@@ -312,6 +320,7 @@ test("Scenario I: final patch represents complete state against original base", 
       return { passed: true, exitCode: 0, timedOut: false };
     },
     verifyFn: async () => ({ passed: true, details: "mock verification passed" }),
+    verifyReplayFn: passReplay,
   });
 
   assert.equal(result.status, "succeeded");
@@ -319,4 +328,42 @@ test("Scenario I: final patch represents complete state against original base", 
   const patch = await readFile(path.join(runDirOf(repo, "repair-final-patch"), "diff.patch"), "utf8");
   assert.match(patch, /Final Repaired Roof Repair/);
   assert.ok(!patch.includes("Initial Draft"));
+});
+
+test("Scenario J: replay failure on Attempt 1 enters repair and succeeds on Attempt 2", async () => {
+  const repo = await makeTempRepo();
+  let codexInvocations = 0;
+  let replayInvocations = 0;
+
+  const result = await runSiteTask(TASK, {
+    repoRoot: repo,
+    runId: "repair-replay-flow",
+    maxAttempts: 3,
+    codexRunner: async (req: CodexRunRequest): Promise<CodexRunResult> => {
+      codexInvocations++;
+      const page = path.join(req.worktreePath, "sites", "starter", "src", "pages", "services", "roof-repair.astro");
+      await mkdir(path.dirname(page), { recursive: true });
+      await writeFile(page, `---\n---\n<h1>Roof Repair attempt ${codexInvocations}</h1>\n`);
+      return { exitCode: 0, timedOut: false, version: "codex-mock", stdout: "", stderr: "" };
+    },
+    prepareDependenciesFn: noopDeps,
+    runQaFn: async () => ({ passed: true, exitCode: 0, timedOut: false }),
+    verifyFn: async () => ({ passed: true, details: "mock verification passed" }),
+    verifyReplayFn: async () => {
+      replayInvocations++;
+      if (replayInvocations === 1) {
+        return { passed: false, details: "replay build failed: missing import" };
+      }
+      return { passed: true, details: "replay build succeeded" };
+    },
+  });
+
+  assert.equal(result.status, "succeeded");
+  assert.equal(result.totalAttempts, 2);
+  assert.equal(result.successfulAttempt, 2);
+  assert.equal(codexInvocations, 2);
+  assert.equal(replayInvocations, 2);
+  assert.equal(result.attempts?.[0]?.stage, "replay");
+  assert.equal(result.attempts?.[0]?.classification, "repairable");
+  assert.equal(result.attempts?.[1]?.stage, "complete");
 });

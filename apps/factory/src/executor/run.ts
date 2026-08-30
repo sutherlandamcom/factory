@@ -2,7 +2,10 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import {
+  DEFAULT_MAX_ATTEMPTS,
+  MAX_TOTAL_ATTEMPTS,
   parseSiteTask,
+  validateMaxAttempts,
   type AttemptResult,
   type FailureClassification,
   type SiteTask,
@@ -21,8 +24,11 @@ import { buildFailureReport, classifyFailure, type FailureReport } from "./class
 import { collectChanges } from "./scope.js";
 import { runQa } from "./qa.js";
 import { verifyCreatePage } from "./verify.js";
+import { verifyPatchReplay, type ReplayVerificationResult, type VerifyPatchReplayOptions } from "./replay.js";
 import { captureIntegritySnapshot, compareIntegritySnapshots } from "./integrity.js";
 import { deriveTaskWritePolicy } from "./module-policy.js";
+
+export { DEFAULT_MAX_ATTEMPTS, MAX_TOTAL_ATTEMPTS };
 
 export interface ExecutorTimeouts {
   depsMs: number;
@@ -45,6 +51,7 @@ export interface ExecutorDeps {
     dynamicArtifact?: string;
   }>;
   verifyFn?: (worktreePath: string, task: SiteTask) => Promise<{ passed: boolean; details: string }>;
+  verifyReplayFn?: (opts: VerifyPatchReplayOptions) => Promise<ReplayVerificationResult>;
   timeouts?: Partial<ExecutorTimeouts>;
   maxAttempts?: number;
   /** Fixed runId for tests; a timestamped id is generated otherwise. */
@@ -71,8 +78,6 @@ export function defaultTimeouts(): ExecutorTimeouts {
   };
 }
 
-export const DEFAULT_MAX_ATTEMPTS = 3;
-
 function generateRunId(): string {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   return `run-${stamp}-${randomBytes(3).toString("hex")}`;
@@ -81,7 +86,7 @@ function generateRunId(): string {
 /**
  * Run one SiteTask end to end with bounded automatic repair:
  * validation → clean-repo preflight → detached worktree → offline dependency
- * prep → [attempt loop: Codex → scope → Factory QA → task verification] →
+ * prep → [attempt loop: Codex → scope → Factory QA → task verification → replay verification] →
  * patch artifact → structured TaskResult → cleanup.
  *
  * Always returns a TaskResult (also on failure or needs_review) and always attempts cleanup.
@@ -93,7 +98,22 @@ export async function runSiteTask(
   const startedAt = new Date();
   const runId = opts.runId ?? generateRunId();
   const timeouts: ExecutorTimeouts = { ...defaultTimeouts(), ...opts.timeouts };
-  const maxAttempts = opts.maxAttempts ?? envInt("FACTORY_MAX_ATTEMPTS", DEFAULT_MAX_ATTEMPTS);
+
+  let error: { code: string; message: string } | undefined;
+  const fail = (code: string, message: string): void => {
+    error = { code, message };
+  };
+
+  let maxAttempts = DEFAULT_MAX_ATTEMPTS;
+  try {
+    if (opts.maxAttempts !== undefined) {
+      maxAttempts = validateMaxAttempts(opts.maxAttempts);
+    } else if (process.env.FACTORY_MAX_ATTEMPTS !== undefined) {
+      maxAttempts = validateMaxAttempts(process.env.FACTORY_MAX_ATTEMPTS);
+    }
+  } catch (err) {
+    fail("invalid_configuration", err instanceof Error ? err.message : String(err));
+  }
 
   let repoRoot = opts.repoRoot;
   let runDir = path.join(repoRoot, ".factory", "runs", runId);
@@ -109,7 +129,6 @@ export async function runSiteTask(
   let task: SiteTask | undefined;
   let writePolicy: ReturnType<typeof deriveTaskWritePolicy> | undefined;
   let worktreePath: string | undefined;
-  let error: { code: string; message: string } | undefined;
   let status: TaskStatus = "failed";
   let successfulAttempt: number | null = null;
   const attempts: AttemptResult[] = [];
@@ -118,10 +137,7 @@ export async function runSiteTask(
   let lastCodexOutcome: TaskResult["codex"];
   let lastQaOutcome: TaskResult["qa"];
   let lastVerificationOutcome: TaskResult["taskVerification"];
-
-  const fail = (code: string, message: string): void => {
-    error = { code, message };
-  };
+  let lastReplayOutcome: TaskResult["replay"];
 
   const recordAttempt = async (attemptDir: string, result: AttemptResult): Promise<void> => {
     attempts.push(result);
@@ -134,6 +150,10 @@ export async function runSiteTask(
 
   try {
     // 1. Validation — before any worktree/Codex/modification.
+    if (error) {
+      throw new FactoryError(error.code, error.message);
+    }
+
     try {
       task = parseSiteTask(taskInput);
       writePolicy = deriveTaskWritePolicy(task);
@@ -578,6 +598,96 @@ export async function runSiteTask(
         continue;
       }
 
+      // 10. Patch self-containment verification (pristine replay from baseCommit)
+      stage = "replay";
+      const replayVerifier = opts.verifyReplayFn ?? verifyPatchReplay;
+      const replayResult = await replayVerifier({
+        repoRoot,
+        baseCommit,
+        patch: scopeResult.patch,
+        runId: `${runId}-attempt-${attemptNumber}`,
+        timeoutMs: timeouts.qaMs,
+        prepareDependenciesFn: opts.prepareDependenciesFn,
+      });
+      lastReplayOutcome = replayResult;
+
+      await writeFile(
+        path.join(attemptDir, "replay-verification.json"),
+        JSON.stringify(replayResult, null, 2),
+        "utf8",
+      );
+
+      if (!replayResult.passed) {
+        if (attemptNumber >= maxAttempts) {
+          attemptError = {
+            code: "replay_failed",
+            message: `${replayResult.details} (attempts exhausted)`,
+          };
+          attemptClassification = "exhausted";
+          fail(attemptError.code, attemptError.message);
+          status = "needs_review";
+          await recordAttempt(attemptDir, {
+            attemptNumber,
+            kind,
+            stage: "replay",
+            startedAt: attemptStartedAt.toISOString(),
+            finishedAt: new Date().toISOString(),
+            durationMs: new Date().getTime() - attemptStartedAt.getTime(),
+            codex: attemptCodex,
+            scope: attemptScope,
+            integrity: attemptIntegrity,
+            qa: attemptQa,
+            taskVerification: attemptVerification,
+            changes: attemptChanges,
+            classification: attemptClassification,
+            error: attemptError,
+            artifacts: { attemptDirectory: path.relative(repoRoot, attemptDir) },
+          });
+          break;
+        }
+
+        attemptError = {
+          code: "replay_failed",
+          message: replayResult.details,
+        };
+        attemptClassification = "repairable";
+        failureReport = buildFailureReport({
+          runId,
+          attemptNumber,
+          failingStage: "replay",
+          failureCode: "replay_failed",
+          message: replayResult.details,
+          targetSlug: task.page.slug,
+          changedFiles: scopeResult.changedFiles,
+          authorizedScope: writePolicy.writablePaths.join(", "),
+        });
+
+        await writeFile(
+          path.join(attemptDir, "failure-report.json"),
+          JSON.stringify(failureReport, null, 2),
+          "utf8",
+        );
+
+        await recordAttempt(attemptDir, {
+          attemptNumber,
+          kind,
+          stage: "replay",
+          startedAt: attemptStartedAt.toISOString(),
+          finishedAt: new Date().toISOString(),
+          durationMs: new Date().getTime() - attemptStartedAt.getTime(),
+          codex: attemptCodex,
+          scope: attemptScope,
+          integrity: attemptIntegrity,
+          qa: attemptQa,
+          taskVerification: attemptVerification,
+          changes: attemptChanges,
+          classification: attemptClassification,
+          error: attemptError,
+          artifacts: { attemptDirectory: path.relative(repoRoot, attemptDir) },
+        });
+        continue;
+      }
+
       // All quality gates passed!
       successfulAttempt = attemptNumber;
       status = "succeeded";
@@ -648,6 +758,7 @@ export async function runSiteTask(
     ...(lastCodexOutcome ? { codex: lastCodexOutcome } : {}),
     ...(lastQaOutcome ? { qa: lastQaOutcome } : {}),
     ...(lastVerificationOutcome ? { taskVerification: lastVerificationOutcome } : {}),
+    ...(lastReplayOutcome ? { replay: lastReplayOutcome } : {}),
     ...(lastScopeResult
       ? {
           changes: {

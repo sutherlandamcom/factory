@@ -31,6 +31,7 @@ export function truncateBounded(str: string | undefined | null, maxLen: number):
 
 /**
  * Computes a deterministic idempotency key from siteKey, task payload, and base commit.
+ * Both automatic and caller-supplied keys are strictly scoped to the Site identity.
  */
 export function computeIdempotencyKey(
   siteKey: string,
@@ -39,7 +40,11 @@ export function computeIdempotencyKey(
   callerKey?: string,
 ): string {
   if (callerKey && callerKey.trim().length > 0) {
-    return callerKey.trim();
+    const trimmed = callerKey.trim();
+    const hash = createHash("sha256")
+      .update(`site:${siteKey}::caller:${trimmed}`)
+      .digest("hex");
+    return `idem-${siteKey}-caller-${hash.slice(0, 32)}`;
   }
   const payloadStr =
     typeof taskInput === "string" ? taskInput : JSON.stringify(taskInput);
@@ -219,6 +224,12 @@ export class FactoryStore {
     // 1. Check existing before transaction
     const existing = await this.findRunByIdempotencyKey(input.idempotencyKey);
     if (existing) {
+      if (existing.siteId !== input.siteId) {
+        throw new FactoryError(
+          "idempotency_scope_conflict",
+          `Persisted run '${existing.id}' matching idempotency key '${input.idempotencyKey}' belongs to a different site ('${existing.siteId}' != '${input.siteId}').`,
+        );
+      }
       const [existingTask] = await this.db
         .select()
         .from(tasks)
@@ -275,6 +286,12 @@ export class FactoryStore {
         // Race condition: another concurrent caller inserted the run
         const conflicted = await this.findRunByIdempotencyKey(input.idempotencyKey);
         if (conflicted) {
+          if (conflicted.siteId !== input.siteId) {
+            throw new FactoryError(
+              "idempotency_scope_conflict",
+              `Persisted run '${conflicted.id}' matching idempotency key '${input.idempotencyKey}' belongs to a different site ('${conflicted.siteId}' != '${input.siteId}').`,
+            );
+          }
           const [conflictedTask] = await this.db
             .select()
             .from(tasks)

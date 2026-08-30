@@ -90,6 +90,12 @@ export async function runPersistedSiteTask(
 
     const existingRun = await store.findRunByIdempotencyKey(idempotencyKey);
     if (existingRun) {
+      if (existingRun.siteId !== site.id) {
+        throw new FactoryError(
+          "idempotency_scope_conflict",
+          `Persisted run '${existingRun.id}' matching idempotency key '${idempotencyKey}' belongs to a different site ('${existingRun.siteId}' != '${site.id}').`,
+        );
+      }
       if (existingRun.status !== "running") {
         const details = await store.getRunDetails(existingRun.id);
         if (!details) {

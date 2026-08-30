@@ -30,9 +30,22 @@ export function reconstructTaskResultFromPersistence(
 
   const totalAttempts = attempts.length;
   let successfulAttempt: number | null = null;
+
   if (status === "succeeded") {
-    const successRecord = attempts.find((a) => a.status === "succeeded");
-    successfulAttempt = successRecord ? successRecord.attemptNumber : (attempts[attempts.length - 1]?.attemptNumber ?? null);
+    const succeededAttempts = attempts.filter((a) => a.status === "succeeded");
+    if (succeededAttempts.length === 0) {
+      throw new FactoryError(
+        "persistence_state_invalid",
+        `Run '${run.id}' has status 'succeeded' but contains no succeeded attempt in the database.`,
+      );
+    }
+    if (succeededAttempts.length > 1) {
+      throw new FactoryError(
+        "persistence_state_invalid",
+        `Run '${run.id}' has status 'succeeded' but contains multiple succeeded attempts (${succeededAttempts.length}) in the database.`,
+      );
+    }
+    successfulAttempt = succeededAttempts[0]!.attemptNumber;
   }
 
   const finalStage: TaskStage =
@@ -98,7 +111,7 @@ export function reconstructTaskResultFromPersistence(
 /**
  * Resolves the terminal TaskResult for an existing run:
  * 1. If task-result.json artifact exists and is valid JSON, validate against taskResultSchema.
- * 2. Cross-check parsed artifact against durable PostgreSQL state.
+ * 2. Cross-check parsed artifact against durable PostgreSQL state (run-level and attempt-level semantics).
  * 3. If artifact is valid and fully consistent with DB truth, return it.
  * 4. If artifact is missing, malformed, schema-invalid, or contradicts DB, reconstruct from DB.
  */
@@ -129,23 +142,42 @@ export function resolveDurableTaskResult(
 
   const artifact = parsed.data;
 
-  // Consistency cross-check between artifact and database truth
-  const isConsistent =
+  // Run-level semantic consistency cross-check
+  const runLevelConsistent =
     artifact.runId === dbResult.runId &&
     artifact.status === dbResult.status &&
+    artifact.siteId === dbResult.siteId &&
+    artifact.taskType === dbResult.taskType &&
     artifact.baseCommit === dbResult.baseCommit &&
     artifact.totalAttempts === dbResult.totalAttempts &&
     artifact.successfulAttempt === dbResult.successfulAttempt &&
-    (dbResult.error ? artifact.error?.code === dbResult.error.code : true) &&
-    (!artifact.attempts ||
-      artifact.attempts.every((att, idx) => {
-        const dbAtt = dbResult.attempts?.[idx];
-        return dbAtt && att.attemptNumber === dbAtt.attemptNumber;
-      }));
+    (dbResult.error?.code === artifact.error?.code);
 
-  if (!isConsistent) {
-    // Stale or contradicting artifact -> DB truth wins
+  if (!runLevelConsistent) {
     return dbResult;
+  }
+
+  // Attempt-level semantic consistency cross-check
+  if (dbResult.totalAttempts > 0) {
+    if (!artifact.attempts || artifact.attempts.length !== dbResult.totalAttempts) {
+      return dbResult;
+    }
+
+    const attemptsConsistent = artifact.attempts.every((artAtt, idx) => {
+      const dbAtt = dbResult.attempts?.[idx];
+      if (!dbAtt) return false;
+      return (
+        artAtt.attemptNumber === dbAtt.attemptNumber &&
+        artAtt.kind === dbAtt.kind &&
+        artAtt.stage === dbAtt.stage &&
+        (artAtt.classification ?? undefined) === (dbAtt.classification ?? undefined) &&
+        (artAtt.error?.code ?? undefined) === (dbAtt.error?.code ?? undefined)
+      );
+    });
+
+    if (!attemptsConsistent) {
+      return dbResult;
+    }
   }
 
   return artifact;

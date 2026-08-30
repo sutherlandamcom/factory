@@ -189,11 +189,35 @@ Following independent QA of the initial Persistent Control Plane implementation,
 
 ---
 
-## 12. Updated Complete Test Matrix
+## 12. Final Independent QA Remediation (PR #3 Idempotency Isolation & Consistency Refinements)
 
-### 12.1 Persistence Integration Tests (`test:persistence`)
+Following final review of PR #3, three additional idempotency and persistence consistency refinements were implemented:
 
-All 14 integration tests run against real PostgreSQL 18 and pass:
+### 12.1 Caller-Supplied Idempotency Key Scoping to Site Identity
+- **Problem**: When a caller provided an explicit `idempotencyKey` (e.g. `launch-001`), `computeIdempotencyKey` previously returned `callerKey.trim()` directly. This created cross-site collision risk where two different sites with the same caller token would share a single database `runs.idempotency_key`.
+- **Remediation**:
+  - `computeIdempotencyKey` now deterministically scopes caller-supplied keys to Site identity: `idem-${siteKey}-caller-${sha256('site:' + siteKey + '::caller:' + callerKey).slice(0, 32)}`.
+  - Automatic and explicit keys are both strictly site-scoped. `Site A + callerKey` and `Site B + callerKey` produce distinct database keys and distinct Runs.
+
+### 12.2 Defence-in-Depth Site Ownership Checks on Run Reuse & Unique Conflict Races
+- **Problem**: If an existing run was discovered matching an idempotency key (either on pre-check or after losing a concurrent unique-constraint race in `createRunAndTask`), there was no explicit assertion that the discovered run belonged to the requested site.
+- **Remediation**:
+  - `driver.ts` asserts `existingRun.siteId === site.id` before inspecting run status or reconstructing results; fails closed immediately with `idempotency_scope_conflict`.
+  - `store.ts` (`createRunAndTask`) asserts `existing.siteId === input.siteId` both in the pre-transaction check and in the 23505 unique conflict handler; fails closed immediately with `idempotency_scope_conflict`.
+
+### 12.3 Reconstruction Invariant & Deep Semantic Attempt Consistency
+- **Problem**: If a run had `status = 'succeeded'` in DB but zero succeeded attempts (or multiple succeeded attempts), `reconstructTaskResultFromPersistence` had a fallback to the last attempt. Additionally, `resolveDurableTaskResult` only validated attempt count and numbers rather than attempt kind, stage, classification, and error codes.
+- **Remediation**:
+  - `reconstructTaskResultFromPersistence` strictly requires that a `succeeded` run has exactly one `succeeded` attempt in PostgreSQL. If 0 or >1 attempts succeeded, it fails closed with `persistence_state_invalid`.
+  - `resolveDurableTaskResult` performs full run-level (`runId`, `status`, `siteId`, `taskType`, `baseCommit`, `totalAttempts`, `successfulAttempt`, `error.code`) and attempt-level (`attemptNumber`, `kind`, `stage`, `classification`, `error.code`) semantic consistency checks. If `task-result.json` contains stale or contradicting attempt metadata, PostgreSQL truth wins.
+
+---
+
+## 13. Complete Final Test Matrix
+
+### 13.1 Persistence Integration Tests (`test:persistence`)
+
+All 18 integration tests run against real PostgreSQL 18 and pass:
 
 | # | Test Name | Result |
 | --- | --- | --- |
@@ -203,23 +227,27 @@ All 14 integration tests run against real PostgreSQL 18 and pass:
 | 4 | `execution integration: bounded repair loop (Attempt 1 QA failure -> Attempt 2 success)` | **PASSED** |
 | 5 | `execution integration: unregistered site fails closed before Codex` | **PASSED** |
 | 6 | `idempotency: sequential and concurrent idempotency deduplication` | **PASSED** |
-| 7 | `idempotency fallback: missing artifact reconstructs accurate multi-attempt TaskResult from DB` | **PASSED** |
-| 8 | `idempotency fallback: malformed, invalid, or contradicting artifact yields to DB truth` | **PASSED** |
-| 9 | `idempotency fallback: terminal failure run with missing artifact reconstructs failure details` | **PASSED** |
-| 10 | `advisory lock: single-writer session lock blocks concurrent writer and releases cleanly` | **PASSED** |
-| 11 | `advisory lock error paths: client release and leak-free ownership invariants` | **PASSED** |
-| 12 | `recovery: stale running Run/Task/Attempt marked interrupted on restart without auto-attempt-2` | **PASSED** |
-| 13 | `project & site: global site key uniqueness across projects and deterministic resolution` | **PASSED** |
-| 14 | `schema & migrations: clean DB migration succeeds and is idempotent` | **PASSED** |
+| 7 | `idempotency: explicit caller key is site-scoped, isolates across sites, and dedupes within site` | **PASSED** |
+| 8 | `idempotency: foreign-run collision fails closed with idempotency_scope_conflict` | **PASSED** |
+| 9 | `idempotency fallback: missing artifact reconstructs accurate multi-attempt TaskResult from DB` | **PASSED** |
+| 10 | `idempotency fallback: malformed, invalid, or contradicting artifact yields to DB truth` | **PASSED** |
+| 11 | `reconstruction consistency: succeeded run without succeeded attempt throws persistence_state_invalid` | **PASSED** |
+| 12 | `reconstruction consistency: succeeded run with multiple succeeded attempts throws persistence_state_invalid` | **PASSED** |
+| 13 | `idempotency fallback: terminal failure run with missing artifact reconstructs failure details` | **PASSED** |
+| 14 | `advisory lock: single-writer session lock blocks concurrent writer and releases cleanly` | **PASSED** |
+| 15 | `advisory lock error paths: client release and leak-free ownership invariants` | **PASSED** |
+| 16 | `recovery: stale running Run/Task/Attempt marked interrupted on restart without auto-attempt-2` | **PASSED** |
+| 17 | `project & site: global site key uniqueness across projects and deterministic resolution` | **PASSED** |
+| 18 | `schema & migrations: clean DB migration succeeds and is idempotent` | **PASSED** |
 
-### 12.2 Factory Unit & Regression Tests (`pnpm test`)
+### 13.2 Factory Unit & Regression Tests (`pnpm test`)
 
 - **Total Tests**: 99 tests
 - **Passed**: 99 (100%)
 - **Failed**: 0
 - **Regressions**: 0
 
-### 12.3 Full QA Pipeline (`pnpm qa`)
+### 13.3 Full QA Pipeline (`pnpm qa`)
 
 - **Check**: Typecheck passed across `@factory/contracts`, `sites/starter`, and `@factory/factory`.
 - **Build**: Astro static site build succeeded.
@@ -228,9 +256,10 @@ All 14 integration tests run against real PostgreSQL 18 and pass:
 
 ---
 
-## 13. Conclusion & Terminal Status
+## 14. Conclusion & Terminal Status
 
-The Persistent Control Plane targeted remediation is complete, all 3 P1 QA findings are resolved and covered by adversarial tests, and all Factory regressions pass.
+The Persistent Control Plane final remediation is complete. All idempotency isolation, foreign run defence, and state consistency invariants are enforced and proven by 18 real PostgreSQL integration tests and 99 unit/regression tests.
 
-`PERSISTENT CONTROL PLANE REMEDIATION COMPLETE — PENDING INDEPENDENT QA`
+`PERSISTENT CONTROL PLANE FINAL REMEDIATION COMPLETE — PENDING INDEPENDENT QA`
+
 

@@ -13,6 +13,7 @@ import {
   validateProductionUrl,
   validateWorkerName,
 } from "./delivery/index.js";
+import { resolveRepositoryRoot } from "./repo-root.js";
 import type { DeploymentResult } from "@factory/contracts";
 import pkg from "../package.json" with { type: "json" };
 
@@ -197,13 +198,15 @@ async function main(argv: string[]): Promise<number> {
     }
 
     if (command === "deploy" && rest.length === 1) {
-      const result = await runProductionDelivery({ repoRoot: process.cwd(), siteKey: rest[0]! });
+      const repoRoot = await resolveRepositoryRoot();
+      const result = await runProductionDelivery({ repoRoot, siteKey: rest[0]! });
       printDeployment(result);
       return result.status === "verified" ? 0 : 1;
     }
 
     if (command === "rollback" && rest.length === 1) {
-      const result = await runExplicitRollback({ repoRoot: process.cwd(), siteKey: rest[0]! });
+      const repoRoot = await resolveRepositoryRoot();
+      const result = await runExplicitRollback({ repoRoot, siteKey: rest[0]! });
       printDeployment(result);
       return result.status === "rolled_back" ? 0 : 1;
     }
@@ -288,8 +291,9 @@ async function main(argv: string[]): Promise<number> {
         };
       }
 
+      const repoRoot = await resolveRepositoryRoot();
       const result = await runPersistedSiteTask(taskInput, {
-        repoRoot: process.cwd(),
+        repoRoot,
         idempotencyKey,
       });
 

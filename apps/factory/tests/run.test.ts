@@ -209,18 +209,11 @@ test("invalid task input fails validation without touching git", async () => {
   assert.equal(gitIn(repo, ["status", "--porcelain"]), "");
 });
 
-test("default real Codex runner fails closed without strong isolation", async () => {
+test("strong isolation preflight fails closed for a repository outside the dedicated mounts", async () => {
   const repo = await makeTempRepo();
-  const { createCodexRunner } = await import("../src/executor/codex.js");
-  const runner = createCodexRunner({ codexPath: "/nonexistent/codex" });
+  const { assertStrongExecutionIsolationAvailable } = await import("../src/executor/isolation.js");
   await assert.rejects(
-    () =>
-      runner({
-        worktreePath: repo,
-        prompt: "x",
-        runDir: repo,
-        timeoutMs: 1000,
-      }),
+    () => assertStrongExecutionIsolationAvailable(repo),
     (err: unknown) => err instanceof FactoryError && err.code === "strong_execution_isolation_unavailable",
   );
 });

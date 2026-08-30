@@ -14,7 +14,8 @@ import { FactoryError } from "./errors.js";
 import { preflight } from "./preflight.js";
 import { createWorktree, removeWorktree } from "./worktree.js";
 import { prepareDependencies } from "./deps.js";
-import { assertStrongExecutionIsolationAvailable, createCodexRunner, type CodexRunner } from "./codex.js";
+import { createCodexRunner, type CodexRunner } from "./codex.js";
+import { assertStrongExecutionIsolationAvailable } from "./isolation.js";
 import { buildCodexPrompt, buildRepairPrompt } from "./prompt.js";
 import { buildFailureReport, classifyFailure, type FailureReport } from "./classify.js";
 import { collectChanges } from "./scope.js";
@@ -161,7 +162,7 @@ export async function runSiteTask(
     // Unsafe host-shared Codex execution is never an implicit fallback.
     if (!opts.codexRunner) {
       stage = "isolation";
-      assertStrongExecutionIsolationAvailable();
+      await assertStrongExecutionIsolationAvailable(repoRoot);
     }
 
     // 3. Detached temp worktree at exactly baseCommit.
@@ -198,7 +199,7 @@ export async function runSiteTask(
       stage = "codex";
       const codexRunner =
         opts.codexRunner ??
-        createCodexRunner({ codexPath: path.join(repoRoot, "node_modules", ".bin", "codex") });
+        createCodexRunner({ repoRoot });
 
       const prompt =
         attemptNumber === 1
@@ -210,6 +211,7 @@ export async function runSiteTask(
         prompt,
         runDir: attemptDir,
         timeoutMs: timeouts.codexMs,
+        writablePaths: writePolicy.writablePaths,
       });
       stage = "codex";
 

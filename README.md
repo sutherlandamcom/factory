@@ -11,15 +11,57 @@ See `docs/architecture.md` for the design.
 
 - Node.js >=22.12.0
 - pnpm 11 (`corepack enable` if needed)
-- Codex CLI (`@openai/codex`, pinned as a root devDependency). Real site-task
-  execution is currently fail-closed because this host has no approved OCI
-  isolation backend; tests and QA do not require Codex auth.
+- Codex CLI authentication (`@openai/codex` is pinned at `0.150.1`). Factory
+  copies only `auth.json` into an ephemeral worker-specific runtime directory.
+- Colima + Docker CLI, using the dedicated `factory-sandbox` profile below.
 
 ## Install
 
 ```bash
 pnpm install
 ```
+
+## Strong execution isolation
+
+Factory never runs production Codex directly on the host. On macOS, install the
+approved local boundary and start a dedicated profile (do not use the default
+Colima profile):
+
+```bash
+brew install colima docker qemu
+mkdir -p "$PWD/.factory/worktrees" "$PWD/.factory/codex-runtime"
+colima start factory-sandbox \
+  --template=false \
+  --vm-type qemu \
+  --runtime docker \
+  --mount "$PWD/.factory/worktrees:w" \
+  --mount "$PWD/.factory/codex-runtime:w" \
+  --cpus 4 --memory 8 --disk 30 \
+  --ssh-agent=false --ssh-config=false \
+  --activate=false --port-forwarder none
+
+# Required by Codex's inner bubblewrap sandbox on Ubuntu guests whose AppArmor
+# policy otherwise blocks unprivileged user namespaces. Apply after first start
+# and persist the same sysctl as a system provision step in this profile only.
+colima ssh --profile factory-sandbox -- \
+  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+```
+
+Persist that VM-only setting in `~/.colima/factory-sandbox/colima.yaml` so it is
+restored on profile restart:
+
+```yaml
+provision:
+  - mode: system
+    script: |
+      sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+```
+
+The profile mounts neither the user's home nor `/Users` or host `/tmp`. Factory
+checks the saved profile and Docker server mechanically before each production
+run and builds the pinned Linux worker image from
+`apps/factory/isolation/codex-worker.Dockerfile` when needed. Do not configure a
+system-wide Docker socket symlink or enable Kubernetes.
 
 ## Playwright browser
 
@@ -57,11 +99,10 @@ pnpm factory site-task packages/contracts/fixtures/create-roof-repair.json
 ```
 
 The executor validates the task and verifies the working tree is clean. Before
-creating a worker it requires a strong outer isolation backend. The current
-host has no supported Docker/Podman/Lima-compatible runtime, so the CLI returns
-`strong_execution_isolation_unavailable` with the explicit blocker
-`STRONG_EXECUTION_ISOLATION_UNAVAILABLE`; it never falls back to host-readable
-`workspace-write` execution.
+creating a worker it verifies the exact dedicated Colima mounts, Linux Docker
+server, inner-sandbox user-namespace policy, and pinned worker image. A missing or unsafe profile returns
+`STRONG_EXECUTION_ISOLATION_UNAVAILABLE`; Factory never falls back to
+host-readable `workspace-write` execution.
 
 With an approved backend, the bounded loop remains specified as follows:
 
@@ -86,7 +127,7 @@ cannot declare a broader policy in their input.
 Run artifacts land in `.factory/runs/<runId>/` (gitignored):
 - `task.json`, `base-commit.txt`, `task-result.json`, `diff.patch`, `changed-files.txt`
 - `attempts/<attemptNumber>/`:
-  - `codex-output.jsonl`, `codex-stderr.txt`, `codex-version.txt`
+  - `codex-output.jsonl`, `codex-stderr.txt`, `codex-version.txt`, `codex-last-message.txt`
   - `changed-files.txt`, `diff.patch`
   - `git-evidence.raw.z`, `integrity-baseline.json`, `integrity-current.json`
   - `foundation-qa-*.txt`, `dynamic-qa-*.txt`, `task-qa-spec.json`, aggregate `qa-*.txt`

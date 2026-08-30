@@ -24,7 +24,7 @@ async function runRealRepairAcceptance(repoRoot: string) {
   console.log("=======================================================");
 
   const realCodex = createCodexRunner({
-    codexPath: path.join(repoRoot, "node_modules", ".bin", "codex"),
+    repoRoot,
   });
 
   let codexInvocations = 0;
@@ -34,7 +34,7 @@ async function runRealRepairAcceptance(repoRoot: string) {
     console.log(`[HybridCodexRunner] Attempt ${codexInvocations} starting...`);
 
     if (codexInvocations === 1) {
-      console.log("[HybridCodexRunner] Attempt 1: Injecting realistic defective Astro page (syntax error / missing canonical / wrong title)...");
+      console.log("[HybridCodexRunner] Attempt 1: Injecting a build-valid page with a dynamic H1 defect...");
       const pageFile = path.join(
         req.worktreePath,
         "sites",
@@ -46,20 +46,37 @@ async function runRealRepairAcceptance(repoRoot: string) {
       );
       await mkdir(path.dirname(pageFile), { recursive: true });
 
-      // Realistic defect: Page exists and imports components, but has wrong title ("Bad Title") and invalid Astro syntax in frontmatter
+      // The page deliberately satisfies the Foundation build and static site checks.
+      // Its only task-contract defect is the wrong H1, so the separate dynamic
+      // task QA must be the gate that triggers the real repair attempt.
       const defectiveContent = `---
-import BaseLayout from '../../layouts/BaseLayout.astro';
-import Hero from '../../components/Hero.astro';
-import Cta from '../../components/Cta.astro';
+import Layout from "../../layouts/Layout.astro";
 
-// Defect: intentionally missing required title and canonical link definition
-const pageTitle = "Wrong Gutter Page";
+const title = "Gutter Cleaning & Inspection Services";
+const description = "Expert gutter cleaning and downspout inspection for residential properties.";
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@type": "Service",
+  name: title,
+  description,
+  url: new URL(Astro.url.pathname, Astro.site ?? Astro.url.origin).href,
+};
 ---
 
-<BaseLayout title={pageTitle} description="Expert gutter cleaning">
-  <Hero title={pageTitle} subtitle="Keep gutters clear" />
-  <!-- Missing CTA and required sections -->
-</BaseLayout>
+<Layout title={title} description={description} jsonLd={jsonLd}>
+  <section class="mx-auto max-w-4xl px-6 py-16">
+    <h1>Wrong heading that dynamic task QA must reject</h1>
+    <p>
+      Clear gutters protect roofing, siding, and foundations from preventable water damage. Our
+      inspection identifies blockages and downspout problems before they become expensive repairs.
+    </p>
+    <details class="mt-8">
+      <summary>How often should gutters be inspected?</summary>
+      <p>Most homes benefit from inspection in spring and autumn, with extra checks after storms.</p>
+    </details>
+    <a href="/" class="mt-8 inline-block">Request gutter cleaning</a>
+  </section>
+</Layout>
 `;
       await writeFile(pageFile, defectiveContent, "utf8");
       return {
@@ -104,6 +121,9 @@ const pageTitle = "Wrong Gutter Page";
   );
   assert.equal(result.attempts?.length, result.totalAttempts);
   assert.equal(result.attempts[0]?.classification, "repairable");
+  assert.equal(result.attempts[0]?.qa?.foundationPassed, true);
+  assert.equal(result.attempts[0]?.qa?.dynamicPassed, false);
+  assert.equal(result.attempts[0]?.qa?.failureGate, "dynamic");
   assert.equal(result.attempts[result.attempts.length - 1]?.stage, "complete");
 
   // Validate schema

@@ -1,5 +1,23 @@
 import { defineConfig, devices } from "@playwright/test";
 
+function resolvePort(): number {
+  const raw = process.env.FACTORY_QA_PORT;
+  if (!raw) {
+    return 4321;
+  }
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(
+      `FACTORY_QA_PORT must be an integer between 1 and 65535, received: ${JSON.stringify(raw)}`,
+    );
+  }
+  return port;
+}
+
+const port = resolvePort();
+const baseUrl = `http://localhost:${port}`;
+const testOrigin = process.env.PUBLIC_SITE_URL || "https://test.example.com";
+
 /**
  * QA for the built static site. The webServer builds and serves the site via
  * `astro preview` so tests run against production output, not the dev server.
@@ -12,7 +30,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: "list",
   use: {
-    baseURL: "http://localhost:4321",
+    baseURL: baseUrl,
     trace: "retain-on-failure",
   },
   projects: [
@@ -32,9 +50,14 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "pnpm run build && pnpm run preview",
-    url: "http://localhost:4321",
-    reuseExistingServer: !process.env.CI,
+    command: `pnpm run build && pnpm run preview --port ${port}`,
+    url: baseUrl,
+    reuseExistingServer: false,
     timeout: 180_000,
+    env: {
+      ...process.env,
+      ASTRO_PREVIEW_BACKGROUND: "0",
+      PUBLIC_SITE_URL: testOrigin,
+    },
   },
 });

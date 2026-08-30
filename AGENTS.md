@@ -35,8 +35,16 @@ human or an agent executing a `SiteTask`.
 
 - After meaningful website changes, run `pnpm qa` (typecheck → build →
   Playwright). **A task is never complete while required QA is failing.**
-- When implementing a `SiteTask`, change only the files the task implies.
-  Do not touch unrelated files, reformat, or refactor opportunistically.
+- When implementing a `SiteTask`:
+  - **Authorized write scope**: The coding agent may modify only files within
+    the explicitly authorized site source scope, initially `sites/starter/src/**`.
+  - **Deny-listed paths**: Tests (`sites/starter/tests/**`), Playwright
+    configuration (`sites/starter/playwright.config.ts`), root scripts,
+    package manifests (`package.json`), lockfiles (`pnpm-lock.yaml`),
+    `AGENTS.md`, Git metadata (`.git/**`), and unrelated files are deny-listed.
+  - **Oracle protection**: QA and changed-file validation run outside the
+    coding agent's write scope.
+  - **Fail closed**: Any out-of-scope changed file makes the task fail immediately.
 - Playwright QA runs against the **built** site (`astro preview`), never the
   dev server. Screenshot artifacts land in `sites/starter/qa-artifacts/`
   (gitignored, regenerated every run).

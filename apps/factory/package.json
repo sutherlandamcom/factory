@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/index.ts",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts"
   },
   "dependencies": {
     "@factory/contracts": "workspace:*"

@@ -189,3 +189,57 @@ tests may inject a fake runner, but there is no host-shared production fallback.
 This leaves real create-page, real repair, and live host canary acceptance
 `NOT VERIFIED` until an approved isolation backend is available. The prior
 decision remains in this record as historical context rather than being erased.
+
+---
+
+## Decision Update — 2026-08-30: Dedicated Colima Boundary Operational
+
+Authorization was subsequently granted to install and configure a supported
+local runtime. The execution boundary is now a dedicated Colima 0.10.3 QEMU
+profile named `factory-sandbox`, backed by Docker (client 29.7.2, Linux server
+29.5.2). Kubernetes, automatic context activation, SSH-agent forwarding, SSH
+configuration changes, host-reachable addressing, and VM port forwarding are
+disabled. The VM receives exactly two host mounts:
+
+- `.factory/worktrees`, for disposable task worktrees;
+- `.factory/codex-runtime`, for narrowly staged runtime input and output.
+
+The repository root, host home, `/Users`, host `/tmp`, Docker socket, and SSH
+agent socket are not mounted. Factory preflight checks both the saved profile
+and effective VM mounts and fails closed with
+`STRONG_EXECUTION_ISOLATION_UNAVAILABLE` on any mismatch, symlinked boundary,
+unexpected running container, non-Linux daemon, or missing capability.
+
+The layered decision is:
+
+1. Git supplies a detached disposable worktree and exact cumulative patch.
+2. Colima/QEMU supplies the host-filesystem boundary.
+3. Docker supplies a pinned, non-root, read-only worker with all capabilities
+   dropped, `no-new-privileges`, PID/CPU/memory limits, isolated temporary
+   filesystems, no host sockets, a read-only worktree, and a writable overlay
+   only for the validated target page's parent directory.
+4. Inner Codex keeps approval disabled, shell network disabled, and web search
+   disabled while retaining model-service connectivity.
+5. Factory remains authoritative for exact-path/mode/integrity enforcement,
+   semantic verification, Foundation QA, dynamic QA, bounded repair, artifact
+   capture, and cleanup after the worker exits.
+
+Live adversarial acceptance in
+`.factory/acceptance/isolation-4d0b4462ea52/result.json` passed: reads and writes
+outside the worktree were blocked, worktree reads remained available, no
+synthetic environment value leaked, and no orphan container remained. A real
+isolated `create_page` completed after two attempts, and a separate wrong-H1
+fixture failed dynamic QA before a real isolated Codex repair passed on attempt
+two. The previous unavailable-runtime result remains above as historical
+evidence, but it is no longer the acceptance disposition for this environment.
+
+Two residuals are explicit. Editor-safe atomic replacement requires the target
+page's parent directory to be physically writable inside the container, so the
+exact single-file authority is enforced mechanically by Git mode/path checks
+and ignored-state integrity checks after every attempt. Also, inner Codex uses
+Linux user and mount namespaces; the dedicated VM sets
+`kernel.apparmor_restrict_unprivileged_userns=0`, and the worker uses unconfined
+seccomp/AppArmor profiles for that inner sandbox. This exception is confined to
+the dedicated VM; the worker still drops every capability and has
+`no-new-privileges`. The worker receives only the minimal read-only Codex auth
+file needed for the model call, copied into an ephemeral container-local home.

@@ -58,6 +58,7 @@ const jsonLd = {
   "@context": "https://schema.org",
   "@type": "Service",
   name: title,
+  serviceType: title,
   description,
   url: new URL(Astro.url.pathname, Astro.site ?? Astro.url.origin).href,
 };

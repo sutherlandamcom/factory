@@ -4,6 +4,7 @@
   "compatibility_date": "2026-08-30",
   "preview_urls": true,
   "assets": {
-    "directory": "./dist"
+    "directory": "./dist",
+    "not_found_handling": "404-page"
   }
 }

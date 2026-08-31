@@ -15,12 +15,22 @@ test("registry contains only current repository modules", () => {
     "control-plane",
     "persistence",
     "production-delivery",
+    "site-intelligence",
     "site-source",
     "site-configuration",
     "quality-oracle",
     "repository-policy",
   ]);
   assert.ok(!MODULE_REGISTRY.some((module) => /seo|research|content/.test(module.id)));
+});
+
+test("site-intelligence module is protected and not ordinary-task writable", () => {
+  const module = MODULE_REGISTRY.find((entry) => entry.id === "site-intelligence");
+  assert.ok(module, "site-intelligence module must be registered");
+  assert.deepEqual(module.ownedPaths, ["apps/factory/src/intelligence/"]);
+  assert.equal(module.protected, true);
+  assert.equal(module.ordinaryTaskWritable, false);
+  assert.deepEqual(owningModules("apps/factory/src/intelligence/driver.ts"), ["site-intelligence"]);
 });
 
 test("create_page has READ MANY / WRITE ONE exact-page authority", () => {
@@ -41,6 +51,7 @@ test("create_page cannot write protected or unrelated paths", () => {
     "apps/factory/src/executor/run.ts",
     "apps/factory/src/persistence/schema.ts",
     "apps/factory/src/delivery/service.ts",
+    "apps/factory/src/intelligence/driver.ts",
     "packages/contracts/src/site-task.ts",
     "sites/starter/tests/qa.spec.ts",
     "sites/starter/playwright.config.ts",

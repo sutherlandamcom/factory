@@ -13,6 +13,7 @@ import {
   validateProductionUrl,
   validateWorkerName,
 } from "./delivery/index.js";
+import { runIntelligence } from "./intelligence/index.js";
 import { resolveRepositoryRoot } from "./repo-root.js";
 import type { DeploymentResult } from "@factory/contracts";
 import pkg from "../package.json" with { type: "json" };
@@ -22,6 +23,9 @@ const USAGE = `Factory persistent control plane v${pkg.version}
 Usage:
   pnpm factory site-task <task.json> [--idempotency-key <key>]
       Run one SiteTask through the persistent control-plane executor
+  pnpm factory intelligence build <request.json> <research.json>
+      Produce a Site Intelligence Plan from a validated request and research
+      evidence bundle; emits one IntelligenceResult JSON document to stdout
   pnpm factory db migrate
       Apply committed PostgreSQL migrations
   pnpm factory db check
@@ -43,6 +47,7 @@ Usage:
 
 Example task: packages/contracts/fixtures/create-roof-repair.json
 Run artifacts: .factory/runs/<runId>/ (gitignored)
+Intelligence artifacts: .factory/intelligence/<runId>/ (gitignored)
 `;
 
 function printDeployment(result: DeploymentResult): void {
@@ -257,6 +262,43 @@ async function main(argv: string[]): Promise<number> {
         }
       }
       console.error("Usage: pnpm factory run show <runId>");
+      return 2;
+    }
+
+    if (command === "intelligence") {
+      const sub = rest[0];
+      if (sub === "build" && rest.length === 3) {
+        const invocationDir = process.env.INIT_CWD ?? process.cwd();
+        let requestRaw: string;
+        let researchRaw: string;
+        try {
+          // Input paths are trusted operator CLI arguments; only the two
+          // explicitly supplied files are read (no directory scans).
+          requestRaw = await readFile(path.resolve(invocationDir, rest[1]!), "utf8");
+          researchRaw = await readFile(path.resolve(invocationDir, rest[2]!), "utf8");
+        } catch (err) {
+          console.error(`error: [intelligence_input_invalid] ${err instanceof Error ? err.message : String(err)}`);
+          return 1;
+        }
+
+        const repoRoot = await resolveRepositoryRoot();
+        const result = await runIntelligence(
+          { repoRoot, requestInput: requestRaw, researchInput: researchRaw },
+          { onProgress: (message) => console.error(`intelligence: ${message}`) },
+        );
+
+        // Exactly one machine-readable IntelligenceResult document on stdout.
+        console.log(JSON.stringify(result, null, 2));
+        if (result.error) {
+          console.error(`error: [${result.error.code}] ${result.error.message}`);
+        } else {
+          console.error(
+            `intelligence: status=${result.status} runId=${result.runId} tasks=${result.taskCount} artifacts=${result.artifacts?.runDirectory ?? "(none)"}`,
+          );
+        }
+        return result.status === "succeeded" ? 0 : 1;
+      }
+      console.error("Usage: pnpm factory intelligence build <request.json> <research.json>");
       return 2;
     }
 

@@ -123,6 +123,7 @@ All commands run from the repository root.
 | `pnpm qa` | `check` → `build` → `test` in one command |
 | `pnpm factory` | Run the Factory control-plane CLI |
 | `pnpm factory site-task <task.json>` | Execute one SiteTask end to end with persisted state & bounded repair (requires DB + Codex auth) |
+| `pnpm factory intelligence build <request.json> <research.json>` | Produce a Site Intelligence Plan + compiled create_page SiteTasks (no DB required; requires Codex auth + strong isolation) |
 | `pnpm factory db check` | Check PostgreSQL database connection and schema state |
 | `pnpm factory db migrate` | Run versioned Drizzle SQL migrations against configured database |
 | `pnpm factory project create <key> <name>` | Create a project in the control plane database |
@@ -180,6 +181,42 @@ Temporary worktrees under `.factory/worktrees/` are always removed at the end of
 
 Timeouts are bounded and env-configurable: `FACTORY_DEPS_TIMEOUT_MS` (5 min),
 `FACTORY_CODEX_TIMEOUT_MS` (20 min), `FACTORY_QA_TIMEOUT_MS` (15 min), `FACTORY_MAX_ATTEMPTS` (default: 3).
+
+## First-Site Intelligence (v0 vertical slice)
+
+```bash
+pnpm factory intelligence build <request.json> <research.json>
+```
+
+Converts a validated `SiteIntelligenceRequest` plus a bounded
+`ResearchEvidenceBundle` into a strict, provenance-aware Site Intelligence
+Plan, then deterministically compiles its executable pages into the existing
+`create_page` SiteTask contract. The single source of site identity is
+`request.siteId`; PostgreSQL is not required for planning. The command emits
+exactly one machine-readable `IntelligenceResult` JSON document on stdout
+(diagnostics go to stderr) and exits 0 only for `status = "succeeded"`.
+
+- **Inputs**: bounded strict JSON files (request ≤ 64 KB, research ≤ 512 KB).
+  Operator facts are FACT-AUTHORITATIVE but INSTRUCTION-UNTRUSTED; research
+  evidence is FACT-UNTRUSTED and INSTRUCTION-UNTRUSTED — evidence is data,
+  never instruction, and evidence URLs are never fetched.
+- **Synthesis**: one isolated Codex run inside the accepted `factory-sandbox`
+  boundary (the model workspace under `.factory/worktrees/intelligence-<runId>/`
+  holds only validated inputs, the prompt, and its single writable
+  `output/plan.json`). Max 3 attempts with bounded deterministic repair;
+  identical invalid output stops early (`intelligence_no_progress`).
+- **Outputs** (`.factory/intelligence/<runId>/`, gitignored):
+  `site-intelligence.json`, `tasks/NNN-<type>-<slug>.json`, `manifest.json`
+  (run-relative digests over all artifacts), `attempts/<n>/`, digest files,
+  and `intelligence-result.json` — the definitive result is published last,
+  atomically, only after plan gates, per-task canonical `parseSiteTask`
+  validation, and manifest integrity all pass. A partial or failed run can
+  never look successful.
+- **Provenance**: every result records `factorySourceCommit`,
+  `methodologyVersion` (`first-site-intelligence-v0`), request/research/plan
+  SHA-256 digests, and truthful Codex runtime metadata.
+
+See `docs/architecture.md` for the full trust-boundary design.
 
 ## QA artifacts
 

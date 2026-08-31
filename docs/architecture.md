@@ -1,5 +1,9 @@
 # Factory architecture
 
+Repository policy: [`AGENTS.md`](../AGENTS.md) and
+[`docs/seo-policy.md`](./seo-policy.md) — Google Search / SEO governance is a
+first-class acceptance constraint for all Factory work.
+
 ## What exists today (execution trust hardening)
 
 Factory is a pnpm monorepo with three packages:

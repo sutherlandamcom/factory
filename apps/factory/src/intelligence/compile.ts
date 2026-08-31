@@ -30,6 +30,10 @@ function byPriorityThenSlug(left: PlannedPage, right: PlannedPage): number {
 function taskFileName(index: number, page: PlannedPage): string {
   const ordinal = String(index + 1).padStart(3, "0");
   if (page.type === "homepage") return `${ordinal}-homepage.json`;
+  if (page.type === "general") {
+    const slugBase = page.slug.split("/").filter(Boolean).join("-");
+    return `${ordinal}-general-${slugBase}.json`;
+  }
   // Drop the fixed first path segment ("/services/" or "/blog/") so the
   // file name does not duplicate the page-type prefix.
   const slugBase = page.slug.split("/").filter(Boolean).slice(1).join("-");
@@ -41,9 +45,10 @@ export function compilePlanToTasks(
   request: SiteIntelligenceRequest,
 ): CompiledIntelligenceTask[] {
   const homepagePages = plan.pages.filter((page) => page.type === "homepage");
+  const generalPages = plan.pages.filter((page) => page.type === "general").sort(byPriorityThenSlug);
   const servicePages = plan.pages.filter((page) => page.type === "service").sort(byPriorityThenSlug);
   const articlePages = plan.pages.filter((page) => page.type === "article").sort(byPriorityThenSlug);
-  const orderedPages = [...homepagePages, ...servicePages, ...articlePages];
+  const orderedPages = [...homepagePages, ...generalPages, ...servicePages, ...articlePages];
 
   return orderedPages.map((page, index) => {
     // Only CURRENT create_page fields may flow into SiteTask; planning-only

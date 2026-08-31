@@ -38,8 +38,8 @@ const OUTPUT_SCHEMA_DESCRIPTION = `{
       "metrics": { "searchVolume": int>=0, "cpc": number>=0, "difficulty": 0-100, "position": int>=1 }  // OPTIONAL; only values copied verbatim from cited evidence metrics; omit otherwise
   } ],
   "pages": [ {
-      "type": "homepage|service|article",
-      "slug": "homepage must be \\"/\\", service must be \\"/services/<name>\\", article must be \\"/blog/<name>\\" (lowercase alphanumerics and single hyphens)",
+      "type": "homepage|general|service|article",
+      "slug": "homepage must be \\"/\\"; general must be non-root, must not end in /index, and must not be /services, /services/**, /blog, /blog/**, or /404; service must be \\"/services/<name>\\"; article must be \\"/blog/<name>\\" (lowercase alphanumerics and single hyphens)",
       "title": "1-200 chars",
       "description": "1-500 chars meta description",
       "sections": ["1-20 unique values from: hero, feature_cards, content_section, benefits, faq, cta"],
@@ -56,6 +56,7 @@ const OUTPUT_SCHEMA_DESCRIPTION = `{
 const HARD_INVARIANTS = `- version is exactly "v0" and methodologyVersion is exactly "${INTELLIGENCE_METHODOLOGY_VERSION}".
 - siteId equals the request siteId exactly.
 - Exactly ONE homepage page and its slug is exactly "/".
+- A general page is non-root, cannot terminate in /index, and may not use /services, /services/**, /blog, /blog/**, or /404. General is not a loophole for service or article routes.
 - Total pages must not exceed the request planning.maxInitialPages.
 - Every page has at least one evidenceId or at least one operatorFactId (provenance is mandatory).
 - Every evidenceIds entry (anywhere) must reference an id present in RESEARCH_EVIDENCE_DATA; every operatorFactIds entry must reference an id present in the request data. Fictitious ids are invalid.
@@ -69,10 +70,11 @@ const HARD_INVARIANTS = `- version is exactly "v0" and methodologyVersion is exa
 - rationale must be a meaningful explanation of at least 20 characters.
 - No unknown fields anywhere; no comments; no trailing text.`;
 
-const METHODOLOGY_GUIDANCE = `- The homepage states the broad market role of the business; service pages cover the supplied services with distinct, specific topics; article pages answer informational intent that the service pages do not already cover.
+const METHODOLOGY_GUIDANCE = `- The homepage is the unique root page. A service page is a genuine commercial service under /services/**. An article is informational/editorial content under /blog/**. A general page is an institutional, trust, methodology, navigation, research-hub, company/about, or conversion page that is neither a service nor an article; examples include /private-office, /about, /market-intelligence, and /strategic-briefing.
+- General is not a generic loophole: use service and article whenever those semantics apply, and preserve every reserved route restriction exactly.
 - Prefer honest uncertainty over confident invention: if evidence is thin, contradictory, or only weakly related to a topic, record that in marketSummary.uncertainty or warnings instead of asserting unsupported claims.
 - Research-derived statements are observations, not business facts. Business facts come only from operator facts.
-- Suggested section patterns (not mandatory): homepage [hero, feature_cards, benefits, faq, cta]; service [hero, benefits, content_section, faq, cta]; article [content_section, faq].`;
+- Suggested section patterns (not mandatory): homepage [hero, feature_cards, benefits, faq, cta]; general [hero, content_section, cta]; service [hero, benefits, content_section, faq, cta]; article [content_section, faq].`;
 
 function dataSection(label: string, value: unknown): string {
   return `${label}

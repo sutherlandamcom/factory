@@ -23,6 +23,7 @@ export function buildCodexPrompt(task: SiteTask, policy: TaskWritePolicy): strin
 - Do NOT commit, push, stash, or otherwise run git-mutating commands.
 - Do NOT access the network; it is disabled.
 - Do NOT attempt to run "pnpm qa" or launch background dev/preview servers; sandbox blocks network sockets. Factory runs the authoritative QA oracle outside the sandbox.
+- When page.type is "general", use existing layouts/components and emit one truthful WebPage JSON-LD object whose name equals the SiteTask title and whose url equals the canonical URL.
 
 ## SiteTask (authoritative, validated JSON)
 
@@ -68,6 +69,7 @@ Your goal is to inspect the current implementation in the repository and FIX THE
 - Do NOT commit, push, stash, or otherwise run git-mutating commands.
 - Do NOT access the network; it is disabled.
 - Do NOT attempt to run "pnpm qa" or launch background dev/preview servers; sandbox blocks network sockets. Factory runs the authoritative QA oracle outside the sandbox.
+- When page.type is "general", use existing layouts/components and emit one truthful WebPage JSON-LD object whose name equals the SiteTask title and whose url equals the canonical URL.
 
 ## Target SiteTask
 

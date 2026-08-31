@@ -23,7 +23,10 @@ schemas are the source of truth and TypeScript types are derived from them,
 so SiteTasks arriving as JSON at runtime are validated before any work
 begins; slugs are restricted to rooted lowercase paths like
 `/services/roof-repair` (no traversal, backslashes, query/fragment, double
-slashes).
+slashes). `create_page` supports `homepage` (`/`), `general` (ordinary
+non-root institutional/trust/methodology/conversion routes), `service`
+(`/services/**`), and `article` (`/blog/**`). General pages cannot occupy the
+root, service/blog namespaces, or the Foundation-owned `/404` route.
 
 `TaskResult` is the structured run outcome:
 - `status`: `"succeeded" | "failed" | "needs_review"`
@@ -260,8 +263,9 @@ metrics of a cited evidence record. Evidence records must carry at least one
 substantive payload (query, sourceUrl, title, text, or an observed metric
 value) — metadata-only shells are invalid. The trusted compiler (never the
 model) emits `create_page` tasks in deterministic order — homepage, then
-services, then articles, each by priority (`high→medium→low`) with slug
-tie-break — and every task passes canonical `parseSiteTask`.
+general pages, services, then articles, each non-home group by priority
+(`high→medium→low`) with slug tie-break — and every task passes canonical
+`parseSiteTask`.
 
 ### Source provenance fails closed
 

@@ -86,3 +86,52 @@ test("task file names are deterministic and ordered", async () => {
     ],
   );
 });
+
+test("general pages compile between homepage and services with deterministic names", async () => {
+  const { request, plan } = await inputs();
+  const provenance = ((plan.pages as AnyRecord[])[0] as AnyRecord).evidenceIds;
+  (plan.pages as AnyRecord[]).push(
+    {
+      type: "general",
+      slug: "/private-office/approach",
+      title: "Our Approach",
+      description: "How the private office approaches evidence-led property decisions.",
+      sections: ["hero", "content_section", "cta"],
+      primaryTopic: "private office approach",
+      intent: "commercial_investigation",
+      priority: "medium",
+      rationale: "Explains the institutional operating model without misclassifying it as a service.",
+      evidenceIds: provenance,
+    },
+    {
+      type: "general",
+      slug: "/about",
+      title: "About",
+      description: "Meet the accountable people behind this synthetic test business.",
+      sections: ["hero", "content_section"],
+      primaryTopic: "company leadership",
+      intent: "informational",
+      priority: "high",
+      rationale: "Provides a distinct trust destination for provider diligence and leadership context.",
+      evidenceIds: provenance,
+    },
+  );
+  const compiled = compilePlanToTasks(plan as never, request);
+  assert.deepEqual(
+    compiled.map((entry) => entry.task.page.type),
+    ["homepage", "general", "general", "service", "service", "article", "article"],
+  );
+  assert.deepEqual(
+    compiled.slice(0, 3).map((entry) => entry.fileName),
+    ["001-homepage.json", "002-general-about.json", "003-general-private-office-approach.json"],
+  );
+  assert.deepEqual(
+    compiled.slice(3).map((entry) => entry.fileName),
+    [
+      "004-service-emergency-roof-repair.json",
+      "005-service-gutter-installation.json",
+      "006-article-hail-damage-roof-inspection-guide.json",
+      "007-article-roof-replacement-cost-guide.json",
+    ],
+  );
+});

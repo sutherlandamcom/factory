@@ -114,9 +114,19 @@ test("mixed plans accept general pages without treating them as service coverage
   assert.ok(rejected.issues.some((issue) => /mustCoverServices/.test(issue)));
 });
 
-test("planned general pages reuse reserved route invariants including 404", async () => {
+test("planned general pages reuse reserved route invariants including 404 and terminal index", async () => {
   const { rawRequest, rawResearch } = await context();
-  for (const slug of ["/", "/services", "/services/x", "/blog", "/blog/x", "/404"]) {
+  for (const slug of [
+    "/",
+    "/services",
+    "/services/x",
+    "/blog",
+    "/blog/x",
+    "/404",
+    "/index",
+    "/private-office/index",
+    "/foo/bar/index",
+  ]) {
     const plan = makeValidPlan(rawRequest, rawResearch);
     const page = (plan.pages as AnyRecord[])[4] as AnyRecord;
     page.type = "general";
@@ -125,6 +135,23 @@ test("planned general pages reuse reserved route invariants including 404", asyn
     const result = validate(plan, rawRequest, rawResearch);
     assert.equal(result.ok, false, slug);
     assert.ok(result.issues.some((issue) => /general page slug/.test(issue)), `${slug}: ${result.issues.join("\n")}`);
+  }
+});
+
+test("planned general pages accept valid index-bearing compound slugs", async () => {
+  const { rawRequest, rawResearch } = await context();
+  for (const slug of [
+    "/index-methodology",
+    "/private-office/index-strategy",
+    "/index/approach",
+  ]) {
+    const plan = makeValidPlan(rawRequest, rawResearch);
+    const page = (plan.pages as AnyRecord[])[4] as AnyRecord;
+    page.type = "general";
+    page.slug = slug;
+    page.primaryTopic = `general route ${slug}`;
+    const result = validate(plan, rawRequest, rawResearch);
+    assert.equal(result.ok, true, `${slug}: ${(result as any).issues?.join("\n")}`);
   }
 });
 

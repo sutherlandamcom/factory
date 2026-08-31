@@ -39,7 +39,7 @@ const OUTPUT_SCHEMA_DESCRIPTION = `{
   } ],
   "pages": [ {
       "type": "homepage|general|service|article",
-      "slug": "homepage must be \\"/\\"; general must be non-root and must not be /services, /services/**, /blog, /blog/**, or /404; service must be \\"/services/<name>\\"; article must be \\"/blog/<name>\\" (lowercase alphanumerics and single hyphens)",
+      "slug": "homepage must be \\"/\\"; general must be non-root, must not end in /index, and must not be /services, /services/**, /blog, /blog/**, or /404; service must be \\"/services/<name>\\"; article must be \\"/blog/<name>\\" (lowercase alphanumerics and single hyphens)",
       "title": "1-200 chars",
       "description": "1-500 chars meta description",
       "sections": ["1-20 unique values from: hero, feature_cards, content_section, benefits, faq, cta"],
@@ -56,7 +56,7 @@ const OUTPUT_SCHEMA_DESCRIPTION = `{
 const HARD_INVARIANTS = `- version is exactly "v0" and methodologyVersion is exactly "${INTELLIGENCE_METHODOLOGY_VERSION}".
 - siteId equals the request siteId exactly.
 - Exactly ONE homepage page and its slug is exactly "/".
-- A general page is non-root and may not use /services, /services/**, /blog, /blog/**, or /404. General is not a loophole for service or article routes.
+- A general page is non-root, cannot terminate in /index, and may not use /services, /services/**, /blog, /blog/**, or /404. General is not a loophole for service or article routes.
 - Total pages must not exceed the request planning.maxInitialPages.
 - Every page has at least one evidenceId or at least one operatorFactId (provenance is mandatory).
 - Every evidenceIds entry (anywhere) must reference an id present in RESEARCH_EVIDENCE_DATA; every operatorFactIds entry must reference an id present in the request data. Fictitious ids are invalid.

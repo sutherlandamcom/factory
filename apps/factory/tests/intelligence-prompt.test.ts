@@ -139,5 +139,6 @@ test("synthesis prompt describes general semantics and reserved routes exactly",
   assert.ok(prompt.includes('"type": "homepage|general|service|article"'));
   assert.ok(prompt.includes("institutional, trust, methodology, navigation, research-hub, company/about, or conversion page"));
   for (const reserved of ["/services/**", "/blog/**", "/404"]) assert.ok(prompt.includes(reserved));
+  assert.ok(prompt.includes("cannot terminate in /index") || prompt.includes("must not end in /index"));
   assert.ok(prompt.includes("General is not a generic loophole"));
 });

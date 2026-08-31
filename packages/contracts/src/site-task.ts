@@ -100,6 +100,8 @@ export function addSitePageInvariantIssues(
       });
     }
   } else if (data.type === "general") {
+    const segments = data.slug.split("/").filter(Boolean);
+    const finalSegment = segments[segments.length - 1];
     const ownsReservedNamespace =
       data.slug === "/" ||
       data.slug === "/services" ||
@@ -111,6 +113,12 @@ export function addSitePageInvariantIssues(
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: `general page slug must be non-root and outside reserved homepage, service, blog, and 404 routes (got "${data.slug}")`,
+        path: ["slug"],
+      });
+    } else if (finalSegment === "index") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `general page slug cannot end in reserved Astro directory segment "index" (got "${data.slug}")`,
         path: ["slug"],
       });
     }

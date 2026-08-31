@@ -218,6 +218,9 @@ test("general pages accept ordinary flat and hierarchical routes", () => {
     "/strategic-briefing",
     "/private-office/approach",
     "/research/methodology",
+    "/index-methodology",
+    "/private-office/index-strategy",
+    "/index/approach",
   ]) {
     const task = parseSiteTask({
       type: "create_page",
@@ -226,6 +229,24 @@ test("general pages accept ordinary flat and hierarchical routes", () => {
     });
     assert.equal(task.page.type, "general");
     assert.equal(task.page.slug, slug);
+  }
+});
+
+test("general pages reject terminal-index routes to prevent Astro index route ambiguity", () => {
+  for (const slug of [
+    "/index",
+    "/private-office/index",
+    "/foo/bar/index",
+  ]) {
+    assert.throws(
+      () => parseSiteTask({
+        type: "create_page",
+        siteId: "demo",
+        page: { type: "general", slug, title: "General Page", description: "General page description", sections: ["hero"] },
+      }),
+      /reserved Astro directory segment/,
+      `terminal index route should be rejected: ${slug}`,
+    );
   }
 });
 

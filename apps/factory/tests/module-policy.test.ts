@@ -61,6 +61,25 @@ test("flat and hierarchical general pages retain exact WRITE ONE authority", () 
   }
 });
 
+test("general page can never obtain homepage target sites/starter/src/pages/index.astro via /index", () => {
+  assert.throws(
+    () =>
+      parseSiteTask({
+        ...exampleSiteTask,
+        page: { ...exampleSiteTask.page, type: "general", slug: "/index" },
+      }),
+    /reserved Astro directory segment/,
+  );
+
+  const homepageTask = parseSiteTask({
+    ...exampleSiteTask,
+    page: { ...exampleSiteTask.page, type: "homepage", slug: "/" },
+  });
+  const homepagePolicy = deriveTaskWritePolicy(homepageTask);
+  assert.deepEqual(homepagePolicy.writablePaths, ["sites/starter/src/pages/index.astro"]);
+  assert.equal(policyAllowsWrite(homepagePolicy, "sites/starter/src/pages/index.astro"), true);
+});
+
 test("create_page cannot write protected or unrelated paths", () => {
   const policy = deriveTaskWritePolicy(exampleSiteTask);
   const denied = [

@@ -269,6 +269,9 @@ export async function runIntelligence(
           `attempts/${attemptNumber}/raw-output.txt`,
           attempt.rawOutput ?? `<<no output file: ${attempt.outputError ?? "unknown"}>>\n`,
         );
+        // Runtime evidence (bounded): raw event stream and stderr for audits.
+        await writeArtifact(runDir, `attempts/${attemptNumber}/codex-stdout.txt`, attempt.codex.stdout.slice(0, 65_536));
+        await writeArtifact(runDir, `attempts/${attemptNumber}/codex-stderr.txt`, attempt.codex.stderr.slice(0, 65_536));
         onProgress(`synthesis attempt ${attemptNumber} finished (exit=${attempt.codex.exitCode})`);
 
         if (attempt.codex.timedOut) {

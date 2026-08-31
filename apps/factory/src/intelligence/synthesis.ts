@@ -74,6 +74,11 @@ export async function runSynthesisAttempt(
     runDir: params.runArtifactDir,
     timeoutMs: params.timeoutMs,
     writablePaths: [params.workspace.outputRelativePath],
+    // The throwaway Intelligence workspace is mounted read-write as a single
+    // root (see CodexRunRequest.workspaceWritable): it contains only
+    // Factory-validated inputs and the model's own output. SiteTask
+    // execution keeps its strict readonly + exact-page authority layout.
+    workspaceWritable: true,
   };
   const codex = await runner(codexRequest);
 

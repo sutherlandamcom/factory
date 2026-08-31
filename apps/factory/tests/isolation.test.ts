@@ -57,6 +57,7 @@ test("Codex container is hardened and receives one writable page-parent mount", 
     "--security-opt=seccomp=unconfined",
     "--security-opt=apparmor=unconfined",
     "--network=bridge",
+    "--skip-git-repo-check",
     "/workspace/.agents:rw,nosuid,nodev,noexec,size=16m,mode=0700,uid=",
     "/workspace/.codex:rw,nosuid,nodev,noexec,size=16m,mode=0700,uid=",
     "type=bind,src=/repo/.factory/worktrees/run-1,dst=/workspace,readonly",
@@ -66,6 +67,9 @@ test("Codex container is hardened and receives one writable page-parent mount", 
     "sandbox_workspace_write.network_access=false",
     "tools.web_search=false",
   ]) assert.ok(rendered.includes(required), `missing ${required}`);
+  // SiteTask authority layout is unchanged: readonly workspace root plus the
+  // exact page-parent writable bind — never a fully writable workspace.
+  assert.ok(!rendered.includes("dst=/workspace\n") && rendered.includes("dst=/workspace,readonly"));
   assert.ok(!rendered.includes("docker.sock"));
   assert.ok(!rendered.includes("src=/,dst=/workspace"));
 });

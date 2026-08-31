@@ -51,6 +51,7 @@ test("codex container arguments expose no secrets and no broad mounts", () => {
       runDir: "/repo/.factory/intelligence/run/attempts/1",
       timeoutMs: 1000,
       writablePaths: ["output/plan.json"],
+      workspaceWritable: true,
     },
     "factory-codex-test",
     "/repo/.factory/codex-runtime/factory-codex-test",
@@ -70,6 +71,9 @@ test("codex container arguments expose no secrets and no broad mounts", () => {
   assert.ok(flattened.includes("sandbox_workspace_write.network_access=false"));
   assert.ok(flattened.includes("tools.web_search=false"));
   assert.ok(flattened.includes("approval_policy=\"never\""));
+  // Factory pre-validates its own workspaces; the Codex interactive git-repo
+  // trust convenience is skipped without touching any sandbox boundary.
+  assert.ok(flattened.includes("--skip-git-repo-check"));
   // The primary repository checkout is never mounted — only the intelligence
   // workspace, the runtime auth, and the runtime output directory.
   const mounts: string[] = [];
@@ -84,7 +88,10 @@ test("codex container arguments expose no secrets and no broad mounts", () => {
       `unexpected mount: ${mount}`,
     );
   }
-  assert.ok(mounts.some((mount) => mount.endsWith("dst=/workspace,readonly")));
+  assert.ok(mounts.some((mount) => mount.endsWith("dst=/workspace,readonly") === false && mount.endsWith("dst=/workspace")));
+  // The Intelligence workspace is one throwaway rw root (no sensitive data,
+  // no repository); there is no readonly /workspace mount in this mode.
+  assert.equal(mounts.some((mount) => mount.includes("dst=/workspace,readonly")), false);
   // Inner network stays disabled; no docker socket, no host HOME mount.
   assert.equal(flattened.includes("/var/run/docker.sock"), false);
 });

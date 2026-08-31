@@ -10,7 +10,7 @@ import { z } from "zod";
 
 export const MAX_TASK_PAYLOAD_BYTES = 64 * 1024; // 64 KB
 
-export const pageTypeSchema = z.enum(["homepage", "service", "article"]);
+export const pageTypeSchema = z.enum(["homepage", "general", "service", "article"]);
 
 export const sectionTypeSchema = z.enum([
   "hero",
@@ -96,6 +96,21 @@ export function addSitePageInvariantIssues(
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: `article page slug must start with "/blog/<name>" (got "${data.slug}")`,
+        path: ["slug"],
+      });
+    }
+  } else if (data.type === "general") {
+    const ownsReservedNamespace =
+      data.slug === "/" ||
+      data.slug === "/services" ||
+      data.slug.startsWith("/services/") ||
+      data.slug === "/blog" ||
+      data.slug.startsWith("/blog/") ||
+      data.slug === "/404";
+    if (ownsReservedNamespace) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `general page slug must be non-root and outside reserved homepage, service, blog, and 404 routes (got "${data.slug}")`,
         path: ["slug"],
       });
     }

@@ -31,6 +31,28 @@ test("validated task derives exactly one create_page target", () => {
   assert.equal(createPageTargetPath(exampleSiteTask), "sites/starter/src/pages/services/roof-repair.astro");
   assert.equal(createPageTargetPath({ ...exampleSiteTask, page: { ...exampleSiteTask.page, type: "homepage", slug: "/" } }), "sites/starter/src/pages/index.astro");
   assert.equal(createPageTargetPath({ ...exampleSiteTask, page: { ...exampleSiteTask.page, slug: "/services/roof/repair" } }), "sites/starter/src/pages/services/roof/repair.astro");
+  assert.equal(createPageTargetPath({ ...exampleSiteTask, page: { ...exampleSiteTask.page, type: "general", slug: "/about" } }), "sites/starter/src/pages/about.astro");
+  assert.equal(createPageTargetPath({ ...exampleSiteTask, page: { ...exampleSiteTask.page, type: "general", slug: "/private-office/approach" } }), "sites/starter/src/pages/private-office/approach.astro");
+});
+
+test("hierarchical general scope accepts only its exact target", async () => {
+  const task = {
+    ...exampleSiteTask,
+    page: { ...exampleSiteTask.page, type: "general" as const, slug: "/private-office/approach" },
+  };
+  const policy = deriveTaskWritePolicy(task);
+  await withWorktree("scope-general-hierarchy", async (_repo, worktree) => {
+    const target = path.join(worktree, createPageTargetPath(task));
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, "---\n---\n<h1>Approach</h1>\n");
+    let result = await collectChanges(worktree, policy);
+    assert.deepEqual(result.changedFiles, ["sites/starter/src/pages/private-office/approach.astro"]);
+    assert.deepEqual(result.violations, []);
+
+    await writeFile(path.join(worktree, "sites/starter/src/pages/private-office/other.astro"), "<h1>Sibling</h1>\n");
+    result = await collectChanges(worktree, policy);
+    assert.ok(result.violations.some((issue) => issue.startsWith("sites/starter/src/pages/private-office/other.astro:")));
+  });
 });
 
 test("exact target regular file is accepted and patch is binary-safe", async () => {
@@ -195,4 +217,3 @@ test("nested helper named dist/helper.ts or .factory/hidden.ts in source is stag
     );
   });
 });
-

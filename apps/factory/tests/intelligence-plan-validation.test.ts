@@ -78,6 +78,56 @@ test("rejects invalid service and article slugs", async () => {
   assert.ok(result2.issues.some((issue) => /article page slug/.test(issue)));
 });
 
+test("mixed plans accept general pages without treating them as service coverage", async () => {
+  const { rawRequest, rawResearch } = await context();
+  const plan = makeValidPlan(rawRequest, rawResearch);
+  (rawRequest.planning as AnyRecord).maxInitialPages = 7;
+  const homepage = (plan.pages as AnyRecord[])[0] as AnyRecord;
+  (plan.pages as AnyRecord[]).push(
+    {
+      ...homepage,
+      type: "general",
+      slug: "/about",
+      title: "About Summit Roofing",
+      description: "A synthetic company trust page used to validate the general page contract.",
+      primaryTopic: "company leadership",
+      rationale: "A company trust page is neither a service nor an editorial article.",
+    },
+    {
+      ...homepage,
+      type: "general",
+      slug: "/research/methodology",
+      title: "Research Methodology",
+      description: "A synthetic methodology page used to validate hierarchical general routes.",
+      primaryTopic: "research methodology",
+      rationale: "A methodology page has a distinct institutional purpose outside service and blog namespaces.",
+    },
+  );
+  const result = validate(plan, rawRequest, rawResearch);
+  assert.equal(result.ok, true, result.ok ? "" : result.issues.join("\n"));
+
+  const noServices = deepClone(plan);
+  noServices.pages = (noServices.pages as AnyRecord[]).filter((page) => page.type !== "service");
+  const rejected = validate(noServices, rawRequest, rawResearch);
+  assert.equal(rejected.ok, false);
+  assert.ok(rejected.issues.some((issue) => /no service page/.test(issue)));
+  assert.ok(rejected.issues.some((issue) => /mustCoverServices/.test(issue)));
+});
+
+test("planned general pages reuse reserved route invariants including 404", async () => {
+  const { rawRequest, rawResearch } = await context();
+  for (const slug of ["/", "/services", "/services/x", "/blog", "/blog/x", "/404"]) {
+    const plan = makeValidPlan(rawRequest, rawResearch);
+    const page = (plan.pages as AnyRecord[])[4] as AnyRecord;
+    page.type = "general";
+    page.slug = slug;
+    page.primaryTopic = `general route ${slug}`;
+    const result = validate(plan, rawRequest, rawResearch);
+    assert.equal(result.ok, false, slug);
+    assert.ok(result.issues.some((issue) => /general page slug/.test(issue)), `${slug}: ${result.issues.join("\n")}`);
+  }
+});
+
 test("rejects duplicate slugs", async () => {
   const { rawRequest, rawResearch } = await context();
   const plan = makeValidPlan(rawRequest, rawResearch);

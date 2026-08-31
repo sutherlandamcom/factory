@@ -6,7 +6,8 @@ interface TaskQaSpec {
   title: string;
   documentTitle: string;
   description: string;
-  pageType: "homepage" | "service" | "article";
+  pageType: "homepage" | "general" | "service" | "article";
+  jsonLdType: "LocalBusiness" | "WebPage" | "Service" | "Article";
   sections: string[];
   canonicalUrl: string;
 }
@@ -80,14 +81,16 @@ test.describe(`Factory task-aware generated page QA ${configuredSpec?.route ?? "
       } catch (error) {
         throw new Error(`route=${task.route} requirement=json-ld-parse actual=${error instanceof Error ? error.message : String(error)}`);
       }
-      const expectedType = { homepage: "LocalBusiness", service: "Service", article: "Article" }[task.pageType];
       expect(schema["@context"], `route=${task.route} requirement=json-ld-context`).toBe("https://schema.org");
-      expect(schema["@type"], `route=${task.route} requirement=json-ld-type expected=${expectedType}`).toBe(expectedType);
+      expect(schema["@type"], `route=${task.route} requirement=json-ld-type expected=${task.jsonLdType}`).toBe(task.jsonLdType);
       if (task.pageType === "article") {
         expect(schema.headline, `route=${task.route} requirement=json-ld-headline`).toBe(task.title);
         expect((schema.mainEntityOfPage as Record<string, unknown> | undefined)?.["@id"], `route=${task.route} requirement=json-ld-url`).toBe(task.canonicalUrl);
       } else if (task.pageType === "service") {
         expect(schema.serviceType, `route=${task.route} requirement=json-ld-service-type`).toBe(task.title);
+        expect(schema.url, `route=${task.route} requirement=json-ld-url`).toBe(task.canonicalUrl);
+      } else if (task.pageType === "general") {
+        expect(schema.name, `route=${task.route} requirement=json-ld-name`).toBe(task.title);
         expect(schema.url, `route=${task.route} requirement=json-ld-url`).toBe(task.canonicalUrl);
       } else {
         expect(normalize(String(schema.name ?? "")).length, `route=${task.route} requirement=json-ld-name`).toBeGreaterThan(0);

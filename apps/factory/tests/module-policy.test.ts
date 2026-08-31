@@ -43,6 +43,24 @@ test("create_page has READ MANY / WRITE ONE exact-page authority", () => {
   assert.ok(Object.isFrozen(policy.writablePaths));
 });
 
+test("flat and hierarchical general pages retain exact WRITE ONE authority", () => {
+  for (const [slug, expected] of [
+    ["/about", "sites/starter/src/pages/about.astro"],
+    ["/private-office/approach", "sites/starter/src/pages/private-office/approach.astro"],
+  ] as const) {
+    const task = parseSiteTask({
+      ...exampleSiteTask,
+      page: { ...exampleSiteTask.page, type: "general", slug },
+    });
+    const policy = deriveTaskWritePolicy(task);
+    assert.deepEqual(policy.writablePaths, [expected]);
+    assert.equal(policyAllowsWrite(policy, expected), true);
+    assert.equal(policyAllowsWrite(policy, "sites/starter/src/pages/private-office/index.astro"), false);
+    assert.equal(policyAllowsWrite(policy, "sites/starter/src/pages/private-office/other.astro"), false);
+    assert.equal(policyAllowsWrite(policy, "sites/starter/src/components/Hero.astro"), false);
+  }
+});
+
 test("create_page cannot write protected or unrelated paths", () => {
   const policy = deriveTaskWritePolicy(exampleSiteTask);
   const denied = [

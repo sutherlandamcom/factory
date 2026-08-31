@@ -6,6 +6,9 @@ export type ModuleId =
   | "persistence"
   | "production-delivery"
   | "site-intelligence"
+  | "models"
+  | "blueprint"
+  | "evals"
   | "site-source"
   | "site-configuration"
   | "quality-oracle"
@@ -37,6 +40,24 @@ export const MODULE_REGISTRY: readonly FactoryModule[] = Object.freeze([
   {
     id: "site-intelligence",
     ownedPaths: ["apps/factory/src/intelligence/"],
+    protected: true,
+    ordinaryTaskWritable: false,
+  },
+  {
+    id: "models",
+    ownedPaths: ["apps/factory/src/models/"],
+    protected: true,
+    ordinaryTaskWritable: false,
+  },
+  {
+    id: "blueprint",
+    ownedPaths: ["apps/factory/src/blueprint/"],
+    protected: true,
+    ordinaryTaskWritable: false,
+  },
+  {
+    id: "evals",
+    ownedPaths: ["apps/factory/src/evals/"],
     protected: true,
     ordinaryTaskWritable: false,
   },

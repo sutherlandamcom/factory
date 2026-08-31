@@ -14,6 +14,8 @@ import {
   validateWorkerName,
 } from "./delivery/index.js";
 import { runIntelligence } from "./intelligence/index.js";
+import { runBlueprint } from "./blueprint/index.js";
+import { runRoleEval } from "./evals/index.js";
 import { resolveRepositoryRoot } from "./repo-root.js";
 import type { DeploymentResult } from "@factory/contracts";
 import pkg from "../package.json" with { type: "json" };
@@ -26,6 +28,10 @@ Usage:
   pnpm factory intelligence build <request.json> <research.json>
       Produce a Site Intelligence Plan from a validated request and research
       evidence bundle; emits one IntelligenceResult JSON document to stdout
+  pnpm factory blueprint build <plan.json> <request.json> <research.json>
+      Produce a SiteBlueprint from a validated SiteIntelligencePlan, request,
+      and research evidence bundle through the Factory model gateway;
+      emits one BlueprintResult JSON document to stdout
   pnpm factory db migrate
       Apply committed PostgreSQL migrations
   pnpm factory db check
@@ -48,6 +54,8 @@ Usage:
 Example task: packages/contracts/fixtures/create-roof-repair.json
 Run artifacts: .factory/runs/<runId>/ (gitignored)
 Intelligence artifacts: .factory/intelligence/<runId>/ (gitignored)
+Blueprint artifacts: .factory/blueprint/<runId>/ (gitignored)
+Eval artifacts: .factory/evals/autonomy-v0/<runId>/ (gitignored)
 `;
 
 function printDeployment(result: DeploymentResult): void {
@@ -299,6 +307,85 @@ async function main(argv: string[]): Promise<number> {
         return result.status === "succeeded" ? 0 : 1;
       }
       console.error("Usage: pnpm factory intelligence build <request.json> <research.json>");
+      return 2;
+    }
+
+    if (command === "blueprint") {
+      const sub = rest[0];
+      if (sub === "build" && rest.length === 4) {
+        const invocationDir = process.env.INIT_CWD ?? process.cwd();
+        let planRaw: string;
+        let requestRaw: string;
+        let researchRaw: string;
+        try {
+          // Input paths are trusted operator CLI arguments; only the three
+          // explicitly supplied files are read (no directory scans).
+          planRaw = await readFile(path.resolve(invocationDir, rest[1]!), "utf8");
+          requestRaw = await readFile(path.resolve(invocationDir, rest[2]!), "utf8");
+          researchRaw = await readFile(path.resolve(invocationDir, rest[3]!), "utf8");
+        } catch (err) {
+          console.error(`error: [blueprint_input_invalid] ${err instanceof Error ? err.message : String(err)}`);
+          return 1;
+        }
+
+        const repoRoot = await resolveRepositoryRoot();
+        const result = await runBlueprint(
+          { repoRoot, planInput: planRaw, requestInput: requestRaw, researchInput: researchRaw },
+          { onProgress: (message) => console.error(`blueprint: ${message}`) },
+        );
+
+        // Exactly one machine-readable BlueprintResult document on stdout.
+        console.log(JSON.stringify(result, null, 2));
+        if (result.error) {
+          console.error(`error: [${result.error.code}] ${result.error.message}`);
+        } else {
+          console.error(
+            `blueprint: status=${result.status} runId=${result.runId} pages=${result.pageCount} ready=${result.readyCount} blocked=${result.blockedCount} artifacts=${result.artifacts?.runDirectory ?? "(none)"}`,
+          );
+        }
+        return result.status === "succeeded" ? 0 : 1;
+      }
+      console.error("Usage: pnpm factory blueprint build <plan.json> <request.json> <research.json>");
+      return 2;
+    }
+
+    if (command === "eval") {
+      const sub = rest[0];
+      if (sub === "run") {
+        const invocationDir = process.env.INIT_CWD ?? process.cwd();
+        const args = rest.slice(1);
+        const readOption = (flag: string): string | undefined => {
+          const index = args.indexOf(flag);
+          return index >= 0 ? args[index + 1] : undefined;
+        };
+        const role = readOption("--role");
+        const requestPath = readOption("--request");
+        const researchPath = readOption("--research");
+        const planPath = readOption("--plan");
+        if (!role || !requestPath || !researchPath) {
+          console.error(
+            "Usage: pnpm factory eval run --role <roleId> --request <request.json> --research <research.json> [--plan <plan.json>]",
+          );
+          return 2;
+        }
+        const readJsonFile = async (value: string): Promise<unknown> => {
+          const raw = await readFile(path.resolve(invocationDir, value), "utf8");
+          return JSON.parse(raw);
+        };
+        const repoRoot = await resolveRepositoryRoot();
+        const result = await runRoleEval(repoRoot, {
+          roleId: role as Parameters<typeof runRoleEval>[1]["roleId"],
+          requestInput: await readJsonFile(requestPath),
+          researchInput: await readJsonFile(researchPath),
+          planInput: planPath ? await readJsonFile(planPath) : undefined,
+          onProgress: (message) => console.error(`eval: ${message}`),
+        });
+        console.log(JSON.stringify(result, null, 2));
+        return result.status === "succeeded" ? 0 : 1;
+      }
+      console.error(
+        "Usage: pnpm factory eval run --role <roleId> --request <request.json> --research <research.json> [--plan <plan.json>]",
+      );
       return 2;
     }
 

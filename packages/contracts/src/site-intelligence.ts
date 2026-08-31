@@ -212,7 +212,9 @@ const researchEvidenceItemFields = {
  * Substantive-evidence rule: every record must carry at least ONE actual
  * observation payload (query, sourceUrl, title, text, or at least one
  * observed metric value). id/kind/provider/collectedAt metadata alone — and
- * an empty metrics object — are NOT substantive evidence.
+ * an empty metrics object — are NOT substantive evidence. Whitespace-only
+ * text is never substantive, even though the stored text value itself is
+ * never trimmed or rewritten (provenance stays verbatim).
  */
 function hasSubstantiveEvidencePayload(item: {
   query?: unknown;
@@ -221,12 +223,14 @@ function hasSubstantiveEvidencePayload(item: {
   text?: unknown;
   metrics?: unknown;
 }): boolean {
-  if (
-    item.query !== undefined ||
-    item.sourceUrl !== undefined ||
-    item.title !== undefined ||
-    item.text !== undefined
-  ) {
+  // Whitespace-only text is never substantive, even though the stored text
+  // value itself is never trimmed or rewritten (provenance stays verbatim).
+  if (typeof item.text === "string" && item.text.trim().length > 0) {
+    return true;
+  }
+  // query/title are validated through trim+min(1) bounds, so a defined value
+  // is non-blank; sourceUrl must pass the absolute http/https URL check.
+  if (item.query !== undefined || item.sourceUrl !== undefined || item.title !== undefined) {
     return true;
   }
   if (item.metrics === undefined || typeof item.metrics !== "object" || item.metrics === null) {
@@ -244,6 +248,15 @@ export const researchEvidenceItemSchema = z
         code: z.ZodIssueCode.custom,
         message: "sourceUrl must be an absolute http:// or https:// URL",
         path: ["sourceUrl"],
+      });
+    }
+    // Whitespace-only text carries no evidence. Validation only — the stored
+    // value is never trimmed or rewritten (provenance stays verbatim).
+    if (item.text !== undefined && item.text.trim().length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "text must contain non-whitespace content",
+        path: ["text"],
       });
     }
     if (!hasSubstantiveEvidencePayload(item)) {

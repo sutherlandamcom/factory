@@ -1,5 +1,5 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { readFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { CodexRunRequest, CodexRunResult, CodexRunner } from "../src/executor/codex.js";
 
@@ -12,6 +12,21 @@ export async function loadFixtureRequestJson(): Promise<Record<string, unknown>>
 
 export async function loadFixtureResearchJson(): Promise<Record<string, unknown>> {
   return JSON.parse(await readFile(path.join(FIXTURE_DIR, "summit-roofing.research.json"), "utf8"));
+}
+
+/** Synchronous loaders for test-local scenario builders. */
+export function loadFixtureRequestJsonSync(): Record<string, unknown> {
+  return JSON.parse(readFileSync(path.join(FIXTURE_DIR, "summit-roofing.request.json"), "utf8")) as Record<
+    string,
+    unknown
+  >;
+}
+
+export function loadFixtureResearchJsonSync(): Record<string, unknown> {
+  return JSON.parse(readFileSync(path.join(FIXTURE_DIR, "summit-roofing.research.json"), "utf8")) as Record<
+    string,
+    unknown
+  >;
 }
 
 export function fixturePaths(): { request: string; research: string } {

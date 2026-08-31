@@ -7,10 +7,10 @@
  */
 export { SYNTHESIS_TIMEOUT_MS, resolveFactorySourceCommit, runIntelligence } from "./driver.js";
 export type {
-  FactorySourceCommitInfo,
+  FactorySourceProvenance,
+  GitCommandRunner,
   RunIntelligenceDeps,
   RunIntelligenceInput,
-  SourceCommitResolver,
 } from "./driver.js";
 export { canonicalJsonStringify, deterministicDigest, sha256Hex } from "./digest.js";
 export { countDuplicateEvidenceRecords, normalizeResearchBundle, normalizeUrlForComparison } from "./normalize.js";

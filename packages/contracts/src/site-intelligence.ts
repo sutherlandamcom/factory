@@ -208,6 +208,33 @@ const researchEvidenceItemFields = {
   collectedAt: isoDateTimeSchema.optional(),
 } as const;
 
+/**
+ * Substantive-evidence rule: every record must carry at least ONE actual
+ * observation payload (query, sourceUrl, title, text, or at least one
+ * observed metric value). id/kind/provider/collectedAt metadata alone — and
+ * an empty metrics object — are NOT substantive evidence.
+ */
+function hasSubstantiveEvidencePayload(item: {
+  query?: unknown;
+  sourceUrl?: unknown;
+  title?: unknown;
+  text?: unknown;
+  metrics?: unknown;
+}): boolean {
+  if (
+    item.query !== undefined ||
+    item.sourceUrl !== undefined ||
+    item.title !== undefined ||
+    item.text !== undefined
+  ) {
+    return true;
+  }
+  if (item.metrics === undefined || typeof item.metrics !== "object" || item.metrics === null) {
+    return false;
+  }
+  return Object.values(item.metrics as Record<string, unknown>).some((value) => value !== undefined);
+}
+
 export const researchEvidenceItemSchema = z
   .object({ ...researchEvidenceItemFields })
   .strict()
@@ -217,6 +244,13 @@ export const researchEvidenceItemSchema = z
         code: z.ZodIssueCode.custom,
         message: "sourceUrl must be an absolute http:// or https:// URL",
         path: ["sourceUrl"],
+      });
+    }
+    if (!hasSubstantiveEvidencePayload(item)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "evidence item must contain at least one substantive payload (query, sourceUrl, title, text, or at least one observed metric value); id/kind/provider/collectedAt metadata alone is not evidence",
       });
     }
   });
@@ -442,6 +476,7 @@ export type SiteIntelligencePlan = z.infer<typeof siteIntelligencePlanSchema>;
 export const INTELLIGENCE_ERROR_CODES = [
   "intelligence_input_invalid",
   "research_input_invalid",
+  "intelligence_source_unverified",
   "intelligence_isolation_unavailable",
   "intelligence_model_failed",
   "intelligence_model_timeout",

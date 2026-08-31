@@ -61,7 +61,8 @@ const HARD_INVARIANTS = `- version is exactly "v0" and methodologyVersion is exa
 - Every evidenceIds entry (anywhere) must reference an id present in RESEARCH_EVIDENCE_DATA; every operatorFactIds entry must reference an id present in the request data. Fictitious ids are invalid.
 - All page slugs are unique.
 - All primaryTopic values are distinct across all pages (case/whitespace-insensitive). Articles must never duplicate a service page topic.
-- Every service page primary topic must relate to the request serviceSeeds/mustCoverServices, or be supported by referenced evidence or operator facts.
+- Every service page primary topic must relate to the request serviceSeeds/mustCoverServices, or be supported by the evidence records and operator facts THAT PAGE actually cites (page.evidenceIds / page.operatorFactIds). Operator facts the page does not cite cannot support it.
+- No planned page primaryTopic and no keywordCluster primaryTopic may represent an operator-excluded topic: if a request planning.excludedTopics value appears inside the topic (or the topic inside it), ignoring case/whitespace, the plan is rejected.
 - If request.business.serviceSeeds is non-empty there must be at least one service page, and every request planning.mustCoverServices value must be represented by a service page primary topic.
 - A keyword cluster may include metrics ONLY when each metric value appears verbatim in the metrics of one of the evidence records it cites; otherwise omit metrics entirely. Never estimate, average, or invent values.
 - competitorInsights and keywordClusters each require at least one evidenceId.

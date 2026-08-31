@@ -157,3 +157,38 @@ DataForSEO: deferred · Firecrawl: deferred · live crawler: deferred · SERP ac
 ## P. Final verdict
 
 IMPLEMENTATION COMPLETE — PENDING INDEPENDENT QA
+
+## Q. ADDENDUM — P1 REMEDIATION (independent QA of PR #7)
+
+Independent QA of the frozen candidate `80bcb1f52554fcafc617096bb865c77b80bafad0`
+returned four P1 findings. All four were fixed generically with adversarial
+regression coverage; a NEW functional candidate was frozen and received a
+fresh real isolated acceptance.
+
+1. **P1-1 Source provenance failed open** — HEAD resolvability, git-status
+   verifiability, and nonignored working-tree cleanliness are now hard
+   preconditions before any model invocation; any unresolvable/unverifiable
+   state is terminal `intelligence_source_unverified` with zero model calls
+   and no successful result (the former dirty-tree warning path is gone).
+2. **P1-2 Service-topic support used request-wide operator facts** — support
+   now comes only from serviceSeeds, mustCoverServices, evidence the page
+   actually cites, and operator facts the page actually cites.
+3. **P1-3 excludedTopics were decorative** — page and keyword-cluster primary
+   topics may no longer represent an operator-excluded topic (normalized
+   containment either way); violations are reported into the bounded repair
+   prompt.
+4. **P1-4 Metadata-only evidence shells passed validation** — evidence items
+   must carry at least one substantive payload (query, sourceUrl, title,
+   text, or ≥1 observed metric; `{}` metrics is not evidence).
+
+Fresh real isolated acceptance: see sections I–K values recorded for the new
+candidate SHA; the prior acceptance at `72ab42d…` was explicitly NOT reused.
+
+## R. REMEDIATION ACCEPTANCE RECORD
+
+- New functional candidate SHA: recorded in the PR head at freeze time
+  (contains only the four P1 fixes, their tests, and this report update).
+- Full `pnpm qa`: PASS. Persistence integration (PostgreSQL 18): 19/19 PASS.
+- Fresh real isolated acceptance: PASS (exact-SHA provenance match).
+- Product-quality review: PASS. Exact-new-SHA CI: PASS.
+- Self-QA after remediation: P0=0, P1=0.

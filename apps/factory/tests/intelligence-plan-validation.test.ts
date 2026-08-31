@@ -10,6 +10,8 @@ import {
   deepClone,
   loadFixtureRequestJson,
   loadFixtureResearchJson,
+  loadFixtureRequestJsonSync,
+  loadFixtureResearchJsonSync,
   makeValidPlan,
 } from "./intelligence-fixtures.js";
 
@@ -293,4 +295,132 @@ test("service topics supported by operator facts or evidence text pass", async (
   service.slug = "/services/roof-repair";
   const result = validate(plan, request, rawResearch);
   assert.equal(result.ok, true, result.ok ? "" : result.issues.join("\n"));
+});
+
+// ---------------------------------------------------------------------------
+// P1-2: service-topic support may come ONLY from cited facts/evidence
+// ---------------------------------------------------------------------------
+
+function makeCoatingScenario() {
+  // Request copy with an extra, matching-but-initially-uncited operator
+  // fact. mustCover stays unchanged so the coating page's support must come
+  // from its OWN citations, not from seeds/mustCover containment.
+  const request = deepClone(loadFixtureRequestJsonSync());
+  (request.business as AnyRecord).operatorFacts = [
+    ...((request.business as AnyRecord).operatorFacts as AnyRecord[]),
+    { id: "fact-commercial", text: "We provide commercial roof coating for flat and low-slope roofs" },
+  ];
+  return { request, research: deepClone(loadFixtureResearchJsonSync()) };
+}
+
+function coatingPage(plan: AnyRecord, operatorFactIds: string[]): AnyRecord {
+  // Convert the fixture's article slot into a coating service page supported
+  // (or not) only by what it cites.
+  const page = (plan.pages as AnyRecord[])[4] as AnyRecord;
+  page.type = "service";
+  page.slug = "/services/commercial-roof-coating";
+  page.title = "Commercial Roof Coating in Denver | Summit Roofing LLC";
+  page.description =
+    "Protective commercial roof coating for flat and low-slope Denver roofs, explained without price claims.";
+  page.intent = "transactional";
+  page.priority = "low";
+  page.primaryTopic = "commercial roof coating";
+  page.evidenceIds = ["kw-roof-repair-vs-replace", "comp-peak-article"]; // unrelated to coating
+  page.operatorFactIds = operatorFactIds;
+  return page;
+}
+
+test("P1-2: uncited matching operator fact cannot support a service topic", async () => {
+  const { request, research } = makeCoatingScenario();
+  const plan = makeValidPlan(request, research);
+  coatingPage(plan, []); // fact-commercial exists in request but is NOT cited
+  const result = validate(plan, request, research);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.issues.some((issue) => /primary topic "commercial roof coating" is unsupported/.test(issue)),
+    result.issues.join("\n"),
+  );
+});
+
+test("P1-2: the same operator fact supports the page once explicitly cited", async () => {
+  const { request, research } = makeCoatingScenario();
+  const plan = makeValidPlan(request, research);
+  coatingPage(plan, ["fact-commercial"]); // explicitly cited → support
+  const result = validate(plan, request, research);
+  assert.equal(result.ok, true, result.ok ? "" : result.issues.join("\n"));
+});
+
+test("P1-2: unrelated operator facts elsewhere in the request never support a page", async () => {
+  const { request, research } = makeCoatingScenario();
+  const plan = makeValidPlan(request, research);
+  const page = coatingPage(plan, ["fact-local"]); // cited but unrelated
+  page.primaryTopic = "solar-ready roof preparation";
+  page.slug = "/services/solar-ready-roofs";
+  page.title = "Solar-Ready Roof Preparation in Denver | Summit Roofing LLC";
+  const result = validate(plan, request, research);
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.some((issue) => /is unsupported/.test(issue)));
+});
+
+// ---------------------------------------------------------------------------
+// P1-3: excludedTopics are deterministically enforced
+// ---------------------------------------------------------------------------
+
+test("P1-3: exact excluded page topic and cluster topic are rejected", async () => {
+  const { rawRequest, rawResearch } = await context();
+  const request = deepClone(rawRequest);
+  (request.planning as AnyRecord).excludedTopics = ["gutter installation"];
+  const result = validate(makeValidPlan(request, rawResearch), request, rawResearch);
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.some((issue) => /page ".*" primary topic .* operator-excluded topic "gutter installation"/.test(issue)));
+  assert.ok(result.issues.some((issue) => /keywordCluster "cluster-gutter-installation" primary topic .* operator-excluded topic "gutter installation"/.test(issue)));
+});
+
+test("P1-3: normalized containment either way is rejected (broader and narrower)", async () => {
+  const { rawRequest, rawResearch } = await context();
+  const request = deepClone(rawRequest);
+  const plan = makeValidPlan(request, rawResearch);
+  // Broader excluded value contains a page topic.
+  ((request.planning as AnyRecord).excludedTopics = ["emergency roof repair denver colorado"]);
+  const emergencyPage = (plan.pages as AnyRecord[])[1] as AnyRecord;
+  emergencyPage.primaryTopic = "emergency roof repair";
+  let result = validate(plan, request, rawResearch);
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.some((issue) => /operator-excluded topic "emergency roof repair denver colorado"/.test(issue)));
+
+  // Narrower excluded value inside a cluster topic.
+  const request2 = deepClone(rawRequest);
+  ((request2.planning as AnyRecord).excludedTopics = ["insurance claims"]);
+  const result2 = validate(makeValidPlan(request2, rawResearch), request2, rawResearch);
+  assert.equal(result2.ok, true, "fixture topics do not touch insurance claims"); // unrelated excluded topic passes
+
+  const plan2 = makeValidPlan(request2, rawResearch);
+  (plan2.keywordClusters as AnyRecord[])[0]!.supportingTerms = ["roof insurance claims help"];
+  // primaryTopic of the cluster is what matters — change it.
+  (plan2.keywordClusters as AnyRecord[])[0]!.primaryTopic = "roof insurance claims";
+  const result3 = validate(plan2, request2, rawResearch);
+  assert.equal(result3.ok, false);
+  assert.ok(result3.issues.some((issue) => /keywordCluster .* operator-excluded topic "insurance claims"/.test(issue)));
+});
+
+test("P1-3: case and whitespace are normalized before matching", async () => {
+  const { rawRequest, rawResearch } = await context();
+  const request = deepClone(rawRequest);
+  ((request.planning as AnyRecord).excludedTopics = ["GUTTER   Installation"]);
+  const result = validate(makeValidPlan(request, rawResearch), request, rawResearch);
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.some((issue) => /operator-excluded topic "GUTTER   Installation"/.test(issue)));
+});
+
+test("P1-3: unrelated excluded topics keep existing behavior", async () => {
+  const { rawRequest, rawResearch } = await context();
+  // Fixture excludedTopics ["solar panel installation"] overlaps nothing.
+  const result = validate(makeValidPlan(rawRequest, rawResearch), rawRequest, rawResearch);
+  assert.equal(result.ok, true, result.ok ? "" : result.issues.join("\n"));
+
+  // Omitted excludedTopics behaves as empty.
+  const request = deepClone(rawRequest);
+  delete (request.planning as AnyRecord).excludedTopics;
+  const result2 = validate(makeValidPlan(request, rawResearch), request, rawResearch);
+  assert.equal(result2.ok, true, result2.ok ? "" : result2.issues.join("\n"));
 });

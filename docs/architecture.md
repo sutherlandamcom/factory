@@ -245,14 +245,30 @@ Plan validation enforces the current SiteTask page invariants (reusing the
 shared page refinement helper), exactly one homepage, page budget ≤
 `planning.maxInitialPages`, unique slugs, globally distinct normalized
 primary topics (articles may never duplicate a service topic), must-cover
-service representation, service-topic support from seeds/must-cover/operator
-facts/referenced evidence, meaningful rationales, full provenance (≥1 evidence
+service representation, service-topic support from seeds/must-cover, evidence
+explicitly cited by the page, and operator facts explicitly cited by the page
+(request-wide fact text never supports an unciting page), operator-excluded
+topic rejection for page and keyword-cluster primary topics (normalized
+containment either way), meaningful rationales, full provenance (≥1 evidence
 or operator-fact reference per page; evidence references must resolve), and a
 fabricated-metrics gate: any cluster metric value must appear verbatim in the
-metrics of a cited evidence record. The trusted compiler (never the model)
-emits `create_page` tasks in deterministic order — homepage, then services,
-then articles, each by priority (`high→medium→low`) with slug tie-break — and
-every task passes canonical `parseSiteTask`.
+metrics of a cited evidence record. Evidence records must carry at least one
+substantive payload (query, sourceUrl, title, text, or an observed metric
+value) — metadata-only shells are invalid. The trusted compiler (never the
+model) emits `create_page` tasks in deterministic order — homepage, then
+services, then articles, each by priority (`high→medium→low`) with slug
+tie-break — and every task passes canonical `parseSiteTask`.
+
+### Source provenance fails closed
+
+A successful Intelligence run must attribute itself to an exact, clean,
+committed Factory source state. Before any model invocation, HEAD must
+resolve to an exact 40-char SHA, working-tree cleanliness must be verifiable
+via git, and the tree must be free of nonignored uncommitted changes
+(gitignored runtime artifacts such as `.factory/**` do not invalidate a clean
+source). Any unresolvable or unverifiable provenance state — including git
+failures and timeouts — is a terminal `intelligence_source_unverified`
+failure with zero model invocations and no successful result.
 
 ### Atomic artifacts
 

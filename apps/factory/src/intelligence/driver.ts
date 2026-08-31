@@ -19,7 +19,7 @@ import {
 import { createCodexRunner, type CodexRunner } from "../executor/codex.js";
 import { buildChildEnv } from "../executor/env.js";
 import { FactoryError } from "../executor/errors.js";
-import { runProcess } from "../executor/process.js";
+import { runProcess, type ProcessResult } from "../executor/process.js";
 import {
   buildArtifactDigests,
   generateRunId,
@@ -46,34 +46,59 @@ import {
 /** Per-attempt synthesis timeout (Intelligence-specific; SiteTask ceilings untouched). */
 export const SYNTHESIS_TIMEOUT_MS = 900_000;
 
-export interface FactorySourceCommitInfo {
-  commit: string | null;
-  dirty: boolean;
-}
+/**
+ * Source provenance resolution — FAIL CLOSED.
+ *
+ * A successful Intelligence run must be attributable to an exact, clean,
+ * committed Factory source state. Any inability to PROVE that state is a
+ * terminal failure for the run (before any model invocation):
+ * - HEAD must resolve to an exact 40-char SHA;
+ * - working-tree cleanliness must be verifiable via git;
+ * - the tree must be free of nonignored uncommitted changes
+ *   (untracked nonignored files included; gitignored Factory runtime
+ *   artifacts such as `.factory/**` do not invalidate a clean source).
+ */
+export type GitCommandRunner = (args: readonly string[]) => Promise<ProcessResult>;
 
-export type SourceCommitResolver = (repoRoot: string) => Promise<FactorySourceCommitInfo>;
+export type FactorySourceProvenance =
+  | { readonly ok: true; readonly commit: string }
+  | { readonly ok: false; readonly reason: string };
 
-export async function resolveFactorySourceCommit(repoRoot: string): Promise<FactorySourceCommitInfo> {
-  const headResult = await runProcess("git", ["-C", repoRoot, "rev-parse", "HEAD"], {
-    cwd: repoRoot,
-    env: buildChildEnv(),
-    timeoutMs: 30_000,
-  }).catch(() => null);
-  const candidate =
-    headResult && !headResult.timedOut && headResult.exitCode === 0 ? headResult.stdout.trim() : null;
-  const commit = candidate !== null && /^[0-9a-f]{40}$/.test(candidate) ? candidate : null;
+export async function resolveFactorySourceCommit(
+  repoRoot: string,
+  gitRunner: GitCommandRunner = (args) =>
+    runProcess("git", [...args], { cwd: repoRoot, env: buildChildEnv(), timeoutMs: 30_000 }),
+): Promise<FactorySourceProvenance> {
+  const headResult = await gitRunner(["-C", repoRoot, "rev-parse", "HEAD"]).catch(() => null);
+  if (headResult === null || headResult.timedOut || headResult.exitCode !== 0) {
+    return {
+      ok: false,
+      reason: "factory source provenance unavailable: HEAD commit could not be resolved via git",
+    };
+  }
+  const commit = headResult.stdout.trim();
+  if (!/^[0-9a-f]{40}$/.test(commit)) {
+    return {
+      ok: false,
+      reason: "factory source provenance unavailable: git did not return an exact commit SHA for HEAD",
+    };
+  }
 
-  const statusResult = await runProcess("git", ["-C", repoRoot, "status", "--porcelain"], {
-    cwd: repoRoot,
-    env: buildChildEnv(),
-    timeoutMs: 30_000,
-  }).catch(() => null);
-  const dirty =
-    statusResult !== null && !statusResult.timedOut && statusResult.exitCode === 0
-      ? statusResult.stdout.trim().length > 0
-      : false;
-
-  return { commit, dirty };
+  const statusResult = await gitRunner(["-C", repoRoot, "status", "--porcelain"]).catch(() => null);
+  if (statusResult === null || statusResult.timedOut || statusResult.exitCode !== 0) {
+    return {
+      ok: false,
+      reason: "factory source provenance unavailable: working-tree cleanliness could not be verified via git",
+    };
+  }
+  if (statusResult.stdout.trim().length > 0) {
+    return {
+      ok: false,
+      reason:
+        "factory source provenance unavailable: working tree contains nonignored uncommitted changes; intelligence runs require an exact clean committed source",
+    };
+  }
+  return { ok: true, commit };
 }
 
 export interface RunIntelligenceInput {
@@ -87,7 +112,7 @@ export interface RunIntelligenceDeps {
   codexRunner?: CodexRunner;
   now?: () => Date;
   runIdSuffix?: () => string;
-  sourceCommitResolver?: SourceCommitResolver;
+  sourceCommitResolver?: (repoRoot: string) => Promise<FactorySourceProvenance>;
   synthesisTimeoutMs?: number;
   /** Progress diagnostics (stderr for the CLI; never evidence dumps). */
   onProgress?: (message: string) => void;
@@ -194,18 +219,20 @@ export async function runIntelligence(
     requestDigest = deterministicDigest(request);
     researchDigest = deterministicDigest(normalized);
 
-    // --- 4. Factory source provenance ---
-    const source = await (deps.sourceCommitResolver ?? resolveFactorySourceCommit)(input.repoRoot);
-    if (source.commit === null) {
+    // --- 4. Factory source provenance (fail closed BEFORE any model work) ---
+    let source: FactorySourceProvenance;
+    try {
+      source = await (deps.sourceCommitResolver ?? resolveFactorySourceCommit)(input.repoRoot);
+    } catch (error) {
       return finish("failed", {
-        code: "intelligence_artifact_failed",
-        message: "factory source commit could not be resolved via git; provenance is mandatory",
+        code: "intelligence_source_unverified",
+        message: `factory source provenance could not be verified: ${boundedMessage(error)}`,
       });
     }
-    factorySourceCommit = source.commit;
-    if (source.dirty) {
-      warnings.push("factory working tree contained uncommitted changes during the run");
+    if (!source.ok) {
+      return finish("failed", { code: "intelligence_source_unverified", message: source.reason });
     }
+    factorySourceCommit = source.commit;
     onProgress(`factorySourceCommit=${factorySourceCommit}`);
 
     // --- 5. Fresh artifact root (never reuse previous runs) ---

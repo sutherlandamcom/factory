@@ -1,0 +1,32 @@
+{
+  "version": "v0",
+  "siteId": "summit-roofing",
+  "business": {
+    "name": "Summit Roofing LLC",
+    "category": "Roofing contractor",
+    "country": "United States",
+    "language": "en",
+    "primaryMarket": "Denver, Colorado",
+    "serviceSeeds": ["emergency roof repair", "roof replacement", "gutter installation"],
+    "audienceNotes": [
+      "Homeowners aged 30-60 in the Denver metro area",
+      "Property managers of small multi-family buildings"
+    ],
+    "operatorFacts": [
+      { "id": "fact-license", "text": "Licensed and insured roofing contractor in the state of Colorado" },
+      { "id": "fact-local", "text": "Family-owned and operating in Denver since 2009" },
+      { "id": "fact-warranty", "text": "10-year workmanship warranty on all roof replacements" },
+      { "id": "fact-hail", "text": "Specializes in hail damage repair for Denver's Front Range" },
+      { "id": "fact-inspection", "text": "Offers free roof inspections scheduled within 48 hours" }
+    ],
+    "constraints": [
+      "Do not publish specific prices",
+      "Avoid guaranteed ranking or outcome claims"
+    ]
+  },
+  "planning": {
+    "maxInitialPages": 5,
+    "mustCoverServices": ["emergency roof repair", "gutter installation"],
+    "excludedTopics": ["solar panel installation"]
+  }
+}

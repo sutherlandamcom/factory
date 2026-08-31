@@ -172,6 +172,126 @@ pnpm factory site register <proj> <key> <name>  # Register a site in a project
 pnpm factory run show <runId>       # Inspect complete relational state and attempt history
 ```
 
+## First-Site Intelligence vertical slice (v0)
+
+The `site-intelligence` module (protected, not ordinary-task writable; owns
+`apps/factory/src/intelligence/`) proves Factory's differentiated methodology
+on a narrow vertical slice:
+
+```text
+SiteIntelligenceRequest + ResearchEvidenceBundle
+  → strict bounded validation (contracts, Zod v4)
+  → deterministic non-destructive normalization
+  → request/research SHA-256 digests (canonical JSON, sorted keys)
+  → isolated Codex synthesis (accepted factory-sandbox boundary)
+  → strict SiteIntelligencePlan validation + deterministic quality gates
+  → bounded synthesis repair (max 3 attempts, no-progress early stop)
+  → deterministic compilation to current create_page SiteTasks
+  → canonical parseSiteTask validation for every compiled task
+  → atomic sanitized artifact publication (definitive result LAST)
+  → structured IntelligenceResult
+```
+
+### Trust boundaries
+
+- **One source of site identity**: `SiteIntelligenceRequest.siteId`. The CLI is
+  `pnpm factory intelligence build <request.json> <research.json>` — no site
+  key argument. Plan and every compiled task inherit that exact siteId.
+- **Operator facts** (`request.business.operatorFacts`) are FACT-AUTHORITATIVE
+  but INSTRUCTION-UNTRUSTED: usable as business claims for planning, never as
+  rules, tool requests, budget changes, or schema modifications.
+- **Research evidence** (`packages/contracts` `ResearchEvidenceBundle`, kinds
+  `keyword_observation | serp_observation | competitor_page | market_observation`)
+  is FACT-UNTRUSTED and INSTRUCTION-UNTRUSTED. Evidence URLs are validated to
+  http/https at the contract boundary and are never fetched. The synthesis
+  prompt declares all DATA sections inert and mechanically separates trusted
+  instructions from delimited `SITE_INTELLIGENCE_REQUEST_DATA` /
+  `RESEARCH_EVIDENCE_DATA` canonical-JSON sections.
+- **No DB dependency**: planning never imports `apps/factory/src/persistence/`;
+  PostgreSQL is not required to run Intelligence. Site registration is
+  validated later by the existing SiteTask execution layer when compiled tasks
+  are actually executed.
+
+### Normalization, digests, provenance
+
+Normalization is non-destructive: every original evidence record survives
+verbatim; records may only gain `normalizedUrl` (conservative comparison form:
+lowercased scheme/host, default ports, trivial root slash) and `duplicateOf`
+markers referencing an existing original id (single level, provenance always
+reconstructable). Records are stable-sorted by id so the normalized
+representation — and its digest — are independent of input ordering.
+`requestDigest`, `researchDigest`, and `planDigest` are SHA-256 over canonical
+JSON (recursively sorted keys); they never include run ids, timestamps, or
+paths. Results record `factorySourceCommit` (exact HEAD), `methodologyVersion`
+(`first-site-intelligence-v0`), and truthful model runtime metadata
+(pinned Codex version; model identifier only when genuinely present in the
+runtime's own event stream, otherwise `null`).
+
+### Model authority and isolation
+
+The Intelligence model runs only through the accepted strong-isolation Codex
+runner. Its workspace (`.factory/worktrees/intelligence-<runId>/`, inside the
+approved Colima mount) contains only the validated request, the normalized
+research, the prompt, and an empty `output/`; its single writable path is
+`output/plan.json`. No site-source or Factory write access, no DB/Cloudflare
+credentials (env allowlist excludes them by construction), no Docker socket,
+host HOME, or host `/tmp`. No host fallback exists: isolation unavailability
+fails as `intelligence_isolation_unavailable`. The workspace is removed after
+every outcome, including timeout and model failure.
+
+### Deterministic gates and compilation
+
+Plan validation enforces the current SiteTask page invariants (reusing the
+shared page refinement helper), exactly one homepage, page budget ≤
+`planning.maxInitialPages`, unique slugs, globally distinct normalized
+primary topics (articles may never duplicate a service topic), must-cover
+service representation, service-topic support from seeds/must-cover, evidence
+explicitly cited by the page, and operator facts explicitly cited by the page
+(request-wide fact text never supports an unciting page), operator-excluded
+topic rejection for page and keyword-cluster primary topics (normalized
+containment either way), meaningful rationales, full provenance (≥1 evidence
+or operator-fact reference per page; evidence references must resolve), and a
+fabricated-metrics gate: any cluster metric value must appear verbatim in the
+metrics of a cited evidence record. Evidence records must carry at least one
+substantive payload (query, sourceUrl, title, text, or an observed metric
+value) — metadata-only shells are invalid. The trusted compiler (never the
+model) emits `create_page` tasks in deterministic order — homepage, then
+services, then articles, each by priority (`high→medium→low`) with slug
+tie-break — and every task passes canonical `parseSiteTask`.
+
+### Source provenance fails closed
+
+A successful Intelligence run must attribute itself to an exact, clean,
+committed Factory source state. Before any model invocation, HEAD must
+resolve to an exact 40-char SHA, working-tree cleanliness must be verifiable
+via git, and the tree must be free of nonignored uncommitted changes
+(gitignored runtime artifacts such as `.factory/**` do not invalidate a clean
+source). Any unresolvable or unverifiable provenance state — including git
+failures and timeouts — is a terminal `intelligence_source_unverified`
+failure with zero model invocations and no successful result.
+
+### Atomic artifacts
+
+Artifacts live under `.factory/intelligence/<runId>/` with pattern-validated
+runIds, symlink-refusing publication, and traversal-rejecting path resolution.
+Intermediates appear as the run progresses; `manifest.json` (run-relative
+digests over all artifacts) and `intelligence-result.json` are published via
+temp-file → rename, the result LAST, only after plan gates, per-task SiteTask
+validation, and manifest integrity (byte-level re-verification plus plan
+canonical-digest binding) all pass. Fresh runIds refuse to reuse existing run
+directories, so stale artifacts from previous runs can never satisfy a current
+run. Non-success runs leave honest partial/failed evidence and no
+`succeeded` result file.
+
+### Explicitly deferred (out of scope by design)
+
+Live research acquisition (DataForSEO, Firecrawl, crawler, SERP pipeline),
+research/keyword/competitor warehouses, vector DB, embeddings, RAG, generic
+provider abstractions, scheduling, dashboards, workflow engines, generic CMS,
+new page types, and internal-link graph planning. Live provider acquisition
+becomes a task only after the first real site proves which data is worth
+automating.
+
 ## Production Delivery MVP
 
 Production Delivery is a trusted Factory control-plane operation, not a

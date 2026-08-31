@@ -51,6 +51,57 @@ export const slugSchema = z
       'slug must be a rooted lowercase path like "/" or "/services/roof-repair" (only [a-z0-9], single "/" or "-" separators)',
   });
 
+/**
+ * Shared page invariants (unique sections + coherent page-type/slug
+ * relationship). Used by the SiteTask page schema and by the Intelligence
+ * planned-page schema so both can never drift apart.
+ */
+export function addSitePageInvariantIssues(
+  data: { type: PageType; slug: string; sections: SectionType[] },
+  ctx: z.RefinementCtx,
+): void {
+  // 1. Enforce unique sections (no duplicates)
+  const seen = new Set<string>();
+  for (let i = 0; i < data.sections.length; i++) {
+    const section = data.sections[i]!;
+    if (seen.has(section)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `duplicate section "${section}" is forbidden`,
+        path: ["sections", i],
+      });
+    }
+    seen.add(section);
+  }
+
+  // 2. Coherent page-type / slug relationships
+  if (data.type === "homepage") {
+    if (data.slug !== "/") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `homepage slug must be exactly "/" (got "${data.slug}")`,
+        path: ["slug"],
+      });
+    }
+  } else if (data.type === "service") {
+    if (!data.slug.startsWith("/services/") || data.slug === "/services/") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `service page slug must start with "/services/<name>" (got "${data.slug}")`,
+        path: ["slug"],
+      });
+    }
+  } else if (data.type === "article") {
+    if (!data.slug.startsWith("/blog/") || data.slug === "/blog/") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `article page slug must start with "/blog/<name>" (got "${data.slug}")`,
+        path: ["slug"],
+      });
+    }
+  }
+}
+
 export const sitePageSchema = z
   .object({
     type: pageTypeSchema,
@@ -71,48 +122,7 @@ export const sitePageSchema = z
       .max(20, "maximum 20 sections allowed"),
   })
   .strict()
-  .superRefine((data, ctx) => {
-    // 1. Enforce unique sections (no duplicates)
-    const seen = new Set<string>();
-    for (let i = 0; i < data.sections.length; i++) {
-      const section = data.sections[i]!;
-      if (seen.has(section)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `duplicate section "${section}" is forbidden`,
-          path: ["sections", i],
-        });
-      }
-      seen.add(section);
-    }
-
-    // 2. Coherent page-type / slug relationships
-    if (data.type === "homepage") {
-      if (data.slug !== "/") {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `homepage slug must be exactly "/" (got "${data.slug}")`,
-          path: ["slug"],
-        });
-      }
-    } else if (data.type === "service") {
-      if (!data.slug.startsWith("/services/") || data.slug === "/services/") {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `service page slug must start with "/services/<name>" (got "${data.slug}")`,
-          path: ["slug"],
-        });
-      }
-    } else if (data.type === "article") {
-      if (!data.slug.startsWith("/blog/") || data.slug === "/blog/") {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `article page slug must start with "/blog/<name>" (got "${data.slug}")`,
-          path: ["slug"],
-        });
-      }
-    }
-  });
+  .superRefine(addSitePageInvariantIssues);
 
 export const createPageTaskSchema = z
   .object({

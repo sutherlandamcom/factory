@@ -22,6 +22,17 @@ export interface CodexRunRequest {
   timeoutMs: number;
   /** Exact logical write authority derived from the validated SiteTask. */
   writablePaths: readonly string[];
+  /**
+   * Mount the ENTIRE workspace read-write instead of the default
+   * readonly-root + per-path writable-parent layout. Only used by the
+   * Intelligence planner whose workspace is a Factory-built throwaway
+   * directory holding nothing but validated inputs and its own prompt/output
+   * files; the inner workspace-write sandbox then sees one uniformly
+   * writable root (bubblewrap's non-recursive workspace re-bind would
+   * otherwise shadow nested writable mounts). SiteTask execution never sets
+   * this: it keeps the strict readonly + exact-page-parent authority.
+   */
+  workspaceWritable?: boolean;
 }
 
 export interface CodexRunResult {
@@ -75,7 +86,6 @@ export function buildCodexContainerArgs(
   containerName: string,
   runtimeDir: string,
 ): string[] {
-  const writableParents = [...new Set(request.writablePaths.map((relativePath) => path.dirname(relativePath)))];
   const containerUid = process.getuid?.() ?? 1000;
   const containerGid = process.getgid?.() ?? 1000;
   const args = [
@@ -111,13 +121,16 @@ export function buildCodexContainerArgs(
     "--env",
     "CODEX_HOME=/tmp/home/.codex",
     "--mount",
-    `type=bind,src=${request.worktreePath},dst=/workspace,readonly`,
+    `type=bind,src=${request.worktreePath},dst=/workspace${request.workspaceWritable ? "" : ",readonly"}`,
   ];
-  for (const relativeParent of writableParents) {
-    args.push(
-      "--mount",
-      `type=bind,src=${path.join(request.worktreePath, relativeParent)},dst=${path.posix.join("/workspace", relativeParent)}`,
-    );
+  if (!request.workspaceWritable) {
+    const writableParents = [...new Set(request.writablePaths.map((relativePath) => path.dirname(relativePath)))];
+    for (const relativeParent of writableParents) {
+      args.push(
+        "--mount",
+        `type=bind,src=${path.join(request.worktreePath, relativeParent)},dst=${path.posix.join("/workspace", relativeParent)}`,
+      );
+    }
   }
   args.push(
     "--mount",
@@ -131,6 +144,12 @@ export function buildCodexContainerArgs(
     "--ephemeral",
     "--ignore-user-config",
     "--strict-config",
+    // Factory always pre-validates its execution workspaces itself (git
+    // worktrees for SiteTasks, a Factory-built workspace for Intelligence).
+    // The Codex CLI's own git-repo trust check is an interactive-user
+    // convenience that would otherwise reject the non-git Intelligence
+    // workspace; skipping it changes no sandbox or approval behavior.
+    "--skip-git-repo-check",
     "--json",
     "--color",
     "never",

@@ -31,6 +31,31 @@ human or an agent executing a `SiteTask`.
 - Images are local assets processed through Astro's built-in image handling
   (`astro:assets`). No external hotlinks.
 
+## SEO & Google Search governance
+
+- **SEO is a first-class acceptance constraint**, not a post-launch pass. Any
+  change affecting public routes, indexing, crawling, canonicals, redirects,
+  internal links, metadata, structured data, public content, or performance
+  MUST be evaluated for Google Search impact before implementation.
+- Current official Google Search documentation is the normative external
+  authority for Google-specific requirements. Do not encode SEO folklore.
+- Public content MUST be helpful, reliable, people-first, purpose-specific,
+  original in substance, evidence-supported where factual claims are made,
+  and free of fabricated facts, metrics, credentials, experience, or sources.
+- Factory MUST NOT create search-engine-first spam patterns: doorway pages,
+  keyword stuffing, cloaking, hidden search-targeted text/links, link spam,
+  mass thin pages, substantially duplicated location/query pages made
+  primarily to rank, or scaled content whose primary purpose is manipulating
+  rankings. Automation never justifies lower quality.
+- Every intended indexable page MUST have a coherent route/search identity.
+  Canonical, internal links, structured-data URL, sitemap URL, and the
+  intended public route MUST NOT knowingly conflict.
+- Search-related QA gates MUST NOT be weakened merely to make generated
+  content pass.
+- No ranking guarantees. If official Google guidance changes materially,
+  update repository policy instead of preserving stale assumptions.
+- Detailed rules: `docs/seo-policy.md`.
+
 ## Workflow
 
 - After meaningful website changes, run `pnpm qa` (typecheck → build →

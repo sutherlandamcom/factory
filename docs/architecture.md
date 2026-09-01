@@ -350,3 +350,115 @@ otherwise failing closed as `deployment_drift` / `needs_review`.
 Explicitly deferred: account/DNS/domain provisioning, automatic deployment on
 merge, Cloudflare Access, multi-provider abstractions, environments/releases
 platforms, dashboards, queues, schedules, and gradual/canary rollout.
+
+## Autonomy v0 — Model Gateway, ModelRolePolicy, and SiteBlueprint
+
+Autonomy v0 adds the planning layer between accepted Intelligence plans and
+future content/coding work. Three new protected modules exist:
+`apps/factory/src/models/`, `apps/factory/src/blueprint/`,
+`apps/factory/src/evals/`, plus the `site-blueprint` contracts in
+`packages/contracts`.
+
+### Model Gateway v0 (`apps/factory/src/models/`)
+
+A thin OpenRouter adapter (`gateway.ts`) used for planning-role model calls.
+Policy enforced in code: the exact model id is always explicit per call;
+model-identity auto selection — OpenRouter Auto Router, `models` fallback
+arrays, `route: "fallback"` — is rejected for Factory calls (OpenRouter may
+still route the pinned model among upstream providers; the actual provider is
+recorded as provenance); missing `OPENROUTER_API_KEY` fails closed; the key
+is scrubbed from every error message and never enters prompts or artifacts.
+Each call captures responded model, provider attribution, token usage, gateway
+cost, and duration. Runtime model discovery (`GET /models`) exists for
+evaluations only — authoritative calls never auto-select.
+
+`policy.ts` owns the version-controlled `ModelRolePolicy` per role: the
+operator-fixed champion model, explicit challenger fallbacks, capability
+requirements, sensitive-data policy, implementation status, timeout, and
+bounded attempts. Fallback is only ever champion → explicit configured
+challenger, and the actually used model is recorded in every artifact
+together with the policy version. The accepted Codex site-engineering worker
+is untouched: Autonomy v0 affects planning, not the code-execution boundary.
+
+### Factory Model Policy v0
+
+`FACTORY_MODEL_POLICY_VERSION = "factory-model-policy-v0"` (recorded in
+invocation provenance). The model-to-role mapping is **fixed by explicit
+operator architecture decision for the MVP** — version-controlled, not
+dynamically benchmark-selected, not judge-selected, not "newest in family",
+not cost/latency-selected, and never OpenRouter-auto-selected. Model
+optimization is deferred to a later phase and does not gate production use;
+evaluation tooling is non-authoritative and cannot modify the policy.
+
+| Role | Model | Runtime/Gateway | Status |
+|---|---|---|---|
+| `bulk_research_extraction` | `google/gemini-3.7-flash` | openrouter | future |
+| `competitor_site_analysis` | `openai/gpt-5.6-sol` | openrouter | future |
+| `site_intelligence` | `anthropic/claude-opus-5` | openrouter | active (evaluation-only runner in v0) |
+| `blueprint_architect` | `anthropic/claude-opus-5` | openrouter | active |
+| `content_writer` | `anthropic/claude-opus-5` | openrouter | active (evaluation-only runner in v0) |
+| `content_critic` | `openai/gpt-5.6-sol` | openrouter | active (judging) |
+| `design_director` | `anthropic/claude-opus-5` | openrouter | active (evaluation-only runner in v0) |
+| `visual_critic` | `openai/gpt-5.6-sol` | openrouter | future |
+| `cheap_repair` | `z-ai/glm-5.3-flash` | openrouter | future |
+| `image_generator` | `openai/gpt-image-2` | dedicated provider path when implemented | future |
+| `code_worker` | `anthropic/claude-opus-5` | coding runtime target: `claude-code` | policy target only — active runtime remains the isolated Codex CLI worker; migration NOT activated, requires separate acceptance |
+
+Intentional separations: writer ≠ factuality critic; design director ≠
+visual critic; bulk extraction ≠ competitor analysis; `cheap_repair` is
+never an authority for strategy, IA, high-value content, claim approval, or
+design direction. The proprietary-data gate applies to every role that may
+touch operator facts, private research, plans, or blueprints.
+
+### SiteBlueprint v0 (`apps/factory/src/blueprint/`, `packages/contracts`)
+
+`SiteBlueprint` bridges the information loss between a validated
+`SiteIntelligencePlan` and `SiteTask` execution: it mirrors the accepted IA
+exactly (same page set, types, slugs, primary topics — enforced
+deterministically), and refines each page into machine-readable intent:
+page role, audience, seoTitle vs visible H1, purpose, user questions,
+objections, section-level content jobs with section-level evidence/operator-fact
+provenance, prohibited claims, internal-link plan, structured-data intent,
+bounded site-level design direction, and mandatory page readiness
+(`ready | missing_operator_input | insufficient_evidence | blocked`) with
+honest missing inputs. A page without sufficient support becomes NOT READY
+instead of fabricated.
+
+A Factory-owned component capability registry describes the real starter
+capabilities (hero, feature_cards, content_section, faq, cta — `benefits` has
+no component and is realized through the documented mapping). Blueprint output
+may only reference registered capabilities; repeated semantic section instances
+are allowed (richer than SiteTask v0, which is not broadened in this phase).
+
+Synthesis runs through the gateway under the role policy with bounded repair
+(≤3 attempts, no-progress detection, explicit fallback recording). Incoming
+plans must pass the accepted Intelligence quality gates before any model work;
+deterministic blueprint validation enforces IA preservation, reference
+integrity (evidence/operator facts), the no-invented-chart-data rule, internal
+link and navigation integrity, readiness/missing-input consistency, and payload
+bounds. Artifacts publish atomically under `.factory/blueprint/<runId>/` with
+the definitive result written last; no database writes, no credentials in
+artifacts. CLI: `pnpm factory blueprint build <plan.json> <request.json>
+<research.json>`.
+
+### Model evaluation harness (`apps/factory/src/evals/`)
+
+**Non-authoritative diagnostic/optimization tooling.** It may compare models
+and report candidate quality, cost, and latency; it can never modify
+`MODEL_ROLE_POLICY`, promote a challenger, change production behavior, or
+gate MVP acceptance. Policy changes happen only through explicit reviewed
+changes to `apps/factory/src/models/policy.ts`.
+
+`pnpm factory eval run --role ...` discovers current gateway candidates per
+family at runtime (no stale ids), feeds identical inputs/prompts/schemas to
+every candidate, applies the SAME deterministic Factory gates, then runs two
+blind rubric judges and records a winner among gate-passing candidates.
+Artifacts land under `.factory/evals/autonomy-v0/<runId>/` with
+per-candidate cost/latency from gateway usage accounting, bounded by
+`FACTORY_EVAL_BUDGET_USD` (default 25).
+
+Explicitly deferred: content synthesis, image generation, visual QA,
+`SiteTask` broadening, blueprint→task compilation, migrating Intelligence
+execution off Codex, generic workflow engines, multi-site scale
+infrastructure, and Site Shell implementation (see
+`docs/handoffs/site-shell-gap.md`).

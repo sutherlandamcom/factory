@@ -16,12 +16,30 @@ test("registry contains only current repository modules", () => {
     "persistence",
     "production-delivery",
     "site-intelligence",
+    "models",
+    "blueprint",
+    "evals",
     "site-source",
     "site-configuration",
     "quality-oracle",
     "repository-policy",
   ]);
   assert.ok(!MODULE_REGISTRY.some((module) => /seo|research|content/.test(module.id)));
+});
+
+test("autonomy modules are protected and not ordinary-task writable", () => {
+  for (const [id, ownedPath] of [
+    ["models", "apps/factory/src/models/"],
+    ["blueprint", "apps/factory/src/blueprint/"],
+    ["evals", "apps/factory/src/evals/"],
+  ] as const) {
+    const module = MODULE_REGISTRY.find((entry) => entry.id === id);
+    assert.ok(module, `${id} module must be registered`);
+    assert.deepEqual(module.ownedPaths, [ownedPath]);
+    assert.equal(module.protected, true);
+    assert.equal(module.ordinaryTaskWritable, false);
+    assert.deepEqual(owningModules(`${ownedPath}driver.ts`), [id]);
+  }
 });
 
 test("site-intelligence module is protected and not ordinary-task writable", () => {

@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { FactoryError } from "../executor/errors.js";
 
 /**
@@ -88,15 +90,25 @@ export function loadOpenRouterApiKey(env: NodeJS.ProcessEnv = process.env): stri
   // Operator convenience: load the gitignored root .env when the shell env
   // does not carry the key. Existing environment values always win because
   // we only reach this path when the env value is absent.
-  try {
-    // Node 22+: loads `.env` from the current working directory.
-    process.loadEnvFile?.();
-  } catch {
-    // No .env file (or unreadable) — fall through to the final env check.
-  }
-  const fromFile = process.env[OPENROUTER_API_KEY_ENV];
-  if (typeof fromFile === "string" && fromFile.trim().length > 0) {
-    return fromFile.trim();
+  for (const candidate of [
+    undefined,
+    path.resolve(process.cwd(), ".env"),
+    path.resolve(process.cwd(), "..", ".env"),
+    path.resolve(process.cwd(), "..", "..", ".env"),
+  ]) {
+    try {
+      if (candidate === undefined) {
+        process.loadEnvFile?.();
+      } else if (existsSync(candidate)) {
+        process.loadEnvFile?.(candidate);
+      }
+    } catch {
+      // ignore
+    }
+    const fromFile = process.env[OPENROUTER_API_KEY_ENV];
+    if (typeof fromFile === "string" && fromFile.trim().length > 0) {
+      return fromFile.trim();
+    }
   }
   return null;
 }

@@ -5,6 +5,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { EvalResult } from "../src/evals/contracts.js";
+import { MODEL_ROLE_POLICY } from "../src/models/policy.js";
 import { runRoleEval } from "../src/evals/runner.js";
 import { loadBlueprintFixtureInputs, loadBlueprintFixtureInputsRaw } from "./blueprint-fixtures.js";
 
@@ -148,6 +149,31 @@ test("bake-off stops when the budget cap is exceeded", async () => {
     else process.env.FACTORY_EVAL_BUDGET_USD = previous;
     await rm(repoRoot, { recursive: true, force: true });
   }
+});
+
+test("P1-2: public_only role policy blocks proprietary eval inputs with zero invocations", async () => {
+  const repoRoot = realpathSync(await mkdtemp(path.join(tmpdir(), "factory-eval-policy-")));
+  let networkCalls = 0;
+  const result: EvalResult = await runRoleEval(repoRoot, {
+    roleId: "content_writer",
+    requestInput: request,
+    researchInput: research,
+    planInput: plan,
+    policyOverride: {
+      ...MODEL_ROLE_POLICY.content_writer,
+      sensitiveDataPolicy: "public_only",
+    },
+    gatewayDeps: evalDeps(() => {
+      networkCalls++;
+      return { content: JSON.stringify(DRAFT_A) };
+    }),
+  });
+  assert.equal(result.status, "failed");
+  assert.equal(result.error?.code, "eval_policy_violation");
+  assert.match(result.error?.message ?? "", /public_only/);
+  assert.equal(result.candidates.length, 0, "no candidates may be invoked");
+  assert.equal(networkCalls, 0, "zero model invocations must reach the gateway");
+  await rm(repoRoot, { recursive: true, force: true });
 });
 
 test("blueprint_architect bake-off requires a plan input", async () => {

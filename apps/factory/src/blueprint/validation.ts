@@ -107,8 +107,23 @@ export function validateSiteBlueprint(
     }
   };
 
-  const evidenceWithMetrics = new Set(
-    research.items.filter((item) => item.metrics !== undefined).map((item) => item.id),
+  /**
+   * Metric-bearing evidence requires at least one ACTUAL observed numeric
+   * metric value. The accepted Intelligence contract deliberately allows
+   * `metrics: {}` on a valid evidence item when another substantive field
+   * (title/text/query/sourceUrl) carries the evidence — so an empty metrics
+   * object or absent metrics is NOT numerical evidence. A planned chart must
+   * cite at least one evidence record with a real observed number.
+   */
+  const metricBearingEvidenceIds = new Set(
+    research.items
+      .filter((item) => {
+        if (item.metrics === undefined) return false;
+        return Object.values(item.metrics).some(
+          (value) => typeof value === "number" && Number.isFinite(value),
+        );
+      })
+      .map((item) => item.id),
   );
 
   for (const page of blueprint.pages) {
@@ -177,10 +192,10 @@ export function validateSiteBlueprint(
       }
       // --- 5. Chart data policy ---------------------------------------------
       if (section.visualRequirement.required && section.visualRequirement.kind === "chart") {
-        const hasMetricEvidence = section.evidenceIds.some((ref) => evidenceWithMetrics.has(ref));
+        const hasMetricEvidence = section.evidenceIds.some((ref) => metricBearingEvidenceIds.has(ref));
         if (!hasMetricEvidence) {
           add(
-            `${sectionWhere} requires a chart but cites no evidence carrying observed metrics — lower the readiness or drop the visual instead of inventing data`,
+            `${sectionWhere} requires a chart but cites no evidence carrying an observed numeric metric — lower the readiness or drop the visual instead of inventing data`,
           );
         }
       }

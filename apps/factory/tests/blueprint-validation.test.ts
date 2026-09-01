@@ -188,6 +188,54 @@ test("required chart without metric evidence is rejected (no invented chart data
   assert.ok(result.issues.some((issue) => issue.includes("requires a chart")));
 });
 
+test("P1-1: metrics:{} evidence cannot support a required chart", () => {
+  const blueprint = makeValidBlueprintTyped(request, plan);
+  const clone = structuredClone(blueprint);
+  const researchClone = structuredClone(research);
+  researchClone.items.find((item) => item.id === "mkt-seasonal-demand")!.metrics = {};
+  const section = clone.pages[0]!.sections.find((entry) => entry.id === "sec-home-capabilities")!;
+  section.visualRequirement = { required: true, purpose: "seasonal demand chart", kind: "chart" };
+  const result = validateSiteBlueprint(clone, { plan, request, research: researchClone });
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.some((issue) => issue.includes("requires a chart")));
+});
+
+test("P1-1: zero-valued observed searchVolume supports a required chart", () => {
+  const blueprint = makeValidBlueprintTyped(request, plan);
+  const clone = structuredClone(blueprint);
+  const researchClone = structuredClone(research);
+  researchClone.items.find((item) => item.id === "mkt-seasonal-demand")!.metrics = { searchVolume: 0 };
+  const section = clone.pages[0]!.sections.find((entry) => entry.id === "sec-home-capabilities")!;
+  section.visualRequirement = { required: true, purpose: "seasonal demand level", kind: "chart" };
+  const result = validateSiteBlueprint(clone, { plan, request, research: researchClone });
+  assert.ok(result.ok, JSON.stringify(result.ok ? [] : result.issues));
+});
+
+test("P1-1: zero-valued observed difficulty supports a required chart", () => {
+  const blueprint = makeValidBlueprintTyped(request, plan);
+  const clone = structuredClone(blueprint);
+  const researchClone = structuredClone(research);
+  researchClone.items.find((item) => item.id === "mkt-seasonal-demand")!.metrics = { difficulty: 0 };
+  const section = clone.pages[0]!.sections.find((entry) => entry.id === "sec-home-capabilities")!;
+  section.visualRequirement = { required: true, purpose: "topic difficulty level", kind: "chart" };
+  const result = validateSiteBlueprint(clone, { plan, request, research: researchClone });
+  assert.ok(result.ok, JSON.stringify(result.ok ? [] : result.issues));
+});
+
+test("P1-1: unrelated metric-bearing evidence cannot rescue a chart it does not cite", () => {
+  const blueprint = makeValidBlueprintTyped(request, plan);
+  const clone = structuredClone(blueprint);
+  // kw-emergency-repair is metric-bearing but cited only by OTHER pages; the
+  // chart section cites mkt-seasonal-demand, which carries no metrics.
+  const section = clone.pages[0]!.sections.find((entry) => entry.id === "sec-home-capabilities")!;
+  assert.ok(section.evidenceIds.includes("mkt-seasonal-demand"));
+  assert.ok(!section.evidenceIds.includes("kw-emergency-repair"));
+  section.visualRequirement = { required: true, purpose: "seasonal demand chart", kind: "chart" };
+  const result = validateSiteBlueprint(clone, { plan, request, research });
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.some((issue) => issue.includes("requires a chart")));
+});
+
 test("required chart with metric evidence passes", () => {
   const blueprint = makeValidBlueprintTyped(request, plan);
   const clone = structuredClone(blueprint);

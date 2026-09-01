@@ -1,4 +1,5 @@
 import {
+  MAX_BLUEPRINT_MODEL_OUTPUT_BYTES,
   MAX_BLUEPRINT_SYNTHESIS_ATTEMPTS,
   SITE_BLUEPRINT_METHODOLOGY_VERSION,
   parseBlueprintResult,
@@ -27,7 +28,12 @@ import {
   type ModelCallRequest,
   type ModelCallResult,
 } from "../models/gateway.js";
-import { MODEL_ROLE_POLICY, resolveModelSequence, type ModelRolePolicy } from "../models/policy.js";
+import {
+  MODEL_ROLE_POLICY,
+  mayReceiveProprietaryData,
+  resolveModelSequence,
+  type ModelRolePolicy,
+} from "../models/policy.js";
 import {
   buildArtifactDigests,
   generateRunId,
@@ -207,7 +213,19 @@ export async function runBlueprint(
     factorySourceCommit = source.commit;
     onProgress(`factorySourceCommit=${factorySourceCommit}`);
 
-    // --- 4. Credential availability (fail closed) ----------------------------
+    // --- 4. Sensitive-data policy gate (fail closed BEFORE any model work) ---
+    // The Blueprint planning input set (request + research + accepted plan)
+    // is proprietary/unpublished material at the model boundary. A role
+    // policy not permitted to receive proprietary data must never see it:
+    // zero invocations, zero model-call artifacts.
+    if (!mayReceiveProprietaryData(policy)) {
+      return finish("failed", {
+        code: "blueprint_policy_violation",
+        message: `role ${policy.roleId} has sensitiveDataPolicy "${policy.sensitiveDataPolicy}" but the Blueprint planning inputs contain proprietary/unpublished material; no model invocation was performed`,
+      });
+    }
+
+    // --- 5. Credential availability (fail closed) ----------------------------
     const invoker: ModelInvoker =
       deps.invoker ??
       (async (request: ModelCallRequest) => {
@@ -351,12 +369,16 @@ export async function runBlueprint(
         }
 
         const rawOutput = callResult.content;
+        const rawOutputBytes = Buffer.byteLength(rawOutput, "utf8");
+        const outputOverCap = rawOutputBytes > MAX_BLUEPRINT_MODEL_OUTPUT_BYTES;
         await writeArtifact(
           runDir,
           `attempts/${attemptNumber}/raw-output.txt`,
-          rawOutput.slice(0, 1024 * 1024),
+          outputOverCap
+            ? `${rawOutput.slice(0, MAX_BLUEPRINT_MODEL_OUTPUT_BYTES)}\n[truncated: ${rawOutputBytes} bytes exceeded the ${MAX_BLUEPRINT_MODEL_OUTPUT_BYTES}-byte output cap]\n`
+            : rawOutput,
         );
-        onProgress(`attempt ${attemptNumber} completed (${rawOutput.length} chars)`);
+        onProgress(`attempt ${attemptNumber} completed (${rawOutputBytes} bytes)`);
 
         // No-progress detection over already-invalid attempts.
         const currentCanonical = tryCanonicalJson(rawOutput);
@@ -372,25 +394,37 @@ export async function runBlueprint(
           }
         }
 
-        // Strict single-JSON-document parsing (no salvage).
-        const parsed = parseModelPlanOutput(rawOutput, null);
-        if (!parsed.ok) {
+        // Strict rejection reasons, applied before JSON acceptance: the raw
+        // UTF-8 output cap first, then single-JSON-document parsing.
+        let attemptIssue: string | null = outputOverCap
+          ? `model output of ${rawOutputBytes} bytes exceeds the ${MAX_BLUEPRINT_MODEL_OUTPUT_BYTES}-byte output cap`
+          : null;
+        let parsedValue: unknown;
+        if (attemptIssue === null) {
+          const parsed = parseModelPlanOutput(rawOutput, null);
+          if (!parsed.ok) {
+            attemptIssue = parsed.error;
+          } else {
+            parsedValue = parsed.value;
+          }
+        }
+        if (attemptIssue !== null) {
           if (attemptNumber === Math.min(policy.maxAttempts, MAX_BLUEPRINT_SYNTHESIS_ATTEMPTS)) {
             return finish("needs_review", {
               code: "blueprint_attempts_exhausted",
-              message: `all ${attemptCount} attempts produced invalid output: ${parsed.error}`,
+              message: `all ${attemptCount} attempts produced invalid output: ${attemptIssue}`,
             });
           }
           previousRaw = rawOutput;
           previousCanonical = currentCanonical;
-          repairIssues = [parsed.error];
+          repairIssues = [attemptIssue];
           continue;
         }
 
         // Bounded strict contract parse + deterministic semantic validation.
         let candidate: SiteBlueprint;
         try {
-          candidate = parseSiteBlueprint(parsed.value);
+          candidate = parseSiteBlueprint(parsedValue);
         } catch (error) {
           if (attemptNumber === Math.min(policy.maxAttempts, MAX_BLUEPRINT_SYNTHESIS_ATTEMPTS)) {
             return finish("needs_review", {

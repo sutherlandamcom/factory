@@ -4,9 +4,12 @@ import { FactoryError } from "../executor/errors.js";
  * Factory Model Gateway v0 — OpenRouter adapter.
  *
  * Trust and policy rules enforced here:
- * - The exact model id is ALWAYS explicit per call. Auto Router, `models`
- *   fallback arrays, and `route: "fallback"` are never used: Factory's
+ * - The exact model id is ALWAYS explicit per call. Model-identity auto
+ *   selection is never used: OpenRouter Auto Router, `models` fallback
+ *   arrays, and `route: "fallback"` are forbidden — Factory's
  *   ModelRolePolicy decides champion/challenger selection, never the gateway.
+ *   (OpenRouter may still route the pinned model among upstream providers;
+ *   the actual provider is captured below as provenance.)
  * - Credentials fail closed: without OPENROUTER_API_KEY no call is made.
  * - The key never enters prompts, artifacts, logs, or error messages.
  * - Exact provenance (responded model, provider, token usage, cost, duration)
@@ -193,8 +196,11 @@ export async function invokeModel(
         max_tokens: request.maxTokens ?? 16_000,
         // Deterministic-friendly default applied uniformly to every family.
         temperature: 0,
-        // Deliberately absent: `models` fallback arrays, `route`, provider
-        // auto-routing. Factory's role policy owns champion/challenger choice.
+        // Deliberately absent: `models` fallback arrays, `route`, and any
+        // model-identity auto-selection (Auto Router). Factory's role policy
+        // owns champion/challenger choice. OpenRouter may route the pinned
+        // model among upstream providers; the actual provider is recorded
+        // from the response as provenance.
       }),
       // Hard per-call timeout: the gateway never hangs a planning run.
       signal: AbortSignal.timeout(request.timeoutMs),

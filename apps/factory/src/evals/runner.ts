@@ -21,7 +21,7 @@ import {
 } from "../models/gateway.js";
 import { FactoryError } from "../executor/errors.js";
 import { buildArtifactDigests, publishJsonAtomically, writeArtifact } from "../blueprint/artifacts.js";
-import { MODEL_ROLE_POLICY } from "../models/policy.js";
+import { MODEL_ROLE_POLICY, mayReceiveProprietaryData, type ModelRolePolicy } from "../models/policy.js";
 import {
   parseJudgeVerdict,
   type EvalCandidateSummary,
@@ -73,6 +73,8 @@ export interface RunRoleEvalOptions {
   onProgress?: (message: string) => void;
   /** Injectable gateway transport (tests); defaults to the real OpenRouter adapter. */
   gatewayDeps?: { fetchImpl?: FetchLike; loadApiKey?: () => string | null };
+  /** Injectable role policy for the sensitive-data gate (tests); defaults to the authoritative policy. */
+  policyOverride?: ModelRolePolicy;
 }
 
 function evalBudgetCapUsd(): number {
@@ -161,6 +163,17 @@ export async function runRoleEval(
     }
     const context: RoleTaskContext = { request, research, plan };
     const digests = inputDigests(context);
+
+    // Sensitive-data gate: evaluation inputs include the proprietary
+    // request/research/plan material. A role policy not permitted to receive
+    // proprietary data must never see it — zero invocations, zero artifacts.
+    const rolePolicy = options.policyOverride ?? MODEL_ROLE_POLICY[options.roleId];
+    if (!mayReceiveProprietaryData(rolePolicy)) {
+      return failure(
+        "eval_policy_violation",
+        `role ${options.roleId} has sensitiveDataPolicy "${rolePolicy.sensitiveDataPolicy}" but evaluation inputs contain proprietary/unpublished material; no model invocation was performed`,
+      );
+    }
 
     // --- 2. Fresh run directory ---------------------------------------------
     await mkdir(runDir, { recursive: true });

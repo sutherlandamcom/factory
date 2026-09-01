@@ -8,8 +8,11 @@ import type { ModelGateway } from "@factory/contracts";
  * models, quality thresholds, provenance, contracts, validators, invocation
  * records, cost/latency observations, fallback policy, and the sensitive-data
  * policy. OpenRouter provides unified transport ONLY — it must never decide
- * the semantic Factory role through opaque auto-routing (no Auto Router, no
- * `models` fallback arrays, no `route: "fallback"` for authoritative calls).
+ * the semantic Factory role through opaque model-identity auto-selection
+ * (no Auto Router, no `models` fallback arrays, no `route: "fallback"` for
+ * authoritative calls). Factory pins exact MODEL identity; OpenRouter may
+ * route that model among upstream providers, and the actual provider remains
+ * recorded provenance on every invocation.
  *
  * Champion selection evidence lives in gitignored eval artifacts
  * (.factory/evals/autonomy-v0/<runId>/) and is summarized in

@@ -283,6 +283,48 @@ test("model timeouts are terminal for the sequence and recorded", async () => {
   await rm(repoRoot, { recursive: true, force: true });
 });
 
+test("P1-2: public_only role policy fails closed with zero invocations", async () => {
+  const repoRoot = await tempRepo();
+  const publicOnlyPolicy = {
+    ...MODEL_ROLE_POLICY.blueprint_architect,
+    sensitiveDataPolicy: "public_only" as const,
+  };
+  const { invoker, calls } = fakeInvoker([makeValidBlueprintJson(request, plan)]);
+  const result = await runBlueprint(
+    { repoRoot, planInput: plan, requestInput: request, researchInput: research },
+    { ...fakeSourceCommit(), invoker, policy: publicOnlyPolicy },
+  );
+  assert.equal(result.status, "failed");
+  assert.equal(result.error?.code, "blueprint_policy_violation");
+  assert.match(result.error?.message ?? "", /public_only/);
+  assert.equal(calls.length, 0, "zero model invocations must be performed");
+  assert.equal(result.modelInvocations.length, 0);
+  assert.equal(result.modelInvocation, null);
+  await rm(repoRoot, { recursive: true, force: true });
+});
+
+test("P2: oversized raw model output is rejected before JSON acceptance and repaired", async () => {
+  const repoRoot = await tempRepo();
+  // > 256 KB of JSON-shaped garbage: must be rejected on the byte cap (not
+  // on schema/parse grounds), feed bounded repair, and truncate its artifact.
+  const oversized = `{"padding":"${"x".repeat(300 * 1024)}"}`;
+  const { invoker, calls } = fakeInvoker([oversized, makeValidBlueprintJson(request, plan)]);
+  const result = await runBlueprint(
+    { repoRoot, planInput: plan, requestInput: request, researchInput: research },
+    { ...fakeSourceCommit(), invoker },
+  );
+  assert.equal(result.status, "succeeded", JSON.stringify(result.error));
+  assert.equal(result.attemptCount, 2);
+  assert.equal(calls.length, 2);
+  const runDir = await readRunDir(repoRoot, result);
+  const rawArtifact = await readFile(path.join(runDir, "attempts/1/raw-output.txt"), "utf8");
+  assert.ok(rawArtifact.length <= 256 * 1024 + 200, "artifact must be truncated at the cap");
+  assert.match(rawArtifact, /truncated/);
+  const repairPrompt = await readFile(path.join(runDir, "attempts/2/prompt.txt"), "utf8");
+  assert.match(repairPrompt, /output cap/);
+  await rm(repoRoot, { recursive: true, force: true });
+});
+
 test("secrets never enter prompts or artifacts", async () => {
   const repoRoot = await tempRepo();
   let promptSeen = "";

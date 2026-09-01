@@ -363,8 +363,10 @@ future content/coding work. Three new protected modules exist:
 
 A thin OpenRouter adapter (`gateway.ts`) used for planning-role model calls.
 Policy enforced in code: the exact model id is always explicit per call;
-OpenRouter Auto Router, `models` fallback arrays, and `route: "fallback"` are
-rejected for Factory calls; missing `OPENROUTER_API_KEY` fails closed; the key
+model-identity auto selection — OpenRouter Auto Router, `models` fallback
+arrays, `route: "fallback"` — is rejected for Factory calls (OpenRouter may
+still route the pinned model among upstream providers; the actual provider is
+recorded as provenance); missing `OPENROUTER_API_KEY` fails closed; the key
 is scrubbed from every error message and never enters prompts or artifacts.
 Each call captures responded model, provider attribution, token usage, gateway
 cost, and duration. Runtime model discovery (`GET /models`) exists for

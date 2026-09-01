@@ -30,11 +30,14 @@ function fakeSourceCommit(): RunBlueprintDeps {
   };
 }
 
-function fakeInvoker(outputs: Array<string | Error>): { invoker: ModelInvoker; calls: Array<{ model: string }> } {
-  const calls: Array<{ model: string }> = [];
+function fakeInvoker(outputs: Array<string | Error>): {
+  invoker: ModelInvoker;
+  calls: Array<{ model: string; maxTokens?: number }>;
+} {
+  const calls: Array<{ model: string; maxTokens?: number }> = [];
   let index = 0;
   const invoker: ModelInvoker = async (request) => {
-    calls.push({ model: request.model });
+    calls.push({ model: request.model, maxTokens: request.maxTokens });
     const output = outputs[index] ?? outputs[outputs.length - 1]!;
     index++;
     if (output instanceof Error) throw output;
@@ -60,7 +63,7 @@ async function readRunDir(repoRoot: string, result: BlueprintResult): Promise<st
 
 test("successful blueprint run publishes verified artifacts and records exact model", async () => {
   const repoRoot = await tempRepo();
-  const { invoker } = fakeInvoker([makeValidBlueprintJson(request, plan)]);
+  const { invoker, calls } = fakeInvoker([makeValidBlueprintJson(request, plan)]);
   const result = await runBlueprint(
     { repoRoot, planInput: plan, requestInput: request, researchInput: research },
     { ...fakeSourceCommit(), invoker },
@@ -74,6 +77,10 @@ test("successful blueprint run publishes verified artifacts and records exact mo
   assert.equal(result.modelInvocation.gateway, "openrouter");
   assert.equal(result.modelInvocation.fallback, false);
   assert.ok(result.blueprintDigest);
+  // The planning role must carry an explicit bounded completion ceiling:
+  // large multi-page blueprints exceed the gateway's 16k-token default and
+  // would otherwise be truncated mid-JSON on every attempt.
+  assert.equal(calls[0]!.maxTokens, 32_000);
 
   const runDir = await readRunDir(repoRoot, result);
   const manifest = JSON.parse(await readFile(path.join(runDir, "manifest.json"), "utf8"));

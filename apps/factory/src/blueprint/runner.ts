@@ -322,6 +322,13 @@ export async function runBlueprint(
               model,
               systemPrompt: DEFAULT_SYSTEM_PROMPT,
               prompt,
+              // An accepted 8-page blueprint legitimately serializes to
+              // ~45KB of strict JSON; the gateway default (16k tokens)
+              // truncates it mid-document. Give the planning role an
+              // explicit bounded completion ceiling well under the
+              // MAX_BLUEPRINT_MODEL_OUTPUT_BYTES byte cap (32k tokens
+              // ≈ 80-100KB of JSON).
+              maxTokens: 32_000,
               timeoutMs: policy.timeoutMs,
             });
             recordInvocation(callResult, model, startedAt, modelIndex > 0);

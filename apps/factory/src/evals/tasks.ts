@@ -9,6 +9,7 @@ import { canonicalJsonStringify, deterministicDigest, sha256Hex } from "../intel
 import { validateSiteIntelligencePlan } from "../intelligence/plan-validation.js";
 import { validateSiteBlueprint } from "../blueprint/validation.js";
 import type { ModelRoleId } from "../models/policy.js";
+import { MODEL_ROLE_POLICY } from "../models/policy.js";
 import { parseContentDraft, parseDesignSpecDraft, type EvalRoleId } from "./contracts.js";
 
 /**
@@ -254,6 +255,17 @@ Judge now, then stop.`;
 // ---------------------------------------------------------------------------
 // Deterministic gates per evaluation role
 // ---------------------------------------------------------------------------
+
+/**
+ * Timeout budget for a bake-off CANDIDATE invocation: the evaluated role's
+ * own policy ceiling. Candidates must not fail merely because the harness
+ * borrowed a different role's shorter budget. Judges keep the
+ * content_critic ceiling.
+ */
+export function candidateTimeoutMsFor(role: EvalRoleId | ModelRoleId): number {
+  const policy = MODEL_ROLE_POLICY[role as ModelRoleId];
+  return policy?.timeoutMs ?? MODEL_ROLE_POLICY.content_critic.timeoutMs;
+}
 
 export type DeterministicGateResult =
   | { ok: true; issueCount: 0; firstIssue: null; outputDigest: string }

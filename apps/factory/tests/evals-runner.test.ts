@@ -7,11 +7,23 @@ import path from "node:path";
 import type { EvalResult } from "../src/evals/contracts.js";
 import { MODEL_ROLE_POLICY } from "../src/models/policy.js";
 import { runRoleEval } from "../src/evals/runner.js";
+import { candidateTimeoutMsFor } from "../src/evals/tasks.js";
 import { loadBlueprintFixtureInputs, loadBlueprintFixtureInputsRaw } from "./blueprint-fixtures.js";
 
 const VALID_KEY = "sk-or-test-abcdef1234567890";
 
 const { request, research, plan } = loadBlueprintFixtureInputs();
+
+test("P2: bake-off candidates run under the evaluated role's policy timeout", () => {
+  assert.equal(candidateTimeoutMsFor("site_intelligence"), MODEL_ROLE_POLICY.site_intelligence.timeoutMs);
+  assert.equal(candidateTimeoutMsFor("blueprint_architect"), MODEL_ROLE_POLICY.blueprint_architect.timeoutMs);
+  assert.equal(candidateTimeoutMsFor("content_writer"), MODEL_ROLE_POLICY.content_writer.timeoutMs);
+  assert.equal(candidateTimeoutMsFor("design_director"), MODEL_ROLE_POLICY.design_director.timeoutMs);
+  // Planning roles get their longer ceiling — never a different role's
+  // shorter budget (the defect that truncated the first real blueprint
+  // bake-off at exactly 300s).
+  assert.equal(candidateTimeoutMsFor("blueprint_architect"), 600_000);
+});
 
 const MODEL_LIST = {
   data: [
@@ -90,9 +102,11 @@ test("content_writer bake-off: gates, blind judging, winner, artifacts", async (
       const callIndex = callCounts.get(model) ?? 0;
       callCounts.set(model, callIndex + 1);
       if (callIndex > 0) {
-        // Judge pass: openai judge and google judge both rank the grounded
-        // drafts above the fabricating one.
-        return { content: JSON.stringify(JUDGE_VERDICT("C")) };
+        // Judge pass: some judge models wrap JSON in markdown fences despite
+        // instructions — the harness strips a single fence before the strict
+        // verdict parse. Both judges rank the grounded drafts above the
+        // fabricating one.
+        return { content: "```json\n" + JSON.stringify(JUDGE_VERDICT("C")) + "\n```" };
       }
       return {
         content: JSON.stringify(

@@ -34,6 +34,7 @@ import {
   buildContentTask,
   buildDesignTask,
   buildJudgeTask,
+  candidateTimeoutMsFor,
   inputDigests,
   runDeterministicGate,
   type RoleTaskContext,
@@ -81,6 +82,18 @@ function evalBudgetCapUsd(): number {
   const raw = process.env.FACTORY_EVAL_BUDGET_USD;
   const parsed = raw !== undefined ? Number(raw) : NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 25;
+}
+
+/**
+ * Judges are evaluation-only models; some wrap JSON in markdown fences
+ * despite explicit instructions. Strip a single surrounding fence before the
+ * STRICT verdict parse — the verdict itself remains fully validated. This is
+ * evaluation tooling only; production synthesis parsing has no salvage.
+ */
+function stripCodeFence(content: string): string {
+  const trimmed = content.trim();
+  const fenced = /^```[a-zA-Z]*\n([\s\S]*?)\n```$/.exec(trimmed);
+  return fenced ? fenced[1]! : trimmed;
 }
 
 interface CandidateSelection {
@@ -253,7 +266,12 @@ export async function runRoleEval(
           systemPrompt: task.systemPrompt,
           prompt: task.prompt,
           maxTokens: task.maxTokens,
-          timeoutMs: MODEL_ROLE_POLICY.content_critic.timeoutMs,
+          // Fairness: candidates run under the EVALUATED ROLE's policy
+          // timeout (blueprint/intelligence roles get their planning
+          // ceiling), not an unrelated role's shorter one — a candidate must
+          // not fail merely because the harness used a different role's
+          // budget.
+          timeoutMs: candidateTimeoutMsFor(options.roleId),
         };
         const result = await invokeModel(callRequest, options.gatewayDeps ?? {});
         const cost = result.costUsd ?? 0;
@@ -333,7 +351,7 @@ export async function runRoleEval(
             timeoutMs: MODEL_ROLE_POLICY.content_critic.timeoutMs,
           }, options.gatewayDeps ?? {});
           totalCostUsd += result.costUsd ?? 0;
-          const verdict: JudgeVerdict = parseJudgeVerdict(JSON.parse(result.content));
+          const verdict: JudgeVerdict = parseJudgeVerdict(JSON.parse(stripCodeFence(result.content)));
           judges.push({ model: judgeModel, verdict, error: null });
           await writeArtifact(runDir, `judging/${judgeIndex}.json`, `${JSON.stringify({ model: judgeModel, verdict }, null, 2)}\n`);
         } catch (error) {

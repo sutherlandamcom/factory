@@ -372,15 +372,43 @@ Each call captures responded model, provider attribution, token usage, gateway
 cost, and duration. Runtime model discovery (`GET /models`) exists for
 evaluations only — authoritative calls never auto-select.
 
-`policy.ts` owns the version-controlled `ModelRolePolicy` per role
-(`blueprint_architect` authoritative in v0; `site_intelligence`,
-`content_writer`, `content_critic`, `design_director` evaluation-only):
-champion model, explicit challenger fallbacks, capability requirements,
-sensitive-data policy, timeout, and bounded attempts. Champion entries are
-selected from recorded bake-off evidence, never preference. Fallback is only
-ever champion → explicit configured challenger, and the actually used model is
-recorded in every artifact. The accepted Codex site-engineering worker is
-untouched: Autonomy v0 affects planning, not the code-execution boundary.
+`policy.ts` owns the version-controlled `ModelRolePolicy` per role: the
+operator-fixed champion model, explicit challenger fallbacks, capability
+requirements, sensitive-data policy, implementation status, timeout, and
+bounded attempts. Fallback is only ever champion → explicit configured
+challenger, and the actually used model is recorded in every artifact
+together with the policy version. The accepted Codex site-engineering worker
+is untouched: Autonomy v0 affects planning, not the code-execution boundary.
+
+### Factory Model Policy v0
+
+`FACTORY_MODEL_POLICY_VERSION = "factory-model-policy-v0"` (recorded in
+invocation provenance). The model-to-role mapping is **fixed by explicit
+operator architecture decision for the MVP** — version-controlled, not
+dynamically benchmark-selected, not judge-selected, not "newest in family",
+not cost/latency-selected, and never OpenRouter-auto-selected. Model
+optimization is deferred to a later phase and does not gate production use;
+evaluation tooling is non-authoritative and cannot modify the policy.
+
+| Role | Model | Runtime/Gateway | Status |
+|---|---|---|---|
+| `bulk_research_extraction` | `google/gemini-3.7-flash` | openrouter | future |
+| `competitor_site_analysis` | `openai/gpt-5.6-sol` | openrouter | future |
+| `site_intelligence` | `anthropic/claude-opus-5` | openrouter | active (evaluation-only runner in v0) |
+| `blueprint_architect` | `anthropic/claude-opus-5` | openrouter | active |
+| `content_writer` | `anthropic/claude-opus-5` | openrouter | active (evaluation-only runner in v0) |
+| `content_critic` | `openai/gpt-5.6-sol` | openrouter | active (judging) |
+| `design_director` | `anthropic/claude-opus-5` | openrouter | active (evaluation-only runner in v0) |
+| `visual_critic` | `openai/gpt-5.6-sol` | openrouter | future |
+| `cheap_repair` | `z-ai/glm-5.3-flash` | openrouter | future |
+| `image_generator` | `openai/gpt-image-2` | dedicated provider path when implemented | future |
+| `code_worker` | `anthropic/claude-opus-5` | coding runtime target: `claude-code` | policy target only — active runtime remains the isolated Codex CLI worker; migration NOT activated, requires separate acceptance |
+
+Intentional separations: writer ≠ factuality critic; design director ≠
+visual critic; bulk extraction ≠ competitor analysis; `cheap_repair` is
+never an authority for strategy, IA, high-value content, claim approval, or
+design direction. The proprietary-data gate applies to every role that may
+touch operator facts, private research, plans, or blueprints.
 
 ### SiteBlueprint v0 (`apps/factory/src/blueprint/`, `packages/contracts`)
 
@@ -415,13 +443,19 @@ artifacts. CLI: `pnpm factory blueprint build <plan.json> <request.json>
 
 ### Model evaluation harness (`apps/factory/src/evals/`)
 
-Evaluation-only (never production runtime): `pnpm factory eval run --role ...`
-discovers current gateway candidates per family at runtime (no stale ids),
-feeds identical inputs/prompts/schemas to every candidate, applies the SAME
-deterministic Factory gates, then runs two blind rubric judges and records a
-winner among gate-passing candidates. Artifacts land under
-`.factory/evals/autonomy-v0/<runId>/` with per-candidate cost/latency from
-gateway usage accounting, bounded by `FACTORY_EVAL_BUDGET_USD` (default 25).
+**Non-authoritative diagnostic/optimization tooling.** It may compare models
+and report candidate quality, cost, and latency; it can never modify
+`MODEL_ROLE_POLICY`, promote a challenger, change production behavior, or
+gate MVP acceptance. Policy changes happen only through explicit reviewed
+changes to `apps/factory/src/models/policy.ts`.
+
+`pnpm factory eval run --role ...` discovers current gateway candidates per
+family at runtime (no stale ids), feeds identical inputs/prompts/schemas to
+every candidate, applies the SAME deterministic Factory gates, then runs two
+blind rubric judges and records a winner among gate-passing candidates.
+Artifacts land under `.factory/evals/autonomy-v0/<runId>/` with
+per-candidate cost/latency from gateway usage accounting, bounded by
+`FACTORY_EVAL_BUDGET_USD` (default 25).
 
 Explicitly deferred: content synthesis, image generation, visual QA,
 `SiteTask` broadening, blueprint→task compilation, migrating Intelligence

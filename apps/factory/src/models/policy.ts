@@ -1,31 +1,68 @@
 import type { ModelGateway } from "@factory/contracts";
 
 /**
- * Factory ModelRolePolicy — role selection is Factory IP; the gateway is
- * only transport.
+ * FACTORY MODEL POLICY V0 — operator-selected, version-controlled, fixed.
  *
- * Factory owns: role definitions, rubrics, accepted champion/challenger
- * models, quality thresholds, provenance, contracts, validators, invocation
- * records, cost/latency observations, fallback policy, and the sensitive-data
- * policy. OpenRouter provides unified transport ONLY — it must never decide
- * the semantic Factory role through opaque model-identity auto-selection
- * (no Auto Router, no `models` fallback arrays, no `route: "fallback"` for
- * authoritative calls). Factory pins exact MODEL identity; OpenRouter may
- * route that model among upstream providers, and the actual provider remains
- * recorded provenance on every invocation.
+ * This mapping is AUTHORITATIVE for Factory v0 / first-production-site MVP.
+ * It is explicitly selected by the operator; model benchmarking, challenger
+ * testing, and policy optimization are DEFERRED to a later optimization
+ * phase and DO NOT gate production use. Nothing in this policy is
+ * provisional, benchmark-selected, judge-selected, "newest in family",
+ * cost-selected, latency-selected, or OpenRouter-auto-selected.
  *
- * Champion selection evidence lives in gitignored eval artifacts
- * (.factory/evals/autonomy-v0/<runId>/) and is summarized in
- * docs/handoffs/autonomy-v0-build-report.md. Champion entries below cite the
- * eval run that selected them.
+ * Future changes require an explicit reviewed Factory change to this file.
+ * Evaluation tooling (apps/factory/src/evals/) is OPTIONAL diagnostic /
+ * optimization instrumentation: it may compare models and report quality,
+ * cost, and latency, but it can never modify this policy, promote a
+ * challenger, or block MVP acceptance.
+ *
+ * Distinction enforced here: MODEL ≠ GATEWAY/RUNTIME. OpenRouter-backed
+ * planning roles resolve role → fixed model id → OpenRouter → actual
+ * upstream provider (recorded as provenance). The coding worker is a
+ * MODEL + CODING RUNTIME pair, not an OpenRouter model string.
  */
 
-export const MODEL_ROLE_IDS = [
+/** The authoritative version of this frozen policy. */
+export const FACTORY_MODEL_POLICY_VERSION = "factory-model-policy-v0";
+
+/**
+ * The full intended Factory role set (machine-readable identifiers). All 11
+ * assignments exist in policy; implementation status per role is recorded on
+ * the policy entries — a fixed model assignment does NOT imply an
+ * implemented pipeline.
+ */
+export const FACTORY_ROLE_IDS = [
+  "bulk_research_extraction",
+  "competitor_site_analysis",
   "site_intelligence",
   "blueprint_architect",
   "content_writer",
   "content_critic",
   "design_director",
+  "visual_critic",
+  "code_worker",
+  "cheap_repair",
+  "image_generator",
+] as const;
+
+export type FactoryRoleId = (typeof FACTORY_ROLE_IDS)[number];
+
+/**
+ * Roles whose authoritative execution path is the OpenRouter gateway. The
+ * coding worker is intentionally NOT here: it is a model + coding-runtime
+ * pair (see CODE_WORKER_POLICY), not an OpenRouter chat-completion role.
+ */
+export const MODEL_ROLE_IDS = [
+  "bulk_research_extraction",
+  "competitor_site_analysis",
+  "site_intelligence",
+  "blueprint_architect",
+  "content_writer",
+  "content_critic",
+  "design_director",
+  "visual_critic",
+  "cheap_repair",
+  "image_generator",
 ] as const;
 
 export type ModelRoleId = (typeof MODEL_ROLE_IDS)[number];
@@ -36,20 +73,29 @@ export type ModelCapability = "structuredOutput" | "vision" | "longContext" | "t
  * Sensitive-data classes a role may be asked to process. Sutherland operator
  * facts and research are proprietary and unpublished; only roles explicitly
  * permitted for `proprietary_unpublished` may receive them, and every actual
- * provider that received them is recorded in invocation provenance.
+ * provider that received them is recorded in invocation provenance. This
+ * gate is part of the accepted trust boundary and is not weakened by the
+ * policy freeze.
  */
-export type SensitiveDataPolicy =
-  | "public_only"
-  | "proprietary_unpublished";
+export type SensitiveDataPolicy = "public_only" | "proprietary_unpublished";
+
+/** Whether the role has a production runner today. A model assignment does not imply an implemented pipeline. */
+export type RoleImplementationStatus = "active" | "future";
 
 export interface ModelRolePolicy {
   roleId: ModelRoleId;
+  /** The operator-fixed authoritative model for this role. */
   championModel: string;
-  /** Explicit, ordered fallbacks. Champion failure may ONLY use these. */
+  /**
+   * Explicit, ordered fallbacks (operator-configured; NOT bake-off-derived
+   * and never a silent authority change — the actual model is always
+   * recorded on every invocation).
+   */
   challengerModels: readonly string[];
   gateway: ModelGateway;
   requiredCapabilities: readonly ModelCapability[];
   sensitiveDataPolicy: SensitiveDataPolicy;
+  implementationStatus: RoleImplementationStatus;
   timeoutMs: number;
   /** Bounded attempt ceiling (never more than 3 for planning roles). */
   maxAttempts: 1 | 2 | 3;
@@ -64,115 +110,179 @@ const PLANNING_TIMEOUT_MS = 600_000;
 const BOUNDED_GENERATION_TIMEOUT_MS = 300_000;
 
 /**
- * Authoritative role policy for Autonomy v0.
+ * FACTORY MODEL POLICY V0 — the frozen operator matrix.
  *
- * CHAMPION PROVENANCE (2026-09-01, FINAL):
+ * OpenRouter-backed roles. Every champion model id was verified against the
+ * authenticated OpenRouter model listing on 2026-09-01. Production role
+ * resolution returns EXACTLY the configured champion — no hidden
+ * substitutions, no openrouter/auto, no `models` fallback arrays.
  *
- * site_intelligence and blueprint_architect are FACTORY-EVAL-CONFIRMED by
- * real multi-model bake-offs on the real Sutherland inputs (Intelligence run
- * 20260831T224728Z-32ddb4c4; pinned candidates openai/gpt-5.6-sol,
- * anthropic/claude-opus-5, google/gemini-3.7-flash; identical prompts,
- * schema, and deterministic gates; blind two-judge rubric):
- *
- * - site_intelligence eval-20260901T104549Z-12c450c6 + final
- *   eval-20260901T110515Z-b8d52c71: gpt-5.6-sol passed the deterministic
- *   gates in BOTH runs, ranked first by every functioning judge
- *   (5.00 avg vs 4.80/4.40 claude-opus-5, 2.40/3.20 gemini-3.7-flash;
- *   2/2 judge preference votes in the final run), at the lowest cost and
- *   latency. claude-opus-5 failed the production parse in the final run
- *   (markdown-fenced output — zero-salvage contract).
- * - blueprint_architect eval-20260901T105050Z-f4e79061 + final
- *   eval-20260901T111010Z-c12b0864: gpt-5.6-sol was the ONLY candidate
- *   producing a deterministic-valid SiteBlueprint in BOTH runs (IA
- *   preserved, provenance, readiness, chart policy, links all enforced).
- *   claude-opus-5 failed transport/limits both runs (300s harness artifact
- *   in run 1 — harness fixed to role-policy timeout; 32k-token completion
- *   truncation in run 2 — the production envelope). gemini-3.7-flash was
- *   schema-invalid in run 1 and valid in run 2.
- *
- * The remaining roles (content_writer, content_critic, design_director)
- * are OPERATOR-DESIGNATED from the operator's own multi-model test results
- * (2026-09-01: "content writer — Claude Opus 5; claim / factuality critic —
- * GPT-5.6 Sol; design director — Claude Opus 5"); no Factory bake-off has
- * run for them yet. Future designations recorded for later phases (NOT
- * implemented roles in v0): bulk research extraction →
- * google/gemini-3.7-flash; competitor/site analysis → openai/gpt-5.6-sol;
- * visual screenshot critic → openai/gpt-5.6-sol; cheap classification/
- * repair → z-ai/glm-5.3-flash; image generation → openai/gpt-image-2.
- * The accepted code-worker boundary remains the isolated Codex CLI worker.
- *
- * MODEL ID CAVEAT: all champion/challenger ids below were verified against
- * the authenticated OpenRouter model listing on 2026-09-01 (all AVAILABLE).
- * Exact ids — never aliases, never "auto".
+ * Frozen assignments (operator architecture decision, Factory v0 MVP):
+ * - bulk_research_extraction  → google/gemini-3.7-flash   (future)
+ * - competitor_site_analysis  → openai/gpt-5.6-sol        (future)
+ * - site_intelligence         → anthropic/claude-opus-5   (active; evaluation-only runner in v0)
+ * - blueprint_architect       → anthropic/claude-opus-5   (active)
+ * - content_writer            → anthropic/claude-opus-5   (active; evaluation-only runner in v0)
+ * - content_critic            → openai/gpt-5.6-sol        (active; judging role)
+ * - design_director           → anthropic/claude-opus-5   (active; evaluation-only runner in v0)
+ * - visual_critic             → openai/gpt-5.6-sol        (future)
+ * - cheap_repair              → z-ai/glm-5.3-flash        (future)
+ * - image_generator           → openai/gpt-image-2        (future; dedicated provider path when implemented — NOT forced through chat completions)
+ * - code_worker               → anthropic/claude-opus-5 + runtime claude-code (see CODE_WORKER_POLICY)
  */
-export const MODEL_ROLE_POLICY: Readonly<Record<ModelRoleId, ModelRolePolicy>> = Object.freeze({
+export const MODEL_ROLE_POLICY: Readonly<Record<ModelRoleId, ModelRolePolicy>> = deepFreeze({
+  bulk_research_extraction: {
+    roleId: "bulk_research_extraction",
+    championModel: "google/gemini-3.7-flash",
+    challengerModels: [],
+    gateway: "openrouter",
+    requiredCapabilities: ["longContext"],
+    sensitiveDataPolicy: "proprietary_unpublished",
+    implementationStatus: "future",
+    timeoutMs: PLANNING_TIMEOUT_MS,
+    maxAttempts: 3,
+  },
+  competitor_site_analysis: {
+    roleId: "competitor_site_analysis",
+    championModel: "openai/gpt-5.6-sol",
+    challengerModels: [],
+    gateway: "openrouter",
+    requiredCapabilities: ["longContext"],
+    sensitiveDataPolicy: "proprietary_unpublished",
+    implementationStatus: "future",
+    timeoutMs: PLANNING_TIMEOUT_MS,
+    maxAttempts: 3,
+  },
   site_intelligence: {
     roleId: "site_intelligence",
-    // FACTORY-EVAL-CONFIRMED champion (see header provenance): only
-    // candidate passing the accepted production gates in both bake-off
-    // runs; unanimous judge preference; lowest cost and latency.
-    // Evaluation-only role in Autonomy v0; the accepted production
-    // Intelligence implementation remains Codex-based until a migration is
-    // separately accepted.
-    championModel: "openai/gpt-5.6-sol",
-    challengerModels: ["anthropic/claude-opus-5", "google/gemini-3.7-flash"],
+    championModel: "anthropic/claude-opus-5",
+    challengerModels: ["openai/gpt-5.6-sol", "google/gemini-3.7-flash"],
     gateway: "openrouter",
     requiredCapabilities: ["longContext", "structuredOutput"],
     sensitiveDataPolicy: "proprietary_unpublished",
+    // The accepted production Intelligence implementation remains the
+    // isolated Codex pipeline; this role's OpenRouter runner is used by the
+    // diagnostic eval harness only.
+    implementationStatus: "active",
     timeoutMs: PLANNING_TIMEOUT_MS,
     maxAttempts: 3,
   },
   blueprint_architect: {
     roleId: "blueprint_architect",
-    // FACTORY-EVAL-CONFIRMED champion (see header provenance): the only
-    // candidate producing a deterministic-valid SiteBlueprint in both
-    // bake-off runs under identical inputs, schema, and gates. Also the
-    // most token-efficient: fits the production completion envelope with
-    // wide margin.
-    championModel: "openai/gpt-5.6-sol",
-    challengerModels: ["anthropic/claude-opus-5", "google/gemini-3.7-flash"],
+    championModel: "anthropic/claude-opus-5",
+    challengerModels: ["openai/gpt-5.6-sol", "google/gemini-3.7-flash"],
     gateway: "openrouter",
     requiredCapabilities: ["longContext", "structuredOutput"],
     sensitiveDataPolicy: "proprietary_unpublished",
+    implementationStatus: "active",
     timeoutMs: PLANNING_TIMEOUT_MS,
     maxAttempts: 3,
   },
   content_writer: {
     roleId: "content_writer",
-    // OPERATOR-DESIGNATED champion (content writer) — no Factory bake-off
-    // yet. Evaluation-only role in Autonomy v0.
     championModel: "anthropic/claude-opus-5",
     challengerModels: ["openai/gpt-5.6-sol"],
     gateway: "openrouter",
     requiredCapabilities: ["longContext"],
     sensitiveDataPolicy: "proprietary_unpublished",
+    // Full content synthesis pipeline is a later bounded layer; the current
+    // runner is the diagnostic eval harness section task.
+    implementationStatus: "active",
     timeoutMs: BOUNDED_GENERATION_TIMEOUT_MS,
     maxAttempts: 2,
   },
   content_critic: {
     roleId: "content_critic",
-    // OPERATOR-DESIGNATED champion (claim / factuality critic).
     championModel: "openai/gpt-5.6-sol",
     challengerModels: ["google/gemini-3.7-flash"],
     gateway: "openrouter",
     requiredCapabilities: ["longContext"],
     sensitiveDataPolicy: "proprietary_unpublished",
+    // Claim/factuality criticism — deliberately a different model from the
+    // writer; the writer is never its own factuality authority.
+    implementationStatus: "active",
     timeoutMs: BOUNDED_GENERATION_TIMEOUT_MS,
     maxAttempts: 2,
   },
   design_director: {
     roleId: "design_director",
-    // OPERATOR-DESIGNATED champion (design director) — no Factory bake-off
-    // yet. Evaluation-only role in Autonomy v0.
     championModel: "anthropic/claude-opus-5",
     challengerModels: ["openai/gpt-5.6-sol"],
     gateway: "openrouter",
     requiredCapabilities: ["longContext"],
     sensitiveDataPolicy: "proprietary_unpublished",
+    // Design GENERATION is intentionally a different model from the visual
+    // CRITIC below.
+    implementationStatus: "active",
+    timeoutMs: BOUNDED_GENERATION_TIMEOUT_MS,
+    maxAttempts: 2,
+  },
+  visual_critic: {
+    roleId: "visual_critic",
+    championModel: "openai/gpt-5.6-sol",
+    challengerModels: [],
+    gateway: "openrouter",
+    requiredCapabilities: ["vision"],
+    sensitiveDataPolicy: "proprietary_unpublished",
+    implementationStatus: "future",
+    timeoutMs: BOUNDED_GENERATION_TIMEOUT_MS,
+    maxAttempts: 2,
+  },
+  cheap_repair: {
+    roleId: "cheap_repair",
+    championModel: "z-ai/glm-5.3-flash",
+    challengerModels: [],
+    gateway: "openrouter",
+    requiredCapabilities: [],
+    sensitiveDataPolicy: "proprietary_unpublished",
+    // Bounded low-cost classification/schema-correction support ONLY —
+    // never the authority for strategy, IA, high-value content, claim
+    // approval, or design direction.
+    implementationStatus: "future",
+    timeoutMs: BOUNDED_GENERATION_TIMEOUT_MS,
+    maxAttempts: 2,
+  },
+  image_generator: {
+    roleId: "image_generator",
+    championModel: "openai/gpt-image-2",
+    challengerModels: [],
+    gateway: "openrouter",
+    requiredCapabilities: ["vision"],
+    sensitiveDataPolicy: "proprietary_unpublished",
+    // Policy assignment only. Image generation is NOT implemented in v0 and
+    // must use a dedicated provider/API path when built — not the chat
+    // completion adapter.
+    implementationStatus: "future",
     timeoutMs: BOUNDED_GENERATION_TIMEOUT_MS,
     maxAttempts: 2,
   },
 });
+
+/**
+ * The coding worker is a MODEL + CODING RUNTIME pair — never one fake model
+ * string. The TARGET authoritative coding policy is Claude Opus 5 via the
+ * Claude Code runtime; the CURRENTLY ACTIVATED accepted production runtime
+ * remains the isolated Codex CLI worker. Runtime migration is NOT YET
+ * ACTIVATED and requires a separate dedicated acceptance (code execution is
+ * a far larger security boundary than planning calls). Documentation and
+ * provenance must never claim Claude Code is already active.
+ */
+export const CODE_WORKER_POLICY = deepFreeze({
+  roleId: "code_worker" as const,
+  model: "anthropic/claude-opus-5",
+  runtimeTarget: "claude-code",
+  currentlyActiveRuntime: "codex-cli",
+  migrationActivated: false,
+});
+
+function deepFreeze<T>(value: T): Readonly<T> {
+  if (value !== null && typeof value === "object") {
+    for (const key of Object.keys(value as Record<string, unknown>)) {
+      deepFreeze((value as Record<string, unknown>)[key]);
+    }
+  }
+  return Object.freeze(value);
+}
 
 /** Fallback resolution: champion first, then explicit challengers in order. */
 export function resolveModelSequence(policy: ModelRolePolicy): readonly string[] {

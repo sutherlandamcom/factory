@@ -29,6 +29,7 @@ import {
   type ModelCallResult,
 } from "../models/gateway.js";
 import {
+  FACTORY_MODEL_POLICY_VERSION,
   MODEL_ROLE_POLICY,
   mayReceiveProprietaryData,
   resolveModelSequence,
@@ -280,6 +281,7 @@ export async function runBlueprint(
         respondedModel: result?.respondedModel ?? null,
         provider: result?.provider ?? null,
         gateway: "openrouter",
+        policyVersion: FACTORY_MODEL_POLICY_VERSION,
         durationMs: failure ? Math.max(0, Date.now() - startedAt) : (result?.durationMs ?? 0),
         promptTokens: result?.promptTokens ?? null,
         completionTokens: result?.completionTokens ?? null,

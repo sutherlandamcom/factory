@@ -41,15 +41,22 @@ import {
 } from "./tasks.js";
 
 /**
- * Autonomy v0 bake-off runner.
+ * Autonomy v0 bake-off runner — OPTIONAL diagnostic/optimization tooling.
  *
- * Three layers of evaluation (mission §18), all Factory-owned:
+ * NON-AUTHORITATIVE by operator architecture decision: this harness may
+ * compare models and report quality, cost, and latency, but it can never
+ * modify MODEL_ROLE_POLICY, promote a challenger, change production
+ * behavior, or gate MVP acceptance. Policy changes happen only through
+ * explicit reviewed changes to apps/factory/src/models/policy.ts.
+ *
+ * Three layers of evaluation, all Factory-owned:
  *   1. deterministic Factory gates (the SAME accepted validators)
  *   2. blind rubric judging by two different judge models
  *   3. human-readable evidence artifacts under .factory/evals/
  *
  * Candidate discovery inspects CURRENT gateway availability at runtime —
- * stale model ids are never trusted. The same real inputs go to every
+ * stale model ids are never trusted, and production never uses discovery
+ * (production resolves the frozen policy). The same real inputs go to every
  * candidate; families differ only by model. Cost is bounded by
  * FACTORY_EVAL_BUDGET_USD (default 25 USD) and every invocation's cost is
  * recorded from gateway usage accounting.

@@ -14,12 +14,17 @@ export {
   type OpenRouterModelSummary,
 } from "./gateway.js";
 export {
+  CODE_WORKER_POLICY,
+  FACTORY_MODEL_POLICY_VERSION,
+  FACTORY_ROLE_IDS,
   MODEL_ROLE_IDS,
   MODEL_ROLE_POLICY,
   mayReceiveProprietaryData,
   resolveModelSequence,
+  type FactoryRoleId,
   type ModelCapability,
   type ModelRoleId,
   type ModelRolePolicy,
+  type RoleImplementationStatus,
   type SensitiveDataPolicy,
 } from "./policy.js";

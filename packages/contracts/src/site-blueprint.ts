@@ -449,6 +449,8 @@ export const modelInvocationSchema = z
     /** Provider attribution reported by the gateway, or null when unavailable. */
     provider: z.string().min(1).max(100).nullable(),
     gateway: modelGatewaySchema,
+    /** The Factory Model Policy version authoritative for this invocation. */
+    policyVersion: z.string().min(1).max(100).optional(),
     durationMs: z.number().int().min(0),
     promptTokens: z.number().int().min(0).nullable(),
     completionTokens: z.number().int().min(0).nullable(),

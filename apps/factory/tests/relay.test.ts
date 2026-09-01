@@ -16,24 +16,48 @@ test("MAX_CODE_WORKER_OUTPUT_TOKENS is set to 16,000", () => {
   assert.equal(MAX_CODE_WORKER_OUTPUT_TOKENS, 16_000);
 });
 
-test("applyTokenCeiling clamps max_tokens to 16,000 and supplies default when absent", () => {
-  // Clamps > 16k
+test("applyTokenCeiling bounds max_tokens and max_completion_tokens independently", () => {
+  // A. max_tokens = 32000 -> 16000
   assert.deepEqual(applyTokenCeiling({ max_tokens: 32_000, model: "moonshotai/kimi-k3" }), {
     max_tokens: 16_000,
     model: "moonshotai/kimi-k3",
   });
-  assert.deepEqual(applyTokenCeiling({ max_completion_tokens: 24_000, model: "moonshotai/kimi-k3" }), {
+
+  // B. max_completion_tokens = 32000 -> 16000
+  assert.deepEqual(applyTokenCeiling({ max_completion_tokens: 32_000, model: "moonshotai/kimi-k3" }), {
     max_completion_tokens: 16_000,
     model: "moonshotai/kimi-k3",
   });
 
-  // Preserves < 16k
-  assert.deepEqual(applyTokenCeiling({ max_tokens: 8_192, model: "moonshotai/kimi-k3" }), {
-    max_tokens: 8_192,
-    model: "moonshotai/kimi-k3",
-  });
+  // C. BOTH: max_tokens = 32000, max_completion_tokens = 64000 -> both 16000
+  assert.deepEqual(
+    applyTokenCeiling({
+      max_tokens: 32_000,
+      max_completion_tokens: 64_000,
+      model: "moonshotai/kimi-k3",
+    }),
+    {
+      max_tokens: 16_000,
+      max_completion_tokens: 16_000,
+      model: "moonshotai/kimi-k3",
+    },
+  );
 
-  // Defaults when absent
+  // D. BOTH already below ceiling: max_tokens = 8000, max_completion_tokens = 12000 -> unchanged
+  assert.deepEqual(
+    applyTokenCeiling({
+      max_tokens: 8_000,
+      max_completion_tokens: 12_000,
+      model: "moonshotai/kimi-k3",
+    }),
+    {
+      max_tokens: 8_000,
+      max_completion_tokens: 12_000,
+      model: "moonshotai/kimi-k3",
+    },
+  );
+
+  // E. Neither present -> supplies default ceiling
   assert.deepEqual(applyTokenCeiling({ model: "moonshotai/kimi-k3" }), {
     max_tokens: 16_000,
     model: "moonshotai/kimi-k3",

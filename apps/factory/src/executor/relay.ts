@@ -28,11 +28,19 @@ export function applyTokenCeiling(parsedBody: unknown): unknown {
     return parsedBody;
   }
   const body = { ...(parsedBody as Record<string, unknown>) };
-  if (typeof body.max_tokens === "number") {
-    body.max_tokens = Math.min(body.max_tokens, MAX_CODE_WORKER_OUTPUT_TOKENS);
-  } else if (typeof body.max_completion_tokens === "number") {
-    body.max_completion_tokens = Math.min(body.max_completion_tokens, MAX_CODE_WORKER_OUTPUT_TOKENS);
-  } else {
+  const hasMaxTokens = typeof body.max_tokens === "number";
+  const hasMaxCompletionTokens = typeof body.max_completion_tokens === "number";
+
+  if (hasMaxTokens) {
+    body.max_tokens = Math.min(body.max_tokens as number, MAX_CODE_WORKER_OUTPUT_TOKENS);
+  }
+  if (hasMaxCompletionTokens) {
+    body.max_completion_tokens = Math.min(
+      body.max_completion_tokens as number,
+      MAX_CODE_WORKER_OUTPUT_TOKENS,
+    );
+  }
+  if (!hasMaxTokens && !hasMaxCompletionTokens) {
     body.max_tokens = MAX_CODE_WORKER_OUTPUT_TOKENS;
   }
   return body;
@@ -391,11 +399,15 @@ const MAX_CODE_WORKER_OUTPUT_TOKENS = 16000;
 function applyTokenCeiling(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
   const copy = Object.assign({}, body);
-  if (typeof copy.max_tokens === 'number') {
+  const hasMaxTokens = typeof copy.max_tokens === 'number';
+  const hasMaxCompletionTokens = typeof copy.max_completion_tokens === 'number';
+  if (hasMaxTokens) {
     copy.max_tokens = Math.min(copy.max_tokens, MAX_CODE_WORKER_OUTPUT_TOKENS);
-  } else if (typeof copy.max_completion_tokens === 'number') {
+  }
+  if (hasMaxCompletionTokens) {
     copy.max_completion_tokens = Math.min(copy.max_completion_tokens, MAX_CODE_WORKER_OUTPUT_TOKENS);
-  } else {
+  }
+  if (!hasMaxTokens && !hasMaxCompletionTokens) {
     copy.max_tokens = MAX_CODE_WORKER_OUTPUT_TOKENS;
   }
   return copy;

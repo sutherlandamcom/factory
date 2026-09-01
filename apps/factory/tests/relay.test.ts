@@ -7,8 +7,38 @@ import {
   validateRelayPath,
   validateRelayModel,
   startModelRelay,
+  applyTokenCeiling,
+  MAX_CODE_WORKER_OUTPUT_TOKENS,
 } from "../src/executor/relay.js";
 import { CODE_WORKER_POLICY } from "../src/models/policy.js";
+
+test("MAX_CODE_WORKER_OUTPUT_TOKENS is set to 16,000", () => {
+  assert.equal(MAX_CODE_WORKER_OUTPUT_TOKENS, 16_000);
+});
+
+test("applyTokenCeiling clamps max_tokens to 16,000 and supplies default when absent", () => {
+  // Clamps > 16k
+  assert.deepEqual(applyTokenCeiling({ max_tokens: 32_000, model: "moonshotai/kimi-k3" }), {
+    max_tokens: 16_000,
+    model: "moonshotai/kimi-k3",
+  });
+  assert.deepEqual(applyTokenCeiling({ max_completion_tokens: 24_000, model: "moonshotai/kimi-k3" }), {
+    max_completion_tokens: 16_000,
+    model: "moonshotai/kimi-k3",
+  });
+
+  // Preserves < 16k
+  assert.deepEqual(applyTokenCeiling({ max_tokens: 8_192, model: "moonshotai/kimi-k3" }), {
+    max_tokens: 8_192,
+    model: "moonshotai/kimi-k3",
+  });
+
+  // Defaults when absent
+  assert.deepEqual(applyTokenCeiling({ model: "moonshotai/kimi-k3" }), {
+    max_tokens: 16_000,
+    model: "moonshotai/kimi-k3",
+  });
+});
 
 test("generateRelayToken generates a unique cryptographically random token per run", () => {
   const t1 = generateRelayToken();

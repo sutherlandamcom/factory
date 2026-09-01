@@ -59,3 +59,24 @@ test("deterministic worker security: hardened container args deny host sockets a
   assert.ok(!joinedClaude.includes("SSH_AUTH_SOCK"));
   assert.ok(!joinedClaude.includes(process.env.HOME || "/Users/"));
 });
+
+test("deterministic worker security: worker containers attach strictly to internal worker network", () => {
+  const req = {
+    worktreePath: "/tmp/fake-worktree",
+    prompt: "test",
+    runDir: "/tmp/fake-run",
+    timeoutMs: 10_000,
+    writablePaths: ["sites/starter/src/pages/test.astro"],
+  };
+
+  const kimiArgs = buildKimiContainerArgs(req, "test-kimi-net", "/tmp/fake-runtime");
+  const kimiNetIdx = kimiArgs.indexOf("--network");
+  assert.notEqual(kimiNetIdx, -1);
+  assert.equal(kimiArgs[kimiNetIdx + 1], "factory-worker-net");
+
+  const claudeEnv = buildClaudeRuntimeEnv("dummy-token", "http://relay:8080");
+  const claudeArgs = buildClaudeContainerArgs(req, "test-claude-net", "/tmp/fake-runtime", claudeEnv);
+  const claudeNetIdx = claudeArgs.indexOf("--network");
+  assert.notEqual(claudeNetIdx, -1);
+  assert.equal(claudeArgs[claudeNetIdx + 1], "factory-worker-net");
+});

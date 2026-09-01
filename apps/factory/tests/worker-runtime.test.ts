@@ -94,7 +94,7 @@ test("claude container args carry the pinned env and hardened mounts", () => {
   assert.match(joined, /--read-only/);
   assert.match(joined, /--cap-drop=ALL/);
   assert.match(joined, /--security-opt=no-new-privileges/);
-  assert.match(joined, /--network factory-runtime-net/);
+  assert.match(joined, /--network factory-worker-net/);
   assert.match(joined, /ANTHROPIC_MODEL=anthropic\/claude-opus-5/);
   assert.match(joined, /ANTHROPIC_AUTH_TOKEN=sk-or-placeholder/);
   assert.match(joined, /dst=\/workspace,readonly/);

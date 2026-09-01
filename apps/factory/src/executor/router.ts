@@ -82,11 +82,80 @@ export const TERMINAL_FAILURE_CODES: ReadonlySet<string> = new Set([
   "qa_timeout",
   "kimi_credentials_unavailable",
   "claude_credentials_unavailable",
+  "provider_not_allowed",
+  "provider_credit_unavailable",
+  "provider_rate_limited",
+  "provider_credentials_unavailable",
+  "relay_unavailable",
   "codex_failed",
   "codex_timeout",
   "codex_environment_failed",
   "routing_violation",
 ]);
+
+/**
+ * Classifies error text from worker execution into terminal provider/account failures.
+ * Returns null if the failure was a normal coding/runtime failure.
+ */
+export function classifyProviderFailure(output: string): string | null {
+  if (!output || typeof output !== "string") return null;
+  const lower = output.toLowerCase();
+
+  // 1. Credit / payment exhaustion (HTTP 402, requires more credits)
+  if (
+    lower.includes("402") ||
+    lower.includes("requires more credits") ||
+    lower.includes("can only afford") ||
+    lower.includes("payment required") ||
+    lower.includes("insufficient_quota")
+  ) {
+    return "provider_credit_unavailable";
+  }
+
+  // 2. Provider policy / no allowed providers (HTTP 404, allowed-providers, not allowed)
+  if (
+    lower.includes("no allowed providers") ||
+    lower.includes("allowed-providers") ||
+    lower.includes("provider.api_error: 404") ||
+    (lower.includes("404") && lower.includes("provider"))
+  ) {
+    return "provider_not_allowed";
+  }
+
+  // 3. Rate limiting (HTTP 429, rate limit, too many requests)
+  if (
+    lower.includes("429") ||
+    lower.includes("rate limit") ||
+    lower.includes("too many requests") ||
+    lower.includes("rate_limit_exceeded")
+  ) {
+    return "provider_rate_limited";
+  }
+
+  // 4. Missing or rejected provider credentials
+  if (
+    lower.includes("credentials_unavailable") ||
+    lower.includes("unauthorized relay token") ||
+    lower.includes("invalid api key") ||
+    lower.includes("incorrect api key") ||
+    lower.includes("authentication_error")
+  ) {
+    return "provider_credentials_unavailable";
+  }
+
+  // 5. Relay sidecar unavailable or connection failure
+  if (
+    lower.includes("failed to launch factory model relay") ||
+    lower.includes("factory model relay sidecar failed health check") ||
+    lower.includes("upstream connection error") ||
+    lower.includes("econnrefused") ||
+    lower.includes("relay_unavailable")
+  ) {
+    return "relay_unavailable";
+  }
+
+  return null;
+}
 
 /**
  * Deterministically classify a validated SiteTask into a routing class.

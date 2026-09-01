@@ -2,14 +2,41 @@ import { randomBytes } from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import https from "node:https";
 import path from "node:path";
-import { mkdir, rm, writeFile } from "node:fs/promises";
 import { URL } from "node:url";
 import { FactoryError } from "./errors.js";
 import { scrubCredentials } from "../models/gateway.js";
 import { CODE_WORKER_POLICY } from "../models/policy.js";
 import { dockerClientEnv } from "./isolation.js";
-import { FACTORY_RUNTIME_NETWORK } from "./network.js";
+import {
+  FACTORY_WORKER_NETWORK,
+  FACTORY_RELAY_EGRESS_NETWORK,
+  PINNED_NODE_IMAGE,
+} from "./network.js";
 import { runProcess } from "./process.js";
+
+/**
+ * Maximum output tokens the Factory model relay permits a code worker to request.
+ * Caps runaway token consumption on OpenRouter.
+ */
+export const MAX_CODE_WORKER_OUTPUT_TOKENS = 16_000;
+
+/**
+ * Enforces the Factory relay token ceiling on incoming request bodies.
+ */
+export function applyTokenCeiling(parsedBody: unknown): unknown {
+  if (!parsedBody || typeof parsedBody !== "object" || Array.isArray(parsedBody)) {
+    return parsedBody;
+  }
+  const body = { ...(parsedBody as Record<string, unknown>) };
+  if (typeof body.max_tokens === "number") {
+    body.max_tokens = Math.min(body.max_tokens, MAX_CODE_WORKER_OUTPUT_TOKENS);
+  } else if (typeof body.max_completion_tokens === "number") {
+    body.max_completion_tokens = Math.min(body.max_completion_tokens, MAX_CODE_WORKER_OUTPUT_TOKENS);
+  } else {
+    body.max_tokens = MAX_CODE_WORKER_OUTPUT_TOKENS;
+  }
+  return body;
+}
 
 /**
  * FACTORY MODEL RELAY (code-worker-routing-v0).
@@ -256,6 +283,9 @@ export function createRelayRequestHandler(params: {
         return;
       }
 
+      const cappedBody = applyTokenCeiling(parsedBody);
+      const serializedBody = Buffer.from(JSON.stringify(cappedBody), "utf8");
+
       // Build upstream target URL
       const cleanBase = upstreamBaseUrl.replace(/\/+$/, "");
       const targetUrl = new URL(
@@ -266,7 +296,8 @@ export function createRelayRequestHandler(params: {
       );
 
       const upstreamHeaders: Record<string, string> = {
-        "content-type": req.headers["content-type"] ?? "application/json",
+        "content-type": "application/json",
+        "content-length": String(serializedBody.length),
         authorization: `Bearer ${apiKey}`,
         "user-agent": "Factory-Model-Relay/0.1",
       };
@@ -316,8 +347,8 @@ export function createRelayRequestHandler(params: {
           }
         });
 
-        if (rawBody.length > 0) {
-          upstreamReq.write(rawBody);
+        if (serializedBody.length > 0) {
+          upstreamReq.write(serializedBody);
         }
         upstreamReq.end();
       } catch (err) {
@@ -355,6 +386,20 @@ const https = require('node:https');
 const { URL } = require('node:url');
 
 const config = ${JSON.stringify(config)};
+const MAX_CODE_WORKER_OUTPUT_TOKENS = 16000;
+
+function applyTokenCeiling(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
+  const copy = Object.assign({}, body);
+  if (typeof copy.max_tokens === 'number') {
+    copy.max_tokens = Math.min(copy.max_tokens, MAX_CODE_WORKER_OUTPUT_TOKENS);
+  } else if (typeof copy.max_completion_tokens === 'number') {
+    copy.max_completion_tokens = Math.min(copy.max_completion_tokens, MAX_CODE_WORKER_OUTPUT_TOKENS);
+  } else {
+    copy.max_tokens = MAX_CODE_WORKER_OUTPUT_TOKENS;
+  }
+  return copy;
+}
 
 function validateRelayPath(method, urlPath, tier) {
   const normPath = (urlPath || '/').split('?')[0];
@@ -417,6 +462,9 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    const cappedBody = applyTokenCeiling(parsedBody);
+    const serializedBody = Buffer.from(JSON.stringify(cappedBody));
+
     const cleanBase = config.upstreamBaseUrl.replace(/\\/+$/, '');
     const targetUrl = new URL(
       pathCheck.targetPath.replace(/^\\//, ''),
@@ -424,7 +472,8 @@ const server = http.createServer((req, res) => {
     );
 
     const upstreamHeaders = {
-      'content-type': req.headers['content-type'] || 'application/json',
+      'content-type': 'application/json',
+      'content-length': String(serializedBody.length),
       authorization: 'Bearer ' + config.apiKey,
       'user-agent': 'Factory-Model-Relay/0.1'
     };
@@ -443,7 +492,7 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ error: { message: 'Upstream connection error', code: 'upstream_error' } }));
       }
     });
-    if (rawBody.length > 0) upstreamReq.write(rawBody);
+    if (serializedBody.length > 0) upstreamReq.write(serializedBody);
     upstreamReq.end();
   });
 });
@@ -456,8 +505,8 @@ server.listen(config.port, '0.0.0.0', () => {
 
 /**
  * Starts the Factory Model Relay:
- * - If running with Docker/repoRoot: starts an ephemeral sidecar container attached to `FACTORY_RUNTIME_NETWORK`
- *   with alias `factory-model-relay` or `factory-relay-${containerName}`.
+ * - If running with Docker/repoRoot: starts an ephemeral sidecar container attached to `FACTORY_WORKER_NETWORK`
+ *   with alias `factory-model-relay` or `factory-relay-${containerName}`, dual-homed to `FACTORY_RELAY_EGRESS_NETWORK`.
  * - If running in unit test / inProcess mode: starts an in-process Node http.Server.
  */
 export async function startModelRelay(options: ModelRelayOptions): Promise<ModelRelayServer> {
@@ -514,7 +563,7 @@ export async function startModelRelay(options: ModelRelayOptions): Promise<Model
     };
   }
 
-  // Container sidecar mode on FACTORY_RUNTIME_NETWORK
+  // Container sidecar mode: dual-homed to worker network + relay egress network
   const repoRoot = options.repoRoot;
   const relayContainerName = `factory-relay-${options.containerName}`;
   const relayPort = 8080;
@@ -532,13 +581,21 @@ export async function startModelRelay(options: ModelRelayOptions): Promise<Model
     "-d",
     "--name",
     relayContainerName,
+    "--read-only",
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges",
+    "--pids-limit=64",
+    "--memory=256m",
+    "--cpus=1",
+    "--user",
+    "65534:65534",
     "--network",
-    FACTORY_RUNTIME_NETWORK,
+    FACTORY_WORKER_NETWORK,
     "--network-alias",
     "factory-model-relay",
     "--network-alias",
     relayContainerName,
-    "node:22-bookworm-slim",
+    PINNED_NODE_IMAGE,
     "node",
     "-e",
     scriptContent,
@@ -558,13 +615,30 @@ export async function startModelRelay(options: ModelRelayOptions): Promise<Model
       );
     }
 
-    // Wait for sidecar to become ready
+    // Connect relay container to the dedicated relay egress network (dual-homed)
+    const connectEgress = await runProcess(
+      "docker",
+      ["network", "connect", FACTORY_RELAY_EGRESS_NETWORK, relayContainerName],
+      {
+        cwd: repoRoot,
+        env: dockerClientEnv(repoRoot),
+        timeoutMs: 15_000,
+      },
+    );
+    if (connectEgress.exitCode !== 0) {
+      throw new FactoryError(
+        "strong_execution_isolation_unavailable",
+        `Failed to attach Factory model relay to egress network: ${connectEgress.stderr.trim() || `exit ${connectEgress.exitCode}`}`,
+      );
+    }
+
+    // Wait for sidecar to become ready from the worker network
     const probeArgs = [
       "run",
       "--rm",
       "--network",
-      FACTORY_RUNTIME_NETWORK,
-      "node:22-bookworm-slim",
+      FACTORY_WORKER_NETWORK,
+      PINNED_NODE_IMAGE,
       "node",
       "-e",
       `fetch('http://${relayContainerName}:${relayPort}/health', { signal: AbortSignal.timeout(10000) })
@@ -590,7 +664,7 @@ export async function startModelRelay(options: ModelRelayOptions): Promise<Model
     if (!ready) {
       throw new FactoryError(
         "strong_execution_isolation_unavailable",
-        "Factory model relay sidecar failed health check inside the runtime network (fail closed)",
+        "Factory model relay sidecar failed health check inside the worker network (fail closed)",
       );
     }
 

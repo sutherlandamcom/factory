@@ -113,19 +113,19 @@ test("egress rule builder scopes allow rules before the catch-all drop", () => {
   const drop = specs.at(-1)!.args;
   assert.deepEqual(drop.slice(-2), ["-j", "DROP"]);
   for (const spec of specs) {
-    assert.ok(spec.args.includes("factory-runtime-egress"));
+    assert.ok(spec.args.includes("factory-relay-egress"));
     assert.ok(spec.args.includes("192.168.215.0/24"));
   }
 });
 
 test("only Factory-owned DOCKER-USER rules are ever deleted", () => {
   assert.deepEqual(
-    iptablesSpecToDelete("-A DOCKER-USER -s 10.0.0.0/24 -m comment --comment factory-runtime-egress -j DROP"),
-    ["-D", "DOCKER-USER", "-s", "10.0.0.0/24", "-m", "comment", "--comment", "factory-runtime-egress", "-j", "DROP"],
+    iptablesSpecToDelete("-A DOCKER-USER -s 10.0.0.0/24 -m comment --comment factory-relay-egress -j DROP"),
+    ["-D", "DOCKER-USER", "-s", "10.0.0.0/24", "-m", "comment", "--comment", "factory-relay-egress", "-j", "DROP"],
   );
   assert.equal(iptablesSpecToDelete("-A DOCKER-USER -j RETURN"), null);
   assert.equal(iptablesSpecToDelete("-A DOCKER-USER -s 10.0.0.0/24 -j DROP"), null);
-  assert.equal(iptablesSpecToDelete("-A INPUT -s 10.0.0.0/24 -m comment --comment factory-runtime-egress -j DROP"), null);
+  assert.equal(iptablesSpecToDelete("-A INPUT -s 10.0.0.0/24 -m comment --comment factory-relay-egress -j DROP"), null);
 });
 
 test("ahostsv4 parser extracts unique sorted IPv4 addresses", () => {

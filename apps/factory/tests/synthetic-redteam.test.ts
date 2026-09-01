@@ -204,3 +204,171 @@ test("synthetic redteam: symlink escaping worktree triggers scope_violation (0 e
   assert.equal(kimiInvocations, 1);
   assert.equal(claudeInvocations, 0, "Zero Claude escalations on symlink trick");
 });
+
+test("synthetic redteam: provider policy 404 halts immediately (0 second Kimi, 0 Claude)", async () => {
+  const repo = await makeTempRepo();
+  let kimiInvocations = 0;
+  let claudeInvocations = 0;
+
+  const mockKimi: CodeWorkerRuntime = async () => {
+    kimiInvocations++;
+    return {
+      exitCode: 1,
+      timedOut: false,
+      runtimeVersion: "mock-kimi 0.39.1",
+      requestedModel: "moonshotai/kimi-k3",
+      respondedModel: null,
+      provider: "openrouter",
+      reasoningEffort: "max",
+      stdout: "",
+      stderr: "Error: OpenRouter returned HTTP 404: No allowed providers are available for the selected model",
+    };
+  };
+
+  const mockClaude: CodeWorkerRuntime = async () => {
+    claudeInvocations++;
+    return {
+      exitCode: 0,
+      timedOut: false,
+      runtimeVersion: "mock-claude 2.1.150",
+      requestedModel: "anthropic/claude-opus-5",
+      respondedModel: "anthropic/claude-opus-5",
+      provider: "openrouter",
+      reasoningEffort: null,
+      stdout: "done",
+      stderr: "",
+    };
+  };
+
+  const result = await runSiteTask(TASK, {
+    repoRoot: repo,
+    runId: `synth-sec-404-${Date.now()}`,
+    maxAttempts: 3,
+    workerRuntimes: {
+      "kimi-code-cli": mockKimi,
+      "claude-code": mockClaude,
+    },
+    runQaFn: passQa,
+    verifyFn: passVerify,
+    verifyReplayFn: passReplay,
+    prepareDependenciesFn: noopDeps,
+  });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.error?.code, "provider_not_allowed");
+  assert.equal(kimiInvocations, 1, "Exactly 1 attempt made");
+  assert.equal(claudeInvocations, 0, "Zero Claude escalation on provider failure");
+  assert.equal(result.attempts?.length, 1);
+});
+
+test("synthetic redteam: provider 402 insufficient credits halts immediately (0 second Kimi, 0 Claude)", async () => {
+  const repo = await makeTempRepo();
+  let kimiInvocations = 0;
+  let claudeInvocations = 0;
+
+  const mockKimi: CodeWorkerRuntime = async () => {
+    kimiInvocations++;
+    return {
+      exitCode: 1,
+      timedOut: false,
+      runtimeVersion: "mock-kimi 0.39.1",
+      requestedModel: "moonshotai/kimi-k3",
+      respondedModel: null,
+      provider: "openrouter",
+      reasoningEffort: "max",
+      stdout: "",
+      stderr: "Error 402: This request requires more credits than your account balance allows",
+    };
+  };
+
+  const mockClaude: CodeWorkerRuntime = async () => {
+    claudeInvocations++;
+    return {
+      exitCode: 0,
+      timedOut: false,
+      runtimeVersion: "mock-claude 2.1.150",
+      requestedModel: "anthropic/claude-opus-5",
+      respondedModel: "anthropic/claude-opus-5",
+      provider: "openrouter",
+      reasoningEffort: null,
+      stdout: "done",
+      stderr: "",
+    };
+  };
+
+  const result = await runSiteTask(TASK, {
+    repoRoot: repo,
+    runId: `synth-sec-402-${Date.now()}`,
+    maxAttempts: 3,
+    workerRuntimes: {
+      "kimi-code-cli": mockKimi,
+      "claude-code": mockClaude,
+    },
+    runQaFn: passQa,
+    verifyFn: passVerify,
+    verifyReplayFn: passReplay,
+    prepareDependenciesFn: noopDeps,
+  });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.error?.code, "provider_credit_unavailable");
+  assert.equal(kimiInvocations, 1, "Exactly 1 attempt made");
+  assert.equal(claudeInvocations, 0, "Zero Claude escalation on credit exhaustion");
+  assert.equal(result.attempts?.length, 1);
+});
+
+test("synthetic redteam: provider 429 rate limit halts immediately (0 second Kimi, 0 Claude)", async () => {
+  const repo = await makeTempRepo();
+  let kimiInvocations = 0;
+  let claudeInvocations = 0;
+
+  const mockKimi: CodeWorkerRuntime = async () => {
+    kimiInvocations++;
+    return {
+      exitCode: 1,
+      timedOut: false,
+      runtimeVersion: "mock-kimi 0.39.1",
+      requestedModel: "moonshotai/kimi-k3",
+      respondedModel: null,
+      provider: "openrouter",
+      reasoningEffort: "max",
+      stdout: "",
+      stderr: "HTTP 429: Too Many Requests / Rate limit exceeded",
+    };
+  };
+
+  const mockClaude: CodeWorkerRuntime = async () => {
+    claudeInvocations++;
+    return {
+      exitCode: 0,
+      timedOut: false,
+      runtimeVersion: "mock-claude 2.1.150",
+      requestedModel: "anthropic/claude-opus-5",
+      respondedModel: "anthropic/claude-opus-5",
+      provider: "openrouter",
+      reasoningEffort: null,
+      stdout: "done",
+      stderr: "",
+    };
+  };
+
+  const result = await runSiteTask(TASK, {
+    repoRoot: repo,
+    runId: `synth-sec-429-${Date.now()}`,
+    maxAttempts: 3,
+    workerRuntimes: {
+      "kimi-code-cli": mockKimi,
+      "claude-code": mockClaude,
+    },
+    runQaFn: passQa,
+    verifyFn: passVerify,
+    verifyReplayFn: passReplay,
+    prepareDependenciesFn: noopDeps,
+  });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.error?.code, "provider_rate_limited");
+  assert.equal(kimiInvocations, 1, "Exactly 1 attempt made");
+  assert.equal(claudeInvocations, 0, "Zero Claude escalation on rate limiting");
+  assert.equal(result.attempts?.length, 1);
+});

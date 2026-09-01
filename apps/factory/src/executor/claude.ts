@@ -8,7 +8,7 @@ import {
   assertStrongExecutionIsolationAvailable,
   dockerClientEnv,
 } from "./isolation.js";
-import { FACTORY_RUNTIME_NETWORK, OPENROUTER_EGRESS_HOST } from "./network.js";
+import { FACTORY_RUNTIME_NETWORK, FACTORY_WORKER_NETWORK, OPENROUTER_EGRESS_HOST } from "./network.js";
 import { loadOpenRouterApiKey, scrubCredentials } from "../models/gateway.js";
 import { codeWorkerBinding } from "../models/policy.js";
 import { runProcess } from "./process.js";
@@ -145,9 +145,9 @@ export function buildClaudeContainerArgs(
     "--pids-limit=256",
     "--memory=2g",
     "--cpus=2",
-    // Dedicated allowlist-only network (outer DOCKER-USER egress rules).
+    // Dedicated internal worker network (zero external internet route).
     "--network",
-    FACTORY_RUNTIME_NETWORK,
+    FACTORY_WORKER_NETWORK,
     "--user",
     `${containerUid}:${containerGid}`,
     "--tmpfs",

@@ -19,10 +19,14 @@ import { runProcess } from "./process.js";
  * host NOT reachable) proves the property rather than assuming it.
  */
 
-export const FACTORY_RUNTIME_NETWORK = "factory-runtime-net";
+export const FACTORY_WORKER_NETWORK = "factory-worker-net";
+export const FACTORY_RELAY_EGRESS_NETWORK = "factory-relay-egress-net";
+/** Legacy alias mapped to worker network. */
+export const FACTORY_RUNTIME_NETWORK = FACTORY_WORKER_NETWORK;
 export const OPENROUTER_EGRESS_HOST = "openrouter.ai";
 /** iptables comment marker identifying Factory-owned DOCKER-USER rules. */
-export const FACTORY_EGRESS_COMMENT = "factory-runtime-egress";
+export const FACTORY_EGRESS_COMMENT = "factory-relay-egress";
+export const PINNED_NODE_IMAGE = "node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5";
 
 /** Timeout for each VM/docker interaction in the network setup and probes. */
 const NETWORK_CMD_TIMEOUT_MS = 60_000;
@@ -34,7 +38,7 @@ export interface EgressRuleSpec {
 
 /**
  * Pure rule builder: allow established/related outbound, allow the model
- * gateway IPs, drop everything else — all scoped to the dedicated subnet.
+ * gateway IPs, drop everything else — all scoped to the relay egress subnet.
  * Order matters: accept rules must precede the drop rule.
  */
 export function buildEgressRuleSpecs(subnet: string, allowedIps: readonly string[]): EgressRuleSpec[] {
@@ -59,7 +63,8 @@ export function iptablesSpecToDelete(listingLine: string): string[] | null {
 }
 
 export interface NetworkEnsureResult {
-  subnet: string;
+  workerSubnet: string;
+  relayEgressSubnet: string;
   allowedIps: string[];
 }
 
@@ -94,8 +99,8 @@ export function parseAhostsv4Ips(output: string): string[] {
 }
 
 /**
- * Ensure the dedicated runtime network + outer egress allowlist exist and
- * PROVE the property with functional probes. Idempotent; safe to call per
+ * Ensure the dual-zone runtime networks + relay outer egress allowlist exist and
+ * PROVE isolation properties with functional probes. Idempotent; safe to call per
  * process. Fails closed on any verification error.
  */
 export async function ensureRuntimeNetworkIsolation(
@@ -108,8 +113,6 @@ export async function ensureRuntimeNetworkIsolation(
       env: dockerClientEnv(repoRoot),
       timeoutMs: NETWORK_CMD_TIMEOUT_MS,
     }));
-  // Factory-owned VM commands run through sudo: the default Colima VM user
-  // is unprivileged (iptables requires root inside the VM).
   const vm = deps.vm ?? ((args: string[]) =>
     runProcess("colima", ["ssh", "--profile", FACTORY_COLIMA_PROFILE, "--", "sudo", "--", ...args], {
       cwd: repoRoot,
@@ -117,37 +120,46 @@ export async function ensureRuntimeNetworkIsolation(
       timeoutMs: NETWORK_CMD_TIMEOUT_MS,
     }));
 
-  // 1. Dedicated network exists (created without ICC between containers).
-  const inspect = await docker(["network", "inspect", FACTORY_RUNTIME_NETWORK]).catch((error: unknown) => {
-    throw new FactoryError(
-      "strong_execution_isolation_unavailable",
-      `could not inspect runtime network: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  });
-  if (inspect.exitCode !== 0) {
-    const created = await docker(["network", "create", "--attachable", "--internal=false", FACTORY_RUNTIME_NETWORK]);
+  // 1. Worker internal network (zero default gateway, zero external egress).
+  const inspectWorker = await docker(["network", "inspect", FACTORY_WORKER_NETWORK]).catch(() => ({ exitCode: 1, stdout: "", stderr: "", timedOut: false }));
+  if (inspectWorker.exitCode !== 0) {
+    const created = await docker(["network", "create", "--attachable", "--internal", FACTORY_WORKER_NETWORK]);
     if (created.exitCode !== 0) {
       throw new FactoryError(
         "strong_execution_isolation_unavailable",
-        `could not create runtime network: ${created.stderr.trim() || `exit ${created.exitCode}`}`,
+        `could not create worker network ${FACTORY_WORKER_NETWORK}: ${created.stderr.trim() || `exit ${created.exitCode}`}`,
       );
     }
   }
-  const reinspect = inspect.exitCode === 0 ? inspect : await docker(["network", "inspect", FACTORY_RUNTIME_NETWORK]);
-  const subnet = parseNetworkSubnet(reinspect.stdout);
-  if (!subnet) {
+  const reinspectWorker = inspectWorker.exitCode === 0 ? inspectWorker : await docker(["network", "inspect", FACTORY_WORKER_NETWORK]);
+  const workerSubnet = parseNetworkSubnet(reinspectWorker.stdout) ?? "internal";
+
+  // 2. Relay egress network (controlled egress via iptables allowlist).
+  const inspectRelay = await docker(["network", "inspect", FACTORY_RELAY_EGRESS_NETWORK]).catch(() => ({ exitCode: 1, stdout: "", stderr: "", timedOut: false }));
+  if (inspectRelay.exitCode !== 0) {
+    const created = await docker(["network", "create", "--attachable", "--internal=false", FACTORY_RELAY_EGRESS_NETWORK]);
+    if (created.exitCode !== 0) {
+      throw new FactoryError(
+        "strong_execution_isolation_unavailable",
+        `could not create relay egress network ${FACTORY_RELAY_EGRESS_NETWORK}: ${created.stderr.trim() || `exit ${created.exitCode}`}`,
+      );
+    }
+  }
+  const reinspectRelay = inspectRelay.exitCode === 0 ? inspectRelay : await docker(["network", "inspect", FACTORY_RELAY_EGRESS_NETWORK]);
+  const relayEgressSubnet = parseNetworkSubnet(reinspectRelay.stdout);
+  if (!relayEgressSubnet) {
     throw new FactoryError(
       "strong_execution_isolation_unavailable",
-      `runtime network ${FACTORY_RUNTIME_NETWORK} has no parsable subnet`,
+      `relay egress network ${FACTORY_RELAY_EGRESS_NETWORK} has no parsable subnet`,
     );
   }
 
-  // 2. Resolve the model gateway from INSIDE the VM (the egress vantage point).
+  // 3. Resolve OpenRouter gateway IPs from inside the VM.
   const resolved = await vm(["getent", "ahostsv4", OPENROUTER_EGRESS_HOST]);
   if (resolved.exitCode !== 0) {
     throw new FactoryError(
       "strong_execution_isolation_unavailable",
-      `could not resolve ${OPENROUTER_EGRESS_HOST} inside the isolation VM: ${resolved.stderr.trim() || `exit ${resolved.exitCode}`}`,
+      `could not resolve ${OPENROUTER_EGRESS_HOST} inside isolation VM: ${resolved.stderr.trim() || `exit ${resolved.exitCode}`}`,
     );
   }
   const allowedIps = parseAhostsv4Ips(resolved.stdout);
@@ -158,7 +170,7 @@ export async function ensureRuntimeNetworkIsolation(
     );
   }
 
-  // 3. Sync Factory-owned DOCKER-USER rules (remove ours, add fresh set).
+  // 4. Sync Factory-owned DOCKER-USER rules for relay egress subnet.
   const listed = await vm(["iptables", "-w", "-S", "DOCKER-USER"]);
   if (listed.exitCode !== 0) {
     throw new FactoryError(
@@ -177,7 +189,7 @@ export async function ensureRuntimeNetworkIsolation(
       );
     }
   }
-  for (const spec of buildEgressRuleSpecs(subnet, allowedIps)) {
+  for (const spec of buildEgressRuleSpecs(relayEgressSubnet, allowedIps)) {
     const added = await vm(["iptables", "-w", "-A", "DOCKER-USER", ...spec.args]);
     if (added.exitCode !== 0) {
       throw new FactoryError(
@@ -187,31 +199,60 @@ export async function ensureRuntimeNetworkIsolation(
     }
   }
 
-  // 4. Functional probes: model gateway reachable, arbitrary host denied.
+  // 5. Functional probes:
   const probeScript = (url: string) =>
-    `node -e "fetch('${url}',{signal:AbortSignal.timeout(20000)}).then(r=>{console.log('HTTP',r.status);process.exit(0)}).catch(e=>{console.log('ERR',e.message);process.exit(1)})"`;
-  const gatewayProbe = await docker([
-    "run", "--rm", "--network", FACTORY_RUNTIME_NETWORK, "-e", "OPENROUTER_PROBE=1",
-    "node:22-bookworm-slim",
+    `node -e "fetch('${url}',{signal:AbortSignal.timeout(10000)}).then(r=>{console.log('HTTP',r.status);process.exit(0)}).catch(e=>{console.log('ERR',e.message);process.exit(1)})"`;
+
+  // 5a. Prove worker network CANNOT reach OpenRouter or any public address (0 external egress)
+  const workerOpenRouterProbe = await docker([
+    "run", "--rm", "--network", FACTORY_WORKER_NETWORK,
+    PINNED_NODE_IMAGE,
     "/bin/sh", "-c", probeScript("https://openrouter.ai/api/v1/models"),
   ]);
-  if (gatewayProbe.exitCode !== 0) {
+  if (workerOpenRouterProbe.exitCode === 0) {
     throw new FactoryError(
       "strong_execution_isolation_unavailable",
-      `model gateway probe failed through the runtime network (fail closed): ${gatewayProbe.stdout.trim()} ${gatewayProbe.stderr.trim()}`.slice(0, 400),
-    );
-  }
-  const denyProbe = await docker([
-    "run", "--rm", "--network", FACTORY_RUNTIME_NETWORK,
-    "node:22-bookworm-slim",
-    "/bin/sh", "-c", probeScript("https://example.com"),
-  ]);
-  if (denyProbe.exitCode === 0) {
-    throw new FactoryError(
-      "strong_execution_isolation_unavailable",
-      "egress deny probe FAILED: arbitrary internet access is reachable from the runtime network (fail closed)",
+      "worker network isolation FAILED: worker network can directly reach OpenRouter (must be internal only)",
     );
   }
 
-  return { subnet, allowedIps };
+  const workerInternetProbe = await docker([
+    "run", "--rm", "--network", FACTORY_WORKER_NETWORK,
+    PINNED_NODE_IMAGE,
+    "/bin/sh", "-c", probeScript("https://example.com"),
+  ]);
+  if (workerInternetProbe.exitCode === 0) {
+    throw new FactoryError(
+      "strong_execution_isolation_unavailable",
+      "worker network isolation FAILED: worker network can reach arbitrary internet",
+    );
+  }
+
+  // 5b. Prove relay egress network CAN reach OpenRouter
+  const relayGatewayProbe = await docker([
+    "run", "--rm", "--network", FACTORY_RELAY_EGRESS_NETWORK,
+    PINNED_NODE_IMAGE,
+    "/bin/sh", "-c", probeScript("https://openrouter.ai/api/v1/models"),
+  ]);
+  if (relayGatewayProbe.exitCode !== 0) {
+    throw new FactoryError(
+      "strong_execution_isolation_unavailable",
+      `relay egress network probe failed (fail closed): ${relayGatewayProbe.stdout.trim()} ${relayGatewayProbe.stderr.trim()}`.slice(0, 400),
+    );
+  }
+
+  // 5c. Prove relay egress network CANNOT reach arbitrary internet
+  const relayDenyProbe = await docker([
+    "run", "--rm", "--network", FACTORY_RELAY_EGRESS_NETWORK,
+    PINNED_NODE_IMAGE,
+    "/bin/sh", "-c", probeScript("https://example.com"),
+  ]);
+  if (relayDenyProbe.exitCode === 0) {
+    throw new FactoryError(
+      "strong_execution_isolation_unavailable",
+      "relay egress deny probe FAILED: arbitrary internet access reachable from relay egress network",
+    );
+  }
+
+  return { workerSubnet, relayEgressSubnet, allowedIps };
 }

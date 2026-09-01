@@ -24,6 +24,7 @@ import { assertStrongExecutionIsolationAvailable } from "./isolation.js";
 import { buildWorkerPrompt, buildWorkerRepairPrompt } from "./prompt.js";
 import {
   acceptanceRuntimeOverride,
+  classifyProviderFailure,
   classifyTask,
   isEscalationEligible,
   runtimeFailureCodes,
@@ -446,11 +447,15 @@ export async function runSiteTask(
       // stay terminal. Terminal failures stop immediately and are NEVER
       // routed to the senior runtime.
       if (runtimeFailed) {
+        const combinedOutput = `${workerResult.stdout || ""}\n${workerResult.stderr || ""}`;
+        const providerCode = classifyProviderFailure(combinedOutput);
         const codes = runtimeFailureCodes(selection.runtime);
-        const failureCode = workerResult.timedOut ? codes.timeout : codes.executionFailed;
-        const failureMessage = workerResult.timedOut
-          ? `${selection.runtime} invocation timed out after ${timeouts.codexMs}ms`
-          : `${selection.runtime} invocation exited ${workerResult.exitCode}`;
+        const failureCode = providerCode ?? (workerResult.timedOut ? codes.timeout : codes.executionFailed);
+        const failureMessage = providerCode
+          ? `${selection.runtime} provider failure (${failureCode}): ${combinedOutput.trim().slice(0, 300)}`
+          : workerResult.timedOut
+            ? `${selection.runtime} invocation timed out after ${timeouts.codexMs}ms`
+            : `${selection.runtime} invocation exited ${workerResult.exitCode}`;
         attemptError = { code: failureCode, message: failureMessage };
         attemptClassification = "non_repairable";
         fail(failureCode, failureMessage);

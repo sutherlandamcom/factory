@@ -6,6 +6,7 @@ import {
   ESCALATABLE_FAILURE_CODES,
   TERMINAL_FAILURE_CODES,
   acceptanceRuntimeOverride,
+  classifyProviderFailure,
   classifyTask,
   isEscalationEligible,
   runtimeFailureCodes,
@@ -90,6 +91,11 @@ test("security and infrastructure failures are NEVER escalation-eligible", () =>
     "qa_timeout",
     "kimi_credentials_unavailable",
     "claude_credentials_unavailable",
+    "provider_not_allowed",
+    "provider_credit_unavailable",
+    "provider_rate_limited",
+    "provider_credentials_unavailable",
+    "relay_unavailable",
     "codex_failed",
     "codex_timeout",
     "codex_environment_failed",
@@ -101,6 +107,32 @@ test("security and infrastructure failures are NEVER escalation-eligible", () =>
     // Even a repairable classification must not launder a terminal code.
     assert.equal(isEscalationEligible(code, "repairable"), false, `${code} stays terminal under any classification`);
   }
+});
+
+test("classifyProviderFailure accurately identifies provider/account errors", () => {
+  assert.equal(
+    classifyProviderFailure("HTTP 404: No allowed providers are available for the selected model"),
+    "provider_not_allowed",
+  );
+  assert.equal(
+    classifyProviderFailure("Error 402: This request requires more credits than your account balance allows"),
+    "provider_credit_unavailable",
+  );
+  assert.equal(
+    classifyProviderFailure("Error 429: Too Many Requests / Rate limit exceeded"),
+    "provider_rate_limited",
+  );
+  assert.equal(
+    classifyProviderFailure("unauthorized relay token"),
+    "provider_credentials_unavailable",
+  );
+  assert.equal(
+    classifyProviderFailure("Factory model relay sidecar failed health check"),
+    "relay_unavailable",
+  );
+  // Normal errors return null (eligible for normal repair / runtime handling)
+  assert.equal(classifyProviderFailure("SyntaxError: Unexpected token"), null);
+  assert.equal(classifyProviderFailure(""), null);
 });
 
 test("repairable, no_progress, and runtime failures ARE escalation-eligible", () => {

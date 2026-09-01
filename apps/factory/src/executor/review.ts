@@ -9,7 +9,7 @@ import {
   dockerClientEnv,
   CLAUDE_WORKER_IMAGE,
 } from "./isolation.js";
-import { FACTORY_RUNTIME_NETWORK } from "./network.js";
+import { FACTORY_RUNTIME_NETWORK, FACTORY_WORKER_NETWORK } from "./network.js";
 import { loadOpenRouterApiKey, scrubCredentials } from "../models/gateway.js";
 import { buildClaudeRuntimeEnv, CLAUDE_SENIOR_MODEL, parseClaudeJsonResult, resolveAnthropicSurface } from "./claude.js";
 import { startModelRelay } from "./relay.js";
@@ -214,7 +214,7 @@ export async function runSeniorReview(request: SeniorReviewRequest): Promise<Sen
       "--memory=2g",
       "--cpus=2",
       "--network",
-      FACTORY_RUNTIME_NETWORK,
+      FACTORY_WORKER_NETWORK,
       "--user",
       `${containerUid}:${containerGid}`,
       "--tmpfs",

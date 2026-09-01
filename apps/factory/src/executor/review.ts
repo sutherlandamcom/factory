@@ -12,7 +12,7 @@ import {
 import { FACTORY_RUNTIME_NETWORK } from "./network.js";
 import { loadOpenRouterApiKey, scrubCredentials } from "../models/gateway.js";
 import { buildClaudeRuntimeEnv, CLAUDE_SENIOR_MODEL, parseClaudeJsonResult, resolveAnthropicSurface } from "./claude.js";
-import { startModelRelay, RELAY_DUMMY_TOKEN } from "./relay.js";
+import { startModelRelay } from "./relay.js";
 import type { TaskWritePolicy } from "./module-policy.js";
 import { runProcess } from "./process.js";
 
@@ -159,12 +159,14 @@ export async function runSeniorReview(request: SeniorReviewRequest): Promise<Sen
       "OPENROUTER_API_KEY is not configured; the senior reviewer fails closed without credentials",
     );
   }
+  const reviewId = safeReviewDirName(request.runId);
   const relay = await startModelRelay({
     tier: "senior",
     apiKey,
+    repoRoot: request.repoRoot,
+    containerName: `review-${reviewId}`,
   });
 
-  const reviewId = safeReviewDirName(request.runId);
   const reviewsRoot = path.join(request.repoRoot, ".factory", "reviews");
   const reviewDir = path.join(reviewsRoot, reviewId);
   const configDir = path.join(reviewDir, "config");
@@ -196,7 +198,7 @@ export async function runSeniorReview(request: SeniorReviewRequest): Promise<Sen
     await writeFile(settingsPath, buildReviewerSettingsJson(), { mode: 0o600 });
     await chmod(settingsPath, 0o600);
 
-    const runtimeEnv = buildClaudeRuntimeEnv(RELAY_DUMMY_TOKEN, relay.baseUrl);
+    const runtimeEnv = buildClaudeRuntimeEnv(relay.relayToken, relay.baseUrl);
     const containerUid = process.getuid?.() ?? 1000;
     const containerGid = process.getgid?.() ?? 1000;
     const args = [

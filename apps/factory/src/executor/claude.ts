@@ -12,7 +12,7 @@ import { FACTORY_RUNTIME_NETWORK, OPENROUTER_EGRESS_HOST } from "./network.js";
 import { loadOpenRouterApiKey, scrubCredentials } from "../models/gateway.js";
 import { codeWorkerBinding } from "../models/policy.js";
 import { runProcess } from "./process.js";
-import { startModelRelay, RELAY_DUMMY_TOKEN } from "./relay.js";
+import { startModelRelay } from "./relay.js";
 import type { CodeWorkerRuntime } from "./runtime.js";
 
 /**
@@ -252,13 +252,15 @@ export function createClaudeCodeRunner(opts: ClaudeRuntimeOptions): CodeWorkerRu
       );
     }
 
+    const containerName = safeContainerName(request.runDir);
     const relay = await startModelRelay({
       tier: "senior",
       apiKey,
+      repoRoot: opts.repoRoot,
+      containerName,
     });
 
     const runtimeRoot = path.join(opts.repoRoot, ".factory", "claude-runtime");
-    const containerName = safeContainerName(request.runDir);
     const runtimeDir = path.join(runtimeRoot, containerName);
     const configDir = path.join(runtimeDir, "config");
     const outputDir = path.join(runtimeDir, "output");
@@ -279,7 +281,7 @@ export function createClaudeCodeRunner(opts: ClaudeRuntimeOptions): CodeWorkerRu
       await writeFile(settingsPath, buildClaudeSettingsJson(), { mode: 0o600 });
       await chmod(settingsPath, 0o600);
 
-      const runtimeEnv = buildClaudeRuntimeEnv(RELAY_DUMMY_TOKEN, relay.baseUrl);
+      const runtimeEnv = buildClaudeRuntimeEnv(relay.relayToken, relay.baseUrl);
       const args = buildClaudeContainerArgs(request, containerName, runtimeDir, runtimeEnv);
       const result = await runProcess("docker", args, {
         cwd: opts.repoRoot,

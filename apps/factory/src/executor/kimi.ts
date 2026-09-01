@@ -12,7 +12,7 @@ import { FACTORY_RUNTIME_NETWORK, OPENROUTER_EGRESS_HOST } from "./network.js";
 import { loadOpenRouterApiKey, OPENROUTER_GATEWAY_BASE_URL } from "../models/gateway.js";
 import { codeWorkerBinding } from "../models/policy.js";
 import { runProcess } from "./process.js";
-import { startModelRelay, RELAY_DUMMY_TOKEN } from "./relay.js";
+import { startModelRelay } from "./relay.js";
 import { extractRespondedModel, type CodeWorkerRuntime } from "./runtime.js";
 
 /**
@@ -177,13 +177,15 @@ export function createKimiCodeRunner(opts: { repoRoot: string }): CodeWorkerRunt
       );
     }
 
+    const containerName = safeContainerName(request.runDir);
     const relay = await startModelRelay({
       tier: "primary",
       apiKey,
+      repoRoot: opts.repoRoot,
+      containerName,
     });
 
     const runtimeRoot = path.join(opts.repoRoot, ".factory", "kimi-runtime");
-    const containerName = safeContainerName(request.runDir);
     const runtimeDir = path.join(runtimeRoot, containerName);
     const configDir = path.join(runtimeDir, "config");
     const outputDir = path.join(runtimeDir, "output");
@@ -200,13 +202,13 @@ export function createKimiCodeRunner(opts: { repoRoot: string }): CodeWorkerRunt
     try {
       await mkdir(configDir, { recursive: true });
       await mkdir(outputDir, { recursive: true });
-      // The config points to the local Factory model relay with an ephemeral dummy token.
+      // The config points to the local Factory model relay with an ephemeral random token.
       // The real OPENROUTER_API_KEY is never mounted or passed into the container.
       const configPath = path.join(configDir, "config.toml");
       await writeFile(
         configPath,
         buildKimiConfigToml({
-          apiKey: RELAY_DUMMY_TOKEN,
+          apiKey: relay.relayToken,
           model: binding.model,
           openrouterBaseUrl: relay.baseUrl,
           reasoningEffort: binding.reasoningEffort ?? "max",

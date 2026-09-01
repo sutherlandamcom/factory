@@ -1,9 +1,15 @@
+import { randomBytes } from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import https from "node:https";
+import path from "node:path";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { URL } from "node:url";
 import { FactoryError } from "./errors.js";
 import { scrubCredentials } from "../models/gateway.js";
 import { CODE_WORKER_POLICY } from "../models/policy.js";
+import { dockerClientEnv } from "./isolation.js";
+import { FACTORY_RUNTIME_NETWORK } from "./network.js";
+import { runProcess } from "./process.js";
 
 /**
  * FACTORY MODEL RELAY (code-worker-routing-v0).
@@ -15,14 +21,22 @@ import { CODE_WORKER_POLICY } from "../models/policy.js";
  * 4. The relay owns the real OPENROUTER_API_KEY and enforces exact model bindings:
  *    - primary (Kimi): strictly `moonshotai/kimi-k3`
  *    - senior (Claude): strictly `anthropic/claude-opus-5`
- * 5. Any request for an alternate or unpinned model is immediately rejected with HTTP 400/403
+ * 5. Any request for an alternate or unpinned model is immediately rejected with HTTP 403
  *    and results in 0 upstream calls to OpenRouter.
+ * 6. Each run generates a cryptographically random local relay token; missing or invalid
+ *    tokens are rejected with HTTP 401/403.
+ * 7. Path mapping is explicit: only required endpoints (/chat/completions, /v1/messages, /health)
+ *    are routed. All unmapped paths return HTTP 404.
  */
 
 export interface ModelRelayOptions {
   tier: "primary" | "senior";
   apiKey: string;
+  repoRoot?: string;
+  containerName?: string;
   upstreamBaseUrl?: string;
+  relayToken?: string;
+  inProcess?: boolean;
   port?: number;
   host?: string;
 }
@@ -33,15 +47,91 @@ export interface ModelRelayServer {
   baseUrl: string;
   allowedModel: string;
   tier: "primary" | "senior";
+  relayToken: string;
   close: () => Promise<void>;
 }
 
-export const RELAY_DUMMY_TOKEN = "factory-relay-token-authorized";
 export const DEFAULT_OPENROUTER_UPSTREAM = "https://openrouter.ai/api/v1";
 
+/** Generates a cryptographically random local relay auth token per run. */
+export function generateRelayToken(): string {
+  return `factory-relay-${randomBytes(24).toString("hex")}`;
+}
+
+export type PathValidationResult =
+  | { valid: true; type: "health" }
+  | { valid: true; type: "chat_completions"; targetPath: string }
+  | { valid: true; type: "messages"; targetPath: string }
+  | { valid: false; error: string };
+
 /**
- * Validate that the request body matches the authorized model for the relay tier.
- * Returns null if valid, or an error message if invalid.
+ * Validates and explicitly maps incoming request paths per tier.
+ * Unmapped endpoints are rejected (never generic proxying).
+ */
+export function validateRelayPath(
+  method: string | undefined,
+  urlPath: string,
+  tier: "primary" | "senior",
+): PathValidationResult {
+  const normPath = urlPath.split("?")[0] || "/";
+  if (normPath === "/health" || normPath === "/") {
+    return { valid: true, type: "health" };
+  }
+
+  if (tier === "primary") {
+    // OpenAI / Kimi format: POST /chat/completions or POST /v1/chat/completions or /api/v1/chat/completions
+    if (
+      method === "POST" &&
+      (normPath === "/chat/completions" ||
+        normPath === "/v1/chat/completions" ||
+        normPath === "/api/v1/chat/completions")
+    ) {
+      return { valid: true, type: "chat_completions", targetPath: "/chat/completions" };
+    }
+    return {
+      valid: false,
+      error: `Unmapped endpoint '${normPath}' for primary worker tier (only /chat/completions allowed)`,
+    };
+  }
+
+  if (tier === "senior") {
+    // Anthropic / Claude format: POST /messages or POST /v1/messages or POST /api/v1/messages
+    if (
+      method === "POST" &&
+      (normPath === "/messages" ||
+        normPath === "/v1/messages" ||
+        normPath === "/api/v1/messages")
+    ) {
+      return { valid: true, type: "messages", targetPath: "/messages" };
+    }
+    return {
+      valid: false,
+      error: `Unmapped endpoint '${normPath}' for senior worker tier (only /v1/messages allowed)`,
+    };
+  }
+
+  return { valid: false, error: `Unknown tier '${tier}'` };
+}
+
+/**
+ * Validates incoming Authorization header against the expected per-run random relay token.
+ */
+export function validateRelayAuth(
+  authHeader: string | undefined,
+  expectedToken: string,
+): { valid: boolean; code?: number; error?: string } {
+  if (!authHeader || authHeader.trim() === "") {
+    return { valid: false, code: 401, error: "Missing Authorization header" };
+  }
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+  if (token !== expectedToken) {
+    return { valid: false, code: 403, error: "Invalid relay authorization token" };
+  }
+  return { valid: true };
+}
+
+/**
+ * Validates that the request body matches the authorized model for the relay tier.
  */
 export function validateRelayModel(
   body: unknown,
@@ -66,24 +156,19 @@ export function validateRelayModel(
 }
 
 /**
- * Starts an ephemeral local HTTP model relay for one worker execution tier.
+ * Creates the HTTP request handler for the Factory Model Relay.
  */
-export async function startModelRelay(options: ModelRelayOptions): Promise<ModelRelayServer> {
-  const tier = options.tier;
-  const allowedModel =
-    tier === "primary" ? CODE_WORKER_POLICY.primary.model : CODE_WORKER_POLICY.senior.model;
-  const apiKey = options.apiKey;
-  if (!apiKey || apiKey.trim() === "") {
-    throw new FactoryError(
-      `${tier === "primary" ? "kimi" : "claude"}_credentials_unavailable`,
-      `Cannot start ${tier} model relay: OPENROUTER_API_KEY is not configured`,
-    );
-  }
+export function createRelayRequestHandler(params: {
+  tier: "primary" | "senior";
+  allowedModel: string;
+  apiKey: string;
+  relayToken: string;
+  upstreamBaseUrl: string;
+  onForward?: (req: { path: string; model: string; headers: Record<string, string> }) => void;
+}): (req: IncomingMessage, res: ServerResponse) => void {
+  const { tier, allowedModel, apiKey, relayToken, upstreamBaseUrl, onForward } = params;
 
-  const upstreamUrl = new URL(options.upstreamBaseUrl ?? DEFAULT_OPENROUTER_UPSTREAM);
-
-  const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    // Enable basic CORS for local tools
+  return (req: IncomingMessage, res: ServerResponse) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "*");
@@ -94,67 +179,92 @@ export async function startModelRelay(options: ModelRelayOptions): Promise<Model
       return;
     }
 
-    // Health check endpoint
-    if (req.method === "GET" && (req.url === "/health" || req.url === "/")) {
+    const pathCheck = validateRelayPath(req.method, req.url ?? "/", tier);
+    if (!pathCheck.valid) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: {
+            message: `Factory Model Relay: ${pathCheck.error}`,
+            type: "invalid_request_error",
+            code: "not_found",
+          },
+        }),
+      );
+      return;
+    }
+
+    // Health check endpoint (no auth required)
+    if (pathCheck.type === "health") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ status: "ok", tier, allowedModel }));
       return;
     }
 
-    // Collect request body
+    // Collect body
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
-    req.on("end", async () => {
-      const rawBody = Buffer.concat(chunks).toString("utf8");
-
-      // Validate model for POST / completion requests
-      if (req.method === "POST") {
-        let parsedBody: unknown;
-        try {
-          parsedBody = JSON.parse(rawBody);
-        } catch {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              error: {
-                message: "Factory Model Relay: invalid JSON body",
-                type: "invalid_request_error",
-                code: "invalid_json",
-              },
-            }),
-          );
-          return;
-        }
-
-        const modelCheck = validateRelayModel(parsedBody, allowedModel);
-        if (!modelCheck.valid) {
-          res.writeHead(403, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              error: {
-                message: `Factory Model Relay: ${modelCheck.error}`,
-                type: "model_policy_violation",
-                code: "unauthorized_model",
-                requestedModel: modelCheck.requestedModel,
-                allowedModel,
-              },
-            }),
-          );
-          return;
-        }
+    req.on("end", () => {
+      // Validate Authorization header
+      const authCheck = validateRelayAuth(req.headers.authorization, relayToken);
+      if (!authCheck.valid) {
+        res.writeHead(authCheck.code ?? 401, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: {
+              message: `Factory Model Relay: ${authCheck.error}`,
+              type: "authentication_error",
+              code: authCheck.code === 403 ? "forbidden" : "unauthorized",
+            },
+          }),
+        );
+        return;
       }
 
-      // Prepare upstream URL
-      // If incoming path starts with /api/v1 or /v1, resolve correctly against upstream
-      const incomingPath = req.url ?? "/";
+      const rawBody = Buffer.concat(chunks).toString("utf8");
+      let parsedBody: unknown;
+      try {
+        parsedBody = JSON.parse(rawBody);
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: {
+              message: "Factory Model Relay: invalid JSON body",
+              type: "invalid_request_error",
+              code: "invalid_json",
+            },
+          }),
+        );
+        return;
+      }
+
+      const modelCheck = validateRelayModel(parsedBody, allowedModel);
+      if (!modelCheck.valid) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: {
+              message: `Factory Model Relay: ${modelCheck.error}`,
+              type: "model_policy_violation",
+              code: "unauthorized_model",
+              requestedModel: modelCheck.requestedModel,
+              allowedModel,
+            },
+          }),
+        );
+        return;
+      }
+
+      // Build upstream target URL
+      const cleanBase = upstreamBaseUrl.replace(/\/+$/, "");
       const targetUrl = new URL(
-        incomingPath.startsWith("/v1")
-          ? incomingPath.replace(/^\/v1/, "")
-          : incomingPath,
-        upstreamUrl.toString().replace(/\/$/, "") + "/",
+        pathCheck.targetPath.replace(/^\//, ""),
+        cleanBase.endsWith("/api/v1") || cleanBase.endsWith("/v1")
+          ? cleanBase + "/"
+          : cleanBase + "/api/v1/",
       );
 
-      // Forward request to upstream OpenRouter with the real API key
       const upstreamHeaders: Record<string, string> = {
         "content-type": req.headers["content-type"] ?? "application/json",
         authorization: `Bearer ${apiKey}`,
@@ -165,8 +275,17 @@ export async function startModelRelay(options: ModelRelayOptions): Promise<Model
         upstreamHeaders["anthropic-version"] = String(req.headers["anthropic-version"]);
       }
 
+      if (onForward) {
+        onForward({
+          path: targetUrl.pathname,
+          model: modelCheck.requestedModel!,
+          headers: upstreamHeaders,
+        });
+      }
+
+      const transport = targetUrl.protocol === "https:" ? https : http;
       try {
-        const upstreamReq = https.request(
+        const upstreamReq = transport.request(
           targetUrl,
           {
             method: req.method,
@@ -216,30 +335,297 @@ export async function startModelRelay(options: ModelRelayOptions): Promise<Model
         }
       }
     });
-  });
-
-  const host = options.host ?? "0.0.0.0";
-  const port = options.port ?? 0;
-
-  await new Promise<void>((resolve, reject) => {
-    server.listen(port, host, () => resolve());
-    server.on("error", reject);
-  });
-
-  const address = server.address();
-  const assignedPort = typeof address === "object" && address ? address.port : port;
-  const baseUrl = `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${assignedPort}`;
-
-  return {
-    port: assignedPort,
-    host,
-    baseUrl,
-    allowedModel,
-    tier,
-    close: async () => {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    },
   };
+}
+
+/**
+ * Builds standalone JavaScript code for running the relay inside a Docker container sidecar.
+ */
+export function buildRelayContainerScript(config: {
+  tier: "primary" | "senior";
+  allowedModel: string;
+  apiKey: string;
+  relayToken: string;
+  upstreamBaseUrl: string;
+  port: number;
+}): string {
+  return `// Factory Model Relay Sidecar
+const http = require('node:http');
+const https = require('node:https');
+const { URL } = require('node:url');
+
+const config = ${JSON.stringify(config)};
+
+function validateRelayPath(method, urlPath, tier) {
+  const normPath = (urlPath || '/').split('?')[0];
+  if (normPath === '/health' || normPath === '/') return { valid: true, type: 'health' };
+  if (tier === 'primary') {
+    if (method === 'POST' && (normPath === '/chat/completions' || normPath === '/v1/chat/completions' || normPath === '/api/v1/chat/completions')) {
+      return { valid: true, type: 'chat_completions', targetPath: '/chat/completions' };
+    }
+    return { valid: false, error: 'Unmapped endpoint for primary tier' };
+  }
+  if (tier === 'senior') {
+    if (method === 'POST' && (normPath === '/messages' || normPath === '/v1/messages' || normPath === '/api/v1/messages')) {
+      return { valid: true, type: 'messages', targetPath: '/messages' };
+    }
+    return { valid: false, error: 'Unmapped endpoint for senior tier' };
+  }
+  return { valid: false, error: 'Unknown tier' };
+}
+
+const server = http.createServer((req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', '*');
+  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+  const pathCheck = validateRelayPath(req.method, req.url || '/', config.tier);
+  if (!pathCheck.valid) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: pathCheck.error, code: 'not_found' } }));
+    return;
+  }
+  if (pathCheck.type === 'health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', tier: config.tier, allowedModel: config.allowedModel }));
+    return;
+  }
+
+  const chunks = [];
+  req.on('data', chunk => chunks.push(chunk));
+  req.on('end', () => {
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.replace(/^Bearer\\s+/i, '').trim();
+    if (!token || token !== config.relayToken) {
+      res.writeHead(token ? 403 : 401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Unauthorized relay token', code: 'unauthorized' } }));
+      return;
+    }
+
+    const rawBody = Buffer.concat(chunks).toString('utf8');
+    let parsedBody;
+    try { parsedBody = JSON.parse(rawBody); } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Invalid JSON body', code: 'invalid_json' } }));
+      return;
+    }
+
+    if (!parsedBody || parsedBody.model !== config.allowedModel) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Unauthorized model', code: 'unauthorized_model', allowedModel: config.allowedModel } }));
+      return;
+    }
+
+    const cleanBase = config.upstreamBaseUrl.replace(/\\/+$/, '');
+    const targetUrl = new URL(
+      pathCheck.targetPath.replace(/^\\//, ''),
+      (cleanBase.endsWith('/api/v1') || cleanBase.endsWith('/v1')) ? cleanBase + '/' : cleanBase + '/api/v1/'
+    );
+
+    const upstreamHeaders = {
+      'content-type': req.headers['content-type'] || 'application/json',
+      authorization: 'Bearer ' + config.apiKey,
+      'user-agent': 'Factory-Model-Relay/0.1'
+    };
+    if (req.headers['anthropic-version']) {
+      upstreamHeaders['anthropic-version'] = req.headers['anthropic-version'];
+    }
+
+    const transport = targetUrl.protocol === 'https:' ? https : http;
+    const upstreamReq = transport.request(targetUrl, { method: req.method, headers: upstreamHeaders }, upstreamRes => {
+      res.writeHead(upstreamRes.statusCode || 500, upstreamRes.headers);
+      upstreamRes.pipe(res);
+    });
+    upstreamReq.on('error', err => {
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Upstream connection error', code: 'upstream_error' } }));
+      }
+    });
+    if (rawBody.length > 0) upstreamReq.write(rawBody);
+    upstreamReq.end();
+  });
+});
+
+server.listen(config.port, '0.0.0.0', () => {
+  console.log('RELAY_READY on port ' + config.port);
+});
+`;
+}
+
+/**
+ * Starts the Factory Model Relay:
+ * - If running with Docker/repoRoot: starts an ephemeral sidecar container attached to `FACTORY_RUNTIME_NETWORK`
+ *   with alias `factory-model-relay` or `factory-relay-${containerName}`.
+ * - If running in unit test / inProcess mode: starts an in-process Node http.Server.
+ */
+export async function startModelRelay(options: ModelRelayOptions): Promise<ModelRelayServer> {
+  const tier = options.tier;
+  const allowedModel =
+    tier === "primary" ? CODE_WORKER_POLICY.primary.model : CODE_WORKER_POLICY.senior.model;
+  const apiKey = options.apiKey;
+  if (!apiKey || apiKey.trim() === "") {
+    throw new FactoryError(
+      `${tier === "primary" ? "kimi" : "claude"}_credentials_unavailable`,
+      `Cannot start ${tier} model relay: OPENROUTER_API_KEY is not configured`,
+    );
+  }
+
+  const relayToken = options.relayToken ?? generateRelayToken();
+  const upstreamBaseUrl = options.upstreamBaseUrl ?? DEFAULT_OPENROUTER_UPSTREAM;
+
+  // In-process server mode (for unit tests / mock mode)
+  if (options.inProcess || !options.repoRoot || !options.containerName) {
+    const host = options.host ?? "127.0.0.1";
+    const port = options.port ?? 0;
+
+    const handler = createRelayRequestHandler({
+      tier,
+      allowedModel,
+      apiKey,
+      relayToken,
+      upstreamBaseUrl,
+    });
+
+    const server = http.createServer(handler);
+
+    await new Promise<void>((resolve, reject) => {
+      server.listen(port, host, () => resolve());
+      server.on("error", reject);
+    });
+
+    const address = server.address();
+    const assignedPort = typeof address === "object" && address ? address.port : port;
+    const baseUrl = `http://${host}:${assignedPort}`;
+
+    return {
+      port: assignedPort,
+      host,
+      baseUrl,
+      allowedModel,
+      tier,
+      relayToken,
+      close: async () => {
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      },
+    };
+  }
+
+  // Container sidecar mode on FACTORY_RUNTIME_NETWORK
+  const repoRoot = options.repoRoot;
+  const relayContainerName = `factory-relay-${options.containerName}`;
+  const relayDir = path.join(repoRoot, ".factory", "relay-runtime", relayContainerName);
+  await mkdir(relayDir, { recursive: true });
+
+  const relayPort = 8080;
+  const scriptContent = buildRelayContainerScript({
+    tier,
+    allowedModel,
+    apiKey,
+    relayToken,
+    upstreamBaseUrl,
+    port: relayPort,
+  });
+
+  const scriptPath = path.join(relayDir, "server.js");
+  await writeFile(scriptPath, scriptContent, { mode: 0o600 });
+
+  const dockerArgs = [
+    "run",
+    "-d",
+    "--name",
+    relayContainerName,
+    "--network",
+    FACTORY_RUNTIME_NETWORK,
+    "--network-alias",
+    "factory-model-relay",
+    "--network-alias",
+    relayContainerName,
+    "--mount",
+    `type=bind,src=${scriptPath},dst=/server.js,readonly`,
+    "node:22-bookworm-slim",
+    "node",
+    "/server.js",
+  ];
+
+  try {
+    const launchResult = await runProcess("docker", dockerArgs, {
+      cwd: repoRoot,
+      env: dockerClientEnv(repoRoot),
+      timeoutMs: 30_000,
+    });
+
+    if (launchResult.exitCode !== 0) {
+      throw new FactoryError(
+        "strong_execution_isolation_unavailable",
+        `Failed to launch Factory model relay sidecar: ${launchResult.stderr.trim() || `exit ${launchResult.exitCode}`}`,
+      );
+    }
+
+    // Wait for sidecar to become ready
+    const probeArgs = [
+      "run",
+      "--rm",
+      "--network",
+      FACTORY_RUNTIME_NETWORK,
+      "node:22-bookworm-slim",
+      "node",
+      "-e",
+      `fetch('http://${relayContainerName}:${relayPort}/health', { signal: AbortSignal.timeout(10000) })
+        .then(r => r.json())
+        .then(j => { if (j.status === 'ok') process.exit(0); else process.exit(1); })
+        .catch(() => process.exit(1))`,
+    ];
+
+    let ready = false;
+    for (let i = 0; i < 15; i++) {
+      const probe = await runProcess("docker", probeArgs, {
+        cwd: repoRoot,
+        env: dockerClientEnv(repoRoot),
+        timeoutMs: 15_000,
+      }).catch(() => ({ exitCode: 1 }));
+      if (probe.exitCode === 0) {
+        ready = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    if (!ready) {
+      throw new FactoryError(
+        "strong_execution_isolation_unavailable",
+        "Factory model relay sidecar failed health check inside the runtime network (fail closed)",
+      );
+    }
+
+    const baseUrl = `http://${relayContainerName}:${relayPort}`;
+
+    return {
+      port: relayPort,
+      host: relayContainerName,
+      baseUrl,
+      allowedModel,
+      tier,
+      relayToken,
+      close: async () => {
+        await runProcess("docker", ["rm", "--force", relayContainerName], {
+          cwd: repoRoot,
+          env: dockerClientEnv(repoRoot),
+          timeoutMs: 15_000,
+        }).catch(() => undefined);
+        await rm(relayDir, { recursive: true, force: true }).catch(() => undefined);
+      },
+    };
+  } catch (error) {
+    await runProcess("docker", ["rm", "--force", relayContainerName], {
+      cwd: repoRoot,
+      env: dockerClientEnv(repoRoot),
+      timeoutMs: 15_000,
+    }).catch(() => undefined);
+    await rm(relayDir, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
 }

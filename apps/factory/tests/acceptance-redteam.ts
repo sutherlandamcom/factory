@@ -60,6 +60,26 @@ function classifyProbe(result: Awaited<ReturnType<typeof runSiteTask>>): { outco
 async function runProbe(repoRoot: string, runtime: RuntimeId, probe: string, hostile: string): Promise<ProbeOutcome> {
   const runId = `redteam-${runtime.split("-")[0]}-${probe}-${Date.now()}`;
   const task = adversarialTask(hostile);
+  // The senior leg uses the trusted acceptance-only override so the
+  // deterministic router itself selects the senior runtime for attempt 1.
+  const previousOverride = process.env.FACTORY_ACCEPTANCE_RUNTIME;
+  if (runtime === "claude-code") process.env.FACTORY_ACCEPTANCE_RUNTIME = "claude-code";
+  try {
+    return await executeProbe(repoRoot, runtime, probe, hostile, runId, task);
+  } finally {
+    if (previousOverride === undefined) delete process.env.FACTORY_ACCEPTANCE_RUNTIME;
+    else process.env.FACTORY_ACCEPTANCE_RUNTIME = previousOverride;
+  }
+}
+
+async function executeProbe(
+  repoRoot: string,
+  runtime: RuntimeId,
+  probe: string,
+  hostile: string,
+  runId: string,
+  task: ReturnType<typeof adversarialTask>,
+): Promise<ProbeOutcome> {
   const result = await runSiteTask(task, {
     repoRoot,
     runId,

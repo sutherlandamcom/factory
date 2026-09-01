@@ -197,6 +197,14 @@ export const modelInvocations = pgTable(
     runtime: text("runtime").notNull(),
     runtimeVersion: text("runtime_version"),
     methodologyVersion: text("methodology_version"),
+    // Code-worker routing provenance (code-worker-routing-v0). All nullable:
+    // rows from pre-routing runs (and unknown values) stay valid.
+    workerTier: text("worker_tier"),
+    requestedModel: text("requested_model"),
+    reasoningEffort: text("reasoning_effort"),
+    escalation: boolean("escalation"),
+    escalationReason: text("escalation_reason"),
+    exitCode: integer("exit_code"),
     status: text("status").notNull(), // 'running' | 'succeeded' | 'failed' | 'interrupted'
     startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
     finishedAt: timestamp("finished_at", { withTimezone: true }),

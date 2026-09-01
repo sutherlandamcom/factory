@@ -37,6 +37,9 @@ export {
   taskStatusSchema,
   taskVerificationSchema,
   validateMaxAttempts,
+  workerOutcomeSchema,
+  workerRuntimeSchema,
+  workerTierSchema,
 } from "./task-result.js";
 export type {
   AttemptKind,
@@ -53,6 +56,9 @@ export type {
   TaskStage,
   TaskStatus,
   TaskVerification,
+  WorkerOutcome,
+  WorkerRuntime,
+  WorkerTier,
 } from "./task-result.js";
 export { exampleSiteTask } from "./fixtures.js";
 export {

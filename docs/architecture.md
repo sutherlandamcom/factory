@@ -67,14 +67,86 @@ actually exist, and explicit cross-module migration workflows are deferred.
 validate → clean-repo preflight → strong-execution-isolation gate →
 detached git worktree at HEAD → pnpm install --offline --frozen-lockfile →
 [Bounded Loop: Attempt 1..3]
-  isolated Codex exec (Attempt 1: initial / Attempt > 1: repair) →
+  routed coding worker (deterministic router; Attempt 1: initial /
+  Attempt > 1: repair-or-escalation) →
   exact-target Git mode/scope enforcement → ignored-input integrity →
   Foundation QA → dynamic requested-route QA → semantic verification →
-  [If QA/verify defect: create structured FailureReport & continue attempt]
+  [If defect: structured FailureReport & continue when routing-eligible]
 → final diff.patch + TaskResult → cleanup
 ```
 
-- **Isolation**: a detached worktree is source-state isolation, not host-read isolation. The production boundary is a dedicated `factory-sandbox` Colima QEMU VM with exactly two host mounts (`.factory/worktrees` and `.factory/codex-runtime`), an ephemeral hardened Docker worker, and the inner Codex sandbox. Factory verifies the saved mount policy and Linux Docker server before execution and never falls back to the former host-shared runner.
+### Code Worker Routing v0 (factory-model-policy-v0.1)
+
+The coding execution boundary is a MODEL + CODING RUNTIME pair selected by a
+deterministic, trusted Factory router (`executor/router.ts`) — never by an
+LLM, a percentage quota, or any SiteTask field:
+
+- **Primary routine code worker**: Kimi K3 (`moonshotai/kimi-k3` on
+  OpenRouter), reasoning effort `max`, through the **Kimi Code CLI** runtime.
+- **Senior worker** (critical work, escalation, read-only review): Claude
+  Opus 5 (`anthropic/claude-opus-5` on OpenRouter) through **Claude Code**.
+- **Legacy Codex worker** (`codex-cli`): retained rollback/reference path
+  only; after activation it is NOT a normal routing fallback.
+- MODEL, RUNTIME, and GATEWAY are distinct provenance fields; "Kimi K3 Max"
+  means model id + reasoning effort, never a model string. Exact slugs are
+  pinned; aliases, `:batch` variants, and `openrouter/auto` are rejected by
+  policy tests.
+
+Routing semantics:
+
+- `create_page` (the only current SiteTask type) classifies `routine` →
+  primary worker attempts 1–2, senior escalation on attempt 3 when the
+  attempt-2 failure is escalation-eligible. `senior_required` (future task
+  types) starts on the senior worker at attempt 1.
+- **Escalation-eligible failures**: repairable QA/verification/replay
+  defects, `no_progress`, and routed-runtime failures/timeouts
+  (`kimi_execution_failed`, `kimi_timeout`, `claude_*` equivalents).
+- **Terminal — never escalate**: `scope_violation`, `integrity_violation`,
+  isolation unavailability, invalid task/configuration, preflight and
+  dependency failures, `qa_timeout`, credential-configuration errors, and
+  all legacy Codex codes. A security violation is reported, never laundered
+  through the senior runtime.
+- `MAX_TOTAL_ATTEMPTS = 3` is unchanged (contract constant + SQL CHECK).
+- The expected operational distribution (~70–85% primary / ~15–30% senior)
+  is economic guidance only; risk routing always overrides percentages.
+- Acceptance-only runtime selection: `FACTORY_ACCEPTANCE_RUNTIME` (trusted
+  Factory process env, same trust class as `FACTORY_MAX_ATTEMPTS`) forces
+  the senior or primary runtime for REAL isolated acceptance runs. SiteTask
+  content can never select a runtime, model, or reasoning effort.
+
+Runtime hardening (outer boundary is authoritative — the routed CLIs have
+no inner sandbox equivalent to Codex's bubblewrap, so the container is
+hardened further instead):
+
+- Two pinned worker images (`factory-kimi-worker:0.39.1`,
+  `factory-claude-worker:2.1.150`) run under the default seccomp profile
+  (no unconfined exceptions), read-only rootfs, capability-free,
+  no-new-privileges, resource-bounded, non-root.
+- Ephemeral per-run runtime homes (`.factory/kimi-runtime/<id>`,
+  `.factory/claude-runtime/<id>`, inside the Colima mount policy; deleted
+  during cleanup) hold only Factory-supplied trusted configuration.
+- **Outer network egress allowlist**: a dedicated Docker network whose
+  DOCKER-USER rules permit only the model gateway (`openrouter.ai`) plus
+  established return traffic; web/search/fetch/MCP tools are additionally
+  disabled in each runtime's Factory-supplied config. Functional probes
+  (gateway reachable, arbitrary host denied) verify the property every
+  preflight and fail closed.
+- **Single credential class**: `OPENROUTER_API_KEY` only. Kimi receives it
+  inside the ephemeral config file (0600, deleted after the run); Claude
+  receives it as `ANTHROPIC_AUTH_TOKEN` container env (never on disk).
+  Claude Code model-alias env vars are all pinned to exact OpenRouter
+  slugs so main and auxiliary calls cannot silently select another model.
+- Runtime provenance records worker tier, requested/responded model,
+  reasoning effort, escalation (+reason), exit code, and runtime version;
+  unknown values stay `null` — provenance is never invented.
+  `model_invocations` persists these as nullable columns (migration 0003).
+
+Senior read-only review (additive evidence, never the QA oracle): Claude
+reviews a FROZEN candidate patch with all inputs mounted read-only, write
+tools denied, and outputs structured P0/P1/P2 findings; the deterministic
+Factory gates remain authoritative.
+
+- **Isolation**: a detached worktree is source-state isolation, not host-read isolation. The production boundary is a dedicated `factory-sandbox` Colima QEMU VM with exactly four host mounts (`.factory/worktrees`, `.factory/codex-runtime`, `.factory/kimi-runtime`, `.factory/claude-runtime`), an ephemeral hardened Docker worker, and — for the routed runtimes — the outer egress allowlist (the CLIs have no inner sandbox equivalent; see Code Worker Routing v0). Factory verifies the saved mount policy and Linux Docker server before execution and never falls back to the former host-shared runner.
 - **Worker container**: the version-controlled Node 22 image pins `@openai/codex@0.150.1`. Runs are non-root, read-only, capability-free, `no-new-privileges`, resource-bounded, and temporary. Ubuntu's AppArmor user-namespace restriction is disabled only inside this dedicated VM and the worker's AppArmor/seccomp profiles are unconfined so Codex's inner bubblewrap sandbox can create its own user/mount namespaces; this does not change the VM mount boundary, grant Linux capabilities, or expose host paths. The current worktree is read-only except for the target page's parent directory; the immutable task policy still permits only the exact page and post-execution Git/integrity checks remain authoritative. No Docker/SSH-agent socket, host HOME, browser profile, primary checkout, or host `/tmp` is mounted.
 - **Dependency prep**: Factory (never Codex) installs dependencies offline from the pnpm store against the committed lockfile once per run.
 - **Layered sandbox policy**: Factory copies only the host Codex `auth.json` into a per-run directory, mounts it read-only, ignores user configuration, and deletes the copy during cleanup. The outer container permits Codex model-service connectivity; the inner `workspace-write` policy keeps approval disabled, shell/tool network disabled, and web search disabled. Necessary Codex authentication remains a residual readable secret inside that isolated runtime.

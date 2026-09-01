@@ -291,7 +291,7 @@ test("idempotency: foreign-run collision fails closed with idempotency_scope_con
           repoRoot: repo,
           isTest: true,
           idempotencyKey: "caller-key-beta",
-          codexRunner: mockCodex(async () => {
+          primaryRunner: mockCodex(async () => {
             codexCalled = true;
           }),
           prepareDependenciesFn: noopDeps,
@@ -332,7 +332,7 @@ test("idempotency fallback: missing artifact reconstructs accurate multi-attempt
     const initialResult = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
-      codexRunner: mockCodex(async (req) => {
+      primaryRunner: mockCodex(async (req) => {
         codexInvocationCount++;
         const page = path.join(
           req.worktreePath,
@@ -371,7 +371,7 @@ test("idempotency fallback: missing artifact reconstructs accurate multi-attempt
     const reconstructedResult = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
-      codexRunner: mockCodex(async () => {
+      primaryRunner: mockCodex(async () => {
         throw new Error("Codex must NOT be re-executed for terminal idempotent run");
       }),
       prepareDependenciesFn: noopDeps,
@@ -419,7 +419,7 @@ test("idempotency fallback: malformed, invalid, or contradicting artifact yields
     const initialResult = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
-      codexRunner: mockCodex(async (req) => {
+      primaryRunner: mockCodex(async (req) => {
         codexInvocationCount++;
         const page = path.join(
           req.worktreePath,
@@ -452,7 +452,7 @@ test("idempotency fallback: malformed, invalid, or contradicting artifact yields
     const resFromMalformed = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
-      codexRunner: mockCodex(async () => {
+      primaryRunner: mockCodex(async () => {
         throw new Error("Codex must NOT rerun");
       }),
       prepareDependenciesFn: noopDeps,
@@ -468,7 +468,7 @@ test("idempotency fallback: malformed, invalid, or contradicting artifact yields
     const resFromSchemaInvalid = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
-      codexRunner: mockCodex(async () => {
+      primaryRunner: mockCodex(async () => {
         throw new Error("Codex must NOT rerun");
       }),
       prepareDependenciesFn: noopDeps,
@@ -490,7 +490,7 @@ test("idempotency fallback: malformed, invalid, or contradicting artifact yields
     const resFromContradiction = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
-      codexRunner: mockCodex(async () => {
+      primaryRunner: mockCodex(async () => {
         throw new Error("Codex must NOT rerun");
       }),
       prepareDependenciesFn: noopDeps,
@@ -512,7 +512,7 @@ test("idempotency fallback: malformed, invalid, or contradicting artifact yields
     const resFromWrongKind = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
-      codexRunner: mockCodex(async () => {
+      primaryRunner: mockCodex(async () => {
         throw new Error("Codex must NOT rerun");
       }),
       prepareDependenciesFn: noopDeps,
@@ -534,7 +534,7 @@ test("idempotency fallback: malformed, invalid, or contradicting artifact yields
     const resFromWrongClass = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
-      codexRunner: mockCodex(async () => {
+      primaryRunner: mockCodex(async () => {
         throw new Error("Codex must NOT rerun");
       }),
       prepareDependenciesFn: noopDeps,
@@ -553,7 +553,7 @@ test("idempotency fallback: malformed, invalid, or contradicting artifact yields
     const resFromWrongSite = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
-      codexRunner: mockCodex(async () => {
+      primaryRunner: mockCodex(async () => {
         throw new Error("Codex must NOT rerun");
       }),
       prepareDependenciesFn: noopDeps,
@@ -736,7 +736,7 @@ test("idempotency fallback: terminal failure run with missing artifact reconstru
     const failResult = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
-      codexRunner: mockCodex(async (req) => {
+      primaryRunner: mockCodex(async (req) => {
         await writeFile(path.join(req.worktreePath, "package.json"), '{"hacked":true}');
       }),
       prepareDependenciesFn: noopDeps,
@@ -756,7 +756,7 @@ test("idempotency fallback: terminal failure run with missing artifact reconstru
     const reconstructed = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
-      codexRunner: mockCodex(async () => {
+      primaryRunner: mockCodex(async () => {
         throw new Error("Codex must NOT rerun");
       }),
       prepareDependenciesFn: noopDeps,

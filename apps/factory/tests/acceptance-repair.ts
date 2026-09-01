@@ -95,7 +95,7 @@ const jsonLd = {
 
   const result = await runSiteTask(ACCEPTANCE_TASK, {
     repoRoot,
-    codexRunner: hybridCodexRunner,
+    primaryRunner: hybridCodexRunner,
   });
 
   console.log("\n[Real Repair Acceptance Result]");
@@ -180,7 +180,7 @@ async function runBoundedFailureAcceptance(repoRoot: string) {
   const result = await runSiteTask(ACCEPTANCE_TASK, {
     repoRoot,
     maxAttempts: 3,
-    codexRunner: persistentFailingCodex,
+    primaryRunner: persistentFailingCodex,
   });
 
   console.log("\n[Bounded Failure Acceptance Result]");

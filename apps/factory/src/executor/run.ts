@@ -17,9 +17,22 @@ import { FactoryError } from "./errors.js";
 import { preflight } from "./preflight.js";
 import { createWorktree, removeWorktree } from "./worktree.js";
 import { prepareDependencies } from "./deps.js";
-import { createCodexRunner, type CodexRunner } from "./codex.js";
+import { adaptCodexRunner, createCodexRunner, type CodexRunner } from "./codex.js";
+import { createKimiCodeRunner } from "./kimi.js";
+import { createClaudeCodeRunner } from "./claude.js";
 import { assertStrongExecutionIsolationAvailable } from "./isolation.js";
-import { buildCodexPrompt, buildRepairPrompt } from "./prompt.js";
+import { buildWorkerPrompt, buildWorkerRepairPrompt } from "./prompt.js";
+import {
+  acceptanceRuntimeOverride,
+  classifyTask,
+  isEscalationEligible,
+  runtimeFailureCodes,
+  selectWorkerForAttempt,
+  type PreviousFailure,
+  type WorkerSelection,
+} from "./router.js";
+import type { CodeWorkerRuntime, CodeWorkerRuntimeId, CodeWorkerRuntimeRegistry } from "./runtime.js";
+import { CODE_WORKER_POLICY, codeWorkerBinding, type CodeWorkerBinding } from "../models/policy.js";
 import { buildFailureReport, classifyFailure, type FailureReport } from "./classify.js";
 import { collectChanges } from "./scope.js";
 import { runQa } from "./qa.js";
@@ -32,6 +45,7 @@ export { DEFAULT_MAX_ATTEMPTS, MAX_TOTAL_ATTEMPTS };
 
 export interface ExecutorTimeouts {
   depsMs: number;
+  /** Coding-worker invocation timeout (env FACTORY_CODEX_TIMEOUT_MS, legacy name kept). */
   codexMs: number;
   qaMs: number;
 }
@@ -51,6 +65,18 @@ export interface ExecutorLifecycleObserver {
     runtime: string;
     runtimeVersion?: string | null;
     methodologyVersion?: string | null;
+    /** Trusted Factory tier of the selected worker. */
+    workerTier?: "primary" | "senior" | null;
+    /** Exact model id Factory pinned for this invocation. */
+    requestedModel?: string | null;
+    /** Model identity reported by the runtime/gateway (null when unavailable). */
+    respondedModel?: string | null;
+    /** Configured reasoning effort (null when not applicable). */
+    reasoningEffort?: string | null;
+    /** True when this attempt escalated to the senior runtime. */
+    escalation?: boolean;
+    escalationReason?: string | null;
+    exitCode?: number | null;
     status: "running" | "succeeded" | "failed" | "interrupted";
     startedAt: Date;
     finishedAt?: Date | null;
@@ -77,7 +103,22 @@ export interface ExecutorLifecycleObserver {
 
 /** Injectable boundaries — tests substitute deterministic fakes. */
 export interface ExecutorDeps {
-  codexRunner?: CodexRunner;
+  /**
+   * Routed runtime registry (production seam). When provided, worker
+   * selection comes from the deterministic router and the registry supplies
+   * implementations; ids absent from the registry resolve to production
+   * adapters on demand.
+   */
+  workerRuntimes?: CodeWorkerRuntimeRegistry;
+  /**
+   * Convenience single-implementation injection for attempt-loop mechanics
+   * tests and legacy callers: bound to BOTH routed runtime slots so the
+   * deterministic router still decides per-attempt selection (and
+   * escalation records the senior slot) while every invocation runs the
+   * same supplied implementation. Routing-specific tests inject an explicit
+   * workerRuntimes registry instead.
+   */
+  primaryRunner?: CodexRunner;
   prepareDependenciesFn?: (worktreePath: string, timeoutMs: number) => Promise<void>;
   runQaFn?: (worktreePath: string, runDir: string, timeoutMs: number, task: SiteTask) => Promise<{
     passed: boolean;
@@ -126,7 +167,7 @@ function generateRunId(): string {
 /**
  * Run one SiteTask end to end with bounded automatic repair:
  * validation → clean-repo preflight → detached worktree → offline dependency
- * prep → [attempt loop: Codex → scope → Factory QA → task verification → replay verification] →
+ * prep → [attempt loop: routed coding worker → scope → Factory QA → task verification → replay] →
  * patch artifact → structured TaskResult → cleanup.
  *
  * Always returns a TaskResult (also on failure or needs_review) and always attempts cleanup.
@@ -174,7 +215,8 @@ export async function runSiteTask(
   const attempts: AttemptResult[] = [];
   let previousPatch = "";
   let lastScopeResult: Awaited<ReturnType<typeof collectChanges>> | undefined;
-  let lastCodexOutcome: TaskResult["codex"];
+  let acceptanceOverride: WorkerSelection | null = null;
+  let lastWorkerOutcome: TaskResult["worker"];
   let lastQaOutcome: TaskResult["qa"];
   let lastVerificationOutcome: TaskResult["taskVerification"];
   let lastReplayOutcome: TaskResult["replay"];
@@ -195,7 +237,7 @@ export async function runSiteTask(
   };
 
   try {
-    // 1. Validation — before any worktree/Codex/modification.
+    // 1. Validation — before any worktree/worker/modification.
     if (error) {
       throw new FactoryError(error.code, error.message);
     }
@@ -225,8 +267,13 @@ export async function runSiteTask(
     }
     await writeFile(path.join(runDir, "base-commit.txt"), `${baseCommit}\n`, "utf8");
 
-    // Unsafe host-shared Codex execution is never an implicit fallback.
-    if (!opts.codexRunner) {
+    // Acceptance-only runtime override is trusted Factory process
+    // configuration; an invalid value fails closed at validation with zero
+    // worker invocations.
+    acceptanceOverride = acceptanceRuntimeOverride();
+
+    // Unsafe host-shared coding execution is never an implicit fallback.
+    if (!opts.primaryRunner && !opts.workerRuntimes) {
       stage = "isolation";
       await assertStrongExecutionIsolationAvailable(repoRoot);
     }
@@ -240,8 +287,33 @@ export async function runSiteTask(
     const prepare = opts.prepareDependenciesFn ?? prepareDependencies;
     await prepare(worktreePath, timeouts.depsMs);
 
-    // 5. Bounded execution and repair loop.
+    // 5. Bounded routed execution and repair loop (code-worker-routing-v0):
+    // routine → primary worker attempts 1–2, senior escalation on attempt 3
+    // when eligible; senior_required → senior worker from attempt 1; terminal
+    // security failures never escalate.
     let failureReport: FailureReport | undefined;
+    const routingClass = classifyTask(task);
+
+    const runtimeRegistry: CodeWorkerRuntimeRegistry = { ...(opts.workerRuntimes ?? {}) };
+    if (opts.primaryRunner) {
+      const shared = adaptCodexRunner(opts.primaryRunner);
+      runtimeRegistry[codeWorkerBinding("primary").runtime] = shared;
+      runtimeRegistry[codeWorkerBinding("senior").runtime] = shared;
+    }
+    const resolveRuntime = (runtimeId: CodeWorkerRuntimeId): CodeWorkerRuntime => {
+      const existing = runtimeRegistry[runtimeId];
+      if (existing) return existing;
+      const created: CodeWorkerRuntime =
+        runtimeId === "codex-cli"
+          ? adaptCodexRunner(createCodexRunner({ repoRoot }))
+          : runtimeId === "kimi-code-cli"
+            ? createKimiCodeRunner({ repoRoot })
+            : createClaudeCodeRunner({ repoRoot });
+      runtimeRegistry[runtimeId] = created;
+      return created;
+    };
+
+    let previousFailure: PreviousFailure | undefined;
 
     for (let attemptNumber = 1; attemptNumber <= maxAttempts; attemptNumber++) {
       const attemptStartedAt = new Date();
@@ -249,7 +321,7 @@ export async function runSiteTask(
       await mkdir(attemptDir, { recursive: true });
 
       const kind: "initial" | "repair" = attemptNumber === 1 ? "initial" : "repair";
-      let attemptCodex: AttemptResult["codex"];
+      let attemptWorker: AttemptResult["worker"];
       let attemptScope: AttemptResult["scope"];
       let attemptIntegrity: AttemptResult["integrity"];
       let attemptQa: AttemptResult["qa"];
@@ -262,101 +334,160 @@ export async function runSiteTask(
         await opts.lifecycle.onAttemptStarted({
           attemptNumber,
           kind,
-          stage: "codex",
+          stage: "worker",
           startedAt: attemptStartedAt,
           attemptDir,
         });
       }
 
+      // Deterministic, Factory-owned worker selection. Untrusted SiteTask
+      // content cannot influence it; the acceptance override (trusted
+      // process env) takes precedence for REAL isolated runtime acceptance.
+      const selection: WorkerSelection = acceptanceOverride
+        ? {
+            ...acceptanceOverride,
+            requestedModel:
+              acceptanceOverride.runtime === "kimi-code-cli"
+                ? CODE_WORKER_POLICY.primary.model
+                : CODE_WORKER_POLICY.senior.model,
+            reasoningEffort:
+              acceptanceOverride.runtime === "kimi-code-cli"
+                ? CODE_WORKER_POLICY.primary.reasoningEffort
+                : CODE_WORKER_POLICY.senior.reasoningEffort,
+          }
+        : selectWorkerForAttempt(routingClass, attemptNumber, previousFailure, {
+            primary: codeWorkerBinding("primary"),
+            senior: codeWorkerBinding("senior"),
+          });
+
       const integrityBaseline = await captureIntegritySnapshot(worktreePath);
       const integrityBaselinePath = path.join(attemptDir, "integrity-baseline.json");
       await writeFile(integrityBaselinePath, JSON.stringify(integrityBaseline, null, 2), "utf8");
 
-      stage = "codex";
-      const codexRunner =
-        opts.codexRunner ??
-        createCodexRunner({ repoRoot });
+      stage = "worker";
+      const runtimeImpl = resolveRuntime(selection.runtime);
 
       const prompt =
         attemptNumber === 1
-          ? buildCodexPrompt(task, writePolicy)
-          : buildRepairPrompt(task, failureReport!, writePolicy);
+          ? buildWorkerPrompt(task, writePolicy)
+          : buildWorkerRepairPrompt(task, failureReport!, writePolicy);
 
-      const codexResult = await codexRunner({
+      const workerResult = await runtimeImpl({
         worktreePath,
         prompt,
         runDir: attemptDir,
         timeoutMs: timeouts.codexMs,
         writablePaths: writePolicy.writablePaths,
       });
-      stage = "codex";
+      stage = "worker";
 
-      attemptCodex = {
-        exitCode: codexResult.exitCode,
-        version: codexResult.version,
-        timedOut: codexResult.timedOut,
+      attemptWorker = {
+        runtime: selection.runtime,
+        runtimeVersion: workerResult.runtimeVersion,
+        exitCode: workerResult.exitCode,
+        timedOut: workerResult.timedOut,
+        // What Factory PINNED for this attempt (router bindings) is the
+        // authoritative requested-model provenance.
+        requestedModel: selection.requestedModel ?? workerResult.requestedModel,
+        respondedModel: workerResult.respondedModel,
+        reasoningEffort: workerResult.reasoningEffort,
+        workerTier: selection.tier,
+        escalation: selection.escalation,
+        escalationReason: selection.escalationReason,
       };
-      lastCodexOutcome = attemptCodex;
+      lastWorkerOutcome = attemptWorker;
 
-      await writeFile(path.join(attemptDir, "codex-output.jsonl"), codexResult.stdout, "utf8");
-      await writeFile(path.join(attemptDir, "codex-stderr.txt"), codexResult.stderr, "utf8");
-      if (codexResult.version) {
-        await writeFile(path.join(attemptDir, "codex-version.txt"), `${codexResult.version}\n`, "utf8");
+      await writeFile(path.join(attemptDir, "worker-output.jsonl"), workerResult.stdout, "utf8");
+      await writeFile(path.join(attemptDir, "worker-stderr.txt"), workerResult.stderr, "utf8");
+      if (workerResult.runtimeVersion) {
+        await writeFile(path.join(attemptDir, "worker-version.txt"), `${workerResult.runtimeVersion}\n`, "utf8");
       }
 
+      const runtimeFailed = workerResult.timedOut || workerResult.exitCode !== 0;
       if (opts.lifecycle?.onModelInvocation) {
         await opts.lifecycle.onModelInvocation({
           attemptNumber,
-          provider: "openai",
-          runtime: "codex-cli",
-          runtimeVersion: codexResult.version ?? null,
-          status: codexResult.timedOut ? "failed" : codexResult.exitCode === 0 ? "succeeded" : "failed",
+          provider: workerResult.provider ?? "unknown",
+          model: workerResult.respondedModel ?? workerResult.requestedModel ?? null,
+          runtime: workerResult.runtimeVersion?.split(" ")[0] ?? selection.runtime,
+          runtimeVersion: workerResult.runtimeVersion ?? null,
+          workerTier: selection.tier,
+          requestedModel: workerResult.requestedModel,
+          respondedModel: workerResult.respondedModel,
+          reasoningEffort: workerResult.reasoningEffort,
+          escalation: selection.escalation,
+          escalationReason: selection.escalationReason,
+          exitCode: workerResult.exitCode,
+          status: runtimeFailed ? "failed" : "succeeded",
           startedAt: attemptStartedAt,
           finishedAt: new Date(),
           durationMs: new Date().getTime() - attemptStartedAt.getTime(),
-          errorCode: codexResult.timedOut ? "codex_timeout" : codexResult.exitCode !== 0 ? "codex_failed" : null,
-          artifactRef: path.relative(repoRoot, path.join(attemptDir, "codex-output.jsonl")),
+          errorCode: runtimeFailed
+            ? (workerResult.timedOut ? runtimeFailureCodes(selection.runtime).timeout : runtimeFailureCodes(selection.runtime).executionFailed)
+            : null,
+          artifactRef: path.relative(repoRoot, path.join(attemptDir, "worker-output.jsonl")),
         });
       }
 
-      if (codexResult.timedOut) {
-        attemptError = { code: "codex_timeout", message: `codex exec timed out after ${timeouts.codexMs}ms` };
+      // Runtime/model failures and bounded runtime timeouts are
+      // escalation-eligible (Factory Model Policy v0.1); legacy codex codes
+      // stay terminal. Terminal failures stop immediately and are NEVER
+      // routed to the senior runtime.
+      if (runtimeFailed) {
+        const codes = runtimeFailureCodes(selection.runtime);
+        const failureCode = workerResult.timedOut ? codes.timeout : codes.executionFailed;
+        const failureMessage = workerResult.timedOut
+          ? `${selection.runtime} invocation timed out after ${timeouts.codexMs}ms`
+          : `${selection.runtime} invocation exited ${workerResult.exitCode}`;
+        attemptError = { code: failureCode, message: failureMessage };
         attemptClassification = "non_repairable";
-        fail(attemptError.code, attemptError.message);
-        status = "failed";
+        fail(failureCode, failureMessage);
+        if (attemptNumber >= maxAttempts || !isEscalationEligible(failureCode, attemptClassification)) {
+          status = "failed";
+          await recordAttempt(attemptDir, {
+            attemptNumber,
+            kind,
+            stage: "worker",
+            startedAt: attemptStartedAt.toISOString(),
+            finishedAt: new Date().toISOString(),
+            durationMs: new Date().getTime() - attemptStartedAt.getTime(),
+            worker: attemptWorker,
+            classification: attemptClassification,
+            error: attemptError,
+            artifacts: { attemptDirectory: path.relative(repoRoot, attemptDir) },
+          });
+          break;
+        }
+        failureReport = buildFailureReport({
+          runId,
+          attemptNumber,
+          failingStage: "worker",
+          failureCode,
+          message: failureMessage,
+          stdout: workerResult.stdout,
+          stderr: workerResult.stderr,
+          targetSlug: task.page.slug,
+          authorizedScope: writePolicy.writablePaths.join(", "),
+        });
+        await writeFile(
+          path.join(attemptDir, "failure-report.json"),
+          JSON.stringify(failureReport, null, 2),
+          "utf8",
+        );
+        previousFailure = { code: failureCode, classification: attemptClassification };
         await recordAttempt(attemptDir, {
           attemptNumber,
           kind,
-          stage: "codex",
+          stage: "worker",
           startedAt: attemptStartedAt.toISOString(),
           finishedAt: new Date().toISOString(),
           durationMs: new Date().getTime() - attemptStartedAt.getTime(),
-          codex: attemptCodex,
+          worker: attemptWorker,
           classification: attemptClassification,
           error: attemptError,
           artifacts: { attemptDirectory: path.relative(repoRoot, attemptDir) },
         });
-        break;
-      }
-
-      if (codexResult.exitCode !== 0) {
-        attemptError = { code: "codex_failed", message: `codex exec exited ${codexResult.exitCode}` };
-        attemptClassification = "non_repairable";
-        fail(attemptError.code, attemptError.message);
-        status = "failed";
-        await recordAttempt(attemptDir, {
-          attemptNumber,
-          kind,
-          stage: "codex",
-          startedAt: attemptStartedAt.toISOString(),
-          finishedAt: new Date().toISOString(),
-          durationMs: new Date().getTime() - attemptStartedAt.getTime(),
-          codex: attemptCodex,
-          classification: attemptClassification,
-          error: attemptError,
-          artifacts: { attemptDirectory: path.relative(repoRoot, attemptDir) },
-        });
-        break;
+        continue;
       }
 
       // 6. Mechanical change discovery + write-scope enforcement.
@@ -406,14 +537,16 @@ export async function runSiteTask(
           startedAt: attemptStartedAt.toISOString(),
           finishedAt: new Date().toISOString(),
           durationMs: new Date().getTime() - attemptStartedAt.getTime(),
-          codex: attemptCodex,
+          worker: attemptWorker,
           scope: attemptScope,
           changes: attemptChanges,
           classification: attemptClassification,
           error: attemptError,
           artifacts: { attemptDirectory: path.relative(repoRoot, attemptDir) },
         });
-        // Stop immediately on scope violation. No retry.
+        // Stop immediately on scope violation. No retry, no escalation:
+        // a security violation is reported, never laundered through the
+        // senior runtime.
         break;
       }
 
@@ -444,7 +577,7 @@ export async function runSiteTask(
       if (!integrity.passed) {
         attemptError = {
           code: "integrity_violation",
-          message: `ignored/build-input state changed during Codex execution: ${integrity.violations.join(", ")}`,
+          message: `ignored/build-input state changed during worker execution: ${integrity.violations.join(", ")}`,
         };
         attemptClassification = "non_repairable";
         fail(attemptError.code, attemptError.message);
@@ -456,7 +589,7 @@ export async function runSiteTask(
           startedAt: attemptStartedAt.toISOString(),
           finishedAt: new Date().toISOString(),
           durationMs: new Date().getTime() - attemptStartedAt.getTime(),
-          codex: attemptCodex,
+          worker: attemptWorker,
           scope: attemptScope,
           integrity: attemptIntegrity,
           changes: attemptChanges,
@@ -467,7 +600,9 @@ export async function runSiteTask(
         break;
       }
 
-      // Progress check: on repair attempts, verify changes were made.
+      // Progress check: on repair attempts, verify changes were made. A
+      // no-progress failure is escalation-eligible: the senior runtime takes
+      // the next attempt; on the final attempt it ends as needs_review.
       if (attemptNumber > 1) {
         if (scopeResult.patch === previousPatch || scopeResult.changedFiles.length === 0) {
           attemptError = {
@@ -476,7 +611,7 @@ export async function runSiteTask(
           };
           attemptClassification = "no_progress";
           fail(attemptError.code, attemptError.message);
-          status = "needs_review";
+          previousFailure = { code: "no_progress", classification: attemptClassification };
           await recordAttempt(attemptDir, {
             attemptNumber,
             kind,
@@ -484,7 +619,7 @@ export async function runSiteTask(
             startedAt: attemptStartedAt.toISOString(),
             finishedAt: new Date().toISOString(),
             durationMs: new Date().getTime() - attemptStartedAt.getTime(),
-            codex: attemptCodex,
+            worker: attemptWorker,
             scope: attemptScope,
             integrity: attemptIntegrity,
             changes: attemptChanges,
@@ -492,7 +627,11 @@ export async function runSiteTask(
             error: attemptError,
             artifacts: { attemptDirectory: path.relative(repoRoot, attemptDir) },
           });
-          break;
+          if (attemptNumber >= maxAttempts) {
+            status = "needs_review";
+            break;
+          }
+          continue;
         }
       }
       previousPatch = scopeResult.patch;
@@ -537,7 +676,7 @@ export async function runSiteTask(
           startedAt: attemptStartedAt.toISOString(),
           finishedAt: new Date().toISOString(),
           durationMs: new Date().getTime() - attemptStartedAt.getTime(),
-          codex: attemptCodex,
+          worker: attemptWorker,
           scope: attemptScope,
           integrity: attemptIntegrity,
           qa: attemptQa,
@@ -568,7 +707,7 @@ export async function runSiteTask(
             startedAt: attemptStartedAt.toISOString(),
             finishedAt: new Date().toISOString(),
             durationMs: new Date().getTime() - attemptStartedAt.getTime(),
-            codex: attemptCodex,
+            worker: attemptWorker,
             scope: attemptScope,
             integrity: attemptIntegrity,
             qa: attemptQa,
@@ -597,6 +736,7 @@ export async function runSiteTask(
           changedFiles: scopeResult.changedFiles,
           authorizedScope: writePolicy.writablePaths.join(", "),
         });
+        previousFailure = { code: "qa_failed", classification: "repairable" };
 
         await writeFile(
           path.join(attemptDir, "failure-report.json"),
@@ -611,7 +751,7 @@ export async function runSiteTask(
           startedAt: attemptStartedAt.toISOString(),
           finishedAt: new Date().toISOString(),
           durationMs: new Date().getTime() - attemptStartedAt.getTime(),
-          codex: attemptCodex,
+          worker: attemptWorker,
           scope: attemptScope,
           integrity: attemptIntegrity,
           qa: attemptQa,
@@ -661,7 +801,7 @@ export async function runSiteTask(
             startedAt: attemptStartedAt.toISOString(),
             finishedAt: new Date().toISOString(),
             durationMs: new Date().getTime() - attemptStartedAt.getTime(),
-            codex: attemptCodex,
+            worker: attemptWorker,
             scope: attemptScope,
             integrity: attemptIntegrity,
             qa: attemptQa,
@@ -689,6 +829,7 @@ export async function runSiteTask(
           changedFiles: scopeResult.changedFiles,
           authorizedScope: writePolicy.writablePaths.join(", "),
         });
+        previousFailure = { code: "verification_failed", classification: "repairable" };
 
         await writeFile(
           path.join(attemptDir, "failure-report.json"),
@@ -703,7 +844,7 @@ export async function runSiteTask(
           startedAt: attemptStartedAt.toISOString(),
           finishedAt: new Date().toISOString(),
           durationMs: new Date().getTime() - attemptStartedAt.getTime(),
-          codex: attemptCodex,
+          worker: attemptWorker,
           scope: attemptScope,
           integrity: attemptIntegrity,
           qa: attemptQa,
@@ -761,7 +902,7 @@ export async function runSiteTask(
             startedAt: attemptStartedAt.toISOString(),
             finishedAt: new Date().toISOString(),
             durationMs: new Date().getTime() - attemptStartedAt.getTime(),
-            codex: attemptCodex,
+            worker: attemptWorker,
             scope: attemptScope,
             integrity: attemptIntegrity,
             qa: attemptQa,
@@ -789,6 +930,7 @@ export async function runSiteTask(
           changedFiles: scopeResult.changedFiles,
           authorizedScope: writePolicy.writablePaths.join(", "),
         });
+        previousFailure = { code: "replay_failed", classification: "repairable" };
 
         await writeFile(
           path.join(attemptDir, "failure-report.json"),
@@ -803,7 +945,7 @@ export async function runSiteTask(
           startedAt: attemptStartedAt.toISOString(),
           finishedAt: new Date().toISOString(),
           durationMs: new Date().getTime() - attemptStartedAt.getTime(),
-          codex: attemptCodex,
+          worker: attemptWorker,
           scope: attemptScope,
           integrity: attemptIntegrity,
           qa: attemptQa,
@@ -827,7 +969,7 @@ export async function runSiteTask(
         startedAt: attemptStartedAt.toISOString(),
         finishedAt: new Date().toISOString(),
         durationMs: new Date().getTime() - attemptStartedAt.getTime(),
-        codex: attemptCodex,
+        worker: attemptWorker,
         scope: attemptScope,
         integrity: attemptIntegrity,
         qa: attemptQa,
@@ -840,7 +982,7 @@ export async function runSiteTask(
   } catch (err) {
     if (!error) {
       if (err instanceof FactoryError) {
-        fail(err.code, err.message);
+        fail(err.code, `${err.message} [at ${(err.stack ?? "").split("\n")[1]?.trim().slice(0, 160) ?? "unknown"}]`);
       } else {
         fail("internal_error", err instanceof Error ? err.message : String(err));
       }
@@ -883,7 +1025,7 @@ export async function runSiteTask(
     totalAttempts: attempts.length,
     successfulAttempt,
     attempts,
-    ...(lastCodexOutcome ? { codex: lastCodexOutcome } : {}),
+    ...(lastWorkerOutcome ? { worker: lastWorkerOutcome } : {}),
     ...(lastQaOutcome ? { qa: lastQaOutcome } : {}),
     ...(lastVerificationOutcome ? { taskVerification: lastVerificationOutcome } : {}),
     ...(lastReplayOutcome ? { replay: lastReplayOutcome } : {}),

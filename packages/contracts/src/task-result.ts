@@ -54,7 +54,10 @@ export const taskStageSchema = z.enum([
   "worktree",
   "dependencies",
   "isolation",
+  /** Legacy stage name written by pre-routing runs (read for old artifacts). */
   "codex",
+  /** Coding-worker execution stage used by routed (multi-runtime) runs. */
+  "worker",
   "scope",
   "integrity",
   "qa",
@@ -62,6 +65,35 @@ export const taskStageSchema = z.enum([
   "replay",
   "complete",
 ]);
+
+/** Coding runtimes the Factory code-worker router may select. */
+export const workerRuntimeSchema = z.enum(["codex-cli", "kimi-code-cli", "claude-code"]);
+
+/** Trusted Factory tier of the selected worker (never an untrusted field). */
+export const workerTierSchema = z.enum(["primary", "senior"]);
+
+/**
+ * Generalized coding-worker execution outcome. `codex` below is the legacy
+ * shape kept for backward-compatible reading of pre-routing artifacts; all
+ * new runs record `worker` regardless of runtime.
+ */
+export const workerOutcomeSchema = z.object({
+  runtime: workerRuntimeSchema,
+  /** Runtime-reported version string, or null when genuinely unavailable. */
+  runtimeVersion: z.string().nullable(),
+  exitCode: z.number().int().nullable(),
+  timedOut: z.boolean(),
+  /** Exact model id Factory pinned for this invocation, or null for runtimes that own model selection. */
+  requestedModel: z.string().nullable(),
+  /** Model identity reported by the runtime/gateway, or null when unavailable. */
+  respondedModel: z.string().nullable(),
+  /** Configured reasoning effort for the invocation, or null when not applicable. */
+  reasoningEffort: z.string().nullable(),
+  workerTier: workerTierSchema,
+  /** True when this attempt escalated to the senior runtime after an eligible failure. */
+  escalation: z.boolean(),
+  escalationReason: z.string().nullable(),
+});
 
 export const codexOutcomeSchema = z.object({
   exitCode: z.number().int().nullable(),
@@ -123,6 +155,9 @@ export const attemptResultSchema = z.object({
   startedAt: z.string(),
   finishedAt: z.string(),
   durationMs: z.number().int().nonnegative(),
+  /** Generalized coding-worker outcome (all routed runs). */
+  worker: workerOutcomeSchema.optional(),
+  /** Legacy Codex-specific outcome (pre-routing artifacts; not written by new runs). */
   codex: codexOutcomeSchema.optional(),
   scope: attemptScopeOutcomeSchema.optional(),
   integrity: attemptIntegrityOutcomeSchema.optional(),
@@ -151,6 +186,9 @@ export const taskResultSchema = z
     totalAttempts: z.number().int().min(0).max(MAX_TOTAL_ATTEMPTS),
     successfulAttempt: z.number().int().min(1).max(MAX_TOTAL_ATTEMPTS).nullable().optional(),
     attempts: z.array(attemptResultSchema).max(MAX_TOTAL_ATTEMPTS).optional(),
+    /** Last recorded generalized worker outcome (routed runs). */
+    worker: workerOutcomeSchema.optional(),
+    /** Legacy last Codex outcome (pre-routing artifacts; not written by new runs). */
     codex: codexOutcomeSchema.optional(),
     qa: qaOutcomeSchema.optional(),
     taskVerification: taskVerificationSchema.optional(),
@@ -204,6 +242,9 @@ export type TaskStatus = z.infer<typeof taskStatusSchema>;
 export type AttemptKind = z.infer<typeof attemptKindSchema>;
 export type FailureClassification = z.infer<typeof failureClassificationSchema>;
 export type TaskStage = z.infer<typeof taskStageSchema>;
+export type WorkerRuntime = z.infer<typeof workerRuntimeSchema>;
+export type WorkerTier = z.infer<typeof workerTierSchema>;
+export type WorkerOutcome = z.infer<typeof workerOutcomeSchema>;
 export type CodexOutcome = z.infer<typeof codexOutcomeSchema>;
 export type QaOutcome = z.infer<typeof qaOutcomeSchema>;
 export type TaskVerification = z.infer<typeof taskVerificationSchema>;

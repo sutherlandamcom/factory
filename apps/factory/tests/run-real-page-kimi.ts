@@ -3,6 +3,16 @@ import { resolveRepositoryRoot } from "../src/repo-root.js";
 import type { SiteTask } from "@factory/contracts";
 import { assertAcceptancePrerequisites } from "./acceptance-code-worker-common.js";
 
+try {
+  process.loadEnvFile?.(".env");
+} catch {
+  try {
+    process.loadEnvFile?.("../../.env");
+  } catch {
+    // ignore
+  }
+}
+
 const KIMI_PAGE_TASK: SiteTask = {
   type: "create_page",
   siteId: "starter",

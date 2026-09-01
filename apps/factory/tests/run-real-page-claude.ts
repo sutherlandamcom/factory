@@ -5,6 +5,16 @@ import type { CodeWorkerRuntime } from "../src/executor/runtime.js";
 import type { SiteTask } from "@factory/contracts";
 import { assertAcceptancePrerequisites } from "./acceptance-code-worker-common.js";
 
+try {
+  process.loadEnvFile?.(".env");
+} catch {
+  try {
+    process.loadEnvFile?.("../../.env");
+  } catch {
+    // ignore
+  }
+}
+
 const CLAUDE_PAGE_TASK: SiteTask = {
   type: "create_page",
   siteId: "starter",

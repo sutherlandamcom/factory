@@ -75,22 +75,23 @@ detached git worktree at HEAD → pnpm install --offline --frozen-lockfile →
 → final diff.patch + TaskResult → cleanup
 ```
 
-### Code Worker Routing v0 (factory-model-policy-v0.1)
+### Code Worker Routing v0 (factory-model-policy-v0.1 — ACTIVE)
 
 The coding execution boundary is a MODEL + CODING RUNTIME pair selected by a
 deterministic, trusted Factory router (`executor/router.ts`) — never by an
 LLM, a percentage quota, or any SiteTask field:
 
 - **Primary routine code worker**: Kimi K3 (`moonshotai/kimi-k3` on
-  OpenRouter), reasoning effort `max`, through the **Kimi Code CLI** runtime.
+  OpenRouter), reasoning effort `max`, through the **Kimi Code CLI** runtime (pinned 0.39.1).
 - **Senior worker** (critical work, escalation, read-only review): Claude
-  Opus 5 (`anthropic/claude-opus-5` on OpenRouter) through **Claude Code**.
+  Opus 5 (`anthropic/claude-opus-5` on OpenRouter) through **Claude Code** (pinned 2.1.150).
 - **Legacy Codex worker** (`codex-cli`): retained rollback/reference path
   only; after activation it is NOT a normal routing fallback.
 - MODEL, RUNTIME, and GATEWAY are distinct provenance fields; "Kimi K3 Max"
   means model id + reasoning effort, never a model string. Exact slugs are
   pinned; aliases, `:batch` variants, and `openrouter/auto` are rejected by
   policy tests.
+- Status: **`migrationActivated: true`** (active product path).
 
 Routing semantics:
 
@@ -109,10 +110,12 @@ Routing semantics:
 - `MAX_TOTAL_ATTEMPTS = 3` is unchanged (contract constant + SQL CHECK).
 - The expected operational distribution (~70–85% primary / ~15–30% senior)
   is economic guidance only; risk routing always overrides percentages.
-- Acceptance-only runtime selection: `FACTORY_ACCEPTANCE_RUNTIME` (trusted
-  Factory process env, same trust class as `FACTORY_MAX_ATTEMPTS`) forces
-  the senior or primary runtime for REAL isolated acceptance runs. SiteTask
-  content can never select a runtime, model, or reasoning effort.
+- Acceptance-only runtime selection: requires BOTH `FACTORY_ACCEPTANCE_MODE=1`
+  and `FACTORY_ACCEPTANCE_RUNTIME` (trusted Factory process env, same trust
+  class as `FACTORY_MAX_ATTEMPTS`) to force the senior or primary runtime for
+  REAL isolated acceptance runs. Without `FACTORY_ACCEPTANCE_MODE=1`, leftover
+  acceptance variables are ignored in normal production. SiteTask content can
+  never select a runtime, model, or reasoning effort.
 
 Runtime hardening (outer boundary is authoritative — the routed CLIs have
 no inner sandbox equivalent to Codex's bubblewrap, so the container is
@@ -125,17 +128,17 @@ hardened further instead):
 - Ephemeral per-run runtime homes (`.factory/kimi-runtime/<id>`,
   `.factory/claude-runtime/<id>`, inside the Colima mount policy; deleted
   during cleanup) hold only Factory-supplied trusted configuration.
-- **Outer network egress allowlist**: a dedicated Docker network whose
-  DOCKER-USER rules permit only the model gateway (`openrouter.ai`) plus
-  established return traffic; web/search/fetch/MCP tools are additionally
-  disabled in each runtime's Factory-supplied config. Functional probes
-  (gateway reachable, arbitrary host denied) verify the property every
-  preflight and fail closed.
-- **Single credential class**: `OPENROUTER_API_KEY` only. Kimi receives it
-  inside the ephemeral config file (0600, deleted after the run); Claude
-  receives it as `ANTHROPIC_AUTH_TOKEN` container env (never on disk).
-  Claude Code model-alias env vars are all pinned to exact OpenRouter
-  slugs so main and auxiliary calls cannot silently select another model.
+- **Factory Model Relay & Credential Isolation**: worker containers possess
+  NO real `OPENROUTER_API_KEY` and NO direct public internet/OpenRouter access.
+  Worker model calls route through an ephemeral local Factory model relay
+  (`executor/relay.ts`) that owns the real provider credential and strictly
+  enforces exact model bindings (`moonshotai/kimi-k3` for Kimi,
+  `anthropic/claude-opus-5` for Claude), immediately rejecting unauthorized
+  model requests (0 upstream calls).
+- **Model alias pinning**: Claude Code model-alias env vars are ALL pinned
+  to `anthropic/claude-opus-5` (`ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`,
+  `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`) so main and auxiliary calls
+  cannot silently select another model.
 - Runtime provenance records worker tier, requested/responded model,
   reasoning effort, escalation (+reason), exit code, and runtime version;
   unknown values stay `null` — provenance is never invented.

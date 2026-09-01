@@ -12,6 +12,7 @@ import { FACTORY_RUNTIME_NETWORK, OPENROUTER_EGRESS_HOST } from "./network.js";
 import { loadOpenRouterApiKey, OPENROUTER_GATEWAY_BASE_URL } from "../models/gateway.js";
 import { codeWorkerBinding } from "../models/policy.js";
 import { runProcess } from "./process.js";
+import { startModelRelay, RELAY_DUMMY_TOKEN } from "./relay.js";
 import { extractRespondedModel, type CodeWorkerRuntime } from "./runtime.js";
 
 /**
@@ -25,14 +26,14 @@ import { extractRespondedModel, type CodeWorkerRuntime } from "./runtime.js";
  *   DEFAULT hardened seccomp profile (no unconfined exceptions).
  * - The container runs non-root, read-only-rootfs, capability-free,
  *   no-new-privileges, resource-bounded, with the worktree mounted
-   * read-only except the exact writable parent paths.
- * - Credentials: ONLY the OpenRouter key, materialized into a per-run
- *   ephemeral config.toml (Kimi Code requires provider credentials in its
- *   config file), chmod 0600, mounted read-only, deleted in cleanup. No
- *   host HOME, no host Kimi configuration, no other credentials.
- * - Network: only the model gateway is reachable (outer DOCKER-USER egress
- *   allowlist); web/search/fetch/MCP tools are disabled in the Factory
- *   config as defense in depth.
+ *   read-only except the exact writable parent paths.
+ * - Credentials: The worker container has NO real OPENROUTER_API_KEY. All
+ *   model requests route through the trusted local Factory model relay, which
+ *   owns the real API key and enforces model binding (moonshotai/kimi-k3).
+ *   The container receives only an ephemeral dummy authorization token.
+ *   No host HOME, no host Kimi configuration, no other credentials.
+ * - Network: only the model relay is reachable; web/search/fetch/MCP tools are
+ *   disabled in the Factory config as defense in depth.
  * - Provenance: requestedModel/reasoningEffort come from the Factory
  *   policy; respondedModel is extracted from runtime events when genuinely
  *   present, otherwise null — never invented.
@@ -176,6 +177,11 @@ export function createKimiCodeRunner(opts: { repoRoot: string }): CodeWorkerRunt
       );
     }
 
+    const relay = await startModelRelay({
+      tier: "primary",
+      apiKey,
+    });
+
     const runtimeRoot = path.join(opts.repoRoot, ".factory", "kimi-runtime");
     const containerName = safeContainerName(request.runDir);
     const runtimeDir = path.join(runtimeRoot, containerName);
@@ -194,15 +200,15 @@ export function createKimiCodeRunner(opts: { repoRoot: string }): CodeWorkerRunt
     try {
       await mkdir(configDir, { recursive: true });
       await mkdir(outputDir, { recursive: true });
-      // The credential exists ONLY in this per-run ephemeral file (0600),
-      // mounted read-only into the container and deleted during cleanup.
+      // The config points to the local Factory model relay with an ephemeral dummy token.
+      // The real OPENROUTER_API_KEY is never mounted or passed into the container.
       const configPath = path.join(configDir, "config.toml");
       await writeFile(
         configPath,
         buildKimiConfigToml({
-          apiKey,
+          apiKey: RELAY_DUMMY_TOKEN,
           model: binding.model,
-          openrouterBaseUrl: OPENROUTER_GATEWAY_BASE_URL,
+          openrouterBaseUrl: relay.baseUrl,
           reasoningEffort: binding.reasoningEffort ?? "max",
         }),
         { mode: 0o600 },
@@ -229,12 +235,13 @@ export function createKimiCodeRunner(opts: { repoRoot: string }): CodeWorkerRunt
         stderr: result.stderr,
       };
     } finally {
+      await relay.close().catch(() => undefined);
       await runProcess("docker", ["rm", "--force", containerName], {
         cwd: opts.repoRoot,
         env: dockerClientEnv(opts.repoRoot),
         timeoutMs: 30_000,
       }).catch(() => undefined);
-      // Removes the credential-bearing config directory. Never skip.
+      // Removes the ephemeral config directory. Never skip.
       await rm(runtimeDir, { recursive: true, force: true });
     }
   };

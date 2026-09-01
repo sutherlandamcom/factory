@@ -117,16 +117,16 @@ test("code worker: routing policy version and architecture are pinned", () => {
   assert.equal(CODE_WORKER_POLICY.currentlyActiveArchitecture, "code-worker-routing-v0");
 });
 
-test("code worker: migration NOT activated while legacy codex remains the accepted path", () => {
-  assert.equal(CODE_WORKER_POLICY.migrationActivated, false);
+test("code worker: migration ACTIVATED in policy v0.1 cutover", () => {
+  assert.equal(CODE_WORKER_POLICY.migrationActivated, true);
   assert.equal(CODE_WORKER_POLICY.legacyRuntime, "codex-cli");
-  assert.equal(activeCodeWorkerRuntime(), "codex-cli");
+  assert.equal(activeCodeWorkerRuntime(), "kimi-code-cli");
   assert.ok(!MODEL_ROLE_POLICY["code_worker" as keyof typeof MODEL_ROLE_POLICY]);
 });
 
-test("code worker: activation flips the active runtime to the primary worker", () => {
-  const activated = { ...CODE_WORKER_POLICY, migrationActivated: true };
-  assert.equal(activeCodeWorkerRuntime(activated), "kimi-code-cli");
+test("code worker: unactivated policy retains the legacy codex runtime", () => {
+  const unactivated = { ...CODE_WORKER_POLICY, migrationActivated: false };
+  assert.equal(activeCodeWorkerRuntime(unactivated), "codex-cli");
 });
 
 test("code worker: bindings expose exact runtime/model/effort per tier", () => {

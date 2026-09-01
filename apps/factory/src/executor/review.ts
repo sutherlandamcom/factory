@@ -12,6 +12,7 @@ import {
 import { FACTORY_RUNTIME_NETWORK } from "./network.js";
 import { loadOpenRouterApiKey, scrubCredentials } from "../models/gateway.js";
 import { buildClaudeRuntimeEnv, CLAUDE_SENIOR_MODEL, parseClaudeJsonResult, resolveAnthropicSurface } from "./claude.js";
+import { startModelRelay, RELAY_DUMMY_TOKEN } from "./relay.js";
 import type { TaskWritePolicy } from "./module-policy.js";
 import { runProcess } from "./process.js";
 
@@ -158,7 +159,10 @@ export async function runSeniorReview(request: SeniorReviewRequest): Promise<Sen
       "OPENROUTER_API_KEY is not configured; the senior reviewer fails closed without credentials",
     );
   }
-  const surface = await resolveAnthropicSurface(apiKey);
+  const relay = await startModelRelay({
+    tier: "senior",
+    apiKey,
+  });
 
   const reviewId = safeReviewDirName(request.runId);
   const reviewsRoot = path.join(request.repoRoot, ".factory", "reviews");
@@ -192,7 +196,7 @@ export async function runSeniorReview(request: SeniorReviewRequest): Promise<Sen
     await writeFile(settingsPath, buildReviewerSettingsJson(), { mode: 0o600 });
     await chmod(settingsPath, 0o600);
 
-    const runtimeEnv = buildClaudeRuntimeEnv(apiKey, surface.baseUrl);
+    const runtimeEnv = buildClaudeRuntimeEnv(RELAY_DUMMY_TOKEN, relay.baseUrl);
     const containerUid = process.getuid?.() ?? 1000;
     const containerGid = process.getgid?.() ?? 1000;
     const args = [
@@ -258,6 +262,7 @@ export async function runSeniorReview(request: SeniorReviewRequest): Promise<Sen
       artifactDirectory: path.relative(request.repoRoot, reviewDir),
     };
   } finally {
+    await relay.close().catch(() => undefined);
     // Config contains no credentials (auth is env-only), but the review
     // inputs stay for evidence; only the ephemeral config is removed.
     await rm(configDir, { recursive: true, force: true }).catch(() => undefined);

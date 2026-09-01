@@ -29,6 +29,7 @@ async function main() {
   const repoRoot = await resolveRepositoryRoot(process.cwd());
   const runId = `accept-claude-${Date.now()}`;
 
+  process.env.FACTORY_ACCEPTANCE_MODE = "1";
   process.env.FACTORY_ACCEPTANCE_RUNTIME = "claude-code";
   let result;
   try {
@@ -38,6 +39,7 @@ async function main() {
       workerRuntimes: { "claude-code": createClaudeCodeRunner({ repoRoot }) },
     });
   } finally {
+    delete process.env.FACTORY_ACCEPTANCE_MODE;
     delete process.env.FACTORY_ACCEPTANCE_RUNTIME;
   }
 

@@ -64,10 +64,10 @@ test("claude settings deny web tools and subagents and disable MCP/telemetry", (
 test("claude runtime env pins every model alias to exact OpenRouter slugs", () => {
   const env = buildClaudeRuntimeEnv("sk-or-placeholder", "https://openrouter.ai/api");
   assert.equal(env.ANTHROPIC_MODEL, "anthropic/claude-opus-5");
-  assert.equal(env.ANTHROPIC_SMALL_FAST_MODEL, "anthropic/claude-haiku-4.5");
+  assert.equal(env.ANTHROPIC_SMALL_FAST_MODEL, "anthropic/claude-opus-5");
   assert.equal(env.ANTHROPIC_DEFAULT_OPUS_MODEL, CLAUDE_SENIOR_MODEL);
   assert.equal(env.ANTHROPIC_DEFAULT_SONNET_MODEL, CLAUDE_SENIOR_MODEL);
-  assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL, CLAUDE_SMALL_FAST_MODEL);
+  assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL, "anthropic/claude-opus-5");
   assert.equal(env.ENABLE_CLAUDEAI_MCP_SERVERS, "false");
   assert.equal(env.ANTHROPIC_BASE_URL, "https://openrouter.ai/api");
   assert.equal(env.ANTHROPIC_AUTH_TOKEN, "sk-or-placeholder");

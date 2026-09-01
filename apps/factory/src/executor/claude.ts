@@ -12,6 +12,7 @@ import { FACTORY_RUNTIME_NETWORK, OPENROUTER_EGRESS_HOST } from "./network.js";
 import { loadOpenRouterApiKey, scrubCredentials } from "../models/gateway.js";
 import { codeWorkerBinding } from "../models/policy.js";
 import { runProcess } from "./process.js";
+import { startModelRelay, RELAY_DUMMY_TOKEN } from "./relay.js";
 import type { CodeWorkerRuntime } from "./runtime.js";
 
 /**
@@ -27,15 +28,17 @@ import type { CodeWorkerRuntime } from "./runtime.js";
  * - The container runs non-root, read-only-rootfs, capability-free,
  *   no-new-privileges, resource-bounded, worktree read-only except the
  *   exact writable parent paths.
- * - Credentials: ONLY the OpenRouter key, passed as ANTHROPIC_AUTH_TOKEN in
- *   the per-run container environment (never written to disk), resolved via
- *   loadOpenRouterApiKey and fail-closed. No host HOME, no host Claude
- *   configuration (CLAUDE_CONFIG_DIR is a per-run ephemeral tmpfs), no other
- *   credentials.
+ * - Credentials: The worker container has NO real OPENROUTER_API_KEY. All
+ *   model requests route through the trusted local Factory model relay, which
+ *   owns the real API key and enforces model binding (anthropic/claude-opus-5).
+ *   The container receives only an ephemeral dummy authorization token.
+ *   No host HOME, no host Claude configuration (CLAUDE_CONFIG_DIR is a
+ *   per-run ephemeral tmpfs), no other credentials.
  * - Model pinning: ANTHROPIC_MODEL plus every model-alias env var are pinned
- *   to exact OpenRouter slugs so neither main nor auxiliary/background calls
- *   can silently select another model. The Factory settings.json denies
- *   WebFetch/WebSearch and subagent tools; MCP connectors are disabled.
+ *   to exact OpenRouter slugs (anthropic/claude-opus-5) so neither main nor
+ *   auxiliary/background calls can silently select another model. The Factory
+ *   settings.json denies WebFetch/WebSearch and subagent tools; MCP connectors
+ *   are disabled.
  * - Provenance: requestedModel comes from the Factory policy; respondedModel
  *   and usage are read from the runtime's JSON result when genuinely
  *   present, otherwise null — never invented.
@@ -45,7 +48,7 @@ const CLAUDE_CONFIG_DIR = "/tmp/home/.claude";
 
 /** Exact OpenRouter slugs pinned for Claude Code main + auxiliary calls. */
 export const CLAUDE_SENIOR_MODEL = "anthropic/claude-opus-5";
-export const CLAUDE_SMALL_FAST_MODEL = "anthropic/claude-haiku-4.5";
+export const CLAUDE_SMALL_FAST_MODEL = "anthropic/claude-opus-5";
 
 /**
  * Candidate (base URL, endpoint path) pairs for OpenRouter's
@@ -249,8 +252,10 @@ export function createClaudeCodeRunner(opts: ClaudeRuntimeOptions): CodeWorkerRu
       );
     }
 
-    surfaceReady ??= opts.resolveSurface ? opts.resolveSurface() : resolveAnthropicSurface(apiKey);
-    const surface = await surfaceReady;
+    const relay = await startModelRelay({
+      tier: "senior",
+      apiKey,
+    });
 
     const runtimeRoot = path.join(opts.repoRoot, ".factory", "claude-runtime");
     const containerName = safeContainerName(request.runDir);
@@ -274,7 +279,7 @@ export function createClaudeCodeRunner(opts: ClaudeRuntimeOptions): CodeWorkerRu
       await writeFile(settingsPath, buildClaudeSettingsJson(), { mode: 0o600 });
       await chmod(settingsPath, 0o600);
 
-      const runtimeEnv = buildClaudeRuntimeEnv(apiKey, surface.baseUrl);
+      const runtimeEnv = buildClaudeRuntimeEnv(RELAY_DUMMY_TOKEN, relay.baseUrl);
       const args = buildClaudeContainerArgs(request, containerName, runtimeDir, runtimeEnv);
       const result = await runProcess("docker", args, {
         cwd: opts.repoRoot,
@@ -297,6 +302,7 @@ export function createClaudeCodeRunner(opts: ClaudeRuntimeOptions): CodeWorkerRu
         stderr: result.stderr,
       };
     } finally {
+      await relay.close().catch(() => undefined);
       await runProcess("docker", ["rm", "--force", containerName], {
         cwd: opts.repoRoot,
         env: dockerClientEnv(opts.repoRoot),

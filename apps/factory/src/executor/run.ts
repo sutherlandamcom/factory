@@ -343,22 +343,34 @@ export async function runSiteTask(
       // Deterministic, Factory-owned worker selection. Untrusted SiteTask
       // content cannot influence it; the acceptance override (trusted
       // process env) takes precedence for REAL isolated runtime acceptance.
-      const selection: WorkerSelection = acceptanceOverride
-        ? {
-            ...acceptanceOverride,
-            requestedModel:
-              acceptanceOverride.runtime === "kimi-code-cli"
-                ? CODE_WORKER_POLICY.primary.model
-                : CODE_WORKER_POLICY.senior.model,
-            reasoningEffort:
-              acceptanceOverride.runtime === "kimi-code-cli"
-                ? CODE_WORKER_POLICY.primary.reasoningEffort
-                : CODE_WORKER_POLICY.senior.reasoningEffort,
-          }
-        : selectWorkerForAttempt(routingClass, attemptNumber, previousFailure, {
-            primary: codeWorkerBinding("primary"),
-            senior: codeWorkerBinding("senior"),
-          });
+      let selection: WorkerSelection;
+      if (acceptanceOverride) {
+        selection = {
+          ...acceptanceOverride,
+          requestedModel:
+            acceptanceOverride.runtime === "kimi-code-cli"
+              ? CODE_WORKER_POLICY.primary.model
+              : CODE_WORKER_POLICY.senior.model,
+          reasoningEffort:
+            acceptanceOverride.runtime === "kimi-code-cli"
+              ? CODE_WORKER_POLICY.primary.reasoningEffort
+              : CODE_WORKER_POLICY.senior.reasoningEffort,
+        };
+      } else if (!CODE_WORKER_POLICY.migrationActivated) {
+        selection = {
+          runtime: CODE_WORKER_POLICY.legacyRuntime,
+          tier: "primary",
+          requestedModel: null,
+          reasoningEffort: null,
+          escalation: false,
+          escalationReason: null,
+        };
+      } else {
+        selection = selectWorkerForAttempt(routingClass, attemptNumber, previousFailure, {
+          primary: codeWorkerBinding("primary"),
+          senior: codeWorkerBinding("senior"),
+        });
+      }
 
       const integrityBaseline = await captureIntegritySnapshot(worktreePath);
       const integrityBaselinePath = path.join(attemptDir, "integrity-baseline.json");

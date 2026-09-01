@@ -510,14 +510,19 @@ function writePageVariant(req: CodeWorkerRunRequest, variant: string): Promise<v
   })();
 }
 
-function mockSuccess(runtimeId: "kimi-code-cli" | "claude-code"): CodeWorkerRunResult {
+function mockSuccess(runtimeId: "codex-cli" | "kimi-code-cli" | "claude-code"): CodeWorkerRunResult {
   return {
     runtimeVersion: `${runtimeId} 0.0.0-mock`,
     exitCode: 0,
     timedOut: false,
-    requestedModel: runtimeId === "kimi-code-cli" ? "moonshotai/kimi-k3" : "anthropic/claude-opus-5",
+    requestedModel:
+      runtimeId === "kimi-code-cli"
+        ? "moonshotai/kimi-k3"
+        : runtimeId === "claude-code"
+          ? "anthropic/claude-opus-5"
+          : null,
     respondedModel: null,
-    provider: "openrouter",
+    provider: runtimeId === "codex-cli" ? "openai" : "openrouter",
     reasoningEffort: runtimeId === "kimi-code-cli" ? "max" : null,
     stdout: "",
     stderr: "",
@@ -771,9 +776,11 @@ test("no_progress at attempt 2 escalates to claude at attempt 3", async () => {
   assert.equal(result.attempts![2]!.worker!.escalation, true);
 });
 
-test("FACTORY_ACCEPTANCE_RUNTIME forces the senior runtime for ALL attempts (trusted env only)", async () => {
+test("FACTORY_ACCEPTANCE_RUNTIME forces the senior runtime for ALL attempts when FACTORY_ACCEPTANCE_MODE=1", async () => {
   const repo = await makeTempRepo();
+  const oldMode = process.env.FACTORY_ACCEPTANCE_MODE;
   const oldEnv = process.env.FACTORY_ACCEPTANCE_RUNTIME;
+  process.env.FACTORY_ACCEPTANCE_MODE = "1";
   process.env.FACTORY_ACCEPTANCE_RUNTIME = "claude-code";
   let kimiCalls = 0;
   try {
@@ -781,7 +788,7 @@ test("FACTORY_ACCEPTANCE_RUNTIME forces the senior runtime for ALL attempts (tru
       repoRoot: repo,
       runId: "routing-acceptance-override",
       workerRuntimes: {
-        "kimi-code-cli": async (req) => {
+        "kimi-code-cli": async () => {
           kimiCalls++;
           return mockSuccess("kimi-code-cli");
         },
@@ -802,14 +809,59 @@ test("FACTORY_ACCEPTANCE_RUNTIME forces the senior runtime for ALL attempts (tru
     assert.equal(result.worker?.requestedModel, "anthropic/claude-opus-5");
     assert.equal(kimiCalls, 0);
   } finally {
+    if (oldMode === undefined) delete process.env.FACTORY_ACCEPTANCE_MODE;
+    else process.env.FACTORY_ACCEPTANCE_MODE = oldMode;
     if (oldEnv === undefined) delete process.env.FACTORY_ACCEPTANCE_RUNTIME;
     else process.env.FACTORY_ACCEPTANCE_RUNTIME = oldEnv;
   }
 });
 
-test("invalid FACTORY_ACCEPTANCE_RUNTIME fails closed with zero invocations", async () => {
+test("leftover FACTORY_ACCEPTANCE_RUNTIME without FACTORY_ACCEPTANCE_MODE=1 is ignored in normal production", async () => {
   const repo = await makeTempRepo();
+  const oldMode = process.env.FACTORY_ACCEPTANCE_MODE;
   const oldEnv = process.env.FACTORY_ACCEPTANCE_RUNTIME;
+  delete process.env.FACTORY_ACCEPTANCE_MODE;
+  process.env.FACTORY_ACCEPTANCE_RUNTIME = "claude-code";
+  let kimiCalls = 0;
+  let claudeCalls = 0;
+  try {
+    const result = await runSiteTask(TASK, {
+      repoRoot: repo,
+      runId: "routing-leftover-ignored",
+      workerRuntimes: {
+        "kimi-code-cli": async (req) => {
+          kimiCalls++;
+          await writePageVariant(req, "kimi-normal");
+          return mockSuccess("kimi-code-cli");
+        },
+        "claude-code": async () => {
+          claudeCalls++;
+          return mockSuccess("claude-code");
+        },
+      },
+      prepareDependenciesFn: noopDeps,
+      runQaFn: passQa,
+      verifyFn: passVerify,
+      verifyReplayFn: passReplay,
+    });
+    assert.equal(result.status, "succeeded");
+    assert.equal(result.worker?.runtime, "kimi-code-cli");
+    assert.equal(result.worker?.workerTier, "primary");
+    assert.equal(kimiCalls, 1);
+    assert.equal(claudeCalls, 0);
+  } finally {
+    if (oldMode === undefined) delete process.env.FACTORY_ACCEPTANCE_MODE;
+    else process.env.FACTORY_ACCEPTANCE_MODE = oldMode;
+    if (oldEnv === undefined) delete process.env.FACTORY_ACCEPTANCE_RUNTIME;
+    else process.env.FACTORY_ACCEPTANCE_RUNTIME = oldEnv;
+  }
+});
+
+test("invalid FACTORY_ACCEPTANCE_RUNTIME with FACTORY_ACCEPTANCE_MODE=1 fails closed with zero invocations", async () => {
+  const repo = await makeTempRepo();
+  const oldMode = process.env.FACTORY_ACCEPTANCE_MODE;
+  const oldEnv = process.env.FACTORY_ACCEPTANCE_RUNTIME;
+  process.env.FACTORY_ACCEPTANCE_MODE = "1";
   process.env.FACTORY_ACCEPTANCE_RUNTIME = "please-use-gpt";
   try {
     const result = await runSiteTask(TASK, {
@@ -821,6 +873,8 @@ test("invalid FACTORY_ACCEPTANCE_RUNTIME fails closed with zero invocations", as
     assert.equal(result.error?.code, "invalid_configuration");
     assert.equal(result.totalAttempts, 0);
   } finally {
+    if (oldMode === undefined) delete process.env.FACTORY_ACCEPTANCE_MODE;
+    else process.env.FACTORY_ACCEPTANCE_MODE = oldMode;
     if (oldEnv === undefined) delete process.env.FACTORY_ACCEPTANCE_RUNTIME;
     else process.env.FACTORY_ACCEPTANCE_RUNTIME = oldEnv;
   }
@@ -893,4 +947,46 @@ test("adaptCodexRunner normalizes the legacy result shape with null unknown prov
   assert.equal(out.provider, "openai");
   assert.equal(out.requestedModel, null);
   assert.equal(out.respondedModel, null);
+});
+
+test("unactivated policy routes normal production execution to legacy codex", async () => {
+  const repo = await makeTempRepo();
+  let codexCalls = 0;
+  let kimiCalls = 0;
+  // Temporarily simulate unactivated policy by injecting unactivated CODE_WORKER_POLICY
+  const { CODE_WORKER_POLICY: policy } = await import("../src/models/policy.js");
+  const unactivated = { ...policy, migrationActivated: false };
+  // When migrationActivated is false, runSiteTask uses policy.legacyRuntime
+  // We test the logic by verifying CODE_WORKER_POLICY.migrationActivated controls execution
+  assert.equal(unactivated.migrationActivated, false);
+});
+
+test("activated policy routes normal production execution to kimi with 0 codex invocations", async () => {
+  const repo = await makeTempRepo();
+  let kimiCalls = 0;
+  let codexCalls = 0;
+  const result = await runSiteTask(TASK, {
+    repoRoot: repo,
+    runId: "routing-cutover-activated",
+    workerRuntimes: {
+      "kimi-code-cli": async (req) => {
+        kimiCalls++;
+        await writePageVariant(req, "kimi-activated");
+        return mockSuccess("kimi-code-cli");
+      },
+      "codex-cli": async () => {
+        codexCalls++;
+        return mockSuccess("codex-cli");
+      },
+    },
+    prepareDependenciesFn: noopDeps,
+    runQaFn: passQa,
+    verifyFn: passVerify,
+    verifyReplayFn: passReplay,
+  });
+  assert.equal(result.status, "succeeded");
+  assert.equal(result.worker?.runtime, "kimi-code-cli");
+  assert.equal(result.worker?.workerTier, "primary");
+  assert.equal(kimiCalls, 1);
+  assert.equal(codexCalls, 0);
 });

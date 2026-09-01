@@ -139,17 +139,18 @@ test("legacy codex keeps its exact terminal codes", () => {
   });
 });
 
-test("acceptance override: trusted env only, strict values, never from task data", () => {
+test("acceptance override: requires FACTORY_ACCEPTANCE_MODE=1, strict values, never from task data", () => {
   assert.equal(acceptanceRuntimeOverride({}), null);
-  assert.equal(acceptanceRuntimeOverride({ FACTORY_ACCEPTANCE_RUNTIME: "" }), null);
-  const senior = acceptanceRuntimeOverride({ FACTORY_ACCEPTANCE_RUNTIME: "claude-code" });
+  assert.equal(acceptanceRuntimeOverride({ FACTORY_ACCEPTANCE_RUNTIME: "claude-code" }), null, "ignored without mode");
+  assert.equal(acceptanceRuntimeOverride({ FACTORY_ACCEPTANCE_MODE: "1", FACTORY_ACCEPTANCE_RUNTIME: "" }), null);
+  const senior = acceptanceRuntimeOverride({ FACTORY_ACCEPTANCE_MODE: "1", FACTORY_ACCEPTANCE_RUNTIME: "claude-code" });
   assert.equal(senior?.runtime, "claude-code");
   assert.equal(senior?.tier, "senior");
-  const primary = acceptanceRuntimeOverride({ FACTORY_ACCEPTANCE_RUNTIME: "kimi-code-cli" });
+  const primary = acceptanceRuntimeOverride({ FACTORY_ACCEPTANCE_MODE: "1", FACTORY_ACCEPTANCE_RUNTIME: "kimi-code-cli" });
   assert.equal(primary?.runtime, "kimi-code-cli");
   assert.equal(primary?.tier, "primary");
   assert.throws(
-    () => acceptanceRuntimeOverride({ FACTORY_ACCEPTANCE_RUNTIME: "openai/gpt-5.6-sol" }),
+    () => acceptanceRuntimeOverride({ FACTORY_ACCEPTANCE_MODE: "1", FACTORY_ACCEPTANCE_RUNTIME: "openai/gpt-5.6-sol" }),
     (err: unknown) => err instanceof FactoryError && err.code === "invalid_configuration",
   );
 });

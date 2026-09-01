@@ -199,11 +199,16 @@ export function selectWorkerForAttempt(
  * for a natural Kimi failure. It is read exclusively from the executor's
  * own process environment; SiteTask content can never set it.
  *
+ * Ordinary production execution must NOT accidentally honor a leftover
+ * acceptance variable: requires BOTH FACTORY_ACCEPTANCE_MODE=1 and
+ * FACTORY_ACCEPTANCE_RUNTIME to be configured.
+ *
  * Returns null when no override is configured.
  */
 export function acceptanceRuntimeOverride(
   env: NodeJS.ProcessEnv = process.env,
 ): WorkerSelection | null {
+  if (env.FACTORY_ACCEPTANCE_MODE !== "1") return null;
   const raw = env.FACTORY_ACCEPTANCE_RUNTIME;
   if (raw === undefined || raw.trim() === "") return null;
   const value = raw.trim();

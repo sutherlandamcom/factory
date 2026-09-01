@@ -328,7 +328,7 @@ export const CODE_WORKER_POLICY = deepFreeze({
   /** Legacy accepted runtime: rollback/reference only after activation. */
   legacyRuntime: "codex-cli" as const,
   currentlyActiveArchitecture: "code-worker-routing-v0" as const,
-  migrationActivated: false,
+  migrationActivated: true,
 });
 
 export type CodeWorkerPolicy = typeof CODE_WORKER_POLICY;

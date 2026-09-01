@@ -517,9 +517,6 @@ export async function startModelRelay(options: ModelRelayOptions): Promise<Model
   // Container sidecar mode on FACTORY_RUNTIME_NETWORK
   const repoRoot = options.repoRoot;
   const relayContainerName = `factory-relay-${options.containerName}`;
-  const relayDir = path.join(repoRoot, ".factory", "relay-runtime", relayContainerName);
-  await mkdir(relayDir, { recursive: true });
-
   const relayPort = 8080;
   const scriptContent = buildRelayContainerScript({
     tier,
@@ -529,9 +526,6 @@ export async function startModelRelay(options: ModelRelayOptions): Promise<Model
     upstreamBaseUrl,
     port: relayPort,
   });
-
-  const scriptPath = path.join(relayDir, "server.js");
-  await writeFile(scriptPath, scriptContent, { mode: 0o600 });
 
   const dockerArgs = [
     "run",
@@ -544,11 +538,10 @@ export async function startModelRelay(options: ModelRelayOptions): Promise<Model
     "factory-model-relay",
     "--network-alias",
     relayContainerName,
-    "--mount",
-    `type=bind,src=${scriptPath},dst=/server.js,readonly`,
     "node:22-bookworm-slim",
     "node",
-    "/server.js",
+    "-e",
+    scriptContent,
   ];
 
   try {
@@ -616,7 +609,6 @@ export async function startModelRelay(options: ModelRelayOptions): Promise<Model
           env: dockerClientEnv(repoRoot),
           timeoutMs: 15_000,
         }).catch(() => undefined);
-        await rm(relayDir, { recursive: true, force: true }).catch(() => undefined);
       },
     };
   } catch (error) {
@@ -625,7 +617,6 @@ export async function startModelRelay(options: ModelRelayOptions): Promise<Model
       env: dockerClientEnv(repoRoot),
       timeoutMs: 15_000,
     }).catch(() => undefined);
-    await rm(relayDir, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
 }

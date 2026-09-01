@@ -108,8 +108,10 @@ export async function ensureRuntimeNetworkIsolation(
       env: dockerClientEnv(repoRoot),
       timeoutMs: NETWORK_CMD_TIMEOUT_MS,
     }));
+  // Factory-owned VM commands run through sudo: the default Colima VM user
+  // is unprivileged (iptables requires root inside the VM).
   const vm = deps.vm ?? ((args: string[]) =>
-    runProcess("colima", ["ssh", "--profile", FACTORY_COLIMA_PROFILE, "--", ...args], {
+    runProcess("colima", ["ssh", "--profile", FACTORY_COLIMA_PROFILE, "--", "sudo", "--", ...args], {
       cwd: repoRoot,
       env: buildChildEnv(),
       timeoutMs: NETWORK_CMD_TIMEOUT_MS,

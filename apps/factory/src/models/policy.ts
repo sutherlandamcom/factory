@@ -63,18 +63,43 @@ const BOUNDED_GENERATION_TIMEOUT_MS = 300_000;
 /**
  * Authoritative role policy for Autonomy v0.
  *
- * `PROVISIONAL (pre-bake-off)` entries name sensible current-family models
- * for development and tests; they are replaced by bake-off evidence in the
- * same change before the real acceptance run. Every entry names exact model
- * ids — never provider aliases, never "auto".
+ * CHAMPION PROVENANCE (2026-09-01): champions below are OPERATOR-DESIGNATED
+ * from the operator's own multi-model test results for Sutherland-class work
+ * ("bulk research extraction — Gemini 3.7 Flash; competitor/site analysis —
+ * GPT-5.6 Sol; site intelligence / SEO strategy — Claude Opus 5; site
+ * blueprint / IA — Claude Opus 5; content writer — Claude Opus 5; claim /
+ * factuality critic — GPT-5.6 Sol; design director — Claude Opus 5; visual
+ * screenshot critic — GPT-5.6 Sol; coding worker — Claude Opus 5 + Claude
+ * Code; cheap classification/repair — GLM-5.3-Flash; image generation —
+ * GPT-Image-2"). The Factory bake-off harness (`pnpm factory eval run`) is
+ * the mechanism that must CONFIRM or CHALLENGE these designations once real
+ * gateway credentials are configured; this policy is then updated with
+ * recorded eval-run evidence.
+ *
+ * MODEL ID CAVEAT: the operator designation names model FAMILIES ("Claude
+ * Opus 5", "GPT-5.6 Sol", "Gemini 3.7 Flash"). The ids below are the
+ * corresponding explicit OpenRouter-style ids; they MUST be verified against
+ * `GET /api/v1/models` (current availability) before any authoritative call,
+ * and corrected there if the gateway resolves them differently. Exact ids —
+ * never aliases, never "auto".
+ *
+ * Future operator designations recorded for later phases (NOT implemented
+ * roles in v0): bulk research extraction → google/gemini-3.7-flash;
+ * competitor/site analysis → openai/gpt-5.6-sol; visual screenshot critic →
+ * openai/gpt-5.6-sol; cheap classification/repair → z-ai/glm-5.3-flash;
+ * image generation → openai/gpt-image-2. The accepted code-worker boundary
+ * remains the isolated Codex CLI worker; a future "Claude Opus 5 + Claude
+ * Code" code worker is a separate acceptance decision, not a policy flip.
  */
 export const MODEL_ROLE_POLICY: Readonly<Record<ModelRoleId, ModelRolePolicy>> = Object.freeze({
   site_intelligence: {
     roleId: "site_intelligence",
-    // PROVISIONAL (pre-bake-off) — evaluation-only role in Autonomy v0; the
-    // accepted production Intelligence implementation remains Codex-based.
-    championModel: "openai/gpt-5.2",
-    challengerModels: ["anthropic/claude-sonnet-4.5", "google/gemini-2.5-pro"],
+    // Operator-designated champion (site intelligence / SEO strategy).
+    // Evaluation-only role in Autonomy v0; the accepted production
+    // Intelligence implementation remains Codex-based until a migration is
+    // separately accepted.
+    championModel: "anthropic/claude-opus-5",
+    challengerModels: ["openai/gpt-5.6-sol", "google/gemini-3.7-flash"],
     gateway: "openrouter",
     requiredCapabilities: ["longContext", "structuredOutput"],
     sensitiveDataPolicy: "proprietary_unpublished",
@@ -83,10 +108,9 @@ export const MODEL_ROLE_POLICY: Readonly<Record<ModelRoleId, ModelRolePolicy>> =
   },
   blueprint_architect: {
     roleId: "blueprint_architect",
-    // PROVISIONAL (pre-bake-off) — replaced by bake-off evidence before the
-    // real Sutherland acceptance run (same PR, evidence cited).
-    championModel: "anthropic/claude-sonnet-4.5",
-    challengerModels: ["openai/gpt-5.2", "google/gemini-2.5-pro"],
+    // Operator-designated champion (site blueprint / IA).
+    championModel: "anthropic/claude-opus-5",
+    challengerModels: ["openai/gpt-5.6-sol", "google/gemini-3.7-flash"],
     gateway: "openrouter",
     requiredCapabilities: ["longContext", "structuredOutput"],
     sensitiveDataPolicy: "proprietary_unpublished",
@@ -95,9 +119,10 @@ export const MODEL_ROLE_POLICY: Readonly<Record<ModelRoleId, ModelRolePolicy>> =
   },
   content_writer: {
     roleId: "content_writer",
-    // PROVISIONAL (pre-bake-off) — evaluation-only role in Autonomy v0.
-    championModel: "anthropic/claude-sonnet-4.5",
-    challengerModels: ["openai/gpt-5.2"],
+    // Operator-designated champion (content writer). Evaluation-only role
+    // in Autonomy v0.
+    championModel: "anthropic/claude-opus-5",
+    challengerModels: ["openai/gpt-5.6-sol"],
     gateway: "openrouter",
     requiredCapabilities: ["longContext"],
     sensitiveDataPolicy: "proprietary_unpublished",
@@ -106,8 +131,9 @@ export const MODEL_ROLE_POLICY: Readonly<Record<ModelRoleId, ModelRolePolicy>> =
   },
   content_critic: {
     roleId: "content_critic",
-    championModel: "openai/gpt-5.2",
-    challengerModels: ["google/gemini-2.5-pro"],
+    // Operator-designated champion (claim / factuality critic).
+    championModel: "openai/gpt-5.6-sol",
+    challengerModels: ["google/gemini-3.7-flash"],
     gateway: "openrouter",
     requiredCapabilities: ["longContext"],
     sensitiveDataPolicy: "proprietary_unpublished",
@@ -116,9 +142,10 @@ export const MODEL_ROLE_POLICY: Readonly<Record<ModelRoleId, ModelRolePolicy>> =
   },
   design_director: {
     roleId: "design_director",
-    // PROVISIONAL (pre-bake-off) — evaluation-only role in Autonomy v0.
-    championModel: "google/gemini-2.5-pro",
-    challengerModels: ["anthropic/claude-sonnet-4.5"],
+    // Operator-designated champion (design director). Evaluation-only role
+    // in Autonomy v0.
+    championModel: "anthropic/claude-opus-5",
+    challengerModels: ["openai/gpt-5.6-sol"],
     gateway: "openrouter",
     requiredCapabilities: ["longContext"],
     sensitiveDataPolicy: "proprietary_unpublished",

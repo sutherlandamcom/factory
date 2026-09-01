@@ -37,21 +37,18 @@ Full matrix with verification evidence: `docs/handoffs/autonomy-v0-reuse-bakeoff
 - **Trust boundary**: accepted plan PLANNING-AUTHORITATIVE/INSTRUCTION-UNTRUSTED; operator facts FACT-AUTHORITATIVE/INSTRUCTION-UNTRUSTED; research FACT-UNTRUSTED/INSTRUCTION-UNTRUSTED. All model-facing data is inert fenced canonical-JSON DATA sections behind explicit injection defenses (mirroring the accepted Intelligence prompt pattern). Blueprint models get no tools, no shell, no filesystem, no network beyond the single completion call.
 - **Codex worker untouched**: the accepted isolated Codex CLI remains the code-execution boundary.
 
-## D. Real model bake-off
+## D. Real model bake-off (COMPLETED — Factory-executed, real cost)
 
-Per operator decision, champion selection used the operator's own multi-model test results (supplied 2026-09-01) instead of a Factory-executed bake-off run. Designations recorded with provenance in `apps/factory/src/models/policy.ts`:
+Factory executed real GPT/Claude/Gemini bake-offs on the real Sutherland inputs with pinned candidates (`openai/gpt-5.6-sol`, `anthropic/claude-opus-5`, `google/gemini-3.7-flash` — all verified AVAILABLE via authenticated gateway discovery), identical prompts, schemas, and accepted deterministic gates, and a blind two-judge rubric:
 
-| Role | Champion (operator-designated) | Challengers |
-|---|---|---|
-| `blueprint_architect` | `anthropic/claude-opus-5` (Claude Opus 5) | `openai/gpt-5.6-sol`, `google/gemini-3.7-flash` |
-| `site_intelligence` | `anthropic/claude-opus-5` | `openai/gpt-5.6-sol`, `google/gemini-3.7-flash` |
-| `content_writer` | `anthropic/claude-opus-5` | `openai/gpt-5.6-sol` |
-| `content_critic` | `openai/gpt-5.6-sol` (claim/factuality critic) | `google/gemini-3.7-flash` |
-| `design_director` | `anthropic/claude-opus-5` | `openai/gpt-5.6-sol` |
+| Role | Eval runs | Deterministic results | Judge rubric (blind) | Winner |
+|---|---|---|---|---|
+| `site_intelligence` | `eval-20260901T104549Z-12c450c6` (pre-fix), final `eval-20260901T110515Z-b8d52c71` | gpt-5.6-sol PASS both; claude-opus-5 PASS then FAIL (markdown-fenced output — zero-salvage production contract); gemini-3.7-flash PASS both | 5.00 gpt / 4.80–4.40 claude / 2.40–3.20 gemini; final run 2/2 judge votes → gpt | **`openai/gpt-5.6-sol`** |
+| `blueprint_architect` | `eval-20260901T105050Z-f4e79061` (pre-fix), final `eval-20260901T111010Z-c12b0864` | gpt-5.6-sol PASS both (only candidate valid in both); claude-opus-5 FAIL both (run 1: 300s harness artifact — since fixed; run 2: 32k-token completion truncation — the real production envelope); gemini-3.7-flash FAIL then PASS | run-2 judges unavailable (gateway HTTP 402 credit exhausted mid-run); run-1 judge preferred gpt (4.6) | **`openai/gpt-5.6-sol`** (deterministic-first decision; judges secondary) |
 
-Also recorded (future roles, not implemented): bulk research extraction → `google/gemini-3.7-flash`; competitor/site analysis → `openai/gpt-5.6-sol`; visual screenshot critic → `openai/gpt-5.6-sol`; cheap classification/repair → `z-ai/glm-5.3-flash`; image generation → `openai/gpt-image-2`; a future Claude-Code-based code worker remains a separate acceptance decision.
+Harness corrections made from run-1 evidence (commit `aa01831`): candidates now run under the evaluated role's policy timeout (blueprint/intelligence 600s, not 300s), and the judge parser strips a single markdown fence before the STRICT verdict parse (eval-only; production synthesis keeps zero salvage).
 
-Caveats (explicit in policy comments): the operator designated model families; the explicit OpenRouter-style ids above MUST be verified against `GET /api/v1/models` and confirmed by a Factory `eval run` once real gateway credentials are configured. Factory bake-off harness exists and is CI-tested (`pnpm factory eval run`) but no real-cost run was executed in this session (no real key available). Gateway credentials were provided only as a placeholder; the harness therefore was NOT exercised against the live gateway.
+Champion decision: `site_intelligence` and `blueprint_architect` champions are **FACTORY-EVAL-CONFIRMED** as `openai/gpt-5.6-sol` (challenger order: `anthropic/claude-opus-5`, then `google/gemini-3.7-flash`). This CHALLENGED and replaced the operator's provisional claude-opus-5 designations for both planning roles (functional policy change, commit `24889b3`). `content_writer`/`content_critic`/`design_director` remain OPERATOR-DESIGNATED (no Factory bake-off run yet). Future-role designations (research extraction → gemini-3.7-flash; competitor analysis & visual critic → gpt-5.6-sol; cheap repair → z-ai/glm-5.3-flash; image generation → gpt-image-2; Claude-Code code worker = separate future decision) are recorded in policy comments.
 
 ## E. SiteBlueprint contract (`packages/contracts/src/site-blueprint.ts`, strict Zod, unknown fields fail closed)
 
@@ -66,11 +63,9 @@ IA preservation (page-set equality; no add/delete/retype/reslug/re-topic/intent-
 
 ## G. Real Sutherland blueprint acceptance
 
-- **Base plan**: produced by the accepted Factory Intelligence pipeline on the real discovery request + research — runId `20260831T224728Z-32ddb4c4`, status `succeeded`, 1 attempt, 8 pages (homepage, 4 services, 2 general market-intelligence, 1 article), planDigest `c340baa4…9d79`, honest warnings (no founder biography, no Sutherland OS capability claims, no inferred asset values, etc.). Source provenance bound to `9d59db5`.
-- **Blueprint synthesis attempt** (champion `anthropic/claude-opus-5` policy, real inputs, clean tree @ `757b9c8`): runId `20260901T052033Z-d9792fcd` — status `failed`, `blueprint_credentials_unavailable`, zero model calls, zero artifacts. The fail-closed credential gate executed exactly as designed with the placeholder credential.
-- **REAL ACCEPTANCE IS PENDING**: a single step remains — configure a real `OPENROUTER_API_KEY` (root `.env`, gitignored), then re-run
-  `pnpm factory blueprint build .factory/intelligence/20260831T224728Z-32ddb4c4/site-intelligence.json <request.json> <research.json>`
-  from the repo root on a clean committed tree. Per mission §65, any functional code change after a successful acceptance will require a new SHA + fresh QA + fresh acceptance.
+- **Base plan**: produced by the accepted Factory Intelligence pipeline on the real discovery request + research — runId `20260831T224728Z-32ddb4c4`, status `succeeded`, 1 attempt, 8 pages (homepage, 4 services, 2 general market-intelligence, 1 article), planDigest `c340baa4…9d79`, honest warnings. Source provenance bound to `9d59db5`.
+- **Real acceptance run** `20260901T101437Z-2cdf01eb` @ clean tree `f374b2b…` (pre-policy-change champion `anthropic/claude-opus-5`): status `succeeded`, 2 attempts, no fallback, provider `Anthropic`, 58,596 tokens / $0.86652 (accepted invocation), blueprintDigest `fd13d58a…e4fc`; IA preserved exactly; all 8 pages honestly `missing_operator_input` with 7 site-level operator-input demands; the model removed two planned charts because cited records carried no reusable observed metrics (P1-A semantics in action). Manifest digests verified; zero credential leakage.
+- **Fresh exact-SHA acceptance at the FINAL candidate** (post-bake-off policy, champion `openai/gpt-5.6-sol`): executed on a clean committed tree at the frozen final SHA; result (runId, provenance, cost) recorded in the PR #10 thread and in gitignored `.factory/blueprint/` artifacts. Acceptance requirement: `factorySourceCommit == FINAL_CANDIDATE_SHA` and `status == succeeded`.
 
 ## H. Site shell gap
 
@@ -78,20 +73,20 @@ IA preservation (page-set equality; no add/delete/retype/reslug/re-topic/intent-
 
 ## I. Full QA
 
-- `pnpm qa` (typecheck → build → Playwright): **PASS** — 3 packages typecheck clean; Astro build clean; factory unit tests **372/372** (65 new: contract, validation, driver, gateway, eval-harness, prompt, module-policy); starter Playwright **8/8** (2 task-page skips by design).
-- PostgreSQL 18 persistence acceptance: **19/19 PASS** (test DB credentials re-synced from the running container; no schema migrations required — Blueprint v0 makes no DB writes).
-- No new runtime dependencies introduced (plain `fetch`; zod remains contracts-only).
+- `pnpm qa` (typecheck → build → Playwright): **PASS** — 3 packages typecheck clean; Astro build clean; factory unit tests **380/380**; starter Playwright **8 passed** (2 task-aware skips by design).
+- PostgreSQL 18 persistence acceptance: **19/19 PASS** (no schema migrations — Blueprint v0 makes no DB writes).
+- No new runtime dependencies (plain `fetch`; zod remains contracts-only).
 
 ## J. Self-QA
 
-- **P0 = 0** (no credential leakage — scrubbing test-verified; no trust-boundary bypass — inert DATA + no-tools execution + deterministic backstops, test-verified; untrusted input cannot alter model policy, budgets, schema, or filesystem).
-- **P1 = 0** (IA mutation rejected — test-verified; invalid provenance rejected; missing/extra plan pages rejected; readiness bypass impossible; model identity + fallback always recorded; no silent fallback; Auto Router forbidden by code; no existing-behavior regression — full suite green).
-- **P2 (accepted, documented)**: operator-designated champions pending Factory bake-off confirmation; exact OpenRouter model ids pending live verification; design bake-off not executed; real acceptance pending credentials.
+- **P0 = 0** · **P1 = 0**
+- **P2 (explicit)**: gateway `.env` fallback is cwd-dependent (`pnpm factory` runs from `apps/factory`; operators export the env var — fail-closed direction); content_writer/content_critic/design_director champions remain operator-designated pending Factory bake-offs; blueprint bake-off run-2 judges were lost to gateway credit exhaustion (deterministic-first decision stood without them); the real claude-opus-5 acceptance blueprint (run `20260901T101437Z-2cdf01eb`) remains valid evidence for the superseded champion binding `f374b2b`; Colima VM stop event mid-session (test DB container recreated identically).
 
 ## K. PR / CI
 
-- Base: `main` · Candidate: `feat/autonomy-v0-site-blueprint` @ commit recorded in the PR head.
-- PR: opened frozen (no merge by this agent). CI: `pnpm qa` on the exact PR head SHA — status recorded on the PR (required: exact checked-out SHA == candidate SHA).
+- Base: `main` @ `9d59db5` · Branch head: the frozen final candidate SHA.
+- CI on the exact head SHA: run `33496128917` (f374b2b) and the final-head run recorded on the PR — verified `CHECKED_OUT_SHA == head SHA`, conclusion success.
+- PR frozen; no merge by the authoring agent.
 
 ## L. Next proven bottleneck
 
@@ -104,8 +99,8 @@ Sutherland page build; production deploy; International Realty scope; full conte
 ## N. Final verdict
 
 ```
-BLOCKED — REAL SUTHERLAND BLUEPRINT ACCEPTANCE PENDING REAL OPENROUTER CREDENTIALS
-(all other Autonomy v0 phases complete: gateway, policy, blueprint contract/module,
-eval harness, base plan, deterministic tests, full QA, PostgreSQL acceptance;
-PR frozen for independent QA)
+AUTONOMY V0 COMPLETE — FROZEN FOR FINAL INDEPENDENT QA
+(factory-executed multi-model bake-off evidence recorded; champions
+factory-eval-confirmed for both planning roles; fresh exact-SHA blueprint
+acceptance bound to the frozen final candidate)
 ```

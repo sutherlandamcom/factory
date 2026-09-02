@@ -6,6 +6,8 @@ import {
   FACTORY_ROLE_IDS,
   MODEL_ROLE_IDS,
   MODEL_ROLE_POLICY,
+  activeCodeWorkerRuntime,
+  codeWorkerBinding,
   mayReceiveProprietaryData,
   resolveModelSequence,
   type FactoryRoleId,
@@ -24,8 +26,10 @@ const EXPECTED_MATRIX: Record<string, { model: string; status: string }> = {
   image_generator: { model: "openai/gpt-image-2", status: "future" },
 };
 
-test("policy version is the frozen v0 identifier", () => {
-  assert.equal(FACTORY_MODEL_POLICY_VERSION, "factory-model-policy-v0");
+test("policy version is the explicit v0.1 successor of the accepted v0 policy", () => {
+  // Model-policy semantics changed (code-worker routing v0); the version
+  // string distinguishes old and new provenance — never a silent swap.
+  assert.equal(FACTORY_MODEL_POLICY_VERSION, "factory-model-policy-v0.1");
 });
 
 test("the full intended role set is machine-readable with 11 unique ids", () => {
@@ -73,13 +77,69 @@ test("content and design role separation is intentional", () => {
   );
 });
 
-test("code worker: model + runtime split with migration NOT activated", () => {
+test("code worker: primary is Kimi K3 (effort max) via Kimi Code CLI through OpenRouter", () => {
   assert.equal(CODE_WORKER_POLICY.roleId, "code_worker");
-  assert.equal(CODE_WORKER_POLICY.model, "anthropic/claude-opus-5");
-  assert.equal(CODE_WORKER_POLICY.runtimeTarget, "claude-code");
-  assert.equal(CODE_WORKER_POLICY.currentlyActiveRuntime, "codex-cli");
-  assert.equal(CODE_WORKER_POLICY.migrationActivated, false);
+  // Exact OpenRouter slug — never an alias, never openrouter/auto, never a
+  // "kimi-k3-max"-style invented id.
+  assert.equal(CODE_WORKER_POLICY.primary.model, "moonshotai/kimi-k3");
+  assert.equal(CODE_WORKER_POLICY.primary.reasoningEffort, "max");
+  assert.equal(CODE_WORKER_POLICY.primary.runtime, "kimi-code-cli");
+  assert.equal(CODE_WORKER_POLICY.primary.gateway, "openrouter");
+  assert.equal(CODE_WORKER_POLICY.primary.tier, "primary");
+});
+
+test("code worker: senior is Claude Opus 5 via Claude Code through OpenRouter", () => {
+  assert.equal(CODE_WORKER_POLICY.senior.model, "anthropic/claude-opus-5");
+  assert.equal(CODE_WORKER_POLICY.senior.runtime, "claude-code");
+  assert.equal(CODE_WORKER_POLICY.senior.gateway, "openrouter");
+  assert.equal(CODE_WORKER_POLICY.senior.tier, "senior");
+});
+
+test("code worker: model, runtime, and gateway are distinct provenance fields", () => {
+  // "Kimi K3 Max" is model id + reasoning effort, never one model string.
+  assert.ok(!CODE_WORKER_POLICY.primary.model.includes("max"));
+  assert.ok(!CODE_WORKER_POLICY.primary.model.includes("-k3-max"));
+  assert.notEqual(CODE_WORKER_POLICY.primary.model, CODE_WORKER_POLICY.primary.runtime);
+  assert.notEqual(CODE_WORKER_POLICY.senior.model, CODE_WORKER_POLICY.senior.runtime);
+});
+
+test("code worker: exact slug pins reject batch variants and tilde aliases", () => {
+  for (const binding of [CODE_WORKER_POLICY.primary, CODE_WORKER_POLICY.senior]) {
+    assert.ok(!binding.model.includes(":"), "no :batch-style variants");
+    assert.ok(!binding.model.startsWith("~"), "no alias models");
+    assert.notEqual(binding.model, "openrouter/auto");
+    assert.match(binding.model, /^[a-z0-9][a-z0-9._/-]{2,120}$/);
+  }
+});
+
+test("code worker: routing policy version and architecture are pinned", () => {
+  assert.equal(CODE_WORKER_POLICY.routingPolicyVersion, "code-worker-routing-v0");
+  assert.equal(CODE_WORKER_POLICY.currentlyActiveArchitecture, "code-worker-routing-v0");
+});
+
+test("code worker: migration ACTIVATED in policy v0.1 cutover", () => {
+  assert.equal(CODE_WORKER_POLICY.migrationActivated, true);
+  assert.equal(CODE_WORKER_POLICY.legacyRuntime, "codex-cli");
+  assert.equal(activeCodeWorkerRuntime(), "kimi-code-cli");
   assert.ok(!MODEL_ROLE_POLICY["code_worker" as keyof typeof MODEL_ROLE_POLICY]);
+});
+
+test("code worker: unactivated policy retains the legacy codex runtime", () => {
+  const unactivated = { ...CODE_WORKER_POLICY, migrationActivated: false };
+  assert.equal(activeCodeWorkerRuntime(unactivated), "codex-cli");
+});
+
+test("code worker: bindings expose exact runtime/model/effort per tier", () => {
+  const primary = codeWorkerBinding("primary");
+  const senior = codeWorkerBinding("senior");
+  assert.deepEqual(
+    { model: primary.model, runtime: primary.runtime, reasoningEffort: primary.reasoningEffort },
+    { model: "moonshotai/kimi-k3", runtime: "kimi-code-cli", reasoningEffort: "max" },
+  );
+  assert.deepEqual(
+    { model: senior.model, runtime: senior.runtime },
+    { model: "anthropic/claude-opus-5", runtime: "claude-code" },
+  );
 });
 
 test("no role resolves to openrouter/auto and no duplicates exist in fallback sequences", () => {

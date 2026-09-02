@@ -10,6 +10,14 @@ export interface ModelInvocationEvent {
   runtime: string;
   runtimeVersion?: string | null;
   methodologyVersion?: string | null;
+  /** Trusted Factory tier of the selected worker (code-worker-routing-v0). */
+  workerTier?: string | null;
+  requestedModel?: string | null;
+  respondedModel?: string | null;
+  reasoningEffort?: string | null;
+  escalation?: boolean | null;
+  escalationReason?: string | null;
+  exitCode?: number | null;
   status: "running" | "succeeded" | "failed" | "interrupted";
   startedAt: Date;
   finishedAt?: Date | null;
@@ -89,6 +97,12 @@ export class DatabaseLifecycleObserver implements ExecutorLifecycleObserver {
       runtime: event.runtime,
       runtimeVersion: event.runtimeVersion,
       methodologyVersion: event.methodologyVersion,
+      workerTier: event.workerTier ?? null,
+      requestedModel: event.requestedModel ?? null,
+      reasoningEffort: event.reasoningEffort ?? null,
+      escalation: event.escalation ?? null,
+      escalationReason: event.escalationReason ?? null,
+      exitCode: event.exitCode ?? null,
       status: event.status,
       startedAt: event.startedAt,
       finishedAt: event.finishedAt,

@@ -653,6 +653,12 @@ export class FactoryStore {
     runtime: string;
     runtimeVersion?: string | null;
     methodologyVersion?: string | null;
+    workerTier?: string | null;
+    requestedModel?: string | null;
+    reasoningEffort?: string | null;
+    escalation?: boolean | null;
+    escalationReason?: string | null;
+    exitCode?: number | null;
     status: "running" | "succeeded" | "failed" | "interrupted";
     startedAt: Date;
     finishedAt?: Date | null;
@@ -678,6 +684,12 @@ export class FactoryStore {
         runtime: input.runtime,
         runtimeVersion: input.runtimeVersion,
         methodologyVersion: input.methodologyVersion,
+        workerTier: input.workerTier ?? null,
+        requestedModel: input.requestedModel ?? null,
+        reasoningEffort: input.reasoningEffort ?? null,
+        escalation: input.escalation ?? null,
+        escalationReason: input.escalationReason ?? null,
+        exitCode: input.exitCode ?? null,
         status: input.status,
         startedAt: input.startedAt,
         finishedAt: input.finishedAt,

@@ -4,6 +4,7 @@ import path from "node:path";
 import { FactoryError } from "./errors.js";
 import { buildChildEnv } from "./env.js";
 import { runProcess } from "./process.js";
+import { ensureRuntimeNetworkIsolation } from "./network.js";
 
 export const STRONG_EXECUTION_ISOLATION_UNAVAILABLE =
   "STRONG_EXECUTION_ISOLATION_UNAVAILABLE";
@@ -11,6 +12,16 @@ export const FACTORY_COLIMA_PROFILE = "factory-sandbox";
 export const CODEX_WORKER_IMAGE = "factory-codex-worker:0.150.1";
 export const CODEX_VERSION = "0.150.1";
 export const CODEX_WORKER_REVISION = "2";
+
+/** Kimi Code CLI worker (Factory primary code worker) — exact pinned version. */
+export const KIMI_VERSION = "0.39.1";
+export const KIMI_WORKER_IMAGE = `factory-kimi-worker:${KIMI_VERSION}`;
+export const KIMI_WORKER_REVISION = "1";
+
+/** Claude Code worker (Factory senior code worker) — exact pinned version. */
+export const CLAUDE_VERSION = "2.1.150";
+export const CLAUDE_WORKER_IMAGE = `factory-claude-worker:${CLAUDE_VERSION}`;
+export const CLAUDE_WORKER_REVISION = "1";
 
 const PREFLIGHT_TIMEOUT_MS = 120_000;
 
@@ -25,6 +36,36 @@ export function codexWorkerBuildArgs(repoRoot: string): string[] {
     CODEX_WORKER_IMAGE,
     "--build-arg",
     `CODEX_VERSION=${CODEX_VERSION}`,
+    context,
+  ];
+}
+
+export function kimiWorkerBuildArgs(repoRoot: string): string[] {
+  const context = path.join(repoRoot, "apps", "factory", "isolation");
+  return [
+    "build",
+    "--pull",
+    "--file",
+    path.join(context, "kimi-worker.Dockerfile"),
+    "--tag",
+    KIMI_WORKER_IMAGE,
+    "--build-arg",
+    `KIMI_VERSION=${KIMI_VERSION}`,
+    context,
+  ];
+}
+
+export function claudeWorkerBuildArgs(repoRoot: string): string[] {
+  const context = path.join(repoRoot, "apps", "factory", "isolation");
+  return [
+    "build",
+    "--pull",
+    "--file",
+    path.join(context, "claude-worker.Dockerfile"),
+    "--tag",
+    CLAUDE_WORKER_IMAGE,
+    "--build-arg",
+    `CLAUDE_VERSION=${CLAUDE_VERSION}`,
     context,
   ];
 }
@@ -50,7 +91,9 @@ export function colimaDockerHost(parent: NodeJS.ProcessEnv = process.env): strin
 
 export function expectedColimaMounts(repoRoot: string): string[] {
   return [
+    path.join(repoRoot, ".factory", "claude-runtime"),
     path.join(repoRoot, ".factory", "codex-runtime"),
+    path.join(repoRoot, ".factory", "kimi-runtime"),
     path.join(repoRoot, ".factory", "worktrees"),
   ].sort();
 }
@@ -120,8 +163,12 @@ export function dockerClientEnv(
 
 export async function assertStrongExecutionIsolationAvailable(repoRoot: string): Promise<void> {
   const runtimeRoot = path.join(repoRoot, ".factory", "codex-runtime");
+  const kimiRuntimeRoot = path.join(repoRoot, ".factory", "kimi-runtime");
+  const claudeRuntimeRoot = path.join(repoRoot, ".factory", "claude-runtime");
   const dockerConfigDir = path.join(runtimeRoot, "docker-config");
   await mkdir(dockerConfigDir, { recursive: true });
+  await mkdir(kimiRuntimeRoot, { recursive: true });
+  await mkdir(claudeRuntimeRoot, { recursive: true });
   await mkdir(path.join(repoRoot, ".factory", "worktrees"), { recursive: true });
 
   for (const runtimePath of [...expectedColimaMounts(repoRoot), dockerConfigDir]) {
@@ -238,19 +285,65 @@ export async function assertStrongExecutionIsolationAvailable(repoRoot: string):
     throw isolationError("dedicated isolation profile already has a running container");
   }
 
+  await ensureWorkerImage(
+    repoRoot,
+    CODEX_WORKER_IMAGE,
+    "org.factory.codex.version",
+    CODEX_VERSION,
+    CODEX_WORKER_REVISION,
+    codexWorkerBuildArgs(repoRoot),
+  );
+  await ensureWorkerImage(
+    repoRoot,
+    KIMI_WORKER_IMAGE,
+    "org.factory.kimi.version",
+    KIMI_VERSION,
+    KIMI_WORKER_REVISION,
+    kimiWorkerBuildArgs(repoRoot),
+  );
+  await ensureWorkerImage(
+    repoRoot,
+    CLAUDE_WORKER_IMAGE,
+    "org.factory.claude.version",
+    CLAUDE_VERSION,
+    CLAUDE_WORKER_REVISION,
+    claudeWorkerBuildArgs(repoRoot),
+  );
+
+  // Outer egress allowlist for the routed runtimes (kimi/claude): only the
+  // model gateway is reachable from the dedicated runtime network, proven by
+  // functional probes. Fails closed.
+  await ensureRuntimeNetworkIsolation(repoRoot);
+}
+
+/** Verify the pinned worker image is present with exact version labels; build when missing. */
+async function ensureWorkerImage(
+  repoRoot: string,
+  image: string,
+  versionLabelKey: string,
+  expectedVersion: string,
+  expectedRevision: string,
+  buildArgs: string[],
+): Promise<void> {
   const inspect = await runProcess(
     "docker",
-    ["image", "inspect", CODEX_WORKER_IMAGE, "--format", "{{index .Config.Labels \"org.factory.codex.version\"}}|{{index .Config.Labels \"org.factory.worker.revision\"}}"],
+    [
+      "image",
+      "inspect",
+      image,
+      "--format",
+      `{{index .Config.Labels "${versionLabelKey}"}}|{{index .Config.Labels "org.factory.worker.revision"}}`,
+    ],
     { cwd: repoRoot, env: dockerClientEnv(repoRoot), timeoutMs: PREFLIGHT_TIMEOUT_MS },
   );
-  if (inspect.exitCode === 0 && inspect.stdout.trim() === `${CODEX_VERSION}|${CODEX_WORKER_REVISION}`) return;
+  if (inspect.exitCode === 0 && inspect.stdout.trim() === `${expectedVersion}|${expectedRevision}`) return;
 
-  const build = await runProcess(
-    "docker",
-    codexWorkerBuildArgs(repoRoot),
-    { cwd: repoRoot, env: dockerClientEnv(repoRoot), timeoutMs: 900_000 },
-  );
+  const build = await runProcess("docker", buildArgs, {
+    cwd: repoRoot,
+    env: dockerClientEnv(repoRoot),
+    timeoutMs: 900_000,
+  });
   if (build.timedOut || build.exitCode !== 0) {
-    throw isolationError(`failed to build pinned Codex worker image: ${build.stderr.trim() || `exit ${build.exitCode}`}`);
+    throw isolationError(`failed to build pinned worker image ${image}: ${build.stderr.trim() || `exit ${build.exitCode}`}`);
   }
 }

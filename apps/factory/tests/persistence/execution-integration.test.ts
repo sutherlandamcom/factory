@@ -86,7 +86,7 @@ test("execution integration: happy path persists Run, Task, Attempt, QualityResu
     const result = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
-      codexRunner: mockCodex(async (req) => {
+      primaryRunner: mockCodex(async (req) => {
         const page = path.join(
           req.worktreePath,
           "sites",
@@ -158,7 +158,7 @@ test("execution integration: scope violation terminal failure persists failed st
     const result = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
-      codexRunner: mockCodex(async (req) => {
+      primaryRunner: mockCodex(async (req) => {
         // Attempt to modify unauthorized file (package.json)
         await writeFile(path.join(req.worktreePath, "package.json"), '{"hacked": true}');
       }),
@@ -208,7 +208,7 @@ test("execution integration: bounded repair loop (Attempt 1 QA failure -> Attemp
     const result = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
-      codexRunner: mockCodex(async (req) => {
+      primaryRunner: mockCodex(async (req) => {
         attemptCount++;
         const page = path.join(
           req.worktreePath,

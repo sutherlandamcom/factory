@@ -3,9 +3,16 @@ import type { FailureReport } from "./classify.js";
 import type { TaskWritePolicy } from "./module-policy.js";
 
 /**
- * Mechanically generated Codex prompt for a validated SiteTask (Attempt 1).
+ * Factory-owned task instruction contract — ONE methodology shared by every
+ * coding runtime (Kimi Code primary worker, Claude Code senior worker,
+ * legacy Codex rollback worker). Runtime-specific wrappers may adapt
+ * transport/formatting, never task semantics.
  */
-export function buildCodexPrompt(task: SiteTask, policy: TaskWritePolicy): string {
+
+/**
+ * Mechanically generated worker prompt for a validated SiteTask (Attempt 1).
+ */
+export function buildWorkerPrompt(task: SiteTask, policy: TaskWritePolicy): string {
   const targetPath = policy.writablePaths[0]!;
   return `You are the Factory site engineering worker. Implement exactly one SiteTask in this repository.
 
@@ -21,8 +28,8 @@ export function buildCodexPrompt(task: SiteTask, policy: TaskWritePolicy): strin
 - Do NOT change configuration files unless the task explicitly requires it.
 - Do NOT run pnpm install or any package manager — dependencies are already installed.
 - Do NOT commit, push, stash, or otherwise run git-mutating commands.
-- Do NOT access the network; it is disabled.
-- Do NOT attempt to run "pnpm qa" or launch background dev/preview servers; sandbox blocks network sockets. Factory runs the authoritative QA oracle outside the sandbox.
+- Do NOT access the network; it is disabled at the execution boundary.
+- Do NOT attempt to run "pnpm qa" or launch background dev/preview servers. Factory runs the authoritative QA oracle outside your runtime; your work is verified after you stop.
 - When page.type is "general", use existing layouts/components and emit one truthful WebPage JSON-LD object whose name equals the SiteTask title and whose url equals the canonical URL.
 
 ## SiteTask (authoritative, validated JSON)
@@ -35,9 +42,9 @@ Create or replace exactly ${targetPath} using the existing page patterns. The pa
 }
 
 /**
- * Mechanically generated Codex prompt for a repair attempt (Attempt > 1).
+ * Mechanically generated worker prompt for a repair attempt (Attempt > 1).
  */
-export function buildRepairPrompt(task: SiteTask, report: FailureReport, policy: TaskWritePolicy): string {
+export function buildWorkerRepairPrompt(task: SiteTask, report: FailureReport, policy: TaskWritePolicy): string {
   const targetPath = policy.writablePaths[0]!;
   const assertionsBlock =
     report.failingAssertions && report.failingAssertions.length > 0
@@ -67,8 +74,8 @@ Your goal is to inspect the current implementation in the repository and FIX THE
 - Do NOT change configuration files unless the task explicitly requires it.
 - Do NOT run pnpm install or any package manager — dependencies are already installed.
 - Do NOT commit, push, stash, or otherwise run git-mutating commands.
-- Do NOT access the network; it is disabled.
-- Do NOT attempt to run "pnpm qa" or launch background dev/preview servers; sandbox blocks network sockets. Factory runs the authoritative QA oracle outside the sandbox.
+- Do NOT access the network; it is disabled at the execution boundary.
+- Do NOT attempt to run "pnpm qa" or launch background dev/preview servers. Factory runs the authoritative QA oracle outside your runtime; your work is verified after you stop.
 - When page.type is "general", use existing layouts/components and emit one truthful WebPage JSON-LD object whose name equals the SiteTask title and whose url equals the canonical URL.
 
 ## Target SiteTask

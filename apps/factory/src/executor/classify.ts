@@ -22,10 +22,14 @@ export function stripAnsi(text: string): string {
 
 /** Redact sensitive database passwords and credentials from log excerpts. */
 export function scrubSecrets(text: string): string {
-  return text.replace(
-    /((?:postgres|postgresql):\/\/[^:]+:)([^@]+)(@)/gi,
-    "$1***$3",
-  );
+  return text
+    .replace(
+      /((?:postgres|postgresql):\/\/[^:]+:)([^@]+)(@)/gi,
+      "$1***$3",
+    )
+    // Model-gateway credentials never belong in failure artifacts.
+    .replace(/sk-or-[A-Za-z0-9_-]{8,}/g, "[redacted-key]")
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]");
 }
 
 /** Sanitize and truncate raw log text into a compact excerpt (max 8KB). */

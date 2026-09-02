@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { FactoryError } from "../executor/errors.js";
 
 /**
@@ -89,7 +91,6 @@ export function loadOpenRouterApiKey(env: NodeJS.ProcessEnv = process.env): stri
   // does not carry the key. Existing environment values always win because
   // we only reach this path when the env value is absent.
   try {
-    // Node 22+: loads `.env` from the current working directory.
     process.loadEnvFile?.();
   } catch {
     // No .env file (or unreadable) — fall through to the final env check.

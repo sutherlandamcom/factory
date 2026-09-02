@@ -35,7 +35,7 @@ test("Scenario A: initial attempt succeeds -> totalAttempts = 1, status = succee
   const result = await runSiteTask(TASK, {
     repoRoot: repo,
     runId: "repair-init-ok",
-    codexRunner: async (req: CodexRunRequest): Promise<CodexRunResult> => {
+    primaryRunner: async (req: CodexRunRequest): Promise<CodexRunResult> => {
       codexInvocations++;
       const page = path.join(req.worktreePath, "sites", "starter", "src", "pages", "services", "roof-repair.astro");
       await mkdir(path.dirname(page), { recursive: true });
@@ -66,7 +66,7 @@ test("Scenario B: 1 repair succeeds after QA failure -> totalAttempts = 2, statu
   const result = await runSiteTask(TASK, {
     repoRoot: repo,
     runId: "repair-one-qa",
-    codexRunner: async (req: CodexRunRequest): Promise<CodexRunResult> => {
+    primaryRunner: async (req: CodexRunRequest): Promise<CodexRunResult> => {
       codexInvocations++;
       const page = path.join(req.worktreePath, "sites", "starter", "src", "pages", "services", "roof-repair.astro");
       await mkdir(path.dirname(page), { recursive: true });
@@ -120,7 +120,7 @@ test("Scenario C: third attempt succeeds (2 failures -> Attempt 3 passes) -> sta
     repoRoot: repo,
     runId: "repair-three-attempts",
     maxAttempts: 3,
-    codexRunner: async (req: CodexRunRequest): Promise<CodexRunResult> => {
+    primaryRunner: async (req: CodexRunRequest): Promise<CodexRunResult> => {
       codexInvocations++;
       const page = path.join(req.worktreePath, "sites", "starter", "src", "pages", "services", "roof-repair.astro");
       await mkdir(path.dirname(page), { recursive: true });
@@ -154,7 +154,7 @@ test("Scenario D: max attempts exhausted (3 attempts fail repairably) -> needs_r
     repoRoot: repo,
     runId: "repair-exhausted",
     maxAttempts: 3,
-    codexRunner: async (req: CodexRunRequest): Promise<CodexRunResult> => {
+    primaryRunner: async (req: CodexRunRequest): Promise<CodexRunResult> => {
       codexInvocations++;
       const page = path.join(req.worktreePath, "sites", "starter", "src", "pages", "services", "roof-repair.astro");
       await mkdir(path.dirname(page), { recursive: true });
@@ -189,7 +189,7 @@ test("Scenario E: scope violation on Attempt 1 stops immediately without retry",
     repoRoot: repo,
     runId: "repair-scope-stop-1",
     maxAttempts: 3,
-    codexRunner: async (req: CodexRunRequest): Promise<CodexRunResult> => {
+    primaryRunner: async (req: CodexRunRequest): Promise<CodexRunResult> => {
       codexInvocations++;
       await writeFile(path.join(req.worktreePath, "package.json"), '{"name":"tampered"}\n');
       return { exitCode: 0, timedOut: false, version: "codex-mock", stdout: "", stderr: "" };
@@ -216,7 +216,7 @@ test("Scenario F: scope violation on Attempt 2 stops immediately without further
     repoRoot: repo,
     runId: "repair-scope-stop-2",
     maxAttempts: 3,
-    codexRunner: async (req: CodexRunRequest): Promise<CodexRunResult> => {
+    primaryRunner: async (req: CodexRunRequest): Promise<CodexRunResult> => {
       codexInvocations++;
       if (codexInvocations === 1) {
         // Attempt 1: safe modification but fails QA
@@ -248,7 +248,7 @@ test("Scenario F: scope violation on Attempt 2 stops immediately without further
   assert.equal(result.attempts?.[1]?.classification, "non_repairable");
 });
 
-test("Scenario G: no-progress / zero-diff on repair stops early with needs_review", async () => {
+test("Scenario G: no-progress repair escalates to attempt 3; persistent no-progress ends needs_review", async () => {
   const repo = await makeTempRepo();
   let codexInvocations = 0;
 
@@ -256,7 +256,7 @@ test("Scenario G: no-progress / zero-diff on repair stops early with needs_revie
     repoRoot: repo,
     runId: "repair-no-progress",
     maxAttempts: 3,
-    codexRunner: async (req: CodexRunRequest): Promise<CodexRunResult> => {
+    primaryRunner: async (req: CodexRunRequest): Promise<CodexRunResult> => {
       codexInvocations++;
       if (codexInvocations === 1) {
         const page = path.join(req.worktreePath, "sites", "starter", "src", "pages", "services", "roof-repair.astro");
@@ -273,9 +273,10 @@ test("Scenario G: no-progress / zero-diff on repair stops early with needs_revie
   });
 
   assert.equal(result.status, "needs_review");
-  assert.equal(result.totalAttempts, 2);
-  assert.equal(codexInvocations, 2);
+  assert.equal(result.totalAttempts, 3);
+  assert.equal(codexInvocations, 3);
   assert.equal(result.attempts?.[1]?.classification, "no_progress");
+  assert.equal(result.attempts?.[2]?.classification, "no_progress");
   assert.equal(result.error?.code, "no_progress");
 });
 
@@ -303,7 +304,7 @@ test("Scenario I: final patch represents complete state against original base", 
   const result = await runSiteTask(TASK, {
     repoRoot: repo,
     runId: "repair-final-patch",
-    codexRunner: async (req: CodexRunRequest): Promise<CodexRunResult> => {
+    primaryRunner: async (req: CodexRunRequest): Promise<CodexRunResult> => {
       codexInvocations++;
       const page = path.join(req.worktreePath, "sites", "starter", "src", "pages", "services", "roof-repair.astro");
       await mkdir(path.dirname(page), { recursive: true });
@@ -339,7 +340,7 @@ test("Scenario J: replay failure on Attempt 1 enters repair and succeeds on Atte
     repoRoot: repo,
     runId: "repair-replay-flow",
     maxAttempts: 3,
-    codexRunner: async (req: CodexRunRequest): Promise<CodexRunResult> => {
+    primaryRunner: async (req: CodexRunRequest): Promise<CodexRunResult> => {
       codexInvocations++;
       const page = path.join(req.worktreePath, "sites", "starter", "src", "pages", "services", "roof-repair.astro");
       await mkdir(path.dirname(page), { recursive: true });
@@ -366,4 +367,14 @@ test("Scenario J: replay failure on Attempt 1 enters repair and succeeds on Atte
   assert.equal(result.attempts?.[0]?.stage, "replay");
   assert.equal(result.attempts?.[0]?.classification, "repairable");
   assert.equal(result.attempts?.[1]?.stage, "complete");
+});
+
+test("scrubSecrets redacts model-gateway credentials in failure excerpts", async () => {
+  const { scrubSecrets } = await import("../src/executor/classify.js");
+  const dirty = "error: api key sk-or-v1-abc123def456 rejected; auth Bearer sk-or-v1-abc123def456; db postgresql://u:secret@h/db";
+  const clean = scrubSecrets(dirty);
+  assert.ok(!clean.includes("sk-or-v1-abc123def456"));
+  assert.ok(!clean.includes("secret@"));
+  assert.match(clean, /\[redacted-key\]/);
+  assert.match(clean, /Bearer \[redacted/);
 });

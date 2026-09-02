@@ -3,6 +3,7 @@ import { chmod, copyFile, lstat, mkdir, readFile, rm, writeFile } from "node:fs/
 import os from "node:os";
 import path from "node:path";
 import { FactoryError } from "./errors.js";
+import type { CodeWorkerRunRequest, CodeWorkerRuntime } from "./runtime.js";
 import {
   CODEX_VERSION,
   CODEX_WORKER_IMAGE,
@@ -14,26 +15,8 @@ import { runProcess } from "./process.js";
 
 export { STRONG_EXECUTION_ISOLATION_UNAVAILABLE } from "./isolation.js";
 
-export interface CodexRunRequest {
-  worktreePath: string;
-  prompt: string;
-  /** Run artifact directory; raw JSONL/stdout/stderr land here. */
-  runDir: string;
-  timeoutMs: number;
-  /** Exact logical write authority derived from the validated SiteTask. */
-  writablePaths: readonly string[];
-  /**
-   * Mount the ENTIRE workspace read-write instead of the default
-   * readonly-root + per-path writable-parent layout. Only used by the
-   * Intelligence planner whose workspace is a Factory-built throwaway
-   * directory holding nothing but validated inputs and its own prompt/output
-   * files; the inner workspace-write sandbox then sees one uniformly
-   * writable root (bubblewrap's non-recursive workspace re-bind would
-   * otherwise shadow nested writable mounts). SiteTask execution never sets
-   * this: it keeps the strict readonly + exact-page-parent authority.
-   */
-  workspaceWritable?: boolean;
-}
+/** The legacy Codex request shape is now the generalized runtime request. */
+export type CodexRunRequest = CodeWorkerRunRequest;
 
 export interface CodexRunResult {
   exitCode: number | null;
@@ -46,6 +29,29 @@ export interface CodexRunResult {
 }
 
 export type CodexRunner = (request: CodexRunRequest) => Promise<CodexRunResult>;
+
+/**
+ * Adapt the legacy Codex runner onto the generalized CodeWorkerRuntime seam.
+ * Codex owns its own model selection (no Factory-pinned model id), so
+ * requestedModel/respondedModel/reasoningEffort stay null — unknown provenance
+ * is never invented.
+ */
+export function adaptCodexRunner(runner: CodexRunner): CodeWorkerRuntime {
+  return async (request: CodeWorkerRunRequest) => {
+    const result = await runner(request);
+    return {
+      exitCode: result.exitCode,
+      timedOut: result.timedOut,
+      runtimeVersion: result.version,
+      requestedModel: null,
+      respondedModel: null,
+      provider: "openai",
+      reasoningEffort: null,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    };
+  };
+}
 
 export interface CodexRunnerOptions {
   repoRoot: string;

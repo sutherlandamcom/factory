@@ -1,0 +1,30 @@
+---
+import Layout from "../layouts/Layout.astro";
+import Hero from "../components/Hero.astro";
+import ContentSection from "../components/ContentSection.astro";
+import FAQ from "../components/FAQ.astro";
+
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@type": "WebPage",
+  name: "Megève market intelligence for property decisions",
+  url: new URL(Astro.url.pathname, Astro.site ?? Astro.url.origin).href,
+};
+---
+
+<Layout
+  title="Megève market intelligence for property decisions"
+  description="Source-backed context on Megève housing structure, second-home concentration, price evidence and property-specific Alpine risks."
+  jsonLd={jsonLd}
+>
+  <Hero
+    heading="Megève market intelligence for property decisions"
+    subheading="Source-backed context on Megève housing structure, second-home concentration, price evidence and property-specific Alpine risks."
+  />
+
+  <ContentSection heading="Evidence before conclusions">
+    <p>Full market evidence is being prepared for publication. This page will present dated, source-backed observations separated from property-specific conclusions.</p>
+  </ContentSection>
+
+  <FAQ heading="Megève market questions" items={[{ question: "What does this page provide?", answer: "Dated, source-backed market context for Megève, separated from conclusions about an individual property." }]} />
+</Layout>

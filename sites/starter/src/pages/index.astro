@@ -2,6 +2,7 @@
 import Layout from "../layouts/Layout.astro";
 import Hero from "../components/Hero.astro";
 import ContentSection from "../components/ContentSection.astro";
+import FAQ from "../components/FAQ.astro";
 import { siteProfile } from "../lib/site-profile";
 
 const jsonLd = {
@@ -14,20 +15,20 @@ const jsonLd = {
 ---
 
 <Layout
-  title="Independent French Alps Property Advisory"
-  description="Sutherland Private Office provides independent, evidence-led advisory for high-value property decisions in the French Alps, prioritising Chamonix and Megève."
+  title="Independent advice for consequential French Alps property decisions"
+  description="Sutherland Private Office is an independent, evidence-led advisory for high-value French Alps property decisions, prioritising Chamonix and Megève."
   jsonLd={jsonLd}
 >
   <Hero
-    heading="Decision support before commitment"
-    subheading="Sutherland Private Office is an independent, evidence-led advisory for high-value French Alps property decisions, prioritising Chamonix and Megève."
+    heading="Independent advice for consequential French Alps property decisions"
+    subheading="Sutherland Private Office is an independent, evidence-led advisory for high-value property decisions in the French Alps, prioritising Chamonix and Megève."
   />
 
   <ContentSection heading="Evidence-led market intelligence">
     <p>
-      The site currently publishes dated, source-backed market intelligence for the two priority
-      markets — Chamonix and Megève — along with preparation guidance for non-resident buyers of
-      French property.
+      The site publishes dated, source-backed market intelligence for the two priority
+      markets — Chamonix and Megève — along with preparation guidance for non-resident
+      buyers of French property.
     </p>
     <ul class="list-disc space-y-2 pl-5">
       <li><a class="text-accent-700 underline underline-offset-2 hover:text-accent-800" href="/chamonix-market-intelligence">Chamonix market intelligence</a></li>

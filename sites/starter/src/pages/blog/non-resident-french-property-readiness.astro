@@ -1,0 +1,26 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import ContentSection from "../../components/ContentSection.astro";
+import FAQ from "../../components/FAQ.astro";
+
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@type": "Article",
+  headline: "Prepare for a French property acquisition as a non-resident",
+  mainEntityOfPage: { "@id": new URL(Astro.url.pathname, Astro.site ?? Astro.url.origin).href },
+};
+---
+
+<Layout
+  title="Prepare for a French property acquisition as a non-resident"
+  description="General, source-backed preparation guidance for non-resident buyers of French property: documentation, sequencing and the professional boundaries involved."
+  jsonLd={jsonLd}
+>
+  <article class="mx-auto max-w-5xl px-4 py-12">
+    <ContentSection heading="Prepare for a French property acquisition as a non-resident">
+      <p>General preparation guidance is being prepared for publication. Personal legal, notarial and tax questions belong with qualified professionals.</p>
+    </ContentSection>
+
+    <FAQ heading="Readiness questions" items={[{ question: "Is this personal advice?", answer: "No. This page provides general, source-backed preparation context only." }]} />
+  </article>
+</Layout>

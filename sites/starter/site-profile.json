@@ -1,13 +1,13 @@
 {
   "version": "v0",
-  "siteId": "starter",
-  "siteName": "Summit Roofing Co.",
-  "canonicalOrigin": "http://localhost:4321",
+  "siteId": "sutherland-private-office",
+  "siteName": "Sutherland Private Office",
+  "canonicalOrigin": "https://sutherlandam.com",
   "language": "en",
   "navigation": [
     { "label": "Home", "targetSlug": "/" },
-    { "label": "Services", "targetSlug": "/services/example" },
-    { "label": "Blog", "targetSlug": "/blog/example" }
-  ],
-  "addressLines": ["432 Demo Peak Road, Boulder, CO 80302"]
+    { "label": "Chamonix Intelligence", "targetSlug": "/chamonix-market-intelligence" },
+    { "label": "Megève Intelligence", "targetSlug": "/megeve-market-intelligence" },
+    { "label": "Non-Resident Readiness", "targetSlug": "/blog/non-resident-french-property-readiness" }
+  ]
 }

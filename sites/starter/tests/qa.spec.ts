@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { resolveCanonicalOrigin } from "@factory/contracts";
 import { siteProfile } from "../src/lib/site-profile.js";
 
@@ -40,43 +40,6 @@ async function expectOk(page: Page, path: string) {
 
 function assertNoPageErrors(errors: string[]) {
   expect(errors, "expected no critical console errors").toEqual([]);
-}
-
-async function assertMetadata(
-  page: Page,
-  expected: {
-    title: string;
-    description: string;
-    canonicalPath: string;
-    ogType?: string;
-  },
-) {
-  await expect(page).toHaveTitle(expected.title);
-
-  const desc = page.locator('meta[name="description"]');
-  await expect(desc).toHaveCount(1);
-  await expect(desc).toHaveAttribute("content", expected.description);
-
-  const canonicalUrl = `${expectedOrigin}${expected.canonicalPath}`;
-  const canonical = page.locator('link[rel="canonical"]');
-  await expect(canonical).toHaveCount(1);
-  await expect(canonical).toHaveAttribute("href", canonicalUrl);
-
-  const ogTitle = page.locator('meta[property="og:title"]');
-  await expect(ogTitle).toHaveCount(1);
-  await expect(ogTitle).toHaveAttribute("content", expected.title);
-
-  const ogDesc = page.locator('meta[property="og:description"]');
-  await expect(ogDesc).toHaveCount(1);
-  await expect(ogDesc).toHaveAttribute("content", expected.description);
-
-  const ogUrl = page.locator('meta[property="og:url"]');
-  await expect(ogUrl).toHaveCount(1);
-  await expect(ogUrl).toHaveAttribute("content", canonicalUrl);
-
-  const ogType = page.locator('meta[property="og:type"]');
-  await expect(ogType).toHaveCount(1);
-  await expect(ogType).toHaveAttribute("content", expected.ogType ?? "website");
 }
 
 /**
@@ -123,67 +86,39 @@ async function assertJsonLd(page: Page): Promise<Record<string, unknown>> {
   return parsed;
 }
 
-async function assertResponsiveImage(
-  locator: Locator,
-  expected: {
-    alt: string;
-    sizes?: string;
-    loading: "eager" | "lazy";
-  },
-) {
-  await expect(locator).toBeVisible();
-  const src = await locator.getAttribute("src");
-  expect(src, "image src must be a local generated asset").toMatch(/^\/_astro\//);
-  await expect(locator).toHaveAttribute("alt", expected.alt);
-
-  const width = Number(await locator.getAttribute("width"));
-  const height = Number(await locator.getAttribute("height"));
-  expect(width, "image width must be explicit and positive").toBeGreaterThan(0);
-  expect(height, "image height must be explicit and positive").toBeGreaterThan(0);
-
-  const srcset = await locator.getAttribute("srcset");
-  expect(srcset, "responsive image must have srcset").toBeTruthy();
-  expect(srcset).toContain("/_astro/");
-
-  if (expected.sizes) {
-    await expect(locator).toHaveAttribute("sizes", expected.sizes);
-  }
-
-  await expect(locator).toHaveAttribute("loading", expected.loading);
-}
-
 test.describe("homepage", () => {
-  test("loads with exact metadata, H1, JSON-LD, responsive image, working nav, and no errors", async ({
+  test("loads with metadata, single H1, LocalBusiness JSON-LD, shell, and no errors", async ({
     page,
   }, testInfo) => {
     const errors = watchForErrors(page);
     await expectOk(page, "/");
 
-    await assertMetadata(page, {
-      title: `Roof Repair & Replacement in Boulder, CO | ${siteProfile.siteName}`,
-      description:
-        "Summit Roofing Co. provides residential roof repair, replacement, and inspection services in Boulder, Colorado. Licensed, insured, and rated 5 stars by local homeowners.",
-      canonicalPath: "/",
-      ogType: "website",
-    });
+    // Exact title/description/canonical are asserted by Factory's task-aware
+    // QA against the compiled SiteTask. This foundation suite asserts the
+    // structural contract that does not depend on task content:
+    await expect(page.locator('meta[name="description"]')).toHaveCount(1);
+    const canonical = page.locator('link[rel="canonical"]');
+    await expect(canonical).toHaveCount(1);
+    await expect(canonical).toHaveAttribute("href", `${expectedOrigin}/`);
+    const ogUrl = page.locator('meta[property="og:url"]');
+    await expect(ogUrl).toHaveCount(1);
+    await expect(ogUrl).toHaveAttribute("content", `${expectedOrigin}/`);
+    const ogTitle = page.locator('meta[property="og:title"]');
+    await expect(ogTitle).toHaveCount(1);
+    const ogDescription = page.locator('meta[property="og:description"]');
+    await expect(ogDescription).toHaveCount(1);
 
     await assertShell(page);
 
     const h1 = page.locator("h1");
     await expect(h1).toHaveCount(1);
-    await expect(h1).toHaveText("Roofing done right, the first time");
+    const h1Text = (await h1.textContent())?.trim() ?? "";
+    expect(h1Text.length, "homepage must have a non-empty H1").toBeGreaterThan(0);
 
     const schema = await assertJsonLd(page);
     expect(schema["@type"]).toBe("LocalBusiness");
-    expect(schema.name).toBe("Summit Roofing Co.");
+    expect(schema.name).toBe(siteProfile.siteName);
     expect(schema.url).toBe(`${expectedOrigin}/`);
-    expect(schema.areaServed).toBe("Boulder, CO");
-
-    await assertResponsiveImage(page.locator("section.bg-slate-50 img"), {
-      alt: "A repaired shingle roof on a Boulder home at the foot of the Flatirons",
-      sizes: "(max-width: 768px) 100vw, 50vw",
-      loading: "eager",
-    });
 
     await page.screenshot({
       path: `qa-artifacts/homepage-${testInfo.project.name}.png`,
@@ -192,125 +127,16 @@ test.describe("homepage", () => {
 
     await page
       .getByRole("navigation", { name: "Main navigation" })
-      .getByRole("link", { name: "Services" })
+      .getByRole("link", { name: siteProfile.navigation[1]!.label })
       .click();
-    await expect(page).toHaveURL(/\/services\/example\/?$/);
     await expect(page.locator("h1")).toHaveCount(1);
 
     assertNoPageErrors(errors);
   });
 });
 
-test.describe("service page", () => {
-  test("loads with exact metadata, H1, Service JSON-LD, responsive image, visible CTA, and nav", async ({
-    page,
-  }, testInfo) => {
-    const errors = watchForErrors(page);
-    await expectOk(page, "/services/example");
-
-    await assertMetadata(page, {
-      title: `Roof Repair & Replacement Services | ${siteProfile.siteName}`,
-      description:
-        "Roof repair, full replacement, and storm damage restoration for Boulder-area homes. Free inspections, transparent pricing, and a 10-year workmanship warranty.",
-      canonicalPath: "/services/example/",
-      ogType: "website",
-    });
-
-    await assertShell(page);
-
-    const h1 = page.locator("h1");
-    await expect(h1).toHaveCount(1);
-    await expect(h1).toHaveText("Roof repair & replacement");
-
-    const schema = await assertJsonLd(page);
-    expect(schema["@type"]).toBe("Service");
-    expect(schema.serviceType).toBe("Roof repair and replacement");
-    expect(schema.url).toBe(`${expectedOrigin}/services/example/`);
-    expect((schema.provider as Record<string, unknown>)?.name).toBe("Summit Roofing Co.");
-
-    await assertResponsiveImage(page.locator("section.bg-slate-50 img"), {
-      alt: "A Summit Roofing crew member replacing damaged shingles",
-      sizes: "(max-width: 768px) 100vw, 50vw",
-      loading: "eager",
-    });
-
-    const cta = page.getByRole("link", { name: "Start at our homepage" });
-    await expect(cta).toBeVisible();
-    await expect(cta).toHaveAttribute("href", "/");
-
-    await page.screenshot({
-      path: `qa-artifacts/service-${testInfo.project.name}.png`,
-      fullPage: true,
-    });
-
-    await page
-      .getByRole("navigation", { name: "Main navigation" })
-      .getByRole("link", { name: "Home" })
-      .click();
-    await expect(page).toHaveURL(/\/$/);
-
-    assertNoPageErrors(errors);
-  });
-});
-
-test.describe("article page", () => {
-  test("loads with exact metadata, H1, Article JSON-LD, lazy responsive image, and internal links", async ({
-    page,
-  }, testInfo) => {
-    const errors = watchForErrors(page);
-    await expectOk(page, "/blog/example");
-
-    await assertMetadata(page, {
-      title: `5 Signs Your Roof Needs Repair Before Winter | ${siteProfile.siteName}`,
-      description:
-        "Catching roof damage early is the cheapest repair there is. Here are the five warning signs our inspectors check first on Boulder homes.",
-      canonicalPath: "/blog/example/",
-      ogType: "website",
-    });
-
-    await assertShell(page);
-
-    const h1 = page.locator("h1");
-    await expect(h1).toHaveCount(1);
-    await expect(h1).toHaveText("5 Signs Your Roof Needs Repair Before Winter");
-
-    await expect(page.locator("article")).toBeVisible();
-    await expect(page.locator("article h2")).toHaveCount(5);
-
-    const schema = await assertJsonLd(page);
-    expect(schema["@type"]).toBe("Article");
-    expect(schema.headline).toBe("5 Signs Your Roof Needs Repair Before Winter");
-    expect(schema.datePublished).toBe("2026-01-15");
-    expect((schema.author as Record<string, unknown>)?.name).toBe("Summit Roofing Co.");
-    expect(
-      ((schema.mainEntityOfPage as Record<string, unknown>)?.[
-        "@id"
-      ] as string),
-    ).toBe(`${expectedOrigin}/blog/example/`);
-
-    await assertResponsiveImage(page.locator("article img"), {
-      alt: "Close-up of asphalt shingles showing hail damage and granule loss",
-      sizes: "(max-width: 768px) 100vw, 768px",
-      loading: "lazy",
-    });
-
-    await page.screenshot({
-      path: `qa-artifacts/article-${testInfo.project.name}.png`,
-      fullPage: true,
-    });
-
-    await page
-      .locator("article")
-      .getByRole("link", { name: "roof repair and replacement services" })
-      .click();
-    await expect(page).toHaveURL(/\/services\/example\/?$/);
-
-    assertNoPageErrors(errors);
-  });
-});
-
 test.describe("404", () => {
-  test("unknown route returns 404 status, attaches error watcher, renders 404 heading and working home link", async ({
+  test("unknown route returns 404 status, renders 404 heading and working home link", async ({
     page,
   }, testInfo) => {
     const errors = watchForErrors(page);

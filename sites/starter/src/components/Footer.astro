@@ -11,11 +11,30 @@ const { siteName, navigation, addressLines } = Astro.props;
 const year = new Date().getFullYear();
 ---
 
-<footer class="border-t border-slate-200 bg-slate-50">
-  <div
-    class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-4 px-4 py-8 text-sm text-slate-500"
-  >
-    <div>
+<footer class="border-t border-alpine-100 bg-paper-100">
+  <div class="mx-auto max-w-5xl px-4 py-10 text-sm text-alpine-700">
+    <div class="flex flex-wrap items-start justify-between gap-x-8 gap-y-6">
+      <div>
+        <p class="font-display text-base font-semibold text-alpine-900">{siteName}</p>
+        <p class="mt-2 max-w-md leading-relaxed">
+          Independent, evidence-led advisory for consequential French Alps property decisions.
+        </p>
+      </div>
+      <nav aria-label="Footer navigation">
+        <ul class="flex flex-wrap gap-x-6 gap-y-2">
+          {
+            navigation.map((item) => (
+              <li>
+                <a href={item.targetSlug} class="hover:text-alpine-900">
+                  {item.label}
+                </a>
+              </li>
+            ))
+          }
+        </ul>
+      </nav>
+    </div>
+    <div class="mt-8 border-t border-alpine-100 pt-4">
       <p>&copy; {year} {siteName}. All rights reserved.</p>
       {
         addressLines.length > 0 && (
@@ -30,18 +49,5 @@ const year = new Date().getFullYear();
         )
       }
     </div>
-    <nav aria-label="Footer navigation">
-      <ul class="flex gap-6">
-        {
-          navigation.map((item) => (
-            <li>
-              <a href={item.targetSlug} class="hover:text-slate-900">
-                {item.label}
-              </a>
-            </li>
-          ))
-        }
-      </ul>
-    </nav>
   </div>
 </footer>

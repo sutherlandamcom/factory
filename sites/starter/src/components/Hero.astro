@@ -15,16 +15,16 @@ interface Props {
 const { heading, subheading, ctaText, ctaHref, image, imageAlt = "" } = Astro.props;
 ---
 
-<section class="bg-slate-50">
-  <div class="mx-auto grid max-w-5xl items-center gap-10 px-4 py-16 md:grid-cols-2">
+<section class="border-b border-alpine-100 bg-paper-100">
+  <div class="mx-auto grid max-w-5xl items-center gap-10 px-4 py-16 md:grid-cols-2 md:py-20">
     <div>
-      <h1 class="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">{heading}</h1>
-      <p class="mt-4 text-lg text-slate-600">{subheading}</p>
+      <h1 class="font-display text-4xl font-semibold tracking-tight text-alpine-950 sm:text-5xl">{heading}</h1>
+      <p class="mt-5 text-lg leading-relaxed text-alpine-800">{subheading}</p>
       {
         ctaText && ctaHref && (
           <a
             href={ctaHref}
-            class="mt-8 inline-block rounded-md bg-sky-700 px-6 py-3 text-sm font-semibold text-white hover:bg-sky-800"
+            class="mt-8 inline-block rounded-sm bg-alpine-900 px-6 py-3 text-sm font-medium text-paper-50 transition-colors hover:bg-alpine-800"
           >
             {ctaText}
           </a>
@@ -38,7 +38,7 @@ const { heading, subheading, ctaText, ctaHref, image, imageAlt = "" } = Astro.pr
           alt={imageAlt}
           widths={[480, 768, 1024]}
           sizes="(max-width: 768px) 100vw, 50vw"
-          class="rounded-lg"
+          class="rounded-sm"
           loading="eager"
         />
       )

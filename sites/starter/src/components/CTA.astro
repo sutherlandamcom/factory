@@ -9,13 +9,13 @@ interface Props {
 const { heading, text, buttonText, buttonHref } = Astro.props;
 ---
 
-<section class="bg-sky-700">
+<section class="bg-alpine-900">
   <div class="mx-auto max-w-5xl px-4 py-14 text-center">
-    <h2 class="text-2xl font-bold tracking-tight text-white sm:text-3xl">{heading}</h2>
-    <p class="mx-auto mt-3 max-w-xl text-sky-100">{text}</p>
+    <h2 class="font-display text-2xl font-semibold tracking-tight text-paper-50 sm:text-3xl">{heading}</h2>
+    <p class="mx-auto mt-3 max-w-xl leading-relaxed text-alpine-100">{text}</p>
     <a
       href={buttonHref}
-      class="mt-8 inline-block rounded-md bg-white px-6 py-3 text-sm font-semibold text-sky-800 hover:bg-sky-50"
+      class="mt-8 inline-block rounded-sm bg-paper-50 px-6 py-3 text-sm font-medium text-alpine-900 transition-colors hover:bg-paper-100"
     >
       {buttonText}
     </a>

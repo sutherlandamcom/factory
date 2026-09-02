@@ -7,21 +7,34 @@ interface Props {
 }
 
 const { siteName, navigation } = Astro.props;
+const currentPath = Astro.url.pathname.replace(/\/$/, "") || "/";
 ---
 
-<header class="border-b border-slate-200 bg-white">
-  <div class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-4 px-4 py-4">
-    <a href="/" class="text-lg font-bold text-slate-900">{siteName}</a>
+<header class="border-b border-alpine-100 bg-paper-50">
+  <div class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-x-8 gap-y-3 px-4 py-5">
+    <a href="/" class="font-display text-lg font-semibold tracking-tight text-alpine-900">
+      {siteName}
+    </a>
     <nav aria-label="Main navigation">
-      <ul class="flex gap-6 text-sm font-medium">
+      <ul class="flex flex-wrap gap-x-6 gap-y-2 text-sm">
         {
-          navigation.map((item) => (
-            <li>
-              <a href={item.targetSlug} class="text-slate-600 hover:text-slate-900">
-                {item.label}
-              </a>
-            </li>
-          ))
+          navigation.map((item) => {
+            const active = (item.targetSlug === "/" && currentPath === "/") || (item.targetSlug !== "/" && currentPath.startsWith(item.targetSlug));
+            return (
+              <li>
+                <a
+                  href={item.targetSlug}
+                  aria-current={active ? "page" : undefined}
+                  class:list={[
+                    "transition-colors",
+                    active ? "font-medium text-alpine-900 underline decoration-alpine-300 underline-offset-4" : "text-alpine-700 hover:text-alpine-900",
+                  ]}
+                >
+                  {item.label}
+                </a>
+              </li>
+            );
+          })
         }
       </ul>
     </nav>

@@ -2,96 +2,37 @@
 import Layout from "../layouts/Layout.astro";
 import Hero from "../components/Hero.astro";
 import ContentSection from "../components/ContentSection.astro";
-import FeatureCards from "../components/FeatureCards.astro";
-import FAQ from "../components/FAQ.astro";
-import CTA from "../components/CTA.astro";
-import heroImage from "../assets/hero-roof.png";
+import { siteProfile } from "../lib/site-profile";
 
 const jsonLd = {
   "@context": "https://schema.org",
   "@type": "LocalBusiness",
-  name: "Summit Roofing Co.",
-  description:
-    "Residential roof repair and replacement serving Boulder, Colorado and the Front Range.",
-  areaServed: "Boulder, CO",
+  name: siteProfile.siteName,
+  description: "Independent, evidence-led advisory for consequential French Alps property decisions.",
   url: new URL(Astro.url.pathname, Astro.site ?? Astro.url.origin).href,
 };
 ---
 
 <Layout
-  title="Roof Repair & Replacement in Boulder, CO"
-  description="Summit Roofing Co. provides residential roof repair, replacement, and inspection services in Boulder, Colorado. Licensed, insured, and rated 5 stars by local homeowners."
+  title="Independent French Alps Property Advisory"
+  description="Sutherland Private Office provides independent, evidence-led advisory for high-value property decisions in the French Alps, prioritising Chamonix and Megève."
   jsonLd={jsonLd}
 >
   <Hero
-    heading="Roofing done right, the first time"
-    subheading="Summit Roofing Co. keeps Boulder homes dry with honest inspections, durable repairs, and full replacements backed by a 10-year workmanship warranty."
-    ctaText="See our services"
-    ctaHref="/services/example"
-    image={heroImage}
-    imageAlt="A repaired shingle roof on a Boulder home at the foot of the Flatirons"
+    heading="Decision support before commitment"
+    subheading="Sutherland Private Office is an independent, evidence-led advisory for high-value French Alps property decisions, prioritising Chamonix and Megève."
   />
 
-  <FeatureCards
-    heading="Why homeowners choose Summit"
-    cards={[
-      {
-        title: "Free, honest inspections",
-        text: "We document what your roof actually needs — and what it doesn't — with photos you can verify yourself.",
-      },
-      {
-        title: "10-year workmanship warranty",
-        text: "Every repair and replacement is backed in writing. If our work fails, we come back and fix it free.",
-      },
-      {
-        title: "Local crew, local knowledge",
-        text: "We build for Front Range hail, wind, and snow loads because we live under the same weather you do.",
-      },
-    ]}
-  />
-
-  <ContentSection heading="A roofing company built on referrals">
+  <ContentSection heading="Evidence-led market intelligence">
     <p>
-      Most of our work comes from neighbors recommending neighbors. From a single missing shingle
-      after a windstorm to a full tear-off and replacement, our crews treat every roof like it
-      covers our own homes.
+      The site currently publishes dated, source-backed market intelligence for the two priority
+      markets — Chamonix and Megève — along with preparation guidance for non-resident buyers of
+      French property.
     </p>
-    <p>
-      Curious what a repair looks like in practice? Read our guide on{" "}
-      <a href="/blog/example" class="font-medium text-sky-700 hover:underline"
-        >the warning signs of roof damage</a
-      >, or go straight to our{" "}
-      <a href="/services/example" class="font-medium text-sky-700 hover:underline"
-        >roof repair and replacement services</a
-      >.
-    </p>
+    <ul class="list-disc space-y-2 pl-5">
+      <li><a class="text-accent-700 underline underline-offset-2 hover:text-accent-800" href="/chamonix-market-intelligence">Chamonix market intelligence</a></li>
+      <li><a class="text-accent-700 underline underline-offset-2 hover:text-accent-800" href="/megeve-market-intelligence">Megève market intelligence</a></li>
+      <li><a class="text-accent-700 underline underline-offset-2 hover:text-accent-800" href="/blog/non-resident-french-property-readiness">Non-resident French property readiness</a></li>
+    </ul>
   </ContentSection>
-
-  <FAQ
-    heading="Common questions"
-    items={[
-      {
-        question: "How do I know if my roof needs repair or replacement?",
-        answer:
-          "If damage is isolated to one area and your roof is under 15 years old, a repair is usually enough. Widespread granule loss, sagging, or repeated leaks usually mean replacement is the better investment.",
-      },
-      {
-        question: "Do you help with insurance claims after hail damage?",
-        answer:
-          "Yes. We document hail damage with photos and measurements your adjuster can use, and we meet them on-site when needed.",
-      },
-      {
-        question: "How long does a typical roof replacement take?",
-        answer:
-          "Most single-family homes in Boulder are completed in one to two days, weather permitting, including cleanup and a magnetic nail sweep.",
-      },
-    ]}
-  />
-
-  <CTA
-    heading="Get a free roof inspection"
-    text="No pressure, no obligation. We'll tell you exactly what your roof needs — even if the answer is nothing."
-    buttonText="Explore our services"
-    buttonHref="/services/example"
-  />
 </Layout>

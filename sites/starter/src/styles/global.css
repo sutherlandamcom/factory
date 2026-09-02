@@ -1,1 +1,38 @@
 @import "tailwindcss";
+
+/*
+  Sutherland Private Office — global presentation foundation.
+  Accepted design direction (SiteBlueprint 20260901T114820Z-8976f5e5):
+  calm, precise and institutional; restrained alpine neutrals with one
+  sober accent; editorial, authoritative, highly legible typography;
+  moderate information-led density; no agency-style luxury imagery.
+*/
+
+@theme {
+  /* Restrained alpine neutrals */
+  --color-alpine-950: #16211f;
+  --color-alpine-900: #1f3d37;
+  --color-alpine-800: #2c524a;
+  --color-alpine-700: #3c6a60;
+  --color-alpine-600: #547f74;
+  --color-alpine-500: #6f978c;
+  --color-alpine-300: #a9c2ba;
+  --color-alpine-100: #dde7e3;
+  --color-alpine-50: #eef3f1;
+
+  /* Warm paper neutrals for editorial legibility */
+  --color-paper-50: #fbfaf7;
+  --color-paper-100: #f4f1ea;
+  --color-paper-200: #e7e2d6;
+
+  /* The single sober accent (reserved for primary actions/links) */
+  --color-accent-700: #8a5a2b;
+  --color-accent-800: #724920;
+}
+
+/* Editorial serif for display headings; system serif stack keeps the site
+   dependency-free while reading as institutional/editorial. */
+.font-display {
+  font-family: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  letter-spacing: -0.01em;
+}

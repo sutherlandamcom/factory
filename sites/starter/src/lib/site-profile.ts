@@ -1,5 +1,5 @@
 import { parseSiteProfile, type SiteProfile } from "@factory/contracts";
-import rawSiteProfile from "../../site-profile.json";
+import rawSiteProfile from "../../site-profile.json" with { type: "json" };
 
 /**
  * The ONE validated site-level identity/configuration for this site.

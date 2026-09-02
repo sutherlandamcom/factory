@@ -171,6 +171,26 @@ test("resolveCanonicalOrigin defaults to the profile origin", () => {
   );
 });
 
+test("resolveCanonicalOrigin defaults to non-local profile canonical when override is absent (not localhost)", () => {
+  const nonLocalProfile = { canonicalOrigin: "https://example-real-site.test" };
+  assert.equal(
+    resolveCanonicalOrigin({ profile: nonLocalProfile }),
+    "https://example-real-site.test",
+  );
+  assert.equal(
+    resolveCanonicalOrigin({ override: undefined, profile: nonLocalProfile }),
+    "https://example-real-site.test",
+  );
+  assert.equal(
+    resolveCanonicalOrigin({ override: "", profile: nonLocalProfile }),
+    "https://example-real-site.test",
+  );
+  assert.notEqual(
+    resolveCanonicalOrigin({ profile: nonLocalProfile }),
+    "http://localhost:4321",
+  );
+});
+
 test("resolveCanonicalOrigin prefers a valid explicit override", () => {
   assert.equal(
     resolveCanonicalOrigin({ override: "https://test.example.com", profile: { canonicalOrigin: "http://localhost:4321" } }),
@@ -178,6 +198,13 @@ test("resolveCanonicalOrigin prefers a valid explicit override", () => {
   );
   assert.equal(
     resolveCanonicalOrigin({ override: "https://test.example.com/", profile: { canonicalOrigin: "http://localhost:4321" } }),
+    "https://test.example.com",
+  );
+  assert.equal(
+    resolveCanonicalOrigin({
+      override: "https://test.example.com",
+      profile: { canonicalOrigin: "https://example-real-site.test" },
+    }),
     "https://test.example.com",
   );
 });

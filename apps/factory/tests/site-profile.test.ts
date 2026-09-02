@@ -40,11 +40,21 @@ test("valid SiteProfile passes validation", () => {
 test("the repository-owned starter profile JSON parses with the shared contract", async () => {
   const raw = await readFile(path.join(repoRoot, "sites", "starter", "site-profile.json"), "utf8");
   const parsed = siteProfileSchema.parse(JSON.parse(raw));
-  assert.equal(parsed.siteName, "Summit Roofing Co.");
-  // Single source of truth: the demo identity lives ONLY in the data file.
+  // Single source of truth: site identity lives ONLY in the data file.
+  // These assertions mirror the current real profile (Sutherland Private
+  // Office) and keep the contract check intact.
+  assert.equal(parsed.siteId, "sutherland-private-office");
+  assert.equal(parsed.siteName, "Sutherland Private Office");
+  assert.equal(parsed.canonicalOrigin, "https://sutherlandam.com");
+  assert.equal(parsed.addressLines, undefined);
   assert.deepEqual(
     parsed.navigation.map((entry) => entry.targetSlug),
-    ["/", "/services/example", "/blog/example"],
+    [
+      "/",
+      "/chamonix-market-intelligence",
+      "/megeve-market-intelligence",
+      "/blog/non-resident-french-property-readiness",
+    ],
   );
 });
 

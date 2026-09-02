@@ -32,7 +32,11 @@ function resolveBaseUrl(): string {
   return url.origin;
 }
 const baseUrl = resolveBaseUrl();
-const testOrigin = process.env.PUBLIC_SITE_URL || "https://test.example.com";
+// Canonical-origin expectation precedence mirrors astro.config.ts exactly:
+// an explicitly configured PUBLIC_SITE_URL wins; otherwise the validated
+// SiteProfile default (http://localhost:4321 for the starter demo profile)
+// is the expectation — the same value the site build will use.
+const testOrigin = process.env.PUBLIC_SITE_URL || "http://localhost:4321";
 
 /**
  * QA for the built static site. The webServer builds and serves the site via

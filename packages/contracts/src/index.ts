@@ -62,6 +62,23 @@ export type {
 } from "./task-result.js";
 export { exampleSiteTask } from "./fixtures.js";
 export {
+  MAX_SITE_PROFILE_NAVIGATION_ENTRIES,
+  MAX_SITE_PROFILE_PAYLOAD_BYTES,
+  canonicalOriginSchema,
+  parseSiteProfile,
+  resolveCanonicalOrigin,
+  siteNameSchema,
+  siteProfileAddressLineSchema,
+  siteProfileLanguageSchema,
+  siteProfileNavigationEntrySchema,
+  siteProfileSchema,
+  siteProfileVersionSchema,
+} from "./site-profile.js";
+export type {
+  SiteProfile,
+  SiteProfileNavigationEntry,
+} from "./site-profile.js";
+export {
   deploymentResultSchema,
   deploymentStatusSchema,
 } from "./deployment-result.js";

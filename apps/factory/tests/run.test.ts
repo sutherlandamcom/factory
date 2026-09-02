@@ -148,6 +148,44 @@ test("scope violation fails with evidence preserved before cleanup", async () =>
   assert.ok(!existsSync(path.join(repo, ".factory", "worktrees", "scope-violation")));
 });
 
+test("create_page mutation of SiteProfile is a terminal scope_violation", async () => {
+  const repo = await makeTempRepo();
+  const result = await runSiteTask(TASK, {
+    repoRoot: repo,
+    runId: "site-profile-mutation",
+    primaryRunner: mockCodex(async (req) => {
+      // The worker writes its exact correct target page AND attempts to
+      // modify the trusted SiteProfile. Even with a perfect page, the
+      // profile mutation must fail the run terminally.
+      const page = path.join(req.worktreePath, "sites", "starter", "src", "pages", "services", "roof-repair.astro");
+      await mkdir(path.dirname(page), { recursive: true });
+      await writeFile(page, "---\n---\n<h1>Roof Repair</h1>\n");
+      await writeFile(
+        path.join(req.worktreePath, "sites", "starter", "site-profile.json"),
+        JSON.stringify({ version: "v0", siteId: "pwned" }),
+      );
+    }),
+    prepareDependenciesFn: noopDeps,
+    runQaFn: passQa,
+    verifyFn: passVerify,
+    verifyReplayFn: passReplay,
+  });
+  assert.equal(result.status, "failed");
+  assert.equal(result.finalStage, "scope");
+  assert.equal(result.error?.code, "scope_violation");
+  assert.equal(result.totalAttempts, 1);
+  assert.match(result.error!.message, /site-profile\.json/);
+
+  // Evidence preserves both files: the page write and the profile mutation.
+  const changed = await readFile(path.join(runDirOf(repo, "site-profile-mutation"), "changed-files.txt"), "utf8");
+  assert.match(changed, /site-profile\.json/);
+  assert.match(changed, /roof-repair\.astro/);
+  const patch = await readFile(path.join(runDirOf(repo, "site-profile-mutation"), "diff.patch"), "utf8");
+  assert.match(patch, /pwned/);
+  assert.ok(!existsSync(path.join(repo, ".factory", "worktrees", "site-profile-mutation")));
+  assert.equal(gitIn(repo, ["status", "--porcelain"]), "");
+});
+
 test("QA failure with maxAttempts=1 fails with needs_review", async () => {
   const repo = await makeTempRepo();
   const result = await runSiteTask(TASK, {

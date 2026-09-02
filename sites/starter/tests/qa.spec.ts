@@ -1,6 +1,17 @@
+import { readFileSync } from "node:fs";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-const expectedOrigin = process.env.PUBLIC_SITE_URL || "https://test.example.com";
+// Site identity comes from the repository-owned SiteProfile (parsed with the
+// shared contract via the same data file the site builds from). The trusted
+// PUBLIC_SITE_URL override wins exactly as in astro.config.ts.
+const profile = JSON.parse(readFileSync(new URL("../site-profile.json", import.meta.url), "utf8")) as {
+  siteName: string;
+  canonicalOrigin: string;
+  language: string;
+  navigation: Array<{ label: string; targetSlug: string }>;
+  addressLines?: string[];
+};
+const expectedOrigin = process.env.PUBLIC_SITE_URL || profile.canonicalOrigin;
 
 /**
  * Console/page errors that are known-benign and ignored by assertNoPageErrors.
@@ -71,6 +82,40 @@ async function assertMetadata(
   await expect(ogType).toHaveAttribute("content", expected.ogType ?? "website");
 }
 
+/**
+ * Profile-driven shell assertions: language, navigation, and footer identity
+ * must come from the SiteProfile-derived data the components receive.
+ */
+async function assertShell(page: Page) {
+  await expect(page.locator("html")).toHaveAttribute("lang", profile.language);
+
+  const headerNav = page.getByRole("navigation", { name: "Main navigation" });
+  const headerLinks = headerNav.getByRole("link");
+  await expect(headerLinks).toHaveCount(profile.navigation.length);
+  for (const [index, entry] of profile.navigation.entries()) {
+    const link = headerLinks.nth(index);
+    await expect(link, `header nav entry ${index}`).toHaveAttribute("href", entry.targetSlug);
+    await expect(link).toHaveText(entry.label);
+  }
+
+  const footerNav = page.getByRole("navigation", { name: "Footer navigation" });
+  const footerLinks = footerNav.getByRole("link");
+  await expect(footerLinks).toHaveCount(profile.navigation.length);
+  for (const [index, entry] of profile.navigation.entries()) {
+    const link = footerLinks.nth(index);
+    await expect(link, `footer nav entry ${index}`).toHaveAttribute("href", entry.targetSlug);
+    await expect(link).toHaveText(entry.label);
+  }
+
+  const footer = page.locator("footer");
+  await expect(footer).toContainText(`© ${new Date().getFullYear()} ${profile.siteName}`);
+  if (profile.addressLines && profile.addressLines.length > 0) {
+    for (const line of profile.addressLines) {
+      await expect(footer).toContainText(line);
+    }
+  }
+}
+
 async function assertJsonLd(page: Page): Promise<Record<string, unknown>> {
   const script = page.locator('script[type="application/ld+json"]');
   await expect(script).toHaveCount(1);
@@ -118,12 +163,14 @@ test.describe("homepage", () => {
     await expectOk(page, "/");
 
     await assertMetadata(page, {
-      title: "Roof Repair & Replacement in Boulder, CO | Summit Roofing Co.",
+      title: `Roof Repair & Replacement in Boulder, CO | ${profile.siteName}`,
       description:
         "Summit Roofing Co. provides residential roof repair, replacement, and inspection services in Boulder, Colorado. Licensed, insured, and rated 5 stars by local homeowners.",
       canonicalPath: "/",
       ogType: "website",
     });
+
+    await assertShell(page);
 
     const h1 = page.locator("h1");
     await expect(h1).toHaveCount(1);
@@ -165,12 +212,14 @@ test.describe("service page", () => {
     await expectOk(page, "/services/example");
 
     await assertMetadata(page, {
-      title: "Roof Repair & Replacement Services | Summit Roofing Co.",
+      title: `Roof Repair & Replacement Services | ${profile.siteName}`,
       description:
         "Roof repair, full replacement, and storm damage restoration for Boulder-area homes. Free inspections, transparent pricing, and a 10-year workmanship warranty.",
       canonicalPath: "/services/example/",
       ogType: "website",
     });
+
+    await assertShell(page);
 
     const h1 = page.locator("h1");
     await expect(h1).toHaveCount(1);
@@ -215,12 +264,14 @@ test.describe("article page", () => {
     await expectOk(page, "/blog/example");
 
     await assertMetadata(page, {
-      title: "5 Signs Your Roof Needs Repair Before Winter | Summit Roofing Co.",
+      title: `5 Signs Your Roof Needs Repair Before Winter | ${profile.siteName}`,
       description:
         "Catching roof damage early is the cheapest repair there is. Here are the five warning signs our inspectors check first on Boulder homes.",
       canonicalPath: "/blog/example/",
       ogType: "website",
     });
+
+    await assertShell(page);
 
     const h1 = page.locator("h1");
     await expect(h1).toHaveCount(1);

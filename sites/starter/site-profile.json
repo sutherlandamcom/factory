@@ -1,0 +1,13 @@
+{
+  "version": "v0",
+  "siteId": "starter",
+  "siteName": "Summit Roofing Co.",
+  "canonicalOrigin": "http://localhost:4321",
+  "language": "en",
+  "navigation": [
+    { "label": "Home", "targetSlug": "/" },
+    { "label": "Services", "targetSlug": "/services/example" },
+    { "label": "Blog", "targetSlug": "/blog/example" }
+  ],
+  "addressLines": ["432 Demo Peak Road, Boulder, CO 80302"]
+}

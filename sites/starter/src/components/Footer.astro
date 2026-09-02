@@ -1,9 +1,13 @@
 ---
+import type { SiteProfileNavigationEntry } from "@factory/contracts";
+
 interface Props {
   siteName: string;
+  navigation: SiteProfileNavigationEntry[];
+  addressLines: string[];
 }
 
-const { siteName } = Astro.props;
+const { siteName, navigation, addressLines } = Astro.props;
 const year = new Date().getFullYear();
 ---
 
@@ -11,12 +15,32 @@ const year = new Date().getFullYear();
   <div
     class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-4 px-4 py-8 text-sm text-slate-500"
   >
-    <p>&copy; {year} {siteName}. All rights reserved.</p>
+    <div>
+      <p>&copy; {year} {siteName}. All rights reserved.</p>
+      {
+        addressLines.length > 0 && (
+          <p class="mt-1">
+            {addressLines.map((line, index) => (
+              <>
+                {index > 0 && " · "}
+                {line}
+              </>
+            ))}
+          </p>
+        )
+      }
+    </div>
     <nav aria-label="Footer navigation">
       <ul class="flex gap-6">
-        <li><a href="/" class="hover:text-slate-900">Home</a></li>
-        <li><a href="/services/example" class="hover:text-slate-900">Services</a></li>
-        <li><a href="/blog/example" class="hover:text-slate-900">Blog</a></li>
+        {
+          navigation.map((item) => (
+            <li>
+              <a href={item.targetSlug} class="hover:text-slate-900">
+                {item.label}
+              </a>
+            </li>
+          ))
+        }
       </ul>
     </nav>
   </div>

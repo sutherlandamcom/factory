@@ -1,15 +1,12 @@
 ---
+import type { SiteProfileNavigationEntry } from "@factory/contracts";
+
 interface Props {
   siteName: string;
+  navigation: SiteProfileNavigationEntry[];
 }
 
-const { siteName } = Astro.props;
-
-const navItems = [
-  { label: "Home", href: "/" },
-  { label: "Services", href: "/services/example" },
-  { label: "Blog", href: "/blog/example" },
-];
+const { siteName, navigation } = Astro.props;
 ---
 
 <header class="border-b border-slate-200 bg-white">
@@ -18,9 +15,9 @@ const navItems = [
     <nav aria-label="Main navigation">
       <ul class="flex gap-6 text-sm font-medium">
         {
-          navItems.map((item) => (
+          navigation.map((item) => (
             <li>
-              <a href={item.href} class="text-slate-600 hover:text-slate-900">
+              <a href={item.targetSlug} class="text-slate-600 hover:text-slate-900">
                 {item.label}
               </a>
             </li>

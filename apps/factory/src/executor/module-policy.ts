@@ -64,7 +64,14 @@ export const MODULE_REGISTRY: readonly FactoryModule[] = Object.freeze([
   { id: "site-source", ownedPaths: ["sites/starter/src/"], protected: false, ordinaryTaskWritable: true },
   {
     id: "site-configuration",
-    ownedPaths: ["sites/starter/astro.config.ts", "sites/starter/package.json", "sites/starter/tsconfig.json"],
+    // site-profile.json is the trusted site-level identity/configuration;
+    // create_page may READ it but can never WRITE it.
+    ownedPaths: [
+      "sites/starter/site-profile.json",
+      "sites/starter/astro.config.ts",
+      "sites/starter/package.json",
+      "sites/starter/tsconfig.json",
+    ],
     protected: true,
     ordinaryTaskWritable: false,
   },

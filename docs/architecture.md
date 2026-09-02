@@ -173,6 +173,41 @@ Astro 7 + Tailwind CSS 4, fully static. Reusable components (`Header`,
 layouts (`Layout`, `ArticleLayout`). Routes: `/`, `/services/example`,
 `/blog/example`, and `404`. Zero client-side JavaScript.
 
+### SiteProfile v0 (`packages/contracts/src/site-profile.ts`, `sites/starter/site-profile.json`)
+
+SiteProfile is the **trusted, repository-owned, site-level identity and shell
+configuration** for one generated site — not SiteTask input, not page content,
+not model-generated runtime authority. It is a strict Zod contract
+(`siteProfileSchema`, unknown fields fail closed) over `v0` fields:
+`siteId`, `siteName`, `canonicalOrigin`, `language`, bounded internal
+`navigation` (≤ 12 entries with plain-text labels and Factory-slug
+`targetSlug`s), and optional plain-text `addressLines`.
+
+- **One data source**: `sites/starter/site-profile.json`. **One contract
+  source**: `siteProfileSchema`. No duplicated schemas; Factory QA and the
+  Astro site parse the same file with the same contract.
+- **Loading**: `sites/starter/src/lib/site-profile.ts` parses the JSON at
+  module initialization; an invalid profile fails `astro check`/build/dev
+  startup clearly (fail closed). `Layout`, `Header`, and `Footer` derive
+  site name, language, navigation, and address lines from it — no hard-coded
+  demo identity remains in generic shell or QA logic.
+- **Canonical origin precedence** (`resolveCanonicalOrigin`):
+  `PUBLIC_SITE_URL` when explicitly configured and valid (same
+  credential-free-origin validation as the profile value; invalid overrides
+  fail the build), otherwise `SiteProfile.canonicalOrigin`. SiteTask content
+  and model output have no path to this decision.
+- **Factory QA**: `apps/factory/src/executor/site-profile.ts` loads the
+  worktree's profile (fail-closed) and `createTaskQaSpec` derives the expected
+  document title (`<page title> | <siteName>`) and canonical URL from it. The
+  trusted `FACTORY_QA_ORIGIN` override is pinned both as the build's
+  `PUBLIC_SITE_URL` and the expectation origin so they provably agree.
+- **Write authority**: `sites/starter/site-profile.json` belongs to the
+  protected `site-configuration` module. `create_page` retains READ MANY /
+  WRITE ONE EXACT PAGE TARGET; a profile mutation is a terminal
+  `scope_violation`. No `configure_site` task type exists yet — how Factory
+  will autonomously update the profile is deferred until after the first
+  end-to-end site.
+
 ### QA pipeline
 
 `pnpm qa` = `check` → `build` → `test`:

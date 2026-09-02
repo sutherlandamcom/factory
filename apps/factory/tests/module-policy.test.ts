@@ -103,6 +103,7 @@ test("create_page cannot write protected or unrelated paths", () => {
   const denied = [
     "sites/starter/src/pages/index.astro",
     "sites/starter/src/components/Hero.astro",
+    "sites/starter/site-profile.json",
     "apps/factory/src/executor/run.ts",
     "apps/factory/src/persistence/schema.ts",
     "apps/factory/src/delivery/service.ts",
@@ -137,6 +138,11 @@ test("protected path ownership is separate from read and write authority", () =>
   assert.deepEqual(owningModules("sites/starter/tests/qa.spec.ts"), ["quality-oracle"]);
   assert.deepEqual(owningModules("sites/starter/src/components/Hero.astro"), ["site-source"]);
   assert.deepEqual(owningModules("sites/starter/wrangler.jsonc"), ["production-delivery"]);
+  // SiteProfile is site-configuration: trusted, protected, never task-writable.
+  assert.deepEqual(owningModules("sites/starter/site-profile.json"), ["site-configuration"]);
   assert.equal(MODULE_REGISTRY.find((module) => module.id === "contracts")?.protected, true);
   assert.equal(MODULE_REGISTRY.find((module) => module.id === "contracts")?.ordinaryTaskWritable, false);
+  const siteConfiguration = MODULE_REGISTRY.find((module) => module.id === "site-configuration");
+  assert.equal(siteConfiguration?.protected, true);
+  assert.equal(siteConfiguration?.ordinaryTaskWritable, false);
 });

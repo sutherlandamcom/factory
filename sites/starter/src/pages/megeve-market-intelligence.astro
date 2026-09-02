@@ -4,27 +4,66 @@ import Hero from "../components/Hero.astro";
 import ContentSection from "../components/ContentSection.astro";
 import FAQ from "../components/FAQ.astro";
 
+const title = "Megève market intelligence beyond a single price";
+const description =
+  "Evidence-led context for Megève housing, prime-market characteristics and multidimensional Alpine asset analysis without unsupported valuation conclusions.";
+
 const jsonLd = {
   "@context": "https://schema.org",
   "@type": "WebPage",
-  name: "Megève market intelligence for property decisions",
+  name: title,
   url: new URL(Astro.url.pathname, Astro.site ?? Astro.url.origin).href,
 };
+
+const faqItems = [
+  {
+    question: "Why do search results about Megève prices need careful reading?",
+    answer:
+      "Search results mix price estimators, agency reports and Alpine-wide research, each built on different data and purposes. A source-aware interpretation asks what each source actually measured before drawing any conclusion from it — and treats none of them as a statement about a specific property.",
+  },
+  {
+    question: "Is Megève comparable to Chamonix?",
+    answer:
+      "Institutional evidence treats Megève and Chamonix as distinct prime submarkets: they have different locality and ski-area characteristics. They can be compared usefully, but figures or observations from one should not be transposed onto the other.",
+  },
+  {
+    question: "Can market-level data tell me what a specific Megève property is worth?",
+    answer:
+      "No. Market-level observations do not establish an individual property's value, condition or suitability. Assessing a particular asset requires evidence attached to that property — a resort-wide figure is context, not a valuation.",
+  },
+];
 ---
 
-<Layout
-  title="Megève market intelligence for property decisions"
-  description="Source-backed context on Megève housing structure, second-home concentration, price evidence and property-specific Alpine risks."
-  jsonLd={jsonLd}
->
+<Layout title={title} description={description} jsonLd={jsonLd}>
   <Hero
-    heading="Megève market intelligence for property decisions"
-    subheading="Source-backed context on Megève housing structure, second-home concentration, price evidence and property-specific Alpine risks."
+    heading={title}
+    subheading="Assess Megève through market context and property evidence. Institutional evidence treats Megève and Chamonix as distinct prime submarkets, and Megève is one of Sutherland's two priority markets. This page provides decision context rather than property inventory."
   />
 
-  <ContentSection heading="Evidence before conclusions">
-    <p>Full market evidence is being prepared for publication. This page will present dated, source-backed observations separated from property-specific conclusions.</p>
+  <ContentSection heading="A secondary-residence market with asset-level variation">
+    <p>
+      According to INSEE, Megève had 9,429 homes in 2023, of which 83.1% were secondary or
+      occasional residences and 16.0% primary residences. That housing structure describes
+      the market's composition; it does not indicate occupancy, rental permission or the
+      condition of any individual property.
+    </p>
+    <p>
+      UBS 2026 data places Megève around EUR 12,000 per square metre. This is market-level
+      context for understanding the resort's position — it is not a property valuation, and
+      no individual property's value should be inferred from it. Asset-level variation means
+      two properties in the same resort can sit far apart on any dimension that matters to a
+      buyer.
+    </p>
+    <p>
+      Ski-market resilience is multidimensional: it can involve snowfall reliability, season
+      length, altitude, temperature, infrastructure, seasonality and cultural offer. These
+      dimensions frame the questions worth asking about a specific asset; they do not
+      guarantee demand, liquidity or returns. For a source-backed comparison with the other
+      priority market, see the
+      <a class="text-accent-700 underline underline-offset-2 hover:text-accent-800" href="/chamonix-market-intelligence">Chamonix market intelligence</a>
+      page.
+    </p>
   </ContentSection>
 
-  <FAQ heading="Megève market questions" items={[{ question: "What does this page provide?", answer: "Dated, source-backed market context for Megève, separated from conclusions about an individual property." }]} />
+  <FAQ heading="Megève market questions" items={faqItems} />
 </Layout>

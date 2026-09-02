@@ -1,39 +1,93 @@
 ---
 import Layout from "../layouts/Layout.astro";
 import Hero from "../components/Hero.astro";
+import FeatureCards from "../components/FeatureCards.astro";
 import ContentSection from "../components/ContentSection.astro";
 import FAQ from "../components/FAQ.astro";
 import { siteProfile } from "../lib/site-profile";
+
+const title = "Independent advice for consequential French Alps property decisions";
+const description =
+  "Evidence-led acquisition and asset advisory for international buyers considering consequential property decisions in Chamonix and Megève.";
 
 const jsonLd = {
   "@context": "https://schema.org",
   "@type": "LocalBusiness",
   name: siteProfile.siteName,
-  description: "Independent, evidence-led advisory for consequential French Alps property decisions.",
+  description: description,
   url: new URL(Astro.url.pathname, Astro.site ?? Astro.url.origin).href,
 };
+
+const serviceCards = [
+  {
+    title: "Property Acquisition Advisory",
+    text: "Supports strategy and sequencing before or during a search, so that the decision framework is in place before any commitment is made.",
+  },
+  {
+    title: "Asset Review",
+    text: "Addresses a specific property through structured evidence and risk review, examining the asset on its own facts rather than resort-level assumptions.",
+  },
+  {
+    title: "Private Office Advisory",
+    text: "Intended for complex coordination needs, where a consequential property decision intersects with wider family or portfolio considerations.",
+  },
+  {
+    title: "Investment Memorandum",
+    text: "A concept for a structured decision document supporting a defined acquisition question. Its final scope remains unverified and will be confirmed before any engagement relies on it.",
+  },
+];
+
+const faqItems = [
+  {
+    question: "Is Sutherland Private Office an estate agency or broker?",
+    answer:
+      "No. French real-estate intermediation is regulated, and permissions must be verified before any transaction-related role is described. This launch presents advisory services only — analysis and decision support, not intermediation, listings or seller mandates.",
+  },
+  {
+    question: "Does a seller's diagnostic dossier replace a buyer-side assessment?",
+    answer:
+      "No. The diagnostic dossier supplied with a sale is important evidence, but it is prepared on the seller's side and does not replace a broader buyer-side technical assessment of the specific property.",
+  },
+  {
+    question: "How does an engagement begin?",
+    answer:
+      "Through a selective scoping process. This is consistent with discreet private-office engagements: the decision to be supported is defined first, and the appropriate advisory pathway is agreed before any work proceeds.",
+  },
+];
 ---
 
-<Layout
-  title="Independent advice for consequential French Alps property decisions"
-  description="Sutherland Private Office is an independent, evidence-led advisory for high-value French Alps property decisions, prioritising Chamonix and Megève."
-  jsonLd={jsonLd}
->
+<Layout title={title} description={description} jsonLd={jsonLd}>
   <Hero
-    heading="Independent advice for consequential French Alps property decisions"
-    subheading="Sutherland Private Office is an independent, evidence-led advisory for high-value property decisions in the French Alps, prioritising Chamonix and Megève."
+    heading={title}
+    subheading="Decision support before commitment. Sutherland Private Office is a real-estate investment advisory and Private Office focused on the French Alps, with priority markets in Chamonix and Megève. This launch is separate from any future transactional arm and presents no property inventory."
   />
 
-  <ContentSection heading="Evidence-led market intelligence">
+  <FeatureCards heading="Choose the support appropriate to the decision" cards={serviceCards} />
+
+  <ContentSection heading="Analysis rather than inventory">
     <p>
-      The site publishes dated, source-backed market intelligence for the two priority
-      markets — Chamonix and Megève — along with preparation guidance for non-resident
-      buyers of French property.
+      Sale-oriented searches are dominated by agents, portals and listing pages. That material
+      is designed to present property for sale, not to support a buyer's decision about a
+      consequential acquisition.
+    </p>
+    <p>
+      Official transaction, diagnostic and risk sources can inform a property-specific review
+      when carefully interpreted. Market-level evidence, however, cannot determine the value,
+      condition or suitability of an individual asset — each property must be examined on its
+      own facts.
+    </p>
+    <p>
+      For evidence-led context on the two priority markets, see the dedicated pages:
     </p>
     <ul class="list-disc space-y-2 pl-5">
-      <li><a class="text-accent-700 underline underline-offset-2 hover:text-accent-800" href="/chamonix-market-intelligence">Chamonix market intelligence</a></li>
-      <li><a class="text-accent-700 underline underline-offset-2 hover:text-accent-800" href="/megeve-market-intelligence">Megève market intelligence</a></li>
-      <li><a class="text-accent-700 underline underline-offset-2 hover:text-accent-800" href="/blog/non-resident-french-property-readiness">Non-resident French property readiness</a></li>
+      <li>
+        <a class="text-accent-700 underline underline-offset-2 hover:text-accent-800" href="/chamonix-market-intelligence">Chamonix market intelligence</a>
+      </li>
+      <li>
+        <a class="text-accent-700 underline underline-offset-2 hover:text-accent-800" href="/megeve-market-intelligence">Megève market intelligence</a>
+      </li>
     </ul>
   </ContentSection>
+
+  <FAQ heading="Understanding the advisory scope" items={faqItems} />
 </Layout>

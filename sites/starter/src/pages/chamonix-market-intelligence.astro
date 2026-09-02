@@ -4,27 +4,66 @@ import Hero from "../components/Hero.astro";
 import ContentSection from "../components/ContentSection.astro";
 import FAQ from "../components/FAQ.astro";
 
+const title = "Chamonix market intelligence for property decisions";
+const description =
+  "Source-backed context on Chamonix housing structure, transaction evidence, planning, rental rules and property-specific Alpine risks.";
+
 const jsonLd = {
   "@context": "https://schema.org",
   "@type": "WebPage",
-  name: "Chamonix market intelligence for property decisions",
+  name: title,
   url: new URL(Astro.url.pathname, Astro.site ?? Astro.url.origin).href,
 };
+
+const faqItems = [
+  {
+    question: "Can official transaction records show what a Chamonix property is worth?",
+    answer:
+      "Official DVF transaction records can support comparable research, but they require careful matching: two sales are only comparable when property type, location, size and condition genuinely align. DVF evidence informs research into a specific asset; it does not on its own produce a valuation of that asset.",
+  },
+  {
+    question: "What rules apply to furnished tourist rentals in the Chamonix Valley?",
+    answer:
+      "From 1 May 2025, furnished tourist rentals in the Chamonix Valley require registration, and some owners who are natural persons may also require change-of-use authorization. Whether a given plan is permitted depends on the property and the owner's situation, and rules of this kind can change — current property-specific verification is required before relying on any rental plan.",
+  },
+  {
+    question: "Can resort-level data settle planning or risk questions for a specific asset?",
+    answer:
+      "No. Planning and risk conclusions require current property-specific evidence. Commune-level planning policy and official risk information — available at commune and address level — set the context, but the conclusion for an individual property must be drawn from documents and checks attached to that property.",
+  },
+];
 ---
 
-<Layout
-  title="Chamonix market intelligence for property decisions"
-  description="Source-backed context on Chamonix housing structure, transaction evidence, planning, rental rules and property-specific Alpine risks."
-  jsonLd={jsonLd}
->
+<Layout title={title} description={description} jsonLd={jsonLd}>
   <Hero
-    heading="Chamonix market intelligence for property decisions"
-    subheading="Source-backed context on Chamonix housing structure, transaction evidence, planning, rental rules and property-specific Alpine risks."
+    heading={title}
+    subheading="Read the Chamonix market at both resort and asset level. Chamonix has a housing stock dominated by secondary or occasional residences and apartments, and the available research supports treating it as its own market rather than folding it into generic French Alps commentary. Coverage here is limited to decision support — it presents context, not inventory."
   />
 
-  <ContentSection heading="Evidence before conclusions">
-    <p>Full market evidence is being prepared for publication. This page will present dated, source-backed observations separated from property-specific conclusions.</p>
+  <ContentSection heading="Housing structure, permitted use and asset exposure">
+    <p>
+      According to INSEE, 69.2% of housing in Chamonix-Mont-Blanc was secondary or occasional
+      in 2023, and apartments represented 72.6% of the stock. Among qualifying primary
+      residences, 58.2% were built from 1946 through 1990. For a buyer, that construction
+      profile supports attention to condition, energy performance and likely capital
+      expenditure — without implying anything about the state of any individual asset.
+    </p>
+    <p>
+      Chamonix planning policy and furnished-tourist-rental rules make intended use a
+      property-specific verification issue: what is possible on paper at commune level does
+      not establish what is permitted for a particular address. Official risk information is
+      likewise published at commune and address level, so exposure must be checked against
+      the specific property rather than inferred from resort-wide statements.
+    </p>
+    <p>
+      These observations describe the resort and the commune; they are not conclusions about
+      an individual property, and they do not describe or imply the availability of any
+      property. For comparison with the other priority market — related, but not
+      interchangeable — see the
+      <a class="text-accent-700 underline underline-offset-2 hover:text-accent-800" href="/megeve-market-intelligence">Megève market intelligence</a>
+      page.
+    </p>
   </ContentSection>
 
-  <FAQ heading="Chamonix market questions" items={[{ question: "What does this page provide?", answer: "Dated, source-backed market context for Chamonix, separated from conclusions about an individual property." }]} />
+  <FAQ heading="Chamonix market questions" items={faqItems} />
 </Layout>

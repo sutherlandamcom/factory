@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { defineConfig, type AstroIntegration } from "astro/config";
+import { defineConfig } from "astro/config";
+import type { AstroIntegration } from "astro";
 import tailwindcss from "@tailwindcss/vite";
 import { resolveCanonicalOrigin } from "@factory/contracts";
 import { siteProfile } from "./src/lib/site-profile";
@@ -39,14 +40,14 @@ function staticSitemapAndRobots(origin: string): AstroIntegration {
   return {
     name: "factory-static-sitemap-robots",
     hooks: {
-      "astro:build:done": ({ dir, pages, logger }) => {
+      "astro:build:done": ({ dir, pages, logger }: { dir: URL; pages: Array<{ pathname: string }>; logger: { info(message: string): void } }) => {
         // The 404 response is a status page (emitted as 404.html), never an
         // indexable URL. Static-route pathnames keep any .html suffix they
         // were generated with, so normalize and drop 404 in either form.
         const routePaths = pages
-          .map((page) => `/${page.pathname.replace(/^\/|\.html$|\/$/g, "")}`)
-          .filter((path) => path !== "/404")
-          .map((path) => (path === "/" ? "/" : `${path}/`));
+          .map((page: { pathname: string }) => `/${page.pathname.replace(/^\/|\.html$|\/$/g, "")}`)
+          .filter((path: string) => path !== "/404")
+          .map((path: string) => (path === "/" ? "/" : `${path}/`));
         const uniquePaths = [...new Set(routePaths)].sort();
         const escapeXml = (value: string): string =>
           value

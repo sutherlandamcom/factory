@@ -5,7 +5,7 @@ import { migrateDb } from "../../src/persistence/migrate.js";
 
 export const TEST_DATABASE_URL =
   process.env.FACTORY_TEST_DATABASE_URL ||
-  "postgresql://factory:factory_test_password@localhost:5432/factory_test";
+  "postgresql://factory:factory_test_password@localhost:5433/factory_test";
 
 export async function createTestDatabase(): Promise<FactoryDatabaseInstance> {
   const config = resolveDatabaseConfig({

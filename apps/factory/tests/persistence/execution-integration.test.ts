@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import type { SiteTask, TaskResult } from "@factory/contracts";
-import { setupMigratedTestDatabase } from "./helpers.js";
+import { setupMigratedTestDatabase, TEST_DATABASE_URL } from "./helpers.js";
 import { runPersistedSiteTask } from "../../src/persistence/driver.js";
 import { FactoryStore } from "../../src/persistence/store.js";
 import { FactoryError } from "../../src/executor/errors.js";
@@ -86,6 +86,7 @@ test("execution integration: happy path persists Run, Task, Attempt, QualityResu
     const result = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
+      databaseUrl: TEST_DATABASE_URL,
       primaryRunner: mockCodex(async (req) => {
         const page = path.join(
           req.worktreePath,
@@ -158,6 +159,7 @@ test("execution integration: scope violation terminal failure persists failed st
     const result = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
+      databaseUrl: TEST_DATABASE_URL,
       primaryRunner: mockCodex(async (req) => {
         // Attempt to modify unauthorized file (package.json)
         await writeFile(path.join(req.worktreePath, "package.json"), '{"hacked": true}');
@@ -208,6 +210,7 @@ test("execution integration: bounded repair loop (Attempt 1 QA failure -> Attemp
     const result = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
+      databaseUrl: TEST_DATABASE_URL,
       primaryRunner: mockCodex(async (req) => {
         attemptCount++;
         const page = path.join(
@@ -267,7 +270,7 @@ test("execution integration: unregistered site fails closed before Codex", async
       async () => {
         await runPersistedSiteTask(
           { ...TASK, siteId: "non-existent-site-id" },
-          { repoRoot: repo, isTest: true },
+          { repoRoot: repo, isTest: true, databaseUrl: TEST_DATABASE_URL },
         );
       },
       (err: unknown) => {

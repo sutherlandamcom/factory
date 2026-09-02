@@ -3,7 +3,7 @@ import { mkdir, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { taskResultSchema, type SiteTask } from "@factory/contracts";
-import { setupMigratedTestDatabase } from "./helpers.js";
+import { setupMigratedTestDatabase, TEST_DATABASE_URL } from "./helpers.js";
 import { FactoryStore, computeIdempotencyKey } from "../../src/persistence/store.js";
 import { runPersistedSiteTask } from "../../src/persistence/driver.js";
 import { reconstructTaskResultFromPersistence } from "../../src/persistence/reconstruct.js";
@@ -290,6 +290,7 @@ test("idempotency: foreign-run collision fails closed with idempotency_scope_con
         await runPersistedSiteTask(taskForBeta, {
           repoRoot: repo,
           isTest: true,
+      databaseUrl: TEST_DATABASE_URL,
           idempotencyKey: "caller-key-beta",
           primaryRunner: mockCodex(async () => {
             codexCalled = true;
@@ -332,6 +333,7 @@ test("idempotency fallback: missing artifact reconstructs accurate multi-attempt
     const initialResult = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
+      databaseUrl: TEST_DATABASE_URL,
       primaryRunner: mockCodex(async (req) => {
         codexInvocationCount++;
         const page = path.join(
@@ -371,6 +373,7 @@ test("idempotency fallback: missing artifact reconstructs accurate multi-attempt
     const reconstructedResult = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
+      databaseUrl: TEST_DATABASE_URL,
       primaryRunner: mockCodex(async () => {
         throw new Error("Codex must NOT be re-executed for terminal idempotent run");
       }),
@@ -419,6 +422,7 @@ test("idempotency fallback: malformed, invalid, or contradicting artifact yields
     const initialResult = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
+      databaseUrl: TEST_DATABASE_URL,
       primaryRunner: mockCodex(async (req) => {
         codexInvocationCount++;
         const page = path.join(
@@ -452,6 +456,7 @@ test("idempotency fallback: malformed, invalid, or contradicting artifact yields
     const resFromMalformed = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
+      databaseUrl: TEST_DATABASE_URL,
       primaryRunner: mockCodex(async () => {
         throw new Error("Codex must NOT rerun");
       }),
@@ -468,6 +473,7 @@ test("idempotency fallback: malformed, invalid, or contradicting artifact yields
     const resFromSchemaInvalid = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
+      databaseUrl: TEST_DATABASE_URL,
       primaryRunner: mockCodex(async () => {
         throw new Error("Codex must NOT rerun");
       }),
@@ -490,6 +496,7 @@ test("idempotency fallback: malformed, invalid, or contradicting artifact yields
     const resFromContradiction = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
+      databaseUrl: TEST_DATABASE_URL,
       primaryRunner: mockCodex(async () => {
         throw new Error("Codex must NOT rerun");
       }),
@@ -512,6 +519,7 @@ test("idempotency fallback: malformed, invalid, or contradicting artifact yields
     const resFromWrongKind = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
+      databaseUrl: TEST_DATABASE_URL,
       primaryRunner: mockCodex(async () => {
         throw new Error("Codex must NOT rerun");
       }),
@@ -534,6 +542,7 @@ test("idempotency fallback: malformed, invalid, or contradicting artifact yields
     const resFromWrongClass = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
+      databaseUrl: TEST_DATABASE_URL,
       primaryRunner: mockCodex(async () => {
         throw new Error("Codex must NOT rerun");
       }),
@@ -553,6 +562,7 @@ test("idempotency fallback: malformed, invalid, or contradicting artifact yields
     const resFromWrongSite = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
+      databaseUrl: TEST_DATABASE_URL,
       primaryRunner: mockCodex(async () => {
         throw new Error("Codex must NOT rerun");
       }),
@@ -736,6 +746,7 @@ test("idempotency fallback: terminal failure run with missing artifact reconstru
     const failResult = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
+      databaseUrl: TEST_DATABASE_URL,
       primaryRunner: mockCodex(async (req) => {
         await writeFile(path.join(req.worktreePath, "package.json"), '{"hacked":true}');
       }),
@@ -756,6 +767,7 @@ test("idempotency fallback: terminal failure run with missing artifact reconstru
     const reconstructed = await runPersistedSiteTask(TASK, {
       repoRoot: repo,
       isTest: true,
+      databaseUrl: TEST_DATABASE_URL,
       primaryRunner: mockCodex(async () => {
         throw new Error("Codex must NOT rerun");
       }),

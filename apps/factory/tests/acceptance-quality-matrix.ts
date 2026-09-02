@@ -6,6 +6,7 @@ import type { SiteTask } from "@factory/contracts";
 import { buildChildEnv } from "../src/executor/env.js";
 import { runProcess } from "../src/executor/process.js";
 import { createTaskQaSpec } from "../src/executor/task-qa.js";
+import { FACTORY_QA_ORIGIN, loadWorktreeSiteProfile } from "../src/executor/site-profile.js";
 import { createWorktree, removeWorktree } from "../src/executor/worktree.js";
 import { gitIn } from "./helpers.js";
 
@@ -21,7 +22,7 @@ const task: SiteTask = {
   },
 };
 
-function validPage(): string {
+function validPage(siteName: string): string {
   return `---
 import { Image } from "astro:assets";
 import image from "../../assets/roof-repair.png";
@@ -31,10 +32,10 @@ const jsonLd = { "@context": "https://schema.org", "@type": "Service", serviceTy
 <!doctype html>
 <html lang="en">
   <head>
-    <title>Quality Matrix Service | Summit Roofing Co.</title>
+    <title>Quality Matrix Service | ${siteName}</title>
     <meta name="description" content="A deterministic generated page used to verify Factory dynamic quality policy." />
     <link rel="canonical" href={canonical} />
-    <meta property="og:title" content="Quality Matrix Service | Summit Roofing Co." />
+    <meta property="og:title" content="Quality Matrix Service | ${siteName}" />
     <meta property="og:description" content="A deterministic generated page used to verify Factory dynamic quality policy." />
     <meta property="og:url" content={canonical} />
     <script type="application/ld+json" is:inline set:html={JSON.stringify(jsonLd)} />
@@ -92,16 +93,20 @@ async function main() {
     });
     assert.equal(install.exitCode, 0, install.stderr);
 
+    // Site identity is parsed from the worktree with the shared contract
+    // (fail closed); expectations and the pinned QA origin stay in sync.
+    const profile = await loadWorktreeSiteProfile(worktree);
+
     const specs = [];
     for (const [index, scenario] of scenarios.entries()) {
       const slug = `/services/quality-matrix-${index + 1}`;
       const pagePath = path.join(worktree, `sites/starter/src/pages${slug}.astro`);
       await mkdir(path.dirname(pagePath), { recursive: true });
-      await writeFile(pagePath, scenario.mutate(validPage()), "utf8");
+      await writeFile(pagePath, scenario.mutate(validPage(profile.siteName)), "utf8");
       const scenarioTask = scenario.sections
         ? { ...task, page: { ...task.page, slug, sections: scenario.sections } }
         : { ...task, page: { ...task.page, slug } };
-      specs.push(createTaskQaSpec(scenarioTask));
+      specs.push(createTaskQaSpec(scenarioTask, profile, { canonicalOriginOverride: FACTORY_QA_ORIGIN }));
     }
 
     const specPath = path.join(tempDir, "quality-matrix.json");
@@ -113,7 +118,7 @@ async function main() {
         cwd: worktree,
         env: buildChildEnv(process.env, {
           CI: "1",
-          PUBLIC_SITE_URL: "https://test.example.com",
+          PUBLIC_SITE_URL: FACTORY_QA_ORIGIN,
           FACTORY_TASK_QA_SPEC: specPath,
           FACTORY_QA_PORT: "4490",
         }),

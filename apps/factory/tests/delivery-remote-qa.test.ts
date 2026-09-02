@@ -52,3 +52,39 @@ test("local Playwright mode preserves built Astro preview server", async () => {
   assert.match(config.webServer.command, /pnpm run build.*pnpm run preview/);
   assert.equal(config.webServer.url, "http://localhost:4567");
 });
+
+test("Playwright webServer environment derives PUBLIC_SITE_URL from validated profile and respects explicit override", async () => {
+  const envCheckScript = `
+(async () => {
+  const module = await import('./sites/starter/playwright.config.ts');
+  console.log(JSON.stringify({
+    publicSiteUrl: module.default.webServer?.env?.PUBLIC_SITE_URL ?? null,
+  }));
+})()
+`;
+  const defaultResult = await runProcess(
+    tsxBin,
+    ["--eval", envCheckScript],
+    {
+      cwd: repoRoot,
+      env: buildChildEnv(process.env, {}),
+      timeoutMs: 30_000,
+    },
+  );
+  assert.equal(defaultResult.exitCode, 0, defaultResult.stderr);
+  const defaultConfig = JSON.parse(defaultResult.stdout.trim()) as { publicSiteUrl: string };
+  assert.equal(defaultConfig.publicSiteUrl, "http://localhost:4321");
+
+  const overrideResult = await runProcess(
+    tsxBin,
+    ["--eval", envCheckScript],
+    {
+      cwd: repoRoot,
+      env: buildChildEnv(process.env, { PUBLIC_SITE_URL: "https://test.example.com" }),
+      timeoutMs: 30_000,
+    },
+  );
+  assert.equal(overrideResult.exitCode, 0, overrideResult.stderr);
+  const overrideConfig = JSON.parse(overrideResult.stdout.trim()) as { publicSiteUrl: string };
+  assert.equal(overrideConfig.publicSiteUrl, "https://test.example.com");
+});

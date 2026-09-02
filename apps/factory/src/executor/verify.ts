@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { SiteTask, TaskVerification } from "@factory/contracts";
+import type { SiteProfile, SiteTask, TaskVerification } from "@factory/contracts";
 import { createTaskQaSpec } from "./task-qa.js";
+import { FACTORY_QA_ORIGIN, loadWorktreeSiteProfile } from "./site-profile.js";
 
 function decodeHtml(value: string): string {
   return value.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (match, entity: string) => {
@@ -45,6 +46,7 @@ export async function verifyCreatePage(
   worktreePath: string,
   task: SiteTask,
 ): Promise<TaskVerification> {
+  let verificationError: string | undefined;
   const slugPath = task.page.slug.replace(/^\//, "");
   const htmlPath = path.join(worktreePath, "sites", "starter", "dist", ...slugPath.split("/"), "index.html");
   if (!existsSync(htmlPath)) {
@@ -54,7 +56,20 @@ export async function verifyCreatePage(
   const html = await readFile(htmlPath, "utf8");
   const withoutComments = html.replace(/<!--[\s\S]*?-->/g, "");
   const visibleHtml = withoutComments.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "");
-  const expected = createTaskQaSpec(task);
+  // Identity and canonical origin come from the worktree's validated
+  // SiteProfile with the same trusted override the build used — never from
+  // hard-coded demo values. A missing/invalid profile fails closed here and
+  // is reported as a verification failure, not a crash.
+  const profile = await loadWorktreeSiteProfile(worktreePath).catch(
+    (error: unknown): SiteProfile | null => {
+      verificationError = error instanceof Error ? error.message : String(error);
+      return null;
+    },
+  );
+  if (profile === null) {
+    return { passed: false, details: `requirement=site_profile actual=${JSON.stringify(verificationError ?? "invalid")}` };
+  }
+  const expected = createTaskQaSpec(task, profile, { canonicalOriginOverride: FACTORY_QA_ORIGIN });
 
   const titles = [...withoutComments.matchAll(/<title\b[^>]*>([\s\S]*?)<\/title>/gi)].map((match) => normalize(match[1]!));
   if (titles.length !== 1) return fail("title-count", "1", String(titles.length));

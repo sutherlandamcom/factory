@@ -1,4 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
+import { resolveCanonicalOrigin } from "@factory/contracts";
+import { siteProfile } from "./src/lib/site-profile.js";
 
 function resolvePort(): number {
   const raw = process.env.FACTORY_QA_PORT;
@@ -32,7 +34,14 @@ function resolveBaseUrl(): string {
   return url.origin;
 }
 const baseUrl = resolveBaseUrl();
-const testOrigin = process.env.PUBLIC_SITE_URL || "https://test.example.com";
+// Canonical-origin expectation precedence mirrors astro.config.ts exactly:
+// an explicitly configured PUBLIC_SITE_URL wins; otherwise the validated
+// SiteProfile canonicalOrigin is the expectation — the same value the site
+// build will use.
+const testOrigin = resolveCanonicalOrigin({
+  override: process.env.PUBLIC_SITE_URL,
+  profile: siteProfile,
+});
 
 /**
  * QA for the built static site. The webServer builds and serves the site via

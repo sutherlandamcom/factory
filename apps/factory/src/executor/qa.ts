@@ -5,7 +5,8 @@ import { writeFile } from "node:fs/promises";
 import type { SiteTask } from "@factory/contracts";
 import { buildChildEnv } from "./env.js";
 import { runProcess } from "./process.js";
-import { createTaskQaSpec, QA_ORIGIN } from "./task-qa.js";
+import { createTaskQaSpec } from "./task-qa.js";
+import { FACTORY_QA_ORIGIN, loadWorktreeSiteProfile } from "./site-profile.js";
 
 export interface QaRunResult {
   passed: boolean;
@@ -29,9 +30,14 @@ export async function runQa(
   timeoutMs: number,
   task: SiteTask,
 ): Promise<QaRunResult> {
+  // Site identity is parsed from the worktree with the shared contract and
+  // fails closed BEFORE any QA subprocess runs. The trusted override makes
+  // the site build and these expectations use the exact same canonical origin.
+  const profile = await loadWorktreeSiteProfile(worktreePath);
+
   const foundation = await runProcess("pnpm", ["qa"], {
     cwd: worktreePath,
-    env: buildChildEnv(process.env, { CI: "1", PUBLIC_SITE_URL: QA_ORIGIN }),
+    env: buildChildEnv(process.env, { CI: "1", PUBLIC_SITE_URL: FACTORY_QA_ORIGIN }),
     timeoutMs,
   });
 
@@ -41,7 +47,11 @@ export async function runQa(
   await writeFile(foundationStderr, foundation.stderr, "utf8");
 
   const taskSpecPath = path.join(runDir, "task-qa-spec.json");
-  await writeFile(taskSpecPath, JSON.stringify(createTaskQaSpec(task), null, 2), "utf8");
+  await writeFile(
+    taskSpecPath,
+    JSON.stringify(createTaskQaSpec(task, profile, { canonicalOriginOverride: FACTORY_QA_ORIGIN }), null, 2),
+    "utf8",
+  );
 
   let dynamic = { exitCode: null as number | null, timedOut: false, stdout: "", stderr: "" };
   if (foundation.exitCode === 0 && !foundation.timedOut) {
@@ -59,7 +69,7 @@ export async function runQa(
         cwd: worktreePath,
         env: buildChildEnv(process.env, {
           CI: "1",
-          PUBLIC_SITE_URL: QA_ORIGIN,
+          PUBLIC_SITE_URL: FACTORY_QA_ORIGIN,
           FACTORY_TASK_QA_SPEC: taskSpecPath,
         }),
         timeoutMs,

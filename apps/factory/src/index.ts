@@ -1,6 +1,11 @@
 import path from "node:path";
 import { readFile } from "node:fs/promises";
-import { exampleSiteTask } from "@factory/contracts";
+import {
+  exampleSiteTask,
+  parseSiteBlueprint,
+  parseSiteProfile,
+  parseSiteProductionSpec,
+} from "@factory/contracts";
 import { runPersistedSiteTask } from "./persistence/driver.js";
 import { resolveDatabaseConfig, sanitizeDatabaseUrl } from "./persistence/config.js";
 import { createDatabaseInstance } from "./persistence/db.js";
@@ -17,6 +22,11 @@ import { runIntelligence } from "./intelligence/index.js";
 import { runBlueprint } from "./blueprint/index.js";
 import { runRoleEval } from "./evals/index.js";
 import { resolveRepositoryRoot } from "./repo-root.js";
+import {
+  compilePageProductionPacket,
+  evaluateSiteReadiness,
+  validateSiteProductionSpec,
+} from "./site-production/index.js";
 import type { DeploymentResult } from "@factory/contracts";
 import pkg from "../package.json" with { type: "json" };
 
@@ -32,6 +42,12 @@ Usage:
       Produce a SiteBlueprint from a validated SiteIntelligencePlan, request,
       and research evidence bundle through the Factory model gateway;
       emits one BlueprintResult JSON document to stdout
+  pnpm factory site-production validate <spec.json> [--blueprint <bp.json>] [--profile <profile.json>]
+      Validate a SiteProductionSpec strictly against blueprint, profile, and cross-references
+  pnpm factory site-production readiness <spec.json> --input-root <dir> [--blueprint <bp.json>] [--profile <profile.json>]
+      Evaluate objective readiness for all pages in a SiteProductionSpec
+  pnpm factory site-production page-packet <spec.json> <pageSlug> --blueprint <bp.json> --profile <profile.json> [--input-root <dir>]
+      Compile a bounded PageProductionPacket projection for one target page
   pnpm factory db migrate
       Apply committed PostgreSQL migrations
   pnpm factory db check
@@ -385,6 +401,83 @@ async function main(argv: string[]): Promise<number> {
       }
       console.error(
         "Usage: pnpm factory eval run --role <roleId> --request <request.json> --research <research.json> [--plan <plan.json>]",
+      );
+      return 2;
+    }
+
+    if (command === "site-production") {
+      const sub = rest[0];
+      const invocationDir = process.env.INIT_CWD ?? process.cwd();
+      const readOption = (flag: string): string | undefined => {
+        const index = rest.indexOf(flag);
+        return index >= 0 ? rest[index + 1] : undefined;
+      };
+      const readJson = async (p: string): Promise<unknown> => {
+        const raw = await readFile(path.resolve(invocationDir, p), "utf8");
+        return JSON.parse(raw);
+      };
+
+      if (sub === "validate" && rest[1]) {
+        const specInput = parseSiteProductionSpec(await readJson(rest[1]));
+        const bpPath = readOption("--blueprint");
+        const profPath = readOption("--profile");
+        const blueprint = bpPath ? parseSiteBlueprint(await readJson(bpPath)) : undefined;
+        const siteProfile = profPath ? parseSiteProfile(await readJson(profPath)) : undefined;
+        const result = validateSiteProductionSpec(specInput, { blueprint, siteProfile });
+        console.log(JSON.stringify(result, null, 2));
+        return result.ok ? 0 : 1;
+      }
+
+      if (sub === "readiness" && rest[1]) {
+        const inputRoot = readOption("--input-root");
+        if (!inputRoot) {
+          console.error(
+            "Usage: pnpm factory site-production readiness <spec.json> --input-root <dir> [--blueprint <bp.json>] [--profile <profile.json>]",
+          );
+          return 2;
+        }
+        const specInput = parseSiteProductionSpec(await readJson(rest[1]));
+        const bpPath = readOption("--blueprint");
+        const profPath = readOption("--profile");
+        const blueprint = bpPath ? parseSiteBlueprint(await readJson(bpPath)) : undefined;
+        const siteProfile = profPath ? parseSiteProfile(await readJson(profPath)) : undefined;
+        const result = await evaluateSiteReadiness(specInput, {
+          inputRoot: path.resolve(invocationDir, inputRoot),
+          blueprint,
+          siteProfile,
+        });
+        console.log(JSON.stringify(result, null, 2));
+        return result.status === "READY" ? 0 : 1;
+      }
+
+      if (sub === "page-packet" && rest[1] && rest[2]) {
+        const specPath = rest[1];
+        const pageSlug = rest[2];
+        const bpPath = readOption("--blueprint");
+        const profPath = readOption("--profile");
+        const inputRoot = readOption("--input-root");
+        if (!bpPath || !profPath) {
+          console.error(
+            "Usage: pnpm factory site-production page-packet <spec.json> <pageSlug> --blueprint <bp.json> --profile <profile.json> [--input-root <dir>]",
+          );
+          return 2;
+        }
+        const specInput = parseSiteProductionSpec(await readJson(specPath));
+        const blueprint = parseSiteBlueprint(await readJson(bpPath));
+        const siteProfile = parseSiteProfile(await readJson(profPath));
+        const packet = await compilePageProductionPacket({
+          productionSpec: specInput,
+          blueprint,
+          siteProfile,
+          pageSlug,
+          inputRoot: inputRoot ? path.resolve(invocationDir, inputRoot) : undefined,
+        });
+        console.log(JSON.stringify(packet, null, 2));
+        return 0;
+      }
+
+      console.error(
+        "Usage: pnpm factory site-production <validate|readiness|page-packet> ...",
       );
       return 2;
     }

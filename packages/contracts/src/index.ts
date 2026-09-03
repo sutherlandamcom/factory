@@ -1,7 +1,10 @@
 export {
   MAX_TASK_PAYLOAD_BYTES,
   addSitePageInvariantIssues,
+  contentBriefLinkSchema,
+  contentBriefSectionSchema,
   createPageTaskSchema,
+  pageContentBriefSchema,
   pageTypeSchema,
   parseSiteTask,
   sectionTypeSchema,
@@ -12,6 +15,7 @@ export {
 } from "./site-task.js";
 export type {
   CreatePageTask,
+  PageContentBrief,
   PageType,
   SectionType,
   SiteId,

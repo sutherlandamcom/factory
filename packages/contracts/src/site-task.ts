@@ -123,7 +123,153 @@ export function addSitePageInvariantIssues(
       });
     }
   }
+
+  // 3. Content brief (when present) must cover exactly the page's section set:
+  //    one brief entry per section type, no unknown or duplicate sectionType.
+  const withBrief = data as typeof data & {
+    contentBrief?: { sections: Array<{ sectionType: SectionType }> };
+  };
+  if (withBrief.contentBrief) {
+    const pageSections = new Set(data.sections);
+    const briefSections = new Set<string>();
+    for (let i = 0; i < withBrief.contentBrief.sections.length; i++) {
+      const brief = withBrief.contentBrief.sections[i]!;
+      if (!pageSections.has(brief.sectionType)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `contentBrief section "${brief.sectionType}" is not part of the page sections`,
+          path: ["contentBrief", "sections", i],
+        });
+      }
+      if (briefSections.has(brief.sectionType)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `contentBrief has duplicate entry for section "${brief.sectionType}"`,
+          path: ["contentBrief", "sections", i],
+        });
+      }
+      briefSections.add(brief.sectionType);
+    }
+    for (const section of data.sections) {
+      if (!briefSections.has(section)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `contentBrief is missing an entry for section "${section}"`,
+          path: ["contentBrief", "sections"],
+        });
+      }
+    }
+  }
 }
+
+/**
+ * One brief entry for a single section of the page (contentBrief.sections).
+ * The sectionType must reference a type present in the page's sections list;
+ * this is enforced by addSitePageInvariantIssues. Bounded plain text only.
+ */
+export const contentBriefSectionSchema = z
+  .object({
+    /** Section component type this brief applies to (must exist on the page). */
+    sectionType: sectionTypeSchema,
+    /** Visible heading for the section (plain text, no HTML). */
+    heading: z
+      .string()
+      .trim()
+      .min(1, "brief section heading cannot be empty")
+      .max(120, "brief section heading cannot exceed 120 characters")
+      .regex(/^[^<>]*$/, { message: "brief section heading must not contain HTML" }),
+    /** Accepted business-truth key points the worker must implement faithfully. */
+    keyPoints: z
+      .array(
+        z
+          .string()
+          .trim()
+          .min(1, "key point cannot be empty")
+          .max(280, "key point cannot exceed 280 characters"),
+      )
+      .min(1, "brief section requires at least one key point")
+      .max(8, "brief section cannot exceed 8 key points"),
+    /** Optional short lead paragraph for the section. */
+    leadProse: z
+      .string()
+      .trim()
+      .min(1)
+      .max(400, "leadProse cannot exceed 400 characters")
+      .optional(),
+    /** Claims the page must NOT make (from accepted Blueprint prohibitedClaims). */
+    prohibitedClaims: z
+      .array(z.string().trim().min(1).max(240))
+      .max(6, "brief section cannot exceed 6 prohibited claims")
+      .optional(),
+    /** Stable identifier of the originating accepted Blueprint section. */
+    blueprintSectionId: z
+      .string()
+      .trim()
+      .min(1)
+      .max(60)
+      .regex(/^[a-z0-9-]+$/, {
+        message: 'blueprintSectionId must be lowercase alphanumeric words separated by hyphens',
+      })
+      .optional(),
+  })
+  .strict();
+
+/** One planned internal link from the page to an existing route. */
+export const contentBriefLinkSchema = z
+  .object({
+    targetSlug: slugSchema,
+    purpose: z
+      .string()
+      .trim()
+      .min(1, "link purpose cannot be empty")
+      .max(160, "link purpose cannot exceed 160 characters"),
+  })
+  .strict();
+
+/**
+ * Optional, strictly bounded content brief for a create_page task (v0).
+ *
+ * PROVEN_MVP_CAPABILITY_GAP C1: the accepted SiteBlueprint holds per-section
+ * accepted business truth (key points, prohibited claims, planned internal
+ * links), but the v0 task schema carried none of it — page workers received
+ * only title/description/section type names and had to invent copy, which
+ * guarantees unsupported business claims. The brief is trusted upstream
+ * content (Factory/Blueprint-compiled), embedded in the worker prompt, and
+ * bounded so it can never become a prompt-injection or payload channel.
+ * Absent contentBrief means exactly the pre-existing behavior.
+ */
+export const pageContentBriefSchema = z
+  .object({
+    /** Page purpose from the accepted Blueprint. */
+    purpose: z
+      .string()
+      .trim()
+      .min(1, "brief purpose cannot be empty")
+      .max(300, "brief purpose cannot exceed 300 characters"),
+    /** Primary audience from the accepted Blueprint. */
+    audience: z
+      .string()
+      .trim()
+      .min(1, "brief audience cannot be empty")
+      .max(200, "brief audience cannot exceed 200 characters"),
+    /** Run id of the accepted Blueprint run this brief was compiled from. */
+    sourceBlueprintRunId: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .regex(/^[A-Za-z0-9._-]+$/, {
+        message: "sourceBlueprintRunId must be alphanumeric with . _ - only",
+      }),
+    /** One entry per section of the page; see addSitePageInvariantIssues. */
+    sections: z
+      .array(contentBriefSectionSchema)
+      .min(1, "contentBrief requires at least one section")
+      .max(20, "contentBrief cannot exceed 20 sections"),
+    /** Planned internal links (targets must exist as site routes at QA time). */
+    internalLinks: z.array(contentBriefLinkSchema).max(8, "contentBrief cannot exceed 8 internal links").optional(),
+  })
+  .strict();
 
 export const sitePageSchema = z
   .object({
@@ -143,6 +289,8 @@ export const sitePageSchema = z
       .array(sectionTypeSchema)
       .min(1, "at least one section is required")
       .max(20, "maximum 20 sections allowed"),
+    /** Optional bounded content brief compiled from the accepted Blueprint. */
+    contentBrief: pageContentBriefSchema.optional(),
   })
   .strict()
   .superRefine(addSitePageInvariantIssues);
@@ -162,6 +310,7 @@ export type SectionType = z.infer<typeof sectionTypeSchema>;
 export type SiteId = z.infer<typeof siteIdSchema>;
 export type Slug = z.infer<typeof slugSchema>;
 export type SitePage = z.infer<typeof sitePageSchema>;
+export type PageContentBrief = z.infer<typeof pageContentBriefSchema>;
 export type CreatePageTask = z.infer<typeof createPageTaskSchema>;
 export type SiteTask = z.infer<typeof siteTaskSchema>;
 

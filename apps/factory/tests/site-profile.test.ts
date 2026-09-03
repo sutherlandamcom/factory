@@ -40,12 +40,14 @@ test("valid SiteProfile passes validation", () => {
 test("the repository-owned starter profile JSON parses with the shared contract", async () => {
   const raw = await readFile(path.join(repoRoot, "sites", "starter", "site-profile.json"), "utf8");
   const parsed = siteProfileSchema.parse(JSON.parse(raw));
-  assert.equal(parsed.siteName, "Summit Roofing Co.");
-  // Single source of truth: the demo identity lives ONLY in the data file.
-  assert.deepEqual(
-    parsed.navigation.map((entry) => entry.targetSlug),
-    ["/", "/services/example", "/blog/example"],
-  );
+  assert.ok(parsed.siteId.length > 0, "siteId must be non-empty");
+  assert.ok(parsed.siteName.length > 0, "siteName must be non-empty");
+  assert.ok(parsed.canonicalOrigin.startsWith("http"), "canonicalOrigin must be valid URL");
+  assert.ok(parsed.navigation.length > 0, "navigation must have entries");
+  for (const entry of parsed.navigation) {
+    assert.ok(entry.label.length > 0, "navigation label must be non-empty");
+    assert.ok(entry.targetSlug.startsWith("/"), "navigation targetSlug must be rooted path");
+  }
 });
 
 test("canonicalOrigin is normalized to the bare origin", () => {

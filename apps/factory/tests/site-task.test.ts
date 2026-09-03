@@ -397,3 +397,200 @@ test("payload size bound is enforced", () => {
   };
   assert.throws(() => parseSiteTask(hugeObj));
 });
+
+// ---------------------------------------------------------------------------
+// contentBrief (PROVEN_MVP_CAPABILITY_GAP C1)
+// ---------------------------------------------------------------------------
+
+function validBriefTask() {
+  return {
+    type: "create_page",
+    siteId: "demo",
+    page: {
+      type: "general",
+      slug: "/insights/overview",
+      title: "Market overview and verified insights",
+      description: "Evidence-led regional overview and operational analysis.",
+      sections: ["hero", "content_section", "faq"],
+      contentBrief: {
+        purpose: "Provide dated, source-backed operational context.",
+        audience: "Commercial decision makers evaluating local facilities.",
+        sourceBlueprintRunId: "20260901T114820Z-8976f5e5",
+        sections: [
+          {
+            sectionType: "hero",
+            heading: "Executive intelligence overview",
+            keyPoints: ["Primary sector activity remained stable year over year."],
+            prohibitedClaims: ["Do not guarantee specific returns or timeline commitments."],
+            blueprintSectionId: "sec-hero-overview",
+          },
+          {
+            sectionType: "content_section",
+            heading: "Empirical market indicators",
+            keyPoints: ["Regulatory filings require independent validation prior to settlement."],
+            leadProse: "Detailed operational review based on primary sources.",
+            blueprintSectionId: "sec-indicators",
+          },
+          {
+            sectionType: "faq",
+            heading: "Verification guidelines",
+            keyPoints: ["How are operational metrics validated across regional nodes?"],
+            blueprintSectionId: "sec-faq",
+          },
+        ],
+        internalLinks: [{ targetSlug: "/services/roof-repair", purpose: "Review maintenance capabilities." }],
+      },
+    },
+  } as const;
+}
+
+test("valid contentBrief parses and is preserved", () => {
+  const parsed = parseSiteTask(validBriefTask());
+  assert.ok(parsed.page.contentBrief, "brief should be present");
+  assert.equal(parsed.page.contentBrief.sections.length, 3);
+  assert.equal(parsed.page.contentBrief.sourceBlueprintRunId, "20260901T114820Z-8976f5e5");
+  assert.equal(parsed.page.contentBrief.internalLinks?.[0]?.targetSlug, "/services/roof-repair");
+});
+
+test("task without contentBrief still parses (backward compatible)", () => {
+  const parsed = parseSiteTask({
+    type: "create_page",
+    siteId: "demo",
+    page: {
+      type: "service",
+      slug: "/services/roof-repair",
+      title: "T",
+      description: "D",
+      sections: ["hero"],
+    },
+  });
+  assert.equal(parsed.page.contentBrief, undefined);
+});
+
+test("contentBrief sectionType not on page sections is rejected", () => {
+  const task = JSON.parse(JSON.stringify(validBriefTask()));
+  task.page.sections = ["hero", "content_section"];
+  assert.throws(() => parseSiteTask(task));
+});
+
+test("contentBrief missing entry for a page section is rejected", () => {
+  const task = JSON.parse(JSON.stringify(validBriefTask()));
+  task.page.contentBrief.sections = task.page.contentBrief.sections.slice(0, 2);
+  assert.throws(() => parseSiteTask(task));
+});
+
+test("contentBrief duplicate sectionType is rejected", () => {
+  const task = JSON.parse(JSON.stringify(validBriefTask()));
+  task.page.contentBrief.sections[1].sectionType = "hero";
+  assert.throws(() => parseSiteTask(task));
+});
+
+test("contentBrief unknown fields fail closed", () => {
+  const task = JSON.parse(JSON.stringify(validBriefTask()));
+  task.page.contentBrief.injected = "payload";
+  assert.throws(() => parseSiteTask(task));
+  const sectionTask = JSON.parse(JSON.stringify(validBriefTask()));
+  sectionTask.page.contentBrief.sections[0].visualRequirement = { required: true };
+  assert.throws(() => parseSiteTask(sectionTask));
+});
+
+test("contentBrief bound enforcement", () => {
+  // heading too long
+  const longHeading = JSON.parse(JSON.stringify(validBriefTask()));
+  longHeading.page.contentBrief.sections[0].heading = "h".repeat(121);
+  assert.throws(() => parseSiteTask(longHeading));
+
+  // > 8 key points
+  const manyKeys = JSON.parse(JSON.stringify(validBriefTask()));
+  manyKeys.page.contentBrief.sections[0].keyPoints = Array.from({ length: 9 }, (_, i) => `kp${i}`);
+  assert.throws(() => parseSiteTask(manyKeys));
+
+  // key point too long
+  const longKey = JSON.parse(JSON.stringify(validBriefTask()));
+  longKey.page.contentBrief.sections[0].keyPoints = ["k".repeat(281)];
+  assert.throws(() => parseSiteTask(longKey));
+
+  // > 6 prohibited claims
+  const manyProhibited = JSON.parse(JSON.stringify(validBriefTask()));
+  manyProhibited.page.contentBrief.sections[0].prohibitedClaims = Array.from(
+    { length: 7 },
+    (_, i) => `p${i}`,
+  );
+  assert.throws(() => parseSiteTask(manyProhibited));
+
+  // > 8 internal links
+  const manyLinks = JSON.parse(JSON.stringify(validBriefTask()));
+  manyLinks.page.contentBrief.internalLinks = Array.from({ length: 9 }, (_, i) => ({
+    targetSlug: `/route-${i}`,
+    purpose: "link",
+  }));
+  assert.throws(() => parseSiteTask(manyLinks));
+
+  // invalid targetSlug
+  const badLink = JSON.parse(JSON.stringify(validBriefTask()));
+  badLink.page.contentBrief.internalLinks = [{ targetSlug: "not-rooted", purpose: "link" }];
+  assert.throws(() => parseSiteTask(badLink));
+
+  // HTML in heading rejected
+  const htmlHeading = JSON.parse(JSON.stringify(validBriefTask()));
+  htmlHeading.page.contentBrief.sections[0].heading = "<script>alert(1)</script>";
+  assert.throws(() => parseSiteTask(htmlHeading));
+
+  // invalid blueprintSectionId format
+  const badSectionId = JSON.parse(JSON.stringify(validBriefTask()));
+  badSectionId.page.contentBrief.sections[0].blueprintSectionId = "Bad Id!";
+  assert.throws(() => parseSiteTask(badSectionId));
+
+  // invalid sourceBlueprintRunId
+  const badRunId = JSON.parse(JSON.stringify(validBriefTask()));
+  badRunId.page.contentBrief.sourceBlueprintRunId = "bad run id";
+  assert.throws(() => parseSiteTask(badRunId));
+
+  // empty keyPoints rejected
+  const noKeys = JSON.parse(JSON.stringify(validBriefTask()));
+  noKeys.page.contentBrief.sections[0].keyPoints = [];
+  assert.throws(() => parseSiteTask(noKeys));
+});
+
+test("worker prompt incorporates contentBrief and business-truth instructions", async () => {
+  const { buildWorkerPrompt, buildWorkerRepairPrompt } = await import("../src/executor/prompt.js");
+  const { deriveTaskWritePolicy } = await import("../src/executor/module-policy.js");
+  const task = parseSiteTask(validBriefTask());
+  const policy = deriveTaskWritePolicy(task);
+
+  const initialPrompt = buildWorkerPrompt(task, policy);
+  assert.ok(
+    initialPrompt.includes("page.contentBrief is present, it is accepted Factory business truth"),
+    "initial prompt must explain contentBrief rules",
+  );
+  assert.ok(
+    initialPrompt.includes("Executive intelligence overview"),
+    "initial prompt must contain brief content in task JSON",
+  );
+  assert.ok(
+    initialPrompt.includes("Do not guarantee specific returns"),
+    "initial prompt must contain prohibited claims in task JSON",
+  );
+
+  const repairPrompt = buildWorkerRepairPrompt(
+    task,
+    {
+      attemptNumber: 2,
+      failingStage: "qa",
+      failureCode: "qa_failed",
+      summary: "heading mismatch",
+      excerpt: "expected heading to match",
+      targetSlug: task.page.slug,
+      failingAssertions: ["expected heading to match"],
+    },
+    policy,
+  );
+  assert.ok(
+    repairPrompt.includes("page.contentBrief is present, it is accepted Factory business truth"),
+    "repair prompt must explain contentBrief rules",
+  );
+  assert.ok(
+    repairPrompt.includes("Executive intelligence overview"),
+    "repair prompt must contain brief content in task JSON",
+  );
+});

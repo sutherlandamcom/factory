@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { runProcess } from "../src/executor/process.js";
 import { buildChildEnv } from "../src/executor/env.js";
+import { siteProfile } from "../../../sites/starter/src/lib/site-profile.js";
 import path from "node:path";
 
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
@@ -73,7 +74,9 @@ test("Playwright webServer environment derives PUBLIC_SITE_URL from validated pr
   );
   assert.equal(defaultResult.exitCode, 0, defaultResult.stderr);
   const defaultConfig = JSON.parse(defaultResult.stdout.trim()) as { publicSiteUrl: string };
-  assert.equal(defaultConfig.publicSiteUrl, "http://localhost:4321");
+  // The webServer env must derive from the validated profile when no
+  // PUBLIC_SITE_URL override is set (profile canonicalOrigin wins).
+  assert.equal(defaultConfig.publicSiteUrl, siteProfile.canonicalOrigin);
 
   const overrideResult = await runProcess(
     tsxBin,

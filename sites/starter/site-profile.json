@@ -7,7 +7,6 @@
   "navigation": [
     { "label": "Home", "targetSlug": "/" },
     { "label": "Chamonix Intelligence", "targetSlug": "/chamonix-market-intelligence" },
-    { "label": "Megève Intelligence", "targetSlug": "/megeve-market-intelligence" },
-    { "label": "Non-Resident Readiness", "targetSlug": "/blog/non-resident-french-property-readiness" }
+    { "label": "Megève Intelligence", "targetSlug": "/megeve-market-intelligence" }
   ]
 }

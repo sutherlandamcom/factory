@@ -35,14 +35,12 @@ const LAUNCH_ROUTES = [
   "/",
   "/chamonix-market-intelligence",
   "/megeve-market-intelligence",
-  "/blog/non-resident-french-property-readiness",
 ] as const;
 
 const JSON_LD_TYPE_BY_ROUTE: Record<string, string> = {
   "/": "LocalBusiness",
   "/chamonix-market-intelligence": "WebPage",
   "/megeve-market-intelligence": "WebPage",
-  "/blog/non-resident-french-property-readiness": "Article",
 };
 
 function readSitemapRoutes(): string[] {

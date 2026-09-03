@@ -49,12 +49,7 @@ test("the repository-owned starter profile JSON parses with the shared contract"
   assert.equal(parsed.addressLines, undefined);
   assert.deepEqual(
     parsed.navigation.map((entry) => entry.targetSlug),
-    [
-      "/",
-      "/chamonix-market-intelligence",
-      "/megeve-market-intelligence",
-      "/blog/non-resident-french-property-readiness",
-    ],
+    ["/", "/chamonix-market-intelligence", "/megeve-market-intelligence"],
   );
 });
 

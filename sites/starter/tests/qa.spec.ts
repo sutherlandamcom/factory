@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from "node:fs";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { resolveCanonicalOrigin } from "@factory/contracts";
 import { siteProfile } from "../src/lib/site-profile.js";
@@ -335,5 +336,98 @@ test.describe("404", () => {
     await expect(page).toHaveURL(/\/$/);
 
     assertNoPageErrors(errors);
+  });
+});
+
+test.describe("sitemap and robots crawler baseline", () => {
+  test("sitemap.xml and robots.txt exist after build with valid canonical URLs and no 404", async () => {
+    const sitemapUrl = new URL("../../starter/dist/sitemap.xml", import.meta.url);
+    const robotsUrl = new URL("../../starter/dist/robots.txt", import.meta.url);
+
+    expect(existsSync(sitemapUrl), "sitemap.xml must exist after build").toBe(true);
+    expect(existsSync(robotsUrl), "robots.txt must exist after build").toBe(true);
+
+    const sitemapContent = readFileSync(sitemapUrl, "utf8");
+    const robotsContent = readFileSync(robotsUrl, "utf8");
+
+    // robots allows crawl and points to canonical sitemap
+    expect(robotsContent).toContain("Allow: /");
+    const expectedSitemapUrl = `${expectedOrigin}/sitemap.xml`;
+    expect(robotsContent).toContain(`Sitemap: ${expectedSitemapUrl}`);
+
+    // Parse URLs from sitemap
+    const locMatches = [...sitemapContent.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]!);
+    expect(locMatches.length, "sitemap must contain at least one URL").toBeGreaterThan(0);
+
+    // No duplicate URLs in sitemap
+    expect(new Set(locMatches).size, "sitemap must contain no duplicate URLs").toBe(locMatches.length);
+
+    // 404 is absent from sitemap and all URLs use effective canonical origin
+    for (const url of locMatches) {
+      expect(url, "404 must be absent from sitemap").not.toContain("404");
+      expect(url.startsWith(expectedOrigin), `sitemap URL ${url} must use canonical origin ${expectedOrigin}`).toBe(true);
+    }
+  });
+});
+
+test.describe("whole-site navigation coherence", () => {
+  test("every navigation target resolves with single H1, coherent canonical, metadata, and healthy links", async ({
+    page,
+  }) => {
+    const titles: string[] = [];
+    const descriptions: string[] = [];
+
+    for (const entry of siteProfile.navigation) {
+      const errors = watchForErrors(page);
+      const res = await page.goto(entry.targetSlug);
+      expect(res, `navigation target ${entry.targetSlug} responds`).not.toBeNull();
+      expect(res!.status(), `navigation target ${entry.targetSlug} returns 200`).toBe(200);
+
+      // Single H1
+      const h1 = page.locator("h1");
+      await expect(h1, `${entry.targetSlug} must have exactly one H1`).toHaveCount(1);
+      const h1Text = (await h1.textContent())?.trim() ?? "";
+      expect(h1Text.length, `${entry.targetSlug} H1 must be non-empty`).toBeGreaterThan(0);
+
+      // Metadata present
+      const title = await page.title();
+      expect(title.length, `${entry.targetSlug} title must be non-empty`).toBeGreaterThan(0);
+      titles.push(title);
+
+      const desc = page.locator('meta[name="description"]');
+      await expect(desc, `${entry.targetSlug} must have meta description`).toHaveCount(1);
+      const descContent = (await desc.getAttribute("content"))?.trim() ?? "";
+      expect(descContent.length, `${entry.targetSlug} meta description must be non-empty`).toBeGreaterThan(0);
+      descriptions.push(descContent);
+
+      // Canonical origin matches expected origin
+      const canonical = page.locator('link[rel="canonical"]');
+      await expect(canonical, `${entry.targetSlug} must have canonical link`).toHaveCount(1);
+      const expectedCanonical = `${expectedOrigin}${entry.targetSlug === "/" ? "/" : `${entry.targetSlug}/`}`;
+      await expect(canonical).toHaveAttribute("href", expectedCanonical);
+
+      // Consistent shell identity
+      await expect(page.locator("html")).toHaveAttribute("lang", siteProfile.language);
+      await expect(page.locator("footer")).toContainText(siteProfile.siteName);
+
+      // Same-origin links resolve
+      const hrefs = await page.locator("a[href]").evaluateAll((anchors) =>
+        anchors.map((a) => a.getAttribute("href") ?? "").filter(Boolean),
+      );
+      const uniqueHrefs = [...new Set(hrefs)];
+      for (const href of uniqueHrefs) {
+        if (/^(mailto:|tel:|javascript:|#)/i.test(href)) continue;
+        const target = new URL(href, `${expectedOrigin}${entry.targetSlug}`);
+        if (target.origin !== expectedOrigin) continue;
+        const linkRes = await page.request.get(`${target.pathname}${target.search}`);
+        expect(linkRes.status(), `${entry.targetSlug} internal link ${href} resolves`).toBeLessThan(400);
+      }
+
+      assertNoPageErrors(errors);
+    }
+
+    // Titles and descriptions are unique across navigation targets
+    expect(new Set(titles).size, "navigation page titles must be unique").toBe(titles.length);
+    expect(new Set(descriptions).size, "navigation page descriptions must be unique").toBe(descriptions.length);
   });
 });

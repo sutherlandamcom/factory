@@ -24,3 +24,6 @@ node_modules/
 # Local agent tooling (plans, sessions)
 /.kilo/
 .playwright-mcp/
+
+# Local QA screenshot artifacts
+/qa-artifacts/

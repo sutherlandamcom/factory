@@ -598,6 +598,18 @@ test("worker prompt incorporates contentBrief and business-truth instructions", 
     "initial prompt must explain contentBrief rules",
   );
   assert.ok(
+    initialPrompt.includes("treat it as binding art direction for that section"),
+    "initial prompt must preserve binding productionGuidance semantics",
+  );
+  assert.ok(
+    initialPrompt.includes("This is transitional implementation guidance only"),
+    "initial prompt must mark productionGuidance as transitional",
+  );
+  assert.ok(
+    initialPrompt.includes("does not grant the worker design authority"),
+    "initial prompt must deny worker design authority",
+  );
+  assert.ok(
     initialPrompt.includes("Executive intelligence overview"),
     "initial prompt must contain brief content in task JSON",
   );
@@ -622,6 +634,18 @@ test("worker prompt incorporates contentBrief and business-truth instructions", 
   assert.ok(
     repairPrompt.includes("page.contentBrief is present, it is accepted Factory business truth"),
     "repair prompt must explain contentBrief rules",
+  );
+  assert.ok(
+    repairPrompt.includes("treat it as binding art direction for that section"),
+    "repair prompt must preserve binding productionGuidance semantics",
+  );
+  assert.ok(
+    repairPrompt.includes("This is transitional implementation guidance only"),
+    "repair prompt must mark productionGuidance as transitional",
+  );
+  assert.ok(
+    repairPrompt.includes("does not grant the worker design authority"),
+    "repair prompt must deny worker design authority",
   );
   assert.ok(
     repairPrompt.includes("Executive intelligence overview"),

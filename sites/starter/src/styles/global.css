@@ -1,1 +1,35 @@
 @import "tailwindcss";
+
+/*
+ * Sutherland Private Office — trusted site-level design tokens (Phase D foundation).
+ *
+ * Art direction per the operator-approved Production Spec creative direction:
+ * restrained alpine neutrals, editorial serif display + disciplined sans body,
+ * one sober accent used sparingly. System font stacks only — no font packages,
+ * no external requests. These tokens are the site's typographic identity; page
+ * workers consume them, they never redefine them.
+ */
+@theme {
+  --color-ink-900: #1c2430;
+  --color-ink-700: #3b4654;
+  --color-ink-500: #5d6a79;
+  --color-ink-300: #97a1ad;
+  --color-paper: #faf9f6;
+  --color-paper-raised: #ffffff;
+  --color-mist: #eef0ee;
+  --color-slate-line: #d8dcd9;
+  --color-accent: #2f5d62;
+  --color-accent-deep: #24494d;
+
+  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+  --font-body: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+
+html {
+  font-family: var(--font-body);
+}
+
+::selection {
+  background-color: var(--color-accent);
+  color: var(--color-paper-raised);
+}

@@ -1,0 +1,26 @@
+---
+/**
+ * DefinitionList — a decision-oriented definition-list primitive (approved
+ * reference lesson from the Maison Arboris review): titled entries with
+ * precise body copy, used for service pathways and evidence items instead of
+ * card grids. Entries render as a bordered list, not tiles.
+ */
+interface Entry {
+  term: string;
+  description: string;
+}
+interface Props {
+  entries: Entry[];
+}
+const { entries } = Astro.props;
+---
+<dl class="divide-y divide-slate-line border-y border-slate-line">
+  {
+    entries.map((entry) => (
+      <div class="grid gap-2 py-6 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] md:gap-8">
+        <dt class="font-display text-xl font-semibold text-ink-900">{entry.term}</dt>
+        <dd class="text-base leading-relaxed text-ink-700">{entry.description}</dd>
+      </div>
+    ))
+  }
+</dl>

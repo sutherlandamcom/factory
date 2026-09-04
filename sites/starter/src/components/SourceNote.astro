@@ -1,0 +1,16 @@
+---
+/**
+ * SourceNote — a dated, attributed sourcing line for evidence content
+ * (approved reference lesson from the Knight Frank review): figures and
+ * market statements always appear with their source and as-of date, as
+ * editorial content rather than widgets.
+ */
+interface Props {
+  source: string;
+  asOf?: string;
+}
+const { source, asOf } = Astro.props;
+---
+<p class="mt-3 text-sm text-ink-500">
+  Source: {source}{asOf && ` · as of ${asOf}`}
+</p>

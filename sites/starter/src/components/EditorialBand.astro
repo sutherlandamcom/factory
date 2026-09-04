@@ -1,0 +1,34 @@
+---
+/**
+ * EditorialBand — a full-width editorial band primitive for the approved
+ * Sutherland composition: eyebrow label, display-serif heading, and a body
+ * slot. Background and width variants allow the variable rhythm the
+ * Production Spec requires (alternating dense/airy bands, not uniform rows).
+ */
+interface Props {
+  /** Small uppercase eyebrow label above the heading (e.g. "The boundary"). */
+  eyebrow?: string;
+  /** Band heading (H2 unless the page worker passes a heading level explicitly). */
+  heading: string;
+  /** Visual weight variant controlling padding/width rhythm. */
+  variant?: "airy" | "dense";
+  /** Background tone: paper (default), mist (subtle contrast), or raised (white). */
+  tone?: "paper" | "mist" | "raised";
+}
+const { eyebrow, heading, variant = "airy", tone = "paper" } = Astro.props;
+const toneClass = tone === "mist" ? "bg-mist" : tone === "raised" ? "bg-paper-raised" : "bg-paper";
+const padClass = variant === "dense" ? "py-12 md:py-16" : "py-16 md:py-24";
+---
+<section class={`${toneClass} ${padClass}`}>
+  <div class="mx-auto max-w-6xl px-6">
+    {eyebrow && (
+      <p class="text-xs font-semibold tracking-[0.18em] uppercase text-accent">{eyebrow}</p>
+    )}
+    <h2 class="mt-3 font-display text-3xl font-semibold tracking-tight text-ink-900 md:text-4xl">
+      {heading}
+    </h2>
+    <div class="mt-6 max-w-3xl text-base leading-relaxed text-ink-700 md:text-lg">
+      <slot />
+    </div>
+  </div>
+</section>

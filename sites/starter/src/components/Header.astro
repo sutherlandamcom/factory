@@ -9,15 +9,15 @@ interface Props {
 const { siteName, navigation } = Astro.props;
 ---
 
-<header class="border-b border-slate-200 bg-white">
-  <div class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-4 px-4 py-4">
-    <a href="/" class="text-lg font-bold text-slate-900">{siteName}</a>
+<header class="border-b border-slate-line bg-paper">
+  <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-6 py-5">
+    <a href="/" class="font-display text-lg font-semibold tracking-wide text-ink-900">{siteName}</a>
     <nav aria-label="Main navigation">
-      <ul class="flex gap-6 text-sm font-medium">
+      <ul class="flex gap-6 text-sm tracking-wide text-ink-700">
         {
           navigation.map((item) => (
             <li>
-              <a href={item.targetSlug} class="text-slate-600 hover:text-slate-900">
+              <a href={item.targetSlug} class="transition-colors hover:text-accent">
                 {item.label}
               </a>
             </li>

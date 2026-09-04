@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { resolveCanonicalOrigin } from "@factory/contracts";
 import { siteProfile } from "../src/lib/site-profile.js";
 
@@ -124,46 +124,17 @@ async function assertJsonLd(page: Page): Promise<Record<string, unknown>> {
   return parsed;
 }
 
-async function assertResponsiveImage(
-  locator: Locator,
-  expected: {
-    alt: string;
-    sizes?: string;
-    loading: "eager" | "lazy";
-  },
-) {
-  await expect(locator).toBeVisible();
-  const src = await locator.getAttribute("src");
-  expect(src, "image src must be a local generated asset").toMatch(/^\/_astro\//);
-  await expect(locator).toHaveAttribute("alt", expected.alt);
-
-  const width = Number(await locator.getAttribute("width"));
-  const height = Number(await locator.getAttribute("height"));
-  expect(width, "image width must be explicit and positive").toBeGreaterThan(0);
-  expect(height, "image height must be explicit and positive").toBeGreaterThan(0);
-
-  const srcset = await locator.getAttribute("srcset");
-  expect(srcset, "responsive image must have srcset").toBeTruthy();
-  expect(srcset).toContain("/_astro/");
-
-  if (expected.sizes) {
-    await expect(locator).toHaveAttribute("sizes", expected.sizes);
-  }
-
-  await expect(locator).toHaveAttribute("loading", expected.loading);
-}
-
 test.describe("homepage", () => {
-  test("loads with exact metadata, H1, JSON-LD, responsive image, working nav, and no errors", async ({
+  test("loads with exact metadata, H1, JSON-LD, working nav, and no errors", async ({
     page,
   }, testInfo) => {
     const errors = watchForErrors(page);
     await expectOk(page, "/");
 
     await assertMetadata(page, {
-      title: `Roof Repair & Replacement in Boulder, CO | ${siteProfile.siteName}`,
+      title: `Independent advisory for French Alps property decisions | ${siteProfile.siteName}`,
       description:
-        "Summit Roofing Co. provides residential roof repair, replacement, and inspection services in Boulder, Colorado. Licensed, insured, and rated 5 stars by local homeowners.",
+        "Evidence-led acquisition and asset advisory for international buyers making consequential property decisions in Chamonix and Megève.",
       canonicalPath: "/",
       ogType: "website",
     });
@@ -172,139 +143,17 @@ test.describe("homepage", () => {
 
     const h1 = page.locator("h1");
     await expect(h1).toHaveCount(1);
-    await expect(h1).toHaveText("Roofing done right, the first time");
+    await expect(h1).toHaveText("Independent advisory for French Alps property decisions");
 
     const schema = await assertJsonLd(page);
     expect(schema["@type"]).toBe("LocalBusiness");
-    expect(schema.name).toBe("Summit Roofing Co.");
+    expect(schema.name).toBe(siteProfile.siteName);
     expect(schema.url).toBe(`${expectedOrigin}/`);
-    expect(schema.areaServed).toBe("Boulder, CO");
-
-    await assertResponsiveImage(page.locator("section.bg-slate-50 img"), {
-      alt: "A repaired shingle roof on a Boulder home at the foot of the Flatirons",
-      sizes: "(max-width: 768px) 100vw, 50vw",
-      loading: "eager",
-    });
 
     await page.screenshot({
       path: `qa-artifacts/homepage-${testInfo.project.name}.png`,
       fullPage: true,
     });
-
-    await page
-      .getByRole("navigation", { name: "Main navigation" })
-      .getByRole("link", { name: "Services" })
-      .click();
-    await expect(page).toHaveURL(/\/services\/example\/?$/);
-    await expect(page.locator("h1")).toHaveCount(1);
-
-    assertNoPageErrors(errors);
-  });
-});
-
-test.describe("service page", () => {
-  test("loads with exact metadata, H1, Service JSON-LD, responsive image, visible CTA, and nav", async ({
-    page,
-  }, testInfo) => {
-    const errors = watchForErrors(page);
-    await expectOk(page, "/services/example");
-
-    await assertMetadata(page, {
-      title: `Roof Repair & Replacement Services | ${siteProfile.siteName}`,
-      description:
-        "Roof repair, full replacement, and storm damage restoration for Boulder-area homes. Free inspections, transparent pricing, and a 10-year workmanship warranty.",
-      canonicalPath: "/services/example/",
-      ogType: "website",
-    });
-
-    await assertShell(page);
-
-    const h1 = page.locator("h1");
-    await expect(h1).toHaveCount(1);
-    await expect(h1).toHaveText("Roof repair & replacement");
-
-    const schema = await assertJsonLd(page);
-    expect(schema["@type"]).toBe("Service");
-    expect(schema.serviceType).toBe("Roof repair and replacement");
-    expect(schema.url).toBe(`${expectedOrigin}/services/example/`);
-    expect((schema.provider as Record<string, unknown>)?.name).toBe("Summit Roofing Co.");
-
-    await assertResponsiveImage(page.locator("section.bg-slate-50 img"), {
-      alt: "A Summit Roofing crew member replacing damaged shingles",
-      sizes: "(max-width: 768px) 100vw, 50vw",
-      loading: "eager",
-    });
-
-    const cta = page.getByRole("link", { name: "Start at our homepage" });
-    await expect(cta).toBeVisible();
-    await expect(cta).toHaveAttribute("href", "/");
-
-    await page.screenshot({
-      path: `qa-artifacts/service-${testInfo.project.name}.png`,
-      fullPage: true,
-    });
-
-    await page
-      .getByRole("navigation", { name: "Main navigation" })
-      .getByRole("link", { name: "Home" })
-      .click();
-    await expect(page).toHaveURL(/\/$/);
-
-    assertNoPageErrors(errors);
-  });
-});
-
-test.describe("article page", () => {
-  test("loads with exact metadata, H1, Article JSON-LD, lazy responsive image, and internal links", async ({
-    page,
-  }, testInfo) => {
-    const errors = watchForErrors(page);
-    await expectOk(page, "/blog/example");
-
-    await assertMetadata(page, {
-      title: `5 Signs Your Roof Needs Repair Before Winter | ${siteProfile.siteName}`,
-      description:
-        "Catching roof damage early is the cheapest repair there is. Here are the five warning signs our inspectors check first on Boulder homes.",
-      canonicalPath: "/blog/example/",
-      ogType: "website",
-    });
-
-    await assertShell(page);
-
-    const h1 = page.locator("h1");
-    await expect(h1).toHaveCount(1);
-    await expect(h1).toHaveText("5 Signs Your Roof Needs Repair Before Winter");
-
-    await expect(page.locator("article")).toBeVisible();
-    await expect(page.locator("article h2")).toHaveCount(5);
-
-    const schema = await assertJsonLd(page);
-    expect(schema["@type"]).toBe("Article");
-    expect(schema.headline).toBe("5 Signs Your Roof Needs Repair Before Winter");
-    expect(schema.datePublished).toBe("2026-01-15");
-    expect((schema.author as Record<string, unknown>)?.name).toBe("Summit Roofing Co.");
-    expect(
-      ((schema.mainEntityOfPage as Record<string, unknown>)?.[
-        "@id"
-      ] as string),
-    ).toBe(`${expectedOrigin}/blog/example/`);
-
-    await assertResponsiveImage(page.locator("article img"), {
-      alt: "Close-up of asphalt shingles showing hail damage and granule loss",
-      sizes: "(max-width: 768px) 100vw, 768px",
-      loading: "lazy",
-    });
-
-    await page.screenshot({
-      path: `qa-artifacts/article-${testInfo.project.name}.png`,
-      fullPage: true,
-    });
-
-    await page
-      .locator("article")
-      .getByRole("link", { name: "roof repair and replacement services" })
-      .click();
-    await expect(page).toHaveURL(/\/services\/example\/?$/);
 
     assertNoPageErrors(errors);
   });
@@ -361,6 +210,9 @@ test.describe("sitemap and robots crawler baseline", () => {
 
     // No duplicate URLs in sitemap
     expect(new Set(locMatches).size, "sitemap must contain no duplicate URLs").toBe(locMatches.length);
+
+    // One-page launch scope: the sitemap contains exactly the launch route.
+    expect(locMatches, "sitemap must contain exactly the one-page launch scope").toEqual([`${expectedOrigin}/`]);
 
     // 404 is absent from sitemap and all URLs use effective canonical origin
     for (const url of locMatches) {

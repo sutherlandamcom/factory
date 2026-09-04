@@ -39,9 +39,9 @@ export function buildWorkerPrompt(task: SiteTask, policy: TaskWritePolicy): stri
 - Do NOT access the network; it is disabled at the execution boundary.
 - Do NOT attempt to run "pnpm qa" or launch background dev/preview servers. Factory runs the authoritative QA oracle outside your runtime; your work is verified after you stop.
 - When page.type is "general", use existing layouts/components and emit one truthful WebPage JSON-LD object whose name equals the SiteTask title and whose url equals the canonical URL.
-- page.contentBrief is a LEGACY COMPATIBILITY input compiled from accepted Blueprint/ProductionSpec semantics; it is not permission to act as a general marketing writer. Implement every keyPoint faithfully as visible content, honor every prohibitedClaim, use planned internalLinks where they fit naturally, and add NO business claim, qualification, metric, credential, client, performance statement, guarantee, positioning idea, or factual assertion beyond the brief.
+- When page.contentBrief is present, it is accepted Factory business truth compiled from accepted Blueprint/ProductionSpec semantics. It remains a LEGACY COMPATIBILITY input; it is not permission to act as a general marketing writer. Implement every keyPoint faithfully as visible content, honor every prohibitedClaim, use planned internalLinks where they fit naturally, and add NO business claim, qualification, metric, credential, client, performance statement, guarantee, positioning idea, or factual assertion beyond the brief.
 - Because the current SiteTask may contain semantic key points rather than final AcceptedPageContent, you may add only the minimum neutral connective prose necessary to render those exact points coherently. Do not embellish, market, optimize, invent a new angle, or introduce new claims. This compatibility allowance ends when exact accepted copy is supplied by a future contract: exact accepted marketing copy must be reproduced without rewriting.
-- When a brief section carries productionGuidance or purpose, follow it as the CURRENT accepted production instruction for that section. It is transitional implementation guidance, not authority to invent a new visual system or redesign the page beyond the supplied instruction.
+- When a brief section carries productionGuidance or purpose, treat it as binding art direction for that section (layout, editorial treatment, and the reason the section exists); do not substitute a generic component default. This is transitional implementation guidance only and does not grant the worker design authority to invent a visual system, reinterpret the supplied direction, or redesign the page.
 
 ## SiteTask (authoritative, validated JSON)
 
@@ -88,8 +88,8 @@ Your goal is to inspect the current implementation in the repository and FIX THE
 - Do NOT access the network; it is disabled at the execution boundary.
 - Do NOT attempt to run "pnpm qa" or launch background dev/preview servers. Factory runs the authoritative QA oracle outside your runtime; your work is verified after you stop.
 - When page.type is "general", use existing layouts/components and emit one truthful WebPage JSON-LD object whose name equals the SiteTask title and whose url equals the canonical URL.
-- page.contentBrief remains a LEGACY COMPATIBILITY input. Preserve every keyPoint, prohibitedClaim and planned internalLink, and add no new business claims or marketing ideas. Only minimal neutral connective prose is allowed when the current contract lacks final accepted copy.
-- When a brief section carries productionGuidance or purpose, preserve that accepted current production instruction. Do not use a repair as an opportunity to redesign the page.
+- When page.contentBrief is present, it is accepted Factory business truth and remains a LEGACY COMPATIBILITY input. Preserve every keyPoint, prohibitedClaim and planned internalLink, and add no new business claims or marketing ideas. Only minimal neutral connective prose is allowed when the current contract lacks final accepted copy.
+- When a brief section carries productionGuidance or purpose, treat it as binding art direction for that section. This is transitional implementation guidance only and does not grant the worker design authority to invent a visual system, reinterpret the supplied direction, or redesign the page. Do not use a repair as an opportunity to redesign the page.
 
 ## Target SiteTask
 

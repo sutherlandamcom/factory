@@ -1,15 +1,55 @@
 # Factory
 
-Factory is an autonomous system for creating, publishing, and operating
-SEO/content websites. This repository currently contains:
+Factory is an AI-native production control plane for research, search/content
+intelligence, governed content production, design-provider orchestration,
+assets, deterministic production/QA, versioning, approvals, and deployment.
 
-**structured SiteTask → strong-isolation gate → isolated Codex execution → exact-target scope/integrity checks → Foundation QA → dynamic task-page QA → semantic verification → bounded repair → structured TaskResult**
+Factory is **not** a generic CMS, visual page builder, proprietary AI design
+engine, or one unconstrained autonomous agent that researches, writes, designs,
+and codes a site end to end.
+
+Repository instruction precedence is defined in
+[`docs/instruction-authority.md`](./docs/instruction-authority.md). The governing
+vNext product direction lives in
+[`docs/architecture/factory-constitution-vnext.md`](./docs/architecture/factory-constitution-vnext.md)
+and sequencing in [`docs/roadmap-vnext.md`](./docs/roadmap-vnext.md).
+
+## Current implemented state vs vNext target
+
+The repository still contains accepted transitional v0/v0.1 capabilities that
+predate the vNext provider/content architecture. Preserve them until their
+explicit migration run/ADR is accepted; do not extend them as if they were the
+new target architecture.
+
+The current implemented execution path includes:
+
+**structured SiteTask → strong-isolation gate → routed coding execution → exact-target scope/integrity checks → Foundation QA → dynamic task-page QA → semantic verification → bounded repair → structured TaskResult**
 
 and a separate trusted Production Delivery operation:
 
 **accepted `origin/main` → one build → artifact digest → immutable Cloudflare version → preview QA → same-version production promotion → production QA / exact-version rollback**
 
-See `docs/architecture.md` for the design.
+Important transitional boundaries:
+
+- the current public-site renderer is Astro 7 + Tailwind CSS 4; it remains
+  accepted until the explicit Stitch-native-static vs Astro bake-off selects
+  the ordinary production path;
+- the current pre-vNext `create_page` contract may still materialize minimal
+  prose from bounded `contentBrief` key points because `AcceptedPageContent`
+  does not exist yet; new content workflows must move to the human-approved
+  Opus writer pipeline instead of broadening code-worker authorship;
+- legacy/evaluation-only `design_director` and `image_generator` model-role
+  entries are not vNext professional design or imagery authority. vNext uses an
+  external `DesignProvider` (Google Stitch preferred first candidate) and a
+  `VisualAssetProvider` (preferred production direction: Google Vertex/Gemini
+  Nano Banana Pro), with authentic operator photography preferred for
+  documentary truth;
+- Dashboard/operator workflows are now explicitly in scope and must sit over
+  shared application services rather than become a second source of truth.
+
+See `docs/architecture.md` for the implemented-state record. Historical
+"future", "next", and "deferred" statements in dated reports do not override
+the vNext roadmap.
 
 ## Prerequisites
 
@@ -122,8 +162,8 @@ All commands run from the repository root.
 | `pnpm test` | Factory unit tests (deterministic, no Codex calls) + Playwright QA against the **built** site |
 | `pnpm qa` | `check` → `build` → `test` in one command |
 | `pnpm factory` | Run the Factory control-plane CLI |
-| `pnpm factory site-task <task.json>` | Execute one SiteTask end to end with persisted state & bounded repair (requires DB + Codex auth) |
-| `pnpm factory intelligence build <request.json> <research.json>` | Produce a Site Intelligence Plan + compiled create_page SiteTasks (no DB required; requires Codex auth + strong isolation) |
+| `pnpm factory site-task <task.json>` | Execute one current SiteTask end to end with persisted state & bounded repair (requires DB + routed worker credentials) |
+| `pnpm factory intelligence build <request.json> <research.json>` | Produce the current v0 Site Intelligence Plan + compiled create_page SiteTasks (no DB required; requires the current isolated intelligence runtime) |
 | `pnpm factory db check` | Check PostgreSQL database connection and schema state |
 | `pnpm factory db migrate` | Run versioned Drizzle SQL migrations against configured database |
 | `pnpm factory project create <key> <name>` | Create a project in the control plane database |
@@ -146,18 +186,18 @@ server, inner-sandbox user-namespace policy, and pinned worker image. A missing 
 `STRONG_EXECUTION_ISOLATION_UNAVAILABLE`; Factory never falls back to
 host-readable `workspace-write` execution.
 
-With an approved backend, the bounded loop remains specified as follows:
+The current bounded loop remains specified as follows:
 
-1. **Attempt 1 (Initial)**: Runs Codex only inside the approved outer isolation boundary; the inner Codex sandbox must retain disabled tool network and web search.
+1. **Attempt 1 (Initial)**: Runs the trusted routed coding worker only inside the approved outer isolation boundary.
 2. **Exact scope validation**: Derives one page path from the validated slug and evaluates NUL-delimited Git delete/add evidence, modes, and filesystem types. Renames, symlinks, executables, gitlinks, and unrelated pages fail terminally.
-3. **Ignored-input integrity**: Compares content-hashed ignored/build-input state around Codex, including `.env*`, `.astro`, and `node_modules`. Mutations fail terminally before QA.
+3. **Ignored-input integrity**: Compares content-hashed ignored/build-input state around the worker, including `.env*`, `.astro`, and `node_modules`. Mutations fail terminally before QA.
 4. **Factory QA Oracle**: Runs unchanged Foundation `pnpm qa`, then Factory-owned dynamic Playwright QA for the requested route on desktop and mobile.
 5. **Task verification**: Parses fresh built HTML and checks exact semantic title, H1, description, canonical origin/path, and route existence.
 6. **Automatic Repair Loop**: Dynamic/static quality failures produce a bounded `FailureReport` and can retry; security failures never retry.
 7. **Outcomes**:
    - `succeeded`: Full verification passes on attempt 1, 2, or 3.
-  - `failed`: Non-repairable execution/input/security defect (including unavailable isolation, scope/type violation, ignored-input mutation, timeout, or Codex exit).
-  - `needs_review`: Bounded attempts exhausted (3 failed repair attempts) or no source progress made on repair.
+   - `failed`: Non-repairable execution/input/security defect (including unavailable isolation, scope/type violation, ignored-input mutation, timeout, or worker exit).
+   - `needs_review`: Bounded attempts exhausted (3 failed repair attempts) or no source progress made on repair.
 
 Factory's module rule is **READ MANY / WRITE FEW**. The version-controlled
 registry contains only current modules; accepted contracts, control-plane,
@@ -169,7 +209,7 @@ cannot declare a broader policy in their input.
 Run artifacts land in `.factory/runs/<runId>/` (gitignored):
 - `task.json`, `base-commit.txt`, `task-result.json`, `diff.patch`, `changed-files.txt`
 - `attempts/<attemptNumber>/`:
-  - `codex-output.jsonl`, `codex-stderr.txt`, `codex-version.txt`, `codex-last-message.txt`
+  - routed-worker stdout/stderr/runtime-version evidence
   - `changed-files.txt`, `diff.patch`
   - `git-evidence.raw.z`, `integrity-baseline.json`, `integrity-current.json`
   - `foundation-qa-*.txt`, `dynamic-qa-*.txt`, `task-qa-spec.json`, aggregate `qa-*.txt`
@@ -179,8 +219,7 @@ Run artifacts land in `.factory/runs/<runId>/` (gitignored):
 
 Temporary worktrees under `.factory/worktrees/` are always removed at the end of the run.
 
-Timeouts are bounded and env-configurable: `FACTORY_DEPS_TIMEOUT_MS` (5 min),
-`FACTORY_CODEX_TIMEOUT_MS` (20 min), `FACTORY_QA_TIMEOUT_MS` (15 min), `FACTORY_MAX_ATTEMPTS` (default: 3).
+Timeouts are bounded and env-configurable; inspect the current executor/policy for the accepted exact values rather than copying historical defaults into new code.
 
 ## First-Site Intelligence (v0 vertical slice)
 
@@ -188,45 +227,33 @@ Timeouts are bounded and env-configurable: `FACTORY_DEPS_TIMEOUT_MS` (5 min),
 pnpm factory intelligence build <request.json> <research.json>
 ```
 
-Converts a validated `SiteIntelligenceRequest` plus a bounded
-`ResearchEvidenceBundle` into a strict, provenance-aware Site Intelligence
-Plan, then deterministically compiles its executable pages into the existing
-`create_page` SiteTask contract. The single source of site identity is
-`request.siteId`; PostgreSQL is not required for planning. The command emits
-exactly one machine-readable `IntelligenceResult` JSON document on stdout
-(diagnostics go to stderr) and exits 0 only for `status = "succeeded"`.
+This is the current accepted pre-vNext intelligence slice. It converts a
+validated `SiteIntelligenceRequest` plus a bounded `ResearchEvidenceBundle`
+into a strict, provenance-aware Site Intelligence Plan, then deterministically
+compiles its executable pages into the existing `create_page` SiteTask contract.
+It does **not** acquire live SERPs itself and must not be mistaken for the
+vNext Search Intelligence pipeline. The single source of site identity is
+`request.siteId`; PostgreSQL is not required for planning.
 
-- **Inputs**: bounded strict JSON files (request ≤ 64 KB, research ≤ 512 KB).
-  Operator facts are FACT-AUTHORITATIVE but INSTRUCTION-UNTRUSTED; research
-  evidence is FACT-UNTRUSTED and INSTRUCTION-UNTRUSTED — evidence is data,
-  never instruction, and evidence URLs are never fetched.
-- **Synthesis**: one isolated Codex run inside the accepted `factory-sandbox`
-  boundary (the model workspace under `.factory/worktrees/intelligence-<runId>/`
-  holds only validated inputs, the prompt, and its single writable
-  `output/plan.json`). Max 3 attempts with bounded deterministic repair;
-  identical invalid output stops early (`intelligence_no_progress`).
-- **Outputs** (`.factory/intelligence/<runId>/`, gitignored):
-  `site-intelligence.json`, `tasks/NNN-<type>-<slug>.json`, `manifest.json`
-  (run-relative digests over all artifacts), `attempts/<n>/`, digest files,
-  and `intelligence-result.json` — the definitive result is published last,
-  atomically, only after plan gates, per-task canonical `parseSiteTask`
-  validation, and manifest integrity all pass. A partial or failed run can
-  never look successful.
-- **Provenance**: every result records `factorySourceCommit`,
-  `methodologyVersion` (`first-site-intelligence-v0`), request/research/plan
-  SHA-256 digests, and truthful Codex runtime metadata.
+- **Inputs**: bounded strict JSON files. Operator facts are FACT-AUTHORITATIVE
+  but INSTRUCTION-UNTRUSTED; research evidence is FACT-UNTRUSTED and
+  INSTRUCTION-UNTRUSTED — evidence is data, never instruction.
+- **Synthesis**: uses the current accepted isolated intelligence runtime with
+  bounded deterministic repair.
+- **Outputs** (`.factory/intelligence/<runId>/`, gitignored): plan/tasks,
+  manifests, attempts, digest files and the definitive result written last.
+- **Provenance**: every successful result records the accepted source/methodology
+  provenance and deterministic input/plan digests.
 
-See `docs/architecture.md` for the full trust-boundary design.
+The vNext Search Intelligence replacement/addition is scheduled in
+`docs/roadmap-vnext.md` and must use real acquired SERP evidence.
 
 ## QA artifacts
 
 Each `pnpm test` run captures full-page screenshots to
-`sites/starter/qa-artifacts/` (gitignored, regenerated every run):
-
-- `homepage-desktop.png`, `homepage-mobile.png`
-- `service-desktop.png`, `service-mobile.png`
-- `article-desktop.png`, `article-mobile.png`
-- `404-desktop.png`, `404-mobile.png`
+`sites/starter/qa-artifacts/` (gitignored, regenerated every run). These are
+local QA evidence, not durable design approvals, and they are not intended to be
+sent to a multimodal model for every page.
 
 Traces and error contexts for failed tests land in
 `sites/starter/test-results/`.
@@ -236,31 +263,17 @@ Traces and error contexts for failed tests land in
 Copy `.env.example` to `.env` in the repository root (or create `sites/starter/.env`)
 to configure environment variables.
 
-- **`FACTORY_DATABASE_URL`**: PostgreSQL connection string for Factory persistent control plane (e.g. `postgresql://factory:password@localhost:5432/factory`). Required for production `site-task` execution.
+- **`FACTORY_DATABASE_URL`**: PostgreSQL connection string for Factory persistent control plane. Required for production `site-task` execution.
 - **`FACTORY_TEST_DATABASE_URL`**: Optional PostgreSQL connection string used for integration tests (`test:persistence`).
-- **`PUBLIC_SITE_URL`**: Canonical origin of the site. Used for canonical `<link>`,
-  Open Graph URLs, and JSON-LD `@id` / `url` properties.
-  - **Local default**: `http://localhost:4321` when unset.
-  - **Releasable builds**: Set `PUBLIC_SITE_URL=https://yourdomain.com` in `.env` or
-    in the shell environment (e.g. `PUBLIC_SITE_URL=https://summitroofing.example.com pnpm build`).
-    Shell-provided values always take precedence over `.env` files.
-  - **QA acceptance suite**: Automatically builds and tests with a reserved non-production
-    origin (`https://test.example.com`) by default to assert correct canonical generation.
-- **`FACTORY_QA_PORT`**: Optional TCP port for Playwright preview server (default: `4321`).
-  Allows isolated concurrent QA runs across separate worktrees.
-- **`FACTORY_QA_BASE_URL`**: Trusted internal QA override. When set to a
-  credential-free HTTPS origin, Playwright targets that remote preview or
-  production origin and does not start local Astro preview. Delivery sets it
-  automatically; normal operators should not need it.
-- **`CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`**: Required only by the
-  trusted Wrangler subprocess used for `deploy` and `rollback`. These values
-  are never forwarded to SiteTask/Codex, dependency installation, site build,
-  Playwright, PostgreSQL, results, or `.factory` evidence.
+- **`PUBLIC_SITE_URL`**: Canonical origin of the current Astro-rendered site. Used for canonical `<link>`, Open Graph URLs, and JSON-LD identifiers.
+- **`FACTORY_QA_PORT`**: Optional TCP port for Playwright preview server. Allows isolated concurrent QA runs across separate worktrees.
+- **`FACTORY_QA_BASE_URL`**: Trusted internal QA override for remote preview/production QA.
+- **`CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`**: Required only by the trusted Wrangler subprocess used for `deploy` and `rollback`; never forward them into coding workers or browser state.
 
 ## Production Delivery MVP
 
-Wrangler is pinned to `4.127.1`. Apply migrations, register a site, and store
-its delivery target once:
+Wrangler is pinned to the repository's accepted version. Apply migrations,
+register a site, and store its delivery target once:
 
 ```bash
 pnpm factory db migrate

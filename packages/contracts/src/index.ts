@@ -1,4 +1,5 @@
 export {
+  MAX_SECTION_TYPE_INSTANCES,
   MAX_TASK_PAYLOAD_BYTES,
   addSitePageInvariantIssues,
   contentBriefLinkSchema,

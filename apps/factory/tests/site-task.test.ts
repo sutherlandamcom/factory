@@ -307,7 +307,21 @@ test("sections vocabulary and uniqueness are enforced", () => {
     }),
   );
 
-  // Duplicate sections rejected
+  // Repeated section instances are allowed (variable rhythm) up to the bound
+  const repeatedOk = parseSiteTask({
+    type: "create_page",
+    siteId: "demo",
+    page: {
+      type: "service",
+      slug: "/services/roof-repair",
+      title: "T",
+      description: "D",
+      sections: ["hero", "content_section", "content_section", "content_section", "content_section", "faq"],
+    },
+  });
+  assert.equal(repeatedOk.page.sections.length, 6);
+
+  // More than MAX_SECTION_TYPE_INSTANCES of one type rejected
   assert.throws(() =>
     parseSiteTask({
       type: "create_page",
@@ -317,9 +331,10 @@ test("sections vocabulary and uniqueness are enforced", () => {
         slug: "/services/roof-repair",
         title: "T",
         description: "D",
-        sections: ["hero", "benefits", "hero"],
+        sections: ["hero", "faq", "faq", "faq", "faq", "faq"],
       },
     }),
+    /instance bound exceeded/,
   );
 
   // Empty sections rejected
@@ -467,22 +482,41 @@ test("task without contentBrief still parses (backward compatible)", () => {
   assert.equal(parsed.page.contentBrief, undefined);
 });
 
-test("contentBrief sectionType not on page sections is rejected", () => {
+test("contentBrief sectionType mismatching page section order is rejected", () => {
   const task = JSON.parse(JSON.stringify(validBriefTask()));
   task.page.sections = ["hero", "content_section"];
-  assert.throws(() => parseSiteTask(task));
+  assert.throws(() => parseSiteTask(task), /does not match the page section at the same position/);
 });
 
 test("contentBrief missing entry for a page section is rejected", () => {
   const task = JSON.parse(JSON.stringify(validBriefTask()));
   task.page.contentBrief.sections = task.page.contentBrief.sections.slice(0, 2);
-  assert.throws(() => parseSiteTask(task));
+  assert.throws(() => parseSiteTask(task), /exactly one entry per page section/);
 });
 
-test("contentBrief duplicate sectionType is rejected", () => {
+test("contentBrief duplicate sectionType is rejected (order mismatch)", () => {
   const task = JSON.parse(JSON.stringify(validBriefTask()));
   task.page.contentBrief.sections[1].sectionType = "hero";
-  assert.throws(() => parseSiteTask(task));
+  assert.throws(() => parseSiteTask(task), /does not match the page section at the same position/);
+});
+
+test("contentBrief supports repeated section instances with distinct briefs", () => {
+  const task = JSON.parse(JSON.stringify(validBriefTask()));
+  task.page.sections = ["hero", "content_section", "content_section", "faq"];
+  task.page.contentBrief.sections = [
+    task.page.contentBrief.sections[0],
+    task.page.contentBrief.sections[1],
+    {
+      sectionType: "content_section",
+      heading: "Second editorial band",
+      keyPoints: ["Distinct key point for the repeated instance."],
+      blueprintSectionId: "sec-indicators-2",
+    },
+    task.page.contentBrief.sections[2],
+  ];
+  const parsed = parseSiteTask(task);
+  assert.equal(parsed.page.contentBrief!.sections.length, 4);
+  assert.equal(parsed.page.contentBrief!.sections[2]!.heading, "Second editorial band");
 });
 
 test("contentBrief unknown fields fail closed", () => {

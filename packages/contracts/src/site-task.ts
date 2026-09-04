@@ -52,7 +52,16 @@ export const slugSchema = z
   });
 
 /**
- * Shared page invariants (unique sections + coherent page-type/slug
+ * Maximum occurrences of one section type on a single page. Repeated
+ * semantic instances (e.g. several editorial `content_section` bands) are
+ * permitted within this bound so pages can carry variable rhythm instead of
+ * the one-hero-one-grid uniform shape; beyond it a page must use different
+ * section types. The bound keeps prompts, briefs, and QA expectations small.
+ */
+export const MAX_SECTION_TYPE_INSTANCES = 4;
+
+/**
+ * Shared page invariants (bounded repeated sections + coherent page-type/slug
  * relationship). Used by the SiteTask page schema and by the Intelligence
  * planned-page schema so both can never drift apart.
  */
@@ -60,18 +69,19 @@ export function addSitePageInvariantIssues(
   data: { type: PageType; slug: string; sections: SectionType[] },
   ctx: z.RefinementCtx,
 ): void {
-  // 1. Enforce unique sections (no duplicates)
-  const seen = new Set<string>();
+  // 1. Bound repeated section instances (variable rhythm within a ceiling)
+  const counts = new Map<SectionType, number>();
   for (let i = 0; i < data.sections.length; i++) {
     const section = data.sections[i]!;
-    if (seen.has(section)) {
+    const next = (counts.get(section) ?? 0) + 1;
+    counts.set(section, next);
+    if (next > MAX_SECTION_TYPE_INSTANCES) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `duplicate section "${section}" is forbidden`,
+        message: `section "${section}" occurs more than ${MAX_SECTION_TYPE_INSTANCES} times on one page (instance bound exceeded at index ${i})`,
         path: ["sections", i],
       });
     }
-    seen.add(section);
   }
 
   // 2. Coherent page-type / slug relationships
@@ -125,47 +135,36 @@ export function addSitePageInvariantIssues(
   }
 
   // 3. Content brief (when present) must cover exactly the page's section set:
-  //    one brief entry per section type, no unknown or duplicate sectionType.
+  //    one brief entry per section INSTANCE (matched positionally by index),
+  //    so repeated section types carry distinct briefs.
   const withBrief = data as typeof data & {
     contentBrief?: { sections: Array<{ sectionType: SectionType }> };
   };
   if (withBrief.contentBrief) {
-    const pageSections = new Set(data.sections);
-    const briefSections = new Set<string>();
     for (let i = 0; i < withBrief.contentBrief.sections.length; i++) {
       const brief = withBrief.contentBrief.sections[i]!;
-      if (!pageSections.has(brief.sectionType)) {
+      if (data.sections[i] !== brief.sectionType) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `contentBrief section "${brief.sectionType}" is not part of the page sections`,
+          message: `contentBrief section ${i} ("${brief.sectionType}") does not match the page section at the same position ("${data.sections[i] ?? "none"}") — briefs must be listed in the page's section order`,
           path: ["contentBrief", "sections", i],
         });
       }
-      if (briefSections.has(brief.sectionType)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `contentBrief has duplicate entry for section "${brief.sectionType}"`,
-          path: ["contentBrief", "sections", i],
-        });
-      }
-      briefSections.add(brief.sectionType);
     }
-    for (const section of data.sections) {
-      if (!briefSections.has(section)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `contentBrief is missing an entry for section "${section}"`,
-          path: ["contentBrief", "sections"],
-        });
-      }
+    if (withBrief.contentBrief.sections.length !== data.sections.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `contentBrief must have exactly one entry per page section (expected ${data.sections.length}, got ${withBrief.contentBrief.sections.length})`,
+        path: ["contentBrief", "sections"],
+      });
     }
   }
 }
 
 /**
- * One brief entry for a single section of the page (contentBrief.sections).
- * The sectionType must reference a type present in the page's sections list;
- * this is enforced by addSitePageInvariantIssues. Bounded plain text only.
+ * One brief entry for one section INSTANCE of the page
+ * (contentBrief.sections, positionally matched to page.sections).
+ * Bounded plain text only.
  */
 export const contentBriefSectionSchema = z
   .object({
@@ -210,6 +209,22 @@ export const contentBriefSectionSchema = z
       .regex(/^[a-z0-9-]+$/, {
         message: 'blueprintSectionId must be lowercase alphanumeric words separated by hyphens',
       })
+      .optional(),
+    /** Bounded production guidance for this instance (layout/editorial direction from the accepted Production Spec). */
+    productionGuidance: z
+      .string()
+      .trim()
+      .min(1)
+      .max(600, "productionGuidance cannot exceed 600 characters")
+      .regex(/^[^<>]*$/, { message: "productionGuidance must not contain HTML" })
+      .optional(),
+    /** Bounded purpose statement for this instance (why the section exists, from the accepted Production Spec). */
+    purpose: z
+      .string()
+      .trim()
+      .min(1)
+      .max(300, "purpose cannot exceed 300 characters")
+      .regex(/^[^<>]*$/, { message: "purpose must not contain HTML" })
       .optional(),
   })
   .strict();

@@ -31,7 +31,7 @@ export function buildWorkerPrompt(task: SiteTask, policy: TaskWritePolicy): stri
 - Do NOT access the network; it is disabled at the execution boundary.
 - Do NOT attempt to run "pnpm qa" or launch background dev/preview servers. Factory runs the authoritative QA oracle outside your runtime; your work is verified after you stop.
 - When page.type is "general", use existing layouts/components and emit one truthful WebPage JSON-LD object whose name equals the SiteTask title and whose url equals the canonical URL.
-- When page.contentBrief is present, it is accepted Factory business truth compiled from the site's Blueprint: implement every keyPoint faithfully as visible page content, honor every prohibitedClaim (never make those claims), use the planned internalLinks where they fit naturally, and add NO business claims beyond the brief — no invented names, numbers, credentials, clients, performance, or guarantees.
+- When page.contentBrief is present, it is accepted Factory business truth compiled from the site's Blueprint and Production Spec: implement every keyPoint faithfully as visible page content, honor every prohibitedClaim (never make those claims), use the planned internalLinks where they fit naturally, and add NO business claims beyond the brief — no invented names, numbers, credentials, clients, performance, or guarantees. When a brief section carries productionGuidance or purpose, treat it as binding art direction for that section (layout, editorial treatment, and reason the section exists); do not substitute a generic component default.
 
 ## SiteTask (authoritative, validated JSON)
 
@@ -78,7 +78,7 @@ Your goal is to inspect the current implementation in the repository and FIX THE
 - Do NOT access the network; it is disabled at the execution boundary.
 - Do NOT attempt to run "pnpm qa" or launch background dev/preview servers. Factory runs the authoritative QA oracle outside your runtime; your work is verified after you stop.
 - When page.type is "general", use existing layouts/components and emit one truthful WebPage JSON-LD object whose name equals the SiteTask title and whose url equals the canonical URL.
-- When page.contentBrief is present, it is accepted Factory business truth: implement every keyPoint faithfully, honor every prohibitedClaim, use the planned internalLinks where they fit naturally, and add NO business claims beyond the brief — no invented names, numbers, credentials, clients, performance, or guarantees.
+- When page.contentBrief is present, it is accepted Factory business truth: implement every keyPoint faithfully, honor every prohibitedClaim, use the planned internalLinks where they fit naturally, and add NO business claims beyond the brief — no invented names, numbers, credentials, clients, performance, or guarantees. When a brief section carries productionGuidance or purpose, treat it as binding art direction for that section.
 
 ## Target SiteTask
 

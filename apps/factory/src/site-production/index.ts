@@ -34,3 +34,10 @@ export type {
   PacketSiteIdentity,
   PageProductionPacket,
 } from "./packet.js";
+
+export {
+  projectPacketToSiteTask,
+} from "./packet-projection.js";
+export type {
+  ProjectPacketToSiteTaskInput,
+} from "./packet-projection.js";

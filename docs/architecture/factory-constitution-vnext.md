@@ -4,6 +4,8 @@ Status: **proposed authoritative architecture policy for the next Factory workst
 
 This document records the product and engineering direction accepted after the first real Sutherland one-page workflow proof. It governs new vNext work unless a later reviewed ADR explicitly supersedes a rule.
 
+Repository instruction precedence is defined in `docs/instruction-authority.md`. Historical build reports, bake-offs and dated handoffs are evidence about the state at their date and do not override this Constitution or the current roadmap.
+
 ## 1. Product identity
 
 Factory is an AI-native production control plane for research, search intelligence, content production, design orchestration, assets, deterministic build/QA, versioning, approvals and deployment.
@@ -21,7 +23,7 @@ The system MUST preserve the following role boundaries:
 - **Anthropic Opus writer**: authors marketing/editorial prose from a human-approved Content Production Brief. The writer is an author, not factual authority.
 - **External Design Provider**: creates professional visual design. Preferred v0 provider is Google Stitch behind a provider adapter; cheaper/alternative providers are tested only if the preferred provider fails the agreed quality floor.
 - **Visual Asset Provider**: creates or edits synthetic visual assets where appropriate. Authentic operator-owned photography has priority when it represents real places, people, properties or first-party experience.
-- **Code worker**: implements accepted content/design only when deterministic production is insufficient. It has zero authority to originate or rewrite marketing copy and zero authority to redesign an accepted page.
+- **Code worker**: implements accepted content/design only when deterministic production is insufficient. It has zero authority to originate or rewrite marketing copy and zero authority to redesign an accepted page. The current pre-vNext `create_page` compatibility path may still materialize only minimal neutral connective prose from bounded semantic key points until `AcceptedPageContent` exists; this transitional exception MUST NOT be expanded into a new content architecture.
 - **Factory**: validates, versions, approves, materializes, tests and deploys accepted outputs.
 
 No single model should perform research, writing, design and coding as one unconstrained task.
@@ -78,161 +80,232 @@ Page-level content intelligence MUST be capable of expressing:
 - optional semantic coverage;
 - competitor/SERP patterns;
 - content gaps;
-- differentiation opportunities;
-- evidence requirements and missing evidence.
+- differentiation opportunities.
 
-Do not use `LSI keywords` or keyword density as architectural abstractions. Do not rewrite or average the Top 10. Competitors are evidence of market/search expectations; original value must come from accepted evidence, expertise and analysis.
+Do not implement "LSI keywords" or keyword-density pseudo-scoring as a substitute for semantic/search analysis.
 
-## 6. Project Content Constitution and writer governance
+Competitor pages are evidence of SERP expectations, not text sources. Factory must not average/rewrite the Top 10 into a derivative page.
 
-Each project MUST have a versioned, human-approved **Project Content Constitution** visible in the Dashboard. It governs every page and includes brand voice, tone, writing principles, preferred/forbidden terminology, factuality/evidence policy, search policy, people-first usefulness, AI-language avoidance and operator-supplied custom writer instructions.
+## 6. Content Gap is a first-class artifact
 
-Each page MUST also have a structured **Content Production Brief** compiled from Search Intelligence, Content Gap, semantic requirements, accepted evidence, claims policy, page objective, internal links and conversion requirements.
+The system should reason approximately as:
 
-Factory compiles the project constitution + page brief + immutable Factory writer policy into the exact `WriterPromptSnapshot` that will be sent to the writer. The exact prompt MUST be visible to the operator and MUST receive explicit human approval before a paid writer call can run.
+`user need x SERP expectation x competitor coverage x our accepted evidence -> differentiated content opportunity`.
 
-If any contributing input changes, the approval becomes `STALE` and generation fails closed until re-approved.
+A `ContentGapReport` should preserve the user need/question, existing SERP coverage, competitor treatment quality, available first-party evidence, differentiation opportunity, priority and whether the gap is required in the page brief.
 
-## 7. Marketing copy authority
+## 7. Project Content Constitution and writer governance
 
-For v0, the marketing/editorial writer role is **Anthropic Opus** through the reviewed WriterProvider/model policy.
+Every project has a versioned, human-approved **Project Content Constitution** defining the site-wide brand/editorial voice. It includes structured rules plus a large free-form custom writer-instructions field.
 
-A code worker, design provider, summary model or research model MUST NOT originate, rewrite, paraphrase, shorten, expand or SEO-optimize accepted marketing copy.
+It should cover at least:
 
-Opus output is a proposal. It must pass factual, evidence, search-intent, semantic-coverage, differentiation, originality, usefulness, brand-voice and editorial QA before a human may create `AcceptedPageContent`.
+- brand voice and tone;
+- audience communication principles;
+- writing/editorial rules;
+- preferred and forbidden terminology;
+- factuality/evidence policy;
+- allowed/prohibited claim policy;
+- people-first/helpfulness policy;
+- search/SEO writing policy;
+- AI-language/cliche/repetition avoidance;
+- project-specific custom instructions.
 
-Do not invent an artificial E-E-A-T score. Evaluate concrete trust/experience/expertise/authority evidence and Google-aligned people-first quality criteria.
+Each page also has a Search-derived `ContentProductionBrief`. Factory compiles the project Constitution + page brief + evidence/claims into an exact `WriterPromptSnapshot`.
 
-## 8. Design is externally synthesized
+**No marketing content generation may execute until a human has seen and explicitly approved the exact compiled WriterPromptSnapshot.** Approval binds its version/digest; changing an authoritative dependency makes it stale.
 
-Factory MUST NOT build an internal AI design-generation engine.
+## 8. Writer authority
 
-Design is supplied through a `DesignProvider` boundary. Google Stitch is the preferred v0 provider because it can return professional design artifacts and implementation references; provider-specific details must remain behind the adapter.
+Anthropic Opus is the intended v0 production marketing/editorial writer behind a `WriterProvider` boundary.
 
-Design generation should use real accepted copy, brand facts, references/anti-references and available real assets. Prefer creation of a site design system plus a small number of representative page archetypes over independent AI design generation for every page.
+The writer receives accepted truth and requirements. It MUST NOT invent unsupported facts, metrics, credentials, experience, client claims, permissions or guarantees.
 
-Human design approval creates an `AcceptedDesignArtifact`/digest.
+Writer output is a structured proposal. Independent factual/search/editorial QA and a second human approval produce `AcceptedPageContent`.
 
-## 9. Assets and authentic imagery
+Once `AcceptedPageContent` exists, an implementation worker must reproduce it faithfully and must not rewrite, paraphrase, shorten, expand or SEO-optimize it. Genuine content-fit conflicts return to the content workflow rather than being silently fixed by the coder.
 
-Page imagery strategy supports at least:
+## 9. People-first and trust quality
+
+Factory should evaluate concrete qualities rather than fabricate a synthetic "E-E-A-T score". Relevant checks include factual support, first-party experience where applicable, real expertise evidence, authority signals, trust, usefulness, originality, intent satisfaction and the Google-aligned Who/How/Why questions.
+
+Authentic first-party evidence is strategically valuable. Real operator photography or observations from a location should not be replaced by synthetic documentary-looking imagery merely for convenience.
+
+## 10. Professional design is external
+
+Factory MUST NOT build a proprietary AI design engine as an MVP goal.
+
+Professional visual direction and page design are created by an external `DesignProvider`. Google Stitch is the preferred first v0 candidate because of current cost/integration fit; Framer, Figma and other challengers are evaluated only if the preferred provider fails the quality floor.
+
+The provider receives real accepted copy, brand constraints, references/anti-references and available assets. It should create a coherent site design system plus representative page archetypes rather than independently redesigning every SEO page.
+
+Factory stores/version-binds the accepted provider artifacts and human approval. Generated HTML/design-system material may be implementation input; it is not automatically trusted production output.
+
+Current `SiteBlueprint.designDirection`, SiteProductionSpec `creativeDirection`, and legacy `design_director` evaluation roles are transitional planning/evaluation constructs. They do **not** supersede the external DesignProvider as vNext professional-design authority.
+
+## 11. Assets and authenticity
+
+Pages can use a project/page asset strategy such as:
 
 - no imagery;
-- operator-supplied imagery;
+- operator-supplied photography;
 - AI-generated imagery;
 - mixed.
 
-Design requirements should materialize as explicit asset slots with purpose, aspect ratio, minimum quality, visual direction and preferred origin.
+Design produces explicit asset slots/requirements. Operator uploads retain rights/provenance and pass an approval lifecycle before production.
 
-Authentic operator-owned photography SHOULD be preferred for documentary/local truth (for example real Chamonix/Megève places, actual properties, offices, people or first-party experience). Synthetic imagery must not impersonate documentary evidence.
+Synthetic imagery sits behind `VisualAssetProvider`; preferred v0 production direction is Google Vertex/Gemini Nano Banana Pro. An older executable-policy placeholder named `image_generator` MUST NOT be treated as the vNext production image path without an explicit reviewed provider-policy migration.
 
-Generated/AI-edited assets require provenance, provider/model identity, source relationship where applicable, rights/usage status, digest and human approval. Current preferred generated-image path is Google Vertex/Gemini Nano Banana Pro behind `VisualAssetProvider`.
+AI edits of real photographs preserve `derivedFrom`, transformation/provider/model provenance. Synthetic images MUST NOT masquerade as documentary evidence of a real location/property/person.
 
-## 10. Human-in-the-loop gates
+Final design freeze occurs after actual assets are resolved so the design can adapt to the accepted real images.
 
-At minimum, explicit human gates exist for:
+## 12. Production should become deterministic at scale
 
-1. accepted project inputs;
-2. writer prompt/Content Production Brief;
-3. final page content;
-4. design;
-5. material assets where policy requires it;
-6. final candidate/publication.
+Do not invoke a code/design model for every routine page if an accepted design archetype plus structured content/assets can be rendered deterministically.
 
-UI state never substitutes for server-side enforcement. Direct API calls must fail closed when approval/readiness requirements are not met.
+Target pattern:
 
-## 11. Intelligence budget principle
+`accepted archetype + AcceptedPageContent + ApprovedAssets + SEO/derivatives -> deterministic production`.
 
-Use expensive model intelligence only where it creates material value. Prefer deterministic algorithms, versioned templates, caching, precomputation and one-time generation everywhere else.
+Code workers become an exception path for custom/interactive functionality or genuinely non-template implementation work.
 
-Examples that justify model intelligence: search/content reasoning, high-quality writing, professional external design synthesis, image generation/editing, exceptional custom coding.
+## 13. Astro is transitional, not sacred
 
-Examples that normally do not justify model calls: HTML assembly, metadata/schema insertion, sitemaps, cache headers, asset optimization, link checking, content-integrity checks, responsive overflow checks, build/deploy, static summary/audio delivery, template rendering.
+Astro 7 + Tailwind CSS 4 is the **current accepted production path**. It remains protected until an explicit empirical bake-off compares:
 
-Repeated visitor actions MUST NOT trigger repeated LLM/TTS generation for static page derivatives. Generate once per accepted content version, persist, cache and serve.
+A. Design-provider HTML -> deterministic Factory normalization -> static production.
 
-## 12. Paid-execution preflight
+B. Design-provider output -> Astro implementation -> static production.
 
-No paid model execution may run merely because the UI exposes a button. The trusted backend must establish required provider credentials/reachability, effective available budget/limit, accepted inputs, readiness, execution identity and relevant environment/DB preconditions first.
+Select on measurable implementation cost, token spend, semantic HTML, SEO, accessibility, Lighthouse/performance, JS/CSS weight, maintainability, archetype reuse and build complexity, plus one human visual calibration. Do not use expensive per-page multimodal screenshot comparison.
 
-Fail before spend whenever possible. Automatic blind retries are prohibited. A failed attempt must be classified; trusted environment defects are fixed outside the worker before a new execution with a new idempotency identity.
+If Astro does not create material value, remove it from the ordinary page-production path through a reviewed migration. Do not remove it by inference before that proof.
 
-Persist provider/model usage and cost telemetry when the provider supplies it.
+## 14. Static production, SEO and performance
 
-## 13. Dashboard and backend co-development
+Regardless of renderer, intended content pages should be static-first: complete semantic HTML at request time, minimal JavaScript and deterministic technical SEO.
 
-Factory is developed capability-first as vertical slices:
+Factory owns/validates metadata, canonical identity, structured data, sitemap/robots/redirect semantics, internal links, image optimization and performance budgets.
+
+Cloudflare remains the preferred current delivery foundation unless a later reviewed decision replaces it.
+
+Core Web Vitals/performance are hard acceptance concerns; "static" alone is not proof. Use deterministic/lab QA such as Lighthouse/Playwright and later field data. Avoid unnecessary third-party scripts and runtime dependencies.
+
+## 15. Visual QA cost rule
+
+Do NOT send every rendered page screenshot to a multimodal LLM by default.
+
+Use expensive/human visual calibration when establishing a new design system/archetype. Mass pages should rely primarily on deterministic checks: content integrity, approved component/template usage, structure, responsive overflow, links/assets, semantic SEO, accessibility and performance. Optional local screenshot/pixel regression or selective human sampling is allowed without creating repeated model spend.
+
+## 16. Page derivatives: summary and audio
+
+Factory supports page-level AI summary and audio narration as version-bound derivatives of `AcceptedPageContent`.
+
+They are generated **once per accepted content version**, stored and delivered as normal cached/static artifacts. Visitor clicks MUST NOT trigger repeated LLM/TTS generation of unchanged content.
+
+Changing the source content makes old derivatives stale.
+
+Project-level defaults plus page overrides control whether summary/audio are enabled. The accepted design system should include reusable controls for these capabilities where appropriate.
+
+## 17. Dashboard is an operator console
+
+Dashboard is explicitly in vNext scope. It is not a second source of truth and not a generic CMS/page builder.
+
+For each new product capability, prefer a vertical implementation slice:
 
 `domain contract -> application service -> backend/API -> Dashboard -> deterministic tests -> E2E`.
 
-Backend semantics lead by a small step; the operator UI is delivered in the same macro-run. The Dashboard is an operator console, not a second source of truth and not a place for duplicated business logic.
+Backend semantics lead by a small step; operator UI lands in the same macro-run. CLI/API/Dashboard should reuse application services rather than duplicate business rules.
 
-CLI and Dashboard should call the same application services.
+Expected workspace areas evolve toward Overview, Intake, Research/Search, Content, Design, Assets, Production, QA, Versions/Costs and Deployment.
 
-## 14. Production renderer: current implementation vs vNext decision
+## 18. Human approval and fail-closed backend rules
 
-The accepted current production path remains Astro 7 + Tailwind 4. Do not remove or weaken it by assumption.
+UI-disabled buttons are not governance. Backend/API rules enforce every approval/readiness condition even against direct calls.
 
-However, Astro is no longer a permanent architectural invariant. vNext MUST run an empirical, reviewed comparison between:
+At minimum vNext human gates include:
 
-- Stitch/design-provider HTML -> deterministic Factory static normalization; and
-- Stitch/design-provider output -> Astro implementation.
+- accepted Project Inputs;
+- exact Writer Prompt;
+- final marketing content;
+- final design;
+- material assets where policy requires review;
+- final candidate/publication.
 
-Compare implementation cost, model tokens, HTML semantics, SEO, accessibility, performance, maintainability, reusable-archetype scaling and production complexity. One human visual calibration is sufficient; do not use multimodal LLM screenshot comparison on every page.
+Approvals bind exact versions/digests. Mutation makes dependent approvals stale.
 
-Only a reviewed ADR after this proof may remove Astro from ordinary page production. Until then, existing Astro/Tailwind production guarantees remain authoritative.
+## 19. Durable acceptance state
 
-## 15. Static/performance/SEO principles
+Gitignored `.factory/**` is runtime/diagnostic evidence, not sufficient authoritative storage for human acceptance.
 
-Regardless of renderer, indexable content should ship as complete semantic HTML with minimal client JavaScript. SEO, accessibility, caching and Core Web Vitals are acceptance constraints, not later optimization passes.
+The Operator Kernel workstream must define durable authority for drafts, accepted snapshots, approvals, staleness and artifact metadata. PostgreSQL is the preferred structured operational/product state layer; Git remains source/candidate/architecture lineage. Large binary/object storage is introduced only when the asset slice requires it.
 
-Factory should deterministically own title/meta/canonical/schema/sitemap/redirect/indexability rules, content integrity, image optimization, asset fingerprinting, cache policy and performance gates.
+## 20. Cost is an architecture constraint
 
-Cloudflare remains the preferred delivery foundation unless a later reviewed decision changes it.
+Use expensive intelligence only where intelligence creates material value. Prefer deterministic code, caching, precomputation, templates and one-time generation for repeat work.
 
-## 16. Page derivatives
+Before a paid call, trusted backend preflight should establish accepted inputs/readiness, provider credentials/reachability, effective budget/limits and relevant DB/environment prerequisites. Fail before spend.
 
-Factory should support project defaults plus page overrides for:
+Do not blindly retry paid failures. Classify the failure, fix trusted environment/provider faults outside the model worker, then retry with a new execution identity and preserved lineage.
 
-- pre-generated AI summary;
-- pre-generated audio narration.
+Persist provider/model usage and cost telemetry whenever available.
 
-Both derive from exact accepted content versions. Updating accepted content makes dependent derivatives stale. Summary/TTS should be generated once and served as ordinary cached/static artifacts.
+## 21. QA and merge governance
 
-## 17. Visual QA economy
+Significant implementation work follows:
 
-Do not send every rendered page screenshot to an LLM.
+build agent -> exact candidate SHA -> independent QA -> narrow P0/P1 remediation if required -> re-QA exact new candidate -> merge.
 
-Use human visual approval during design/archetype calibration, deterministic DOM/structure/content/performance QA for mass production, optional local pixel regression for stable archetypes, and human sampling where useful.
+Build agents do not self-accept or merge their implementation work. P2 findings normally move into the next appropriate workstream rather than expanding a frozen accepted PR.
 
-## 18. Current empirical debt carried from PR #16
+Deterministic QA is preferred wherever it can test the requirement directly.
 
-PR #16 independently passed with P0=0/P1=0. The following are mandatory vNext follow-ups, not defects to rewrite into the accepted PR:
+## 22. PR #16 empirical carry-forward
 
-1. `headingIntent` currently does not reach the SiteTask compiler directly; define explicit execution/consumer semantics or deprecate it.
-2. `boundedGuidance` and key-point/prohibited-claim slicing silently discard accepted semantics; replace silent truncation/drop behavior with fail-closed bounds or explicit reviewed truncation markers.
-3. accepted operator inputs, reference approvals and run evidence currently rely substantially on gitignored `.factory` artifacts; durable approval/input/artifact authority must be defined before Dashboard write workflows ship.
-4. packet -> projected task -> run is not yet a single governed application use case.
-5. asset workflow, Mode-A CTA, automatic site-foundation derivation and high-quality multi-page production remain unproven.
+The Sutherland one-page proof established that the current bounded execution mechanics work, but independent QA accepted it with P2 follow-ups that vNext must close:
 
-## 19. Anti-patterns
+- define/fix `headingIntent` projection semantics;
+- prohibit silent loss/truncation of accepted production intent;
+- persist accepted inputs/approvals as durable authority rather than relying on ignored/local artifacts;
+- create one governed application seam for packet -> task -> run orchestration.
 
-Do not:
+PR #16 is evidence, not a reason to retain coding-agent authorship/design as the target architecture.
 
-- let a coding worker write marketing copy;
-- let a coding worker invent page design;
-- build a proprietary design generator when an adequate external provider exists;
-- let an LLM imagine current SERPs;
-- generate scaled thin/search-engine-first pages;
-- treat competitor copy as source material to rewrite;
-- replace available authentic evidence with fake documentary imagery;
-- call paid AI on every visitor interaction;
-- perform expensive multimodal visual review on every page;
-- retry paid failures blindly;
-- expose provider secrets to the browser;
-- allow UI/API paths to bypass approval/readiness rules;
-- retain a framework or transformation layer solely because it already exists.
+## 23. Anti-patterns
 
-## 20. Governing maxim
+Do not introduce or extend these patterns:
 
-**Do not automate a mediocre process. Choose the best specialized executor for each stage, then make Factory excellent at transferring accepted truth, provenance and bounded outputs between them.**
+- one model researches + writes + designs + codes without bounded authority;
+- coder originates production marketing copy;
+- coder redesigns accepted design;
+- Factory builds a proprietary professional-design engine instead of using a provider;
+- LLM invents current SERP data;
+- competitor pages become rewrite sources;
+- authentic first-party visual evidence is casually replaced by synthetic documentary imagery;
+- visitor click triggers repeated unchanged LLM/TTS work;
+- every page screenshot is sent to a vision model;
+- automatic paid retries without failure classification;
+- browser receives provider/database secrets;
+- Dashboard/CLI duplicate business truth;
+- accepted semantic input is silently truncated/dropped;
+- a framework remains mandatory solely because earlier work already used it.
+
+## 24. Factory Codex
+
+1. Factory orchestrates; specialists create.
+2. Operator truth/evidence precedes model inference.
+3. Every significant artifact retains provenance and version.
+4. Humans approve source inputs, exact writer prompt, final content, design and publication.
+5. Search Intelligence uses real acquired search evidence.
+6. Content gaps define added value; competitors are not copy sources.
+7. Opus writes production marketing copy; implementation workers do not become writers.
+8. External DesignProvider owns professional design; Factory does not build a proprietary design brain.
+9. Authentic imagery wins when it is genuine documentary/first-party evidence.
+10. VisualAssetProvider supplies synthetic/edited imagery where appropriate.
+11. Use AI once where possible; deterministic rendering/caching handles scale.
+12. Typical pages should eventually require no coding-model call.
+13. SEO, accessibility, performance, security and content integrity are deterministic gates where possible.
+14. Dashboard is an operator console, never a second source of truth.
+15. Every additional model call, framework and transformation layer must justify its cost/complexity.
+16. Do not automate a mediocre process: choose the right specialist for each creative/intelligence stage, then automate the truthful handoff between them.

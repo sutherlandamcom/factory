@@ -2,6 +2,8 @@
 
 Status: proposed execution plan after merge of PR #16 (`62d60575f73e70067f83254aa3eff23b5995fdcf`).
 
+Instruction precedence: `AGENTS.md` -> `docs/architecture/factory-constitution-vnext.md` -> this roadmap -> specialized current policy. Historical handoff/bake-off sequencing does not override this file; see `docs/instruction-authority.md`.
+
 Development should proceed in 2–3 hour macro-runs. Each macro-run delivers a vertical capability: contract -> application service -> API -> Dashboard -> deterministic tests -> E2E. Backend semantics lead by a small step; frontend is delivered in the same run so operator behavior continuously validates the domain model.
 
 Every meaningful implementation PR ends at `IMPLEMENTATION COMPLETE — PENDING INDEPENDENT QA`; independent QA reviews an exact SHA, frozen P0/P1 findings are remediated narrowly, then the exact candidate is re-reviewed before merge.
@@ -52,7 +54,9 @@ Exit: a page opportunity has accepted search intent, content gaps, semantic requ
 
 Deliver project-level Content Constitution, immutable Factory writer policy, page Content Production Brief, exact WriterPromptSnapshot preview, human approval gate, WriterProvider using Anthropic Opus, structured PageContentProposal, independent factual/search/editorial QA and final human content approval.
 
-Exit: high-quality `AcceptedPageContent` for one Sutherland page is produced entirely through Dashboard; no page coder authors copy.
+This workstream replaces the legacy idea that the coding worker authors final page marketing copy. Existing bounded eval/compatibility content-writer paths remain historical/current compatibility evidence only until this production pipeline is accepted.
+
+Exit: high-quality `AcceptedPageContent` for one Sutherland page is produced entirely through Dashboard; no page coder authors production copy.
 
 ## Program III — Design & Assets
 
@@ -66,6 +70,8 @@ Exit: an operator can upload and approve real Chamonix imagery for a specific pa
 
 Implement a narrow `DesignProvider` adapter with Google Stitch as preferred v0 provider. Feed real accepted content, brand facts, references/anti-references and available assets. Generate a site design system plus representative archetypes rather than independently designing every page.
 
+This workstream supersedes legacy `design_director` model-eval roles as professional visual authority; do not extend those eval roles into a proprietary Factory design engine.
+
 Human review/approval is the visual authority. If Stitch clears the institutional-quality floor, stop provider search. Only if it fails should the next cheapest viable provider (Framer, then Figma, then others) be tested.
 
 Exit: accepted Sutherland design artifacts and implementation references exist for homepage plus representative page archetypes.
@@ -73,6 +79,8 @@ Exit: accepted Sutherland design artifacts and implementation references exist f
 ### Macro Run 7 — Nano Banana Pro + Final Asset Resolution
 
 Implement `VisualAssetProvider` with Google Vertex/Gemini Nano Banana Pro as preferred production path. Support generated candidates and AI-derived edits of operator photos while retaining provenance.
+
+The older `image_generator` model-policy placeholder is not production authority and must not be activated merely because it already exists in the v0 policy matrix.
 
 Resolve design asset slots, approve real/generated assets, and perform a final Stitch pass with actual assets before design freeze.
 
@@ -98,55 +106,52 @@ Implement the selected path. If direct-static wins, create a deliberately small 
 
 Regardless of renderer, add deterministic content-integrity, one-H1, canonical/schema/link, responsive/overflow, console-error and Lighthouse/performance gates.
 
-Exit: one accepted Sutherland page produces a Cloudflare-ready static bundle with zero unnecessary LLM calls.
+Exit: ordinary page production is fast, static-first, SEO-complete and primarily deterministic.
 
 ### Macro Run 10 — Page Derivatives: Summary + Audio
 
-Add project defaults/page overrides for pre-generated AI summary and audio narration. Generate once per accepted content digest, persist and serve as static/CDN artifacts. Content mutation makes derivatives stale.
+Add project defaults and page overrides for AI summary and audio narration.
 
-Exit: long editorial pages expose approved/reusable `Listen to article` and `AI-generated summary` controls without per-visitor AI/TTS calls.
+Generate both once per AcceptedPageContent version and store/cache the result. Content mutation makes derivatives stale. Visitor interactions play/reveal existing artifacts and do not trigger repeated provider generation.
 
-## Program V — Productization
+Exit: long editorial pages support reusable `Listen to article` and `AI-generated summary` controls without per-visitor model spend.
+
+## Program V — Productization and Proof
 
 ### Macro Run 11 — Full Operator Workflow
 
-Unify existing vertical slices into a coherent Dashboard navigation and state model:
+Connect existing vertical Dashboard slices into one coherent operator lifecycle with areas for Overview, Intake, Research/Search, Content, Design, Assets, Production, QA, Versions/Costs and Deployment.
 
-Overview -> Intake -> Research -> Search -> Content -> Design -> Assets -> Production -> QA -> Versions -> Costs -> Deploy.
-
-Expose typed states such as DRAFT, READY, APPROVED, STALE, BLOCKED and FAILED. Do not duplicate domain logic in the UI.
+Do not build a generic CMS or visual page builder. Dashboard remains a semantic operator console.
 
 ### Macro Run 12 — High-quality Multi-page Proof
 
-Produce a small real Sutherland set: homepage + service + location + editorial/research page using one accepted design system and multiple archetypes.
+Produce a small coherent Sutherland set such as homepage + service + location + editorial/research page using one accepted design system and multiple archetypes.
 
-Prove search-strategy coherence, internal linking, no cannibalisation, content quality, authentic/generated asset handling, performance and deterministic mass-page production economics.
+Prove search/content strategy, internal links, no cannibalization, accepted content quality, authentic/generated asset discipline, SEO/performance and cheap template/archetype reuse.
 
-Measure per-page costs (SERP/research, reasoning, Opus writing, amortized design, assets, production). Target architecture: a typical page using an accepted archetype requires no new Stitch design call and no coding-worker call.
+Measure per-page/provider cost. The desired steady state is that a typical page using an accepted archetype does not require a new design or coding-model call.
 
-### Macro Run 13 — Production Delivery
+### Macro Run 13 — Production Delivery vNext
 
-Complete browser-operated candidate preview -> human approval -> production publish -> verification -> rollback on Cloudflare with exact lineage across input version, search snapshot, writer brief, accepted content, design, assets, candidate, QA and deployment.
+Expose governed Candidate -> Preview -> Approve -> Publish -> Verify -> Rollback through the operator workflow while preserving exact source/input/content/design/asset/QA/deployment lineage.
 
-## Scope deliberately excluded from MVP
+Current Cloudflare Production Delivery remains accepted infrastructure and should be reused/migrated rather than rebuilt without evidence.
 
-Do not spend MVP time on:
-- generic CMS/page-builder features;
-- Puck or drag-and-drop visual editing;
-- proprietary AI design engine;
-- multi-provider implementations before a real provider fails requirements;
-- complex RBAC/multi-tenancy;
-- microservices/Kubernetes/queues without demonstrated need;
+Exit: the complete MVP can be operated from the Dashboard with backend-enforced governance and reproducible production lineage.
+
+## Scope discipline across all macro-runs
+
+Do not prebuild future complexity. Until demonstrated necessary, avoid:
+
+- Puck/generic CMS/page builder;
+- proprietary design engine;
+- enterprise RBAC/multi-tenancy;
+- microservices/Kubernetes;
+- generic workflow engines;
+- queues/schedulers;
 - real-time collaboration;
-- arbitrary plugin systems;
-- expensive LLM screenshot review for every page.
+- generic plugin architecture;
+- repeated paid model work that a deterministic operation/cache can replace.
 
-## Engineering sequencing rule
-
-Within each macro-run, roughly:
-
-1. first quarter: contract/state machine/application service + deterministic tests;
-2. middle half: API + Dashboard workflow;
-3. final quarter: E2E, persistence/restart, adversarial/direct-API cases, QA and documentation.
-
-The goal is not equal backend/frontend effort. The rule is: **backend semantics lead by one small step; the real operator experience lands in the same run.**
+Every new framework, provider call, transformation layer and infrastructure component must justify its concrete value in the current vertical slice.

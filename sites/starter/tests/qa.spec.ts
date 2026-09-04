@@ -125,25 +125,38 @@ async function assertJsonLd(page: Page): Promise<Record<string, unknown>> {
 }
 
 test.describe("homepage", () => {
-  test("loads with exact metadata, H1, JSON-LD, working nav, and no errors", async ({
+  test("loads with shell identity, single H1, metadata shape, LocalBusiness JSON-LD, and no errors", async ({
     page,
   }, testInfo) => {
     const errors = watchForErrors(page);
     await expectOk(page, "/");
 
-    await assertMetadata(page, {
-      title: `Independent advisory for French Alps property decisions | ${siteProfile.siteName}`,
-      description:
-        "Evidence-led acquisition and asset advisory for international buyers making consequential property decisions in Chamonix and Megève.",
-      canonicalPath: "/",
-      ogType: "website",
-    });
+    // Exact homepage copy is asserted by the dynamic task QA spec (derived
+    // from the SiteTask) rather than hardcoded here: the static suite owns
+    // the shell and structural truth that holds regardless of page content.
+    const title = await page.title();
+    expect(title.endsWith(` | ${siteProfile.siteName}`), `title must end with the profile suffix, got: ${title}`).toBe(true);
+    expect(title.length, "title must be non-empty").toBeGreaterThan(siteProfile.siteName.length + 3);
+
+    const desc = page.locator('meta[name="description"]');
+    await expect(desc).toHaveCount(1);
+    const descContent = (await desc.getAttribute("content"))?.trim() ?? "";
+    expect(descContent.length, "meta description must be present").toBeGreaterThan(0);
+
+    const canonical = page.locator('link[rel="canonical"]');
+    await expect(canonical).toHaveCount(1);
+    await expect(canonical).toHaveAttribute("href", `${expectedOrigin}/`);
+
+    const ogUrl = page.locator('meta[property="og:url"]');
+    await expect(ogUrl).toHaveCount(1);
+    await expect(ogUrl).toHaveAttribute("content", `${expectedOrigin}/`);
 
     await assertShell(page);
 
     const h1 = page.locator("h1");
     await expect(h1).toHaveCount(1);
-    await expect(h1).toHaveText("Independent advisory for French Alps property decisions");
+    const h1Text = (await h1.textContent())?.trim() ?? "";
+    expect(h1Text.length, "H1 must be non-empty").toBeGreaterThan(0);
 
     const schema = await assertJsonLd(page);
     expect(schema["@type"]).toBe("LocalBusiness");

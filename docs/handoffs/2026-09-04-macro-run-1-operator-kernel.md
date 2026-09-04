@@ -1,29 +1,32 @@
 # Macro Run 1 — Factory Operator Kernel + Project Intake
 
-This file is the implementation prompt for the next build agent after the Factory vNext governance PR is accepted and merged.
+This file is the implementation prompt for the next build agent after the Factory vNext governance/instruction-alignment PR is accepted and merged.
 
 ## Starting point
 
 Repository: `sutherlandamcom/factory`
 
-Base `main` after PR #16 merge:
+PR #16 merged as:
 
 `62d60575f73e70067f83254aa3eff23b5995fdcf`
 
 Before doing anything, fetch `origin`, verify the actual current `origin/main`, and rebase/restart the work from the real current `main` if it has advanced. Never assume the SHA above is still current.
 
-Read before implementation:
+Read before implementation, in this authority order:
 
 - `AGENTS.md`
-- `docs/architecture.md`
+- `docs/instruction-authority.md`
 - `docs/architecture/factory-constitution-vnext.md`
 - `docs/roadmap-vnext.md`
+- `docs/architecture.md` for implemented-state detail
 - `docs/handoffs/2026-09-04-pr16-independent-qa-summary.md`
 - `docs/handoffs/2026-09-04-openrouter-token-handoff.md`
 - `docs/site-production-spec-v0.md`
 - relevant persistence/contracts/executor code and migrations
 
-Do not rely on this prompt instead of inspecting the repository. Repository truth wins when this handoff describes an implementation detail that has since changed.
+Historical handoffs/audits/bake-offs are evidence about past states and MUST NOT override `AGENTS.md`, the vNext Constitution, or the current roadmap merely because they contain phrases such as "next phase" or "deferred".
+
+Do not rely on this prompt instead of inspecting the repository. Repository code/contracts are the source of truth for what exists today. If an implementation detail here has changed, adapt to the current code. If current transitional implementation differs from vNext target architecture, preserve it until the explicit migration slice rather than silently extending or deleting it.
 
 ---
 
@@ -55,10 +58,12 @@ Do not merge your own PR.
 4. **Approvals bind exact version/digest.** Mutation after approval creates a new draft and makes downstream acceptance stale where applicable.
 5. **Direct API bypass must fail closed.** UI-disabled state is not governance.
 6. **Accepted operator inputs/approvals are durable.** Gitignored `.factory/**` is runtime evidence, not sufficient authoritative acceptance storage.
-7. **Current website path remains Astro/Tailwind.** This run does NOT execute the later Stitch-vs-Astro renderer decision.
+7. **Current website path remains Astro/Tailwind.** This run does NOT execute the later Stitch-vs-Astro renderer decision. Astro is current accepted implementation, not a permanent vNext invariant.
 8. **Do not build design/search/writer integrations in this run.** Add only the project-level fields/contracts needed to support later slices.
 9. **No paid model calls are required for this run.** Do not burn OpenRouter/Anthropic/Google credits to implement or test Project Intake.
 10. **No Puck/CMS/page builder.** Dashboard is an operator console.
+11. **Do not extend legacy creative/model roles.** Existing `design_director`, eval `content_writer`, or old `image_generator` policy entries are transitional/evaluation surfaces, not vNext production provider authority.
+12. **Do not broaden current create_page copy authority.** The current pre-vNext executor may materialize only minimal neutral connective prose from bounded `contentBrief` key points because `AcceptedPageContent` does not exist yet. New content architecture will move final marketing copy to the approved Opus writer workflow.
 
 ---
 
@@ -399,7 +404,9 @@ Do NOT implement in this run:
 - Content Gap model execution;
 - Anthropic Opus writer calls;
 - Google Stitch;
+- legacy `design_director` expansion;
 - Nano Banana / image generation;
+- activation of the old `image_generator` placeholder;
 - binary asset upload/object storage unless absolutely required by the intake slice (metadata placeholders are enough);
 - audio/TTS/AI summaries;
 - Stitch-vs-Astro bake-off;
@@ -418,9 +425,9 @@ Existing CLI, SiteTask executor, Sutherland accepted site and PR #16 behavior mu
 
 Do not rewrite the existing site foundation or Sutherland homepage as part of Operator Kernel work.
 
-Do not change accepted ModelRolePolicy unless a concrete implementation requirement forces it; this run should not need such a change.
+Do not change accepted ModelRolePolicy unless a concrete implementation requirement forces it; this run should not need such a change. In particular, do not treat old future/eval roles as vNext provider decisions.
 
-Do not reinterpret PR #16 as proof that Factory should remain the designer. It proved page generation on a prepared trusted foundation; the external DesignProvider program comes later.
+Do not reinterpret PR #16 as proof that Factory should remain the designer or marketing writer. It proved page generation on a prepared trusted foundation; the external DesignProvider and approved writer programs come later.
 
 ---
 

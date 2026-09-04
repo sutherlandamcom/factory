@@ -132,7 +132,11 @@ export function projectPacketToSiteTask(input: ProjectPacketToSiteTaskInput): Si
   }
 
   // 2. Positional content brief: one entry per section instance, carrying
-  //    accepted business truth + bounded production guidance.
+  //    accepted business truth + bounded production guidance. Blueprint
+  //    conversion sections may legitimately carry zero keyPoints (their
+  //    truth lives in purpose + cta job); the projection promotes that
+  //    accepted purpose into the keyPoints slot so the brief invariant
+  //    (>=1 key point per section) holds without inventing claims.
   const briefSections = realizations.map((realization, index) => {
     const productionSection = packet.pageProduction.orderedSections[index]!;
     const blueprintSection = realization.blueprintSection;
@@ -142,10 +146,15 @@ export function projectPacketToSiteTask(input: ProjectPacketToSiteTaskInput): Si
     if (layout) guidanceParts.push(`Layout: ${layout}`);
     if (editorial) guidanceParts.push(`Editorial: ${editorial}`);
 
+    let keyPoints = blueprintSection.keyPoints.slice(0, 8);
+    if (keyPoints.length === 0) {
+      keyPoints = [boundedGuidance(productionSection.purpose, "purpose")!];
+    }
+
     return {
       sectionType: realization.sectionType,
       heading: blueprintSection.heading,
-      keyPoints: blueprintSection.keyPoints.slice(0, 8),
+      keyPoints,
       prohibitedClaims: blueprintSection.prohibitedClaims.slice(0, 6),
       blueprintSectionId: blueprintSection.id,
       ...(guidanceParts.length > 0 ? { productionGuidance: guidanceParts.join(" ") } : {}),

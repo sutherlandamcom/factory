@@ -2,6 +2,9 @@
 
 This document defines how humans and agents resolve repository instructions when multiple files discuss the same subject.
 
+The latest audit of repository instruction surfaces is recorded in
+`docs/instruction-surface-audit-2026-09-04.md`.
+
 ## Precedence
 
 Use this order when instructions conflict:
@@ -37,10 +40,20 @@ Conversely, agents MUST NOT treat transitional behavior as permission to extend 
 - Anthropic Opus is the intended marketing/editorial writer behind a human-approved exact writer prompt.
 - Professional design comes from an external `DesignProvider`; Google Stitch is the preferred first provider for v0 evaluation.
 - Synthetic/generated imagery belongs behind `VisualAssetProvider`; the preferred v0 production direction is Google Vertex/Gemini Nano Banana Pro, while authentic operator-owned photography has priority when it is documentary evidence.
-- Code workers are implementation workers, not production marketing writers or design authorities. The current pre-vNext `create_page` compatibility path may still materialize minimal prose from bounded `contentBrief` key points because it predates `AcceptedPageContent`; do not broaden that compatibility behavior, and do not use it as the design for new content workflows.
+- Code workers are implementation workers, not production marketing writers or design authorities. The current pre-vNext `create_page` compatibility path may still materialize minimal neutral connective prose from bounded `contentBrief` key points because it predates `AcceptedPageContent`; do not broaden that compatibility behavior, and do not use it as the design for new content workflows.
 - Typical mass-page production should become deterministic/cached rather than repeatedly invoking coding or vision models.
 - Per-page multimodal screenshot comparison is not a default QA strategy.
 - Astro remains the current accepted renderer until the explicit Stitch-native-static vs Astro bake-off selects the ordinary production path.
+
+## Known transitional names that are not future authority
+
+Some executable policy/eval code still contains role names created before vNext:
+
+- `design_director` / `visual_critic`: legacy model-policy/evaluation roles, not substitutes for `DesignProvider`;
+- `image_generator`: a pre-vNext future-role placeholder, not permission to activate the old OpenAI image assignment as the vNext production image path;
+- eval `content_writer`: a bounded diagnostic task, not the production Project Content Constitution + approved WriterPromptSnapshot pipeline.
+
+Do not rename/remove these mechanically in a governance PR if tests/current provenance depend on them. Their production migration belongs to the explicit provider/content macro-runs.
 
 ## When uncertain
 

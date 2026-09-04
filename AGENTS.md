@@ -7,9 +7,13 @@ Normative vNext product/architecture policy:
 - `docs/architecture/factory-constitution-vnext.md`
 - `docs/roadmap-vnext.md`
 
+Instruction precedence and historical-document handling:
+- `docs/instruction-authority.md`
+
 When current implementation and vNext direction differ, preserve the accepted
 current implementation until the roadmap's explicit migration proof/ADR is
-accepted. Do not silently migrate architecture by inference.
+accepted. Do not silently migrate architecture by inference. Equally, do not
+extend a transitional v0 behavior merely because it still exists in code.
 
 ## Technology constraints
 
@@ -50,13 +54,21 @@ accepted. Do not silently migrate architecture by inference.
 - Current Astro-site images are local assets processed through the accepted
   asset path; no external hotlinks. vNext asset work must preserve local/durable
   provenance, rights, optimization and deterministic production semantics.
-- **Code workers do not author marketing/editorial copy.** They may implement
-  accepted copy and technical UI labels only. They must not originate, rewrite,
-  paraphrase, shorten, expand, SEO-optimize or otherwise change accepted
-  marketing text.
+- **New vNext production paths must not give code workers marketing/editorial
+  authorship.** Once `AcceptedPageContent` exists, implementation workers must
+  reproduce the accepted copy faithfully and must not originate, rewrite,
+  paraphrase, shorten, expand, SEO-optimize or otherwise change it.
+- **Legacy compatibility exception:** the current pre-vNext `create_page`
+  SiteTask contract can contain semantic `contentBrief` key points rather than
+  final accepted prose. The accepted v0 executor may still materialize the
+  minimum connective prose needed to render those bounded points. This is a
+  transitional compatibility behavior, not a design pattern for new content
+  workflows and not permission to invent additional claims or marketing ideas.
 - **Code workers do not invent accepted design.** Once a design artifact or
   approved archetype exists, implementation workers must implement it rather
-  than redesign it.
+  than redesign it. Current `ProductionSpec` layout/editorial guidance is a
+  transitional production input until the external DesignProvider workflow is
+  accepted; do not expand it into a proprietary Factory design engine.
 
 ## Search, writer and provider governance
 
@@ -65,12 +77,22 @@ accepted. Do not silently migrate architecture by inference.
 - The project-level Content Constitution and each page Content Production Brief
   are versioned inputs. The exact compiled writer prompt sent to the marketing
   writer must be visible to and explicitly approved by a human.
-- For v0, the marketing/editorial writer role is Anthropic Opus under reviewed
-  model/provider policy. Writer output is a proposal, never factual authority.
+- For v0, the intended production marketing/editorial writer role is Anthropic
+  Opus under reviewed model/provider policy. Writer output is a proposal, never
+  factual authority. Existing evaluation-only content-writer tasks are not a
+  substitute for this approval pipeline.
 - External providers are isolated behind narrow adapters (`SerpProvider`,
   `WriterProvider`, `DesignProvider`, `VisualAssetProvider`, and later
   `SummaryProvider` / `SpeechProvider`). Provider secrets never enter browser
   state, public artifacts or model prompts that do not need them.
+- Professional visual design is owned by `DesignProvider`, not by legacy
+  `design_director` model-eval tasks. Google Stitch is the preferred first v0
+  candidate; alternatives are tested only if it fails the quality/cost floor.
+- Synthetic/generated imagery belongs behind `VisualAssetProvider`; the
+  preferred v0 production direction is Google Vertex/Gemini Nano Banana Pro.
+  Any older `image_generator` model-policy entry is a pre-vNext placeholder and
+  must not be activated as production imagery without an explicit reviewed
+  policy migration.
 - Authentic operator-owned imagery should be preferred over synthetic imagery
   when the visual is evidence of a real location, person, property, office or
   first-party experience. Synthetic imagery must not impersonate documentary
@@ -164,6 +186,18 @@ explicitly persists them.
   Dashboard write workflows are considered complete; gitignored `.factory`
   runtime artifacts alone are insufficient as authoritative acceptance state.
 
+## Instruction and evidence hygiene
+
+- Treat dated audits, bake-offs, build reports and gap reports as historical
+  evidence unless a current normative policy explicitly adopts their
+  recommendation. A sentence such as "next phase" in a 2026-09-01 handoff does
+  not override `docs/roadmap-vnext.md`.
+- Runtime prompt builders under `apps/factory/src/**/prompt.ts` define only the
+  bounded role consuming that prompt. They do not supersede repository-wide
+  architecture policy.
+- If two current normative files genuinely conflict, surface the conflict in
+  the PR rather than selecting one by guesswork.
+
 ## Agent and merge governance
 
 - **Build agents**:
@@ -180,6 +214,7 @@ explicitly persists them.
 - `apps/factory` — Factory control plane and application/backend capabilities.
 - `packages/contracts` — machine-readable domain/runtime contracts shared across trusted boundaries.
 - `sites/starter` — current accepted Astro starter/production path pending the explicit renderer ADR.
-- `docs/architecture.md` — detailed record of implemented architecture.
+- `docs/architecture.md` — detailed record of implemented architecture; historical "future/deferred" statements inside older sections do not override vNext sequencing.
 - `docs/architecture/factory-constitution-vnext.md` — governing vNext product/engineering constitution.
 - `docs/roadmap-vnext.md` — macro-run implementation sequence.
+- `docs/instruction-authority.md` — precedence rules for repository instructions and historical artifacts.

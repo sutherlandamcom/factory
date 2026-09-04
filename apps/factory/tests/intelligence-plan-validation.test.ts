@@ -179,13 +179,20 @@ test("rejects unknown page type and unknown section", async () => {
   assert.ok(result2.issues.some((issue) => /schema violation/.test(issue)));
 });
 
-test("rejects duplicate sections within a page", async () => {
+test("rejects sections beyond the per-type instance bound", async () => {
   const { rawRequest, rawResearch } = await context();
   const plan = makeValidPlan(rawRequest, rawResearch);
-  ((plan.pages as AnyRecord[])[1] as AnyRecord).sections = ["hero", "hero", "faq"];
+  ((plan.pages as AnyRecord[])[1] as AnyRecord).sections = [
+    "hero",
+    "faq",
+    "faq",
+    "faq",
+    "faq",
+    "faq",
+  ];
   const result = validate(plan, rawRequest, rawResearch);
   assert.equal(result.ok, false);
-  assert.ok(result.issues.some((issue) => /duplicate section/.test(issue)));
+  assert.ok(result.issues.some((issue) => /instance bound exceeded/.test(issue)));
 });
 
 test("rejects title and description outside current SiteTask bounds", async () => {

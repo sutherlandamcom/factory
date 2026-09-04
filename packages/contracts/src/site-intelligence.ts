@@ -431,7 +431,8 @@ export const keywordClusterSchema = z
 
 /**
  * A planned launch page. Reuses the CURRENT SiteTask page invariants
- * (page types, slug rules, unique sections) via the shared refinement helper.
+ * (page types, slug rules, bounded repeated section instances) via the
+ * shared refinement helper.
  * Provenance: at least one evidence reference OR explicit operator-fact
  * reference is mandatory (enforced deterministically by plan validation).
  */

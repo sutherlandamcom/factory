@@ -196,8 +196,9 @@ export class SearchIntelligenceService {
     const blockers: string[] = [];
     if (!latest) blockers.push("No accepted project inputs. Complete Intake first.");
     if (!readiness.configured) blockers.push(readiness.reason);
-    // Grounded research is optional in v0; absence is surfaced honestly in
-    // run details, never treated as a blocker.
+    if (!groundedProviderOptional()) {
+      // Grounded research is optional; absence is surfaced honestly, not a blocker.
+    }
 
     const recentRuns = await this.deps.searchStore.listRuns(projectId, 20);
 
@@ -284,7 +285,7 @@ export class SearchIntelligenceService {
         this.config.freshnessHours,
       );
       if (fresh) {
-        await this.recordReusedRun({
+        await this.recordReusedRun(fresh.run.id, {
           projectId: input.projectId,
           acceptedInputSnapshotId: accepted.id,
           acceptedInputVersion: accepted.version,
@@ -452,11 +453,11 @@ export class SearchIntelligenceService {
     return await this.buildReadModel(projectId, runId, accepted, false, run.refreshRequested);
   }
 
-  /**
-   * Cache reuse is recorded as its own run row (audit trail) without spend,
-   * referencing the existing immutable SERP snapshot via requestDigest.
-   */
-  private async recordReusedRun(runInput: Parameters<SearchStore["createRun"]>[0]): Promise<string> {
+  private async recordReusedRun(
+    _sourceRunId: string,
+    runInput: Parameters<SearchStore["createRun"]>[0],
+  ): Promise<string> {
+    // Cache reuse is recorded as its own run row (audit trail) without spend.
     const run = await this.deps.searchStore.createRun(runInput);
     await this.deps.searchStore.finishRun(run.id, "succeeded", null, null);
     return run.id;
@@ -545,6 +546,11 @@ export class SearchIntelligenceService {
         : null,
     };
   }
+}
+
+/** Grounded research is optional in v0; helper keeps intent explicit. */
+function groundedProviderOptional(): boolean {
+  return true;
 }
 
 /**

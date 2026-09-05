@@ -61,10 +61,7 @@ function fakeGrounded(overrides: { ready?: boolean } = {}): GroundedSearchProvid
   return {
     id: "fake-grounded",
     model: "fake-gemini",
-    readiness: () =>
-      overrides.ready === false
-        ? ({ configured: false, reason: "grounded unavailable" } as const)
-        : ({ configured: true } as const),
+    readiness: () => ({ configured: overrides.ready ?? true }),
     research: async (_r: GroundedResearchRequest) => ({
       data: {
         webSearchQueries: ["q"],
@@ -208,7 +205,7 @@ function makeStores() {
       run.finishedAt = new Date("2026-09-06T00:00:01.000Z");
       run.durationMs = 1000;
     },
-    insertSerpSnapshot: async (input: { data: { organic: unknown[]; features: unknown; peopleAlsoAsk: unknown; relatedSearches: unknown }; usage: unknown; runId: string; provider: string | null }) => {
+    insertSerpSnapshot: async (input: Record<string, unknown>) => {
       const snap = {
         id: `serp-${serps.length + 1}`,
         snapshotDigest: "s".repeat(64),
@@ -226,7 +223,7 @@ function makeStores() {
       serps.push(snap);
       return snap;
     },
-    insertGroundedSnapshot: async (input: { data: { webSearchQueries: unknown; sources: unknown }; runId: string; model: string; promptVersion: string }) => {
+    insertGroundedSnapshot: async (input: Record<string, unknown>) => {
       const snap = {
         id: `g-${grounded.length + 1}`,
         snapshotDigest: "g".repeat(64),
@@ -240,7 +237,7 @@ function makeStores() {
       grounded.push(snap);
       return snap;
     },
-    insertIntelligenceSnapshot: async (input: { data: unknown; runId: string; model: string; promptVersion: string }) => {
+    insertIntelligenceSnapshot: async (input: Record<string, unknown>) => {
       const snap = {
         id: `i-${intel.length + 1}`,
         snapshotDigest: "i".repeat(64),

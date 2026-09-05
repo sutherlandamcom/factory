@@ -16,6 +16,7 @@ import { FixtureSerpProvider } from "../search/serp-fixture.js";
 import { FixtureGroundedSearchProvider } from "../search/grounded-types.js";
 import { FixtureSearchAnalyst, OpenRouterSearchAnalyst } from "../search/analyst.js";
 import { invokeModel } from "../models/gateway.js";
+import { FactoryError } from "../executor/errors.js";
 
 /**
  * Trusted backend provider selection for Search Intelligence.
@@ -23,10 +24,7 @@ import { invokeModel } from "../models/gateway.js";
  * FACTORY_SEARCH_MODE: 'production' (default) | 'fixture'.
  * The browser can NEVER select providers or modes — this is config-only.
  */
-export function buildSearchIntelligenceService(
-  deps: { intake: ProjectIntakeStore; searchStore: SearchStore },
-  config?: Partial<SearchServiceConfig>,
-): SearchIntelligenceService {
+export function buildSearchIntelligenceService(config?: Partial<SearchServiceConfig>): SearchIntelligenceService {
   const mode = process.env.FACTORY_SEARCH_MODE === "fixture" ? "fixture" : "production";
   const env: NodeJS.ProcessEnv = process.env;
   const productionSerp = new DataForSeoSerpProvider({ env });
@@ -70,8 +68,8 @@ export function buildSearchIntelligenceService(
         });
 
   return new SearchIntelligenceService({
-    intake: deps.intake,
-    searchStore: deps.searchStore,
+    intake: undefined as never,
+    searchStore: undefined as never,
     productionSerpProvider: productionSerp,
     fixtureSerpProvider: fixtureSerp,
     groundedProvider: grounded,
@@ -88,6 +86,26 @@ export function buildSearchIntelligenceService(
       ...config,
     },
   });
+}
+
+/** Overload used by server startup with real stores. */
+export function buildSearchIntelligenceServiceWithStores(
+  db: unknown,
+  intake: ProjectIntakeStore,
+  config?: Partial<SearchServiceConfig>,
+): SearchIntelligenceService {
+  const service = buildSearchIntelligenceService(config);
+  const searchStore = new SearchStore(db as never);
+  // Rebuild with real stores (keeps provider selection in one place).
+  return new SearchIntelligenceService({
+    ...service,
+    intake,
+    searchStore,
+  } as never);
+}
+
+export function isFactoryError(error: unknown): error is FactoryError {
+  return error instanceof FactoryError;
 }
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
@@ -266,8 +284,11 @@ export async function startOperatorServer(): Promise<http.Server> {
   const store = new FactoryStore(dbInstance.db);
   const intake = new ProjectIntakeStore(dbInstance.db);
   const searchStore = new SearchStore(dbInstance.db);
-  const search = buildSearchIntelligenceService({ intake, searchStore });
-  const deps: OperatorApiDeps = { store, intake, search };
+  const search = buildSearchIntelligenceService();
+  // Bind the real stores into the search service (providers/policy already built).
+  const searchService = Object.create(Object.getPrototypeOf(search), Object.getOwnPropertyDescriptors(search));
+  Object.assign(searchService, { deps: { ...searchService.deps, intake, searchStore } });
+  const deps: OperatorApiDeps = { store, intake, search: searchService };
   const server = createOperatorServer(deps);
   const host = process.env.FACTORY_OPERATOR_HOST ?? "127.0.0.1";
   const port = Number(process.env.FACTORY_OPERATOR_PORT ?? 3000);

@@ -153,7 +153,7 @@ export class ProjectIntakeStore {
             eq(projectInputSnapshots.digest, input.expectedDigest),
           ),
         );
-      if (existing) return { ...existing, alreadyAccepted: true };
+      if (existing) return deepFreeze({ ...existing, alreadyAccepted: true });
 
       if (draft.revision !== input.expectedRevision) {
         throw new FactoryError(
@@ -222,16 +222,17 @@ export class ProjectIntakeStore {
         })
         .returning();
 
-      return { ...(created as ProjectInputSnapshotRecord), alreadyAccepted: false };
+      return deepFreeze({ ...(created as ProjectInputSnapshotRecord), alreadyAccepted: false });
     });
   }
 
   async listSnapshots(projectId: string): Promise<ProjectInputSnapshotRecord[]> {
-    return await this.db
+    const rows = await this.db
       .select()
       .from(projectInputSnapshots)
       .where(eq(projectInputSnapshots.projectId, projectId))
       .orderBy(asc(projectInputSnapshots.version));
+    return rows.map((row) => deepFreeze({ ...row }));
   }
 
   async getSnapshot(projectId: string, version: number): Promise<ProjectInputSnapshotRecord | null> {
@@ -244,7 +245,7 @@ export class ProjectIntakeStore {
           eq(projectInputSnapshots.version, version),
         ),
       );
-    return row ?? null;
+    return row ? deepFreeze({ ...row }) : null;
   }
 
   async getWorkspace(projectId: string): Promise<{

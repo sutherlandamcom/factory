@@ -15,7 +15,8 @@
   "dependencies": {
     "@factory/contracts": "workspace:*",
     "drizzle-orm": "0.45.2",
-    "pg": "8.23.0"
+    "pg": "8.23.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.3.0",

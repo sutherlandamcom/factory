@@ -113,6 +113,10 @@ export class FactoryStore {
     });
   }
 
+  async listProjects(): Promise<ProjectRecord[]> {
+    return await this.db.select().from(projects).orderBy(asc(projects.createdAt));
+  }
+
   async getProjectByKey(key: string): Promise<ProjectRecord | null> {
     const [row] = await this.db.select().from(projects).where(eq(projects.key, key));
     return row ?? null;

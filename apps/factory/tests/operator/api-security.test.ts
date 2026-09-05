@@ -31,6 +31,7 @@ function makeDeps(overrides: Partial<OperatorApiDeps> = {}): OperatorApiDeps {
     createProject: async () => ({ ...PROJECT, id: "new-1" }),
     listProjects: async () => [PROJECT],
     getProjectById: async (id: string) => (id === PROJECT.id ? PROJECT : null),
+    getProjectByKey: async (key: string) => (key === PROJECT.key ? PROJECT : null),
   };
   const intake = {
     getDraft: async () => null,
@@ -609,4 +610,50 @@ test("workspace projection: history is ascending and last entry is the accepted 
   assert.equal(ws!.history[0]!.version, 1);
   assert.equal(ws!.history[ws!.history.length - 1]!.version, 2);
   assert.equal(ws!.currentAcceptedSnapshot!.version, 2);
+});
+
+test("duplicate project key returns 400 validation_error", async () => {
+  const h = await listen(makeDeps());
+  try {
+    const res = await apiRequest(h.port, {
+      method: "POST",
+      path: "/api/projects",
+      body: JSON.stringify({ key: PROJECT.key, name: "Duplicate Key" }),
+    });
+    assert.equal(res.status, 400);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error.code, "validation_error");
+    assert.ok(body.error.message.includes("already exists"));
+  } finally {
+    await h.close();
+  }
+});
+
+test("mutations and versions on unknown project return 404 not_found", async () => {
+  const h = await listen(makeDeps());
+  try {
+    const put = await apiRequest(h.port, {
+      method: "PUT",
+      path: "/api/projects/unknown-proj/intake-draft",
+      body: JSON.stringify({ baseRevision: 0, payload: {} }),
+    });
+    assert.equal(put.status, 404);
+    assert.equal(JSON.parse(put.body).error.code, "not_found");
+
+    const accept = await apiRequest(h.port, {
+      method: "POST",
+      path: "/api/projects/unknown-proj/intake/accept",
+      body: JSON.stringify({ expectedRevision: 1, expectedDigest: "d" }),
+    });
+    assert.equal(accept.status, 404);
+    assert.equal(JSON.parse(accept.body).error.code, "not_found");
+
+    const versions = await apiRequest(h.port, {
+      path: "/api/projects/unknown-proj/intake/versions",
+    });
+    assert.equal(versions.status, 404);
+    assert.equal(JSON.parse(versions.body).error.code, "not_found");
+  } finally {
+    await h.close();
+  }
 });

@@ -101,6 +101,12 @@ export function createOperatorApi(deps: OperatorApiDeps) {
       if (req.method === "POST" && pathname === "/api/projects") {
         const parsed = parseJsonBody(body);
         const input = parseOr400(createProjectSchema, parsed);
+        if (deps.store.getProjectByKey) {
+          const existing = await deps.store.getProjectByKey(input.key);
+          if (existing) {
+            throw new FactoryError("validation_error", `Project key "${input.key}" already exists.`);
+          }
+        }
         const project = await deps.store.createProject(input);
         return sendJson(res, 201, project);
       }
@@ -123,6 +129,8 @@ export function createOperatorApi(deps: OperatorApiDeps) {
       }
 
       if (req.method === "PUT" && segments.length === 3 && segments[0] === "projects" && segments[2] === "intake-draft") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
         const parsed = parseJsonBody(body);
         const input = parseOr400(saveDraftSchema, parsed);
         const result = await deps.intake.saveDraft({ projectId: segments[1]!, ...input });
@@ -130,6 +138,8 @@ export function createOperatorApi(deps: OperatorApiDeps) {
       }
 
       if (req.method === "POST" && segments.length === 4 && segments[0] === "projects" && segments[2] === "intake" && segments[3] === "accept") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
         const parsed = parseJsonBody(body);
         const input = parseOr400(acceptSchema, parsed);
         const result = await deps.intake.accept({ projectId: segments[1]!, ...input });
@@ -137,11 +147,15 @@ export function createOperatorApi(deps: OperatorApiDeps) {
       }
 
       if (req.method === "GET" && segments.length === 4 && segments[0] === "projects" && segments[2] === "intake" && segments[3] === "versions") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
         const versions = await deps.intake.listSnapshots(segments[1]!);
         return sendJson(res, 200, { versions });
       }
 
       if (req.method === "GET" && segments.length === 5 && segments[0] === "projects" && segments[2] === "intake" && segments[3] === "versions") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
         const version = Number.parseInt(segments[4]!, 10);
         if (!Number.isFinite(version) || version < 1) {
           return sendError(res, "invalid_version", "Version must be a positive integer.");

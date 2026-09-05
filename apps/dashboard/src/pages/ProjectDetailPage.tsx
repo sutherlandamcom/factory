@@ -22,26 +22,37 @@ export function ProjectDetailPage({ projectId, onBack }: { projectId: string; on
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<any>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
     try {
       const w = await api.getWorkspace(projectId);
       setWs(w);
       // Keep local edits when polling refreshes; adopt the server payload
-      // when the form is empty (fresh project) or belongs to another revision.
-      setForm((prev: any) => prev ?? w.currentDraft?.payload ?? null);
+      // when forced (initial mount, project switch, save draft, or stale reload).
+      if (force) {
+        setForm(w.currentDraft?.payload ?? null);
+      } else {
+        setForm((prev: any) => prev ?? w.currentDraft?.payload ?? null);
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Load failed");
     }
   }, [projectId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    setForm(null);
+    setWs(null);
+    setError(null);
+    load(true);
+  }, [projectId, load]);
+
+  usePolling(load, 5000);
 
   const saveDraft = async () => {
     if (!ws) return;
     setBusy(true); setError(null);
     try {
       await api.saveDraft(projectId, { baseRevision: ws.currentDraft.revision, payload: form });
-      await load();
+      await load(true);
     } catch (e: unknown) {
       if (e instanceof OperatorApiError) {
         if (e.code === "intake_stale_revision") {
@@ -54,7 +65,7 @@ export function ProjectDetailPage({ projectId, onBack }: { projectId: string; on
       } else {
         setError(e instanceof Error ? e.message : "Save failed.");
       }
-      await load();
+      await load(true);
     } finally { setBusy(false); }
   };
 
@@ -66,7 +77,7 @@ export function ProjectDetailPage({ projectId, onBack }: { projectId: string; on
         expectedRevision: ws.currentDraft.revision,
         expectedDigest: ws.currentDraft.digest,
       });
-      await load();
+      await load(true);
     } catch (e: unknown) {
       if (e instanceof OperatorApiError) {
         if (e.code === "intake_blocked") {
@@ -79,7 +90,7 @@ export function ProjectDetailPage({ projectId, onBack }: { projectId: string; on
       } else {
         setError(e instanceof Error ? e.message : "Accept failed.");
       }
-      await load();
+      await load(true);
     } finally { setBusy(false); }
   };
 
@@ -151,7 +162,7 @@ export function ProjectDetailPage({ projectId, onBack }: { projectId: string; on
           disabled={busy || !form}
           className="rounded-md bg-gray-800 px-4 py-2 text-sm font-medium text-white hover:bg-gray-900 disabled:opacity-50"
         >
-          Save Draft
+          {busy ? "Saving…" : "Save Draft"}
         </button>
         {readiness.blockers.length > 0 && (
           <div className="text-sm text-red-600">
@@ -191,23 +202,57 @@ function Review({ ws, onAccept, busy }: { ws: ProjectOperatorWorkspace; onAccept
         <Field label="Name" value={p.business?.name} />
         <Field label="Description" value={p.business?.description} />
         <Field label="Model" value={p.business?.businessModel} />
+        <Field label="Positioning" value={p.business?.positioning} />
+        <Field label="Offerings" value={(p.business?.offerings ?? []).join(", ")} />
+        <Field label="Priorities" value={(p.business?.priorities ?? []).join(", ")} />
       </Section>
       <Section title="Audience">
         <Field label="Segments" value={(p.audience?.segments ?? []).join(", ")} />
         <Field label="Needs" value={(p.audience?.needs ?? []).join("; ")} />
+        <Field label="Decision Context" value={p.audience?.decisionContext} />
+      </Section>
+      <Section title="Markets">
+        <Field label="Geographies" value={(p.markets?.geographies ?? []).join(", ")} />
+        <Field label="Priority Locations" value={(p.markets?.priorityLocations ?? []).join(", ")} />
       </Section>
       <Section title="Site Identity">
         <Field label="Site Name" value={p.siteIdentity?.siteName} />
         <Field label="Domain" value={p.siteIdentity?.candidateDomain} />
         <Field label="Language" value={p.siteIdentity?.language} />
+        <Field label="Locale" value={p.siteIdentity?.locale} />
       </Section>
       <Section title="Conversion">
         <Field label="Objective" value={p.conversion?.primaryObjective} />
-        <Field label="CTA" value={typeof p.conversion?.ctaDestination === "string" ? p.conversion.ctaDestination : (p.conversion?.ctaDestination?.value ?? "")} />
+        <Field label="CTA Type" value={p.conversion?.ctaType} />
+        <Field label="CTA" value={typeof p.conversion?.ctaDestination === "string" ? p.conversion.ctaDestination : ""} />
+        <Field label="Destination Type" value={p.conversion?.ctaDestinationType} />
         <Field label="Verification" value={p.conversion?.verificationState} />
+      </Section>
+      <Section title="Evidence & Claims">
+        <Field label="Operator Facts" value={(p.evidence?.operatorFacts ?? []).join("; ")} />
+        <Field label="Allowed Claims" value={(p.evidence?.allowedClaims ?? []).join("; ")} />
+        <Field label="Prohibited Claims" value={(p.evidence?.prohibitedClaims ?? []).join("; ")} />
+      </Section>
+      <Section title="Search Seeds">
+        <Field label="Topics" value={(p.searchSeeds?.topics ?? []).join(", ")} />
+        <Field label="Queries" value={(p.searchSeeds?.queries ?? []).join(", ")} />
+        <Field label="Competitors" value={(p.searchSeeds?.competitors ?? []).join(", ")} />
+        <Field label="Market Hints" value={(p.searchSeeds?.marketHints ?? []).join(", ")} />
+      </Section>
+      <Section title="Brand">
+        <Field label="Positioning" value={p.brand?.positioning} />
+        <Field label="Tone" value={p.brand?.tone} />
+        <Field label="Visual Identity" value={p.brand?.visualIdentityNotes} />
+      </Section>
+      <Section title="Assets & Constraints">
+        <Field label="Logo" value={p.assetAvailability?.hasLogo ? "Yes" : "No"} />
+        <Field label="Authentic Photography" value={p.assetAvailability?.hasAuthenticPhotography ? "Yes" : "No"} />
+        <Field label="Local First-Party Photography" value={p.assetAvailability?.hasLocalFirstPartyPhotography ? "Yes" : "No"} />
+        <Field label="Must Not" value={(p.constraints?.mustNot ?? []).join("; ")} />
       </Section>
       <Section title="Content Constitution">
         <Field label="Brand Voice" value={p.contentConstitution?.brandVoice} />
+        <Field label="Tone" value={p.contentConstitution?.tone} />
         <Field label="Custom Writer Instructions" value={p.contentConstitution?.customWriterInstructions} />
       </Section>
       <div className="border-t pt-4">
@@ -267,11 +312,14 @@ function Constitution({ form, setForm }: { form: any; setForm: (f: any) => void 
   const set = (k: string, v: any) => setForm({ ...form, contentConstitution: { ...c, [k]: v } });
   const listField = (label: string, key: string) => (
     <div key={key}>
-      <label className="mb-1 block text-sm font-medium text-gray-700">{label}</label>
+      <label htmlFor={`field-contentConstitution-${key}`} className="mb-1 block text-sm font-medium text-gray-700">
+        {label} <span className="text-xs text-gray-400">(one per line)</span>
+      </label>
       <textarea
+        id={`field-contentConstitution-${key}`}
         rows={2}
-        value={(c[key] ?? []).join("\n")}
-        onChange={(e) => set(key, e.target.value.split("\n").filter(Boolean))}
+        value={(Array.isArray(c[key]) ? c[key] : []).join("\n")}
+        onChange={(e) => set(key, e.target.value.split("\n").map((s: string) => s.trim()).filter(Boolean))}
         className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
       />
     </div>
@@ -279,31 +327,31 @@ function Constitution({ form, setForm }: { form: any; setForm: (f: any) => void 
   return (
     <div className="space-y-4">
       <div>
-        <label className="mb-1 block text-sm font-medium text-gray-700">Brand Voice</label>
-        <textarea rows={2} value={c.brandVoice ?? ""} onChange={(e) => set("brandVoice", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
+        <label htmlFor="field-contentConstitution-brandVoice" className="mb-1 block text-sm font-medium text-gray-700">Brand Voice</label>
+        <textarea id="field-contentConstitution-brandVoice" rows={2} value={c.brandVoice ?? ""} onChange={(e) => set("brandVoice", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
       </div>
       <div>
-        <label className="mb-1 block text-sm font-medium text-gray-700">Tone</label>
-        <textarea rows={2} value={c.tone ?? ""} onChange={(e) => set("tone", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
+        <label htmlFor="field-contentConstitution-tone" className="mb-1 block text-sm font-medium text-gray-700">Tone</label>
+        <textarea id="field-contentConstitution-tone" rows={2} value={c.tone ?? ""} onChange={(e) => set("tone", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
       </div>
       {listField("Audience Communication Principles", "audiencePrinciples")}
       {listField("Writing Principles", "writingPrinciples")}
-      {listField("Preferred Terminology (one per line)", "preferredTerminology")}
-      {listField("Forbidden Terminology (one per line)", "forbiddenTerminology")}
+      {listField("Preferred Terminology", "preferredTerminology")}
+      {listField("Forbidden Terminology", "forbiddenTerminology")}
       <div>
-        <label className="mb-1 block text-sm font-medium text-gray-700">Evidence / Factuality Policy</label>
-        <textarea rows={2} value={c.evidencePolicy ?? ""} onChange={(e) => set("evidencePolicy", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
+        <label htmlFor="field-contentConstitution-evidencePolicy" className="mb-1 block text-sm font-medium text-gray-700">Evidence / Factuality Policy</label>
+        <textarea id="field-contentConstitution-evidencePolicy" rows={2} value={c.evidencePolicy ?? ""} onChange={(e) => set("evidencePolicy", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
       </div>
       {listField("People-First Principles", "peopleFirstPrinciples")}
       <div>
-        <label className="mb-1 block text-sm font-medium text-gray-700">Trust Expectations</label>
-        <textarea rows={2} value={c.trustExpectations ?? ""} onChange={(e) => set("trustExpectations", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
+        <label htmlFor="field-contentConstitution-trustExpectations" className="mb-1 block text-sm font-medium text-gray-700">Trust Expectations</label>
+        <textarea id="field-contentConstitution-trustExpectations" rows={2} value={c.trustExpectations ?? ""} onChange={(e) => set("trustExpectations", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
       </div>
       {listField("AI-Language to Avoid", "aiLanguageAvoidance")}
       {listField("Marketing Clichés to Avoid", "clicheAvoidance")}
       <div>
-        <label className="mb-1 block text-sm font-medium text-gray-700">Locale / Language Preferences</label>
-        <input value={c.localePreferences ?? ""} onChange={(e) => set("localePreferences", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
+        <label htmlFor="field-contentConstitution-localePreferences" className="mb-1 block text-sm font-medium text-gray-700">Locale / Language Preferences</label>
+        <input id="field-contentConstitution-localePreferences" value={c.localePreferences ?? ""} onChange={(e) => set("localePreferences", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
       </div>
       <div>
         <label htmlFor="field-contentConstitution-customWriterInstructions" className="mb-1 block text-sm font-medium text-gray-700">
@@ -344,7 +392,7 @@ function GenericForm({ tab, form, setForm }: { tab: string; form: any; setForm: 
   const listField = (label: string, key: string) => (
     <div key={key}>
       <label htmlFor={`field-${sectionKey}-${key}`} className="mb-1 block text-sm font-medium text-gray-700">{label} <span className="text-xs text-gray-400">(one per line)</span></label>
-      <textarea id={`field-${sectionKey}-${key}`} rows={3} value={(section[key] ?? []).join("\n")} onChange={(e) => set(key, e.target.value.split("\n").filter(Boolean))} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
+      <textarea id={`field-${sectionKey}-${key}`} rows={3} value={(Array.isArray(section[key]) ? section[key] : []).join("\n")} onChange={(e) => set(key, e.target.value.split("\n").map((s: string) => s.trim()).filter(Boolean))} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
     </div>
   );
 
@@ -394,7 +442,7 @@ function GenericForm({ tab, form, setForm }: { tab: string; form: any; setForm: 
           <label htmlFor="field-conversion-ctaDestination" className="mb-1 block text-sm font-medium text-gray-700">CTA Destination</label>
           <input
             id="field-conversion-ctaDestination"
-            value={typeof section.ctaDestination === "string" ? section.ctaDestination : (section.ctaDestination?.value ?? "")}
+            value={typeof section.ctaDestination === "string" ? section.ctaDestination : ""}
             onChange={(e) => set("ctaDestination", e.target.value)}
             className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
           />
@@ -438,7 +486,7 @@ function GenericForm({ tab, form, setForm }: { tab: string; form: any; setForm: 
       </div>);
     case "Competitors":
       return (<div className="space-y-4">
-        {listField("Known Competitors (one name per line)", "competitors")}
+        {listField("Known Competitors", "competitors")}
       </div>);
     case "Brand":
       return (<div className="space-y-4">
@@ -458,9 +506,15 @@ function GenericForm({ tab, form, setForm }: { tab: string; form: any; setForm: 
     case "Assets":
       return (<div className="space-y-4">
         <div className="flex gap-6">
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={section.hasLogo ?? false} onChange={(e) => set("hasLogo", e.target.checked)} /> Has logo</label>
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={section.hasAuthenticPhotography ?? false} onChange={(e) => set("hasAuthenticPhotography", e.target.checked)} /> Authentic photography</label>
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={section.hasLocalFirstPartyPhotography ?? false} onChange={(e) => set("hasLocalFirstPartyPhotography", e.target.checked)} /> Local first-party photography</label>
+          <label htmlFor="field-assets-hasLogo" className="flex items-center gap-2 text-sm">
+            <input id="field-assets-hasLogo" type="checkbox" checked={section.hasLogo ?? false} onChange={(e) => set("hasLogo", e.target.checked)} /> Has logo
+          </label>
+          <label htmlFor="field-assets-hasAuthenticPhotography" className="flex items-center gap-2 text-sm">
+            <input id="field-assets-hasAuthenticPhotography" type="checkbox" checked={section.hasAuthenticPhotography ?? false} onChange={(e) => set("hasAuthenticPhotography", e.target.checked)} /> Authentic photography
+          </label>
+          <label htmlFor="field-assets-hasLocalFirstPartyPhotography" className="flex items-center gap-2 text-sm">
+            <input id="field-assets-hasLocalFirstPartyPhotography" type="checkbox" checked={section.hasLocalFirstPartyPhotography ?? false} onChange={(e) => set("hasLocalFirstPartyPhotography", e.target.checked)} /> Local first-party photography
+          </label>
         </div>
         {listField("Other Assets", "otherAssets")}
         {textField("Notes", "notes")}

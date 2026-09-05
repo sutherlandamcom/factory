@@ -49,8 +49,9 @@ export function ProjectsPage({ projects, onOpenProject }: ProjectsPageProps) {
         <form onSubmit={handleCreate} className="mb-6 rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Key</label>
+              <label htmlFor="project-key" className="mb-1 block text-sm font-medium text-gray-700">Key</label>
               <input
+                id="project-key"
                 value={newKey}
                 onChange={(e) => setNewKey(e.target.value)}
                 placeholder="e.g. summit-roofing"
@@ -58,8 +59,9 @@ export function ProjectsPage({ projects, onOpenProject }: ProjectsPageProps) {
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Display Name</label>
+              <label htmlFor="project-name" className="mb-1 block text-sm font-medium text-gray-700">Display Name</label>
               <input
+                id="project-name"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 placeholder="e.g. Summit Roofing"

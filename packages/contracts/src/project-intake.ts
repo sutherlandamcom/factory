@@ -31,6 +31,16 @@ export const MAX_INTAKE_PAYLOAD_BYTES = 512 * 1024;
 /** Stable typed diagnostic codes surfaced by intake validation/readiness. */
 export const INTAKE_ERROR_CODES = [
   "intake_schema_invalid",
+  "INTAKE_BUSINESS_NAME_REQUIRED",
+  "INTAKE_BUSINESS_DESCRIPTION_REQUIRED",
+  "INTAKE_SITE_LANGUAGE_REQUIRED",
+  "INTAKE_INVALID_CANONICAL_ORIGIN",
+  "INTAKE_CTA_DESTINATION_UNVERIFIED",
+  "INTAKE_NO_SEARCH_SEEDS",
+  "INTAKE_NO_COMPETITORS",
+  "INTAKE_NO_PHOTOGRAPHY",
+  "INTAKE_SECRET_SHAPED_FIELD",
+  // Lowercase aliases for backward compatibility
   "intake_business_name_required",
   "intake_business_description_required",
   "intake_site_language_required",

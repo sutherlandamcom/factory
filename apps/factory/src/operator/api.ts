@@ -9,10 +9,13 @@ import { FactoryError } from "../executor/errors.js";
 import { ProjectIntakeStore } from "./intake-store.js";
 import { FactoryStore } from "../persistence/store.js";
 import { getProjectOperatorWorkspace } from "./workspace.js";
+import type { SearchIntelligenceService } from "../search/service.js";
 
 export interface OperatorApiDeps {
   readonly store: FactoryStore;
   readonly intake: ProjectIntakeStore;
+  /** Search Intelligence v0; optional for backward-compatible construction. */
+  readonly search?: SearchIntelligenceService;
 }
 
 const projectKeySchema = z
@@ -40,6 +43,16 @@ const acceptSchema = z
   .object({
     expectedRevision: z.number().int().min(0),
     expectedDigest: z.string().trim().min(1).max(128),
+  })
+  .strict();
+
+const searchRunSchema = z
+  .object({
+    query: z.string().min(1).max(200),
+    location: z.string().trim().max(200).optional(),
+    language: z.string().trim().max(35).optional(),
+    device: z.enum(["desktop", "mobile", "tablet"]).default("desktop"),
+    refresh: z.boolean().default(false),
   })
   .strict();
 
@@ -163,6 +176,41 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         const snapshot = await deps.intake.getSnapshot(segments[1]!, version);
         if (!snapshot) return sendError(res, "not_found", "Snapshot not found.");
         return sendJson(res, 200, snapshot);
+      }
+
+      if (req.method === "GET" && segments.length === 4 && segments[0] === "projects" && segments[2] === "search" && segments[3] === "workspace") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.search) return sendError(res, "not_found", "Search is not available.");
+        const ws = await deps.search.workspace(project.id);
+        return sendJson(res, 200, ws);
+      }
+
+      if (req.method === "POST" && segments.length === 4 && segments[0] === "projects" && segments[2] === "search" && segments[3] === "runs") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.search) return sendError(res, "not_found", "Search is not available.");
+        const parsed = parseJsonBody(body);
+        const input = parseOr400(searchRunSchema, parsed);
+        const result = await deps.search.runSearch({ projectId: project.id, ...input });
+        return sendJson(res, 200, result);
+      }
+
+      if (req.method === "GET" && segments.length === 4 && segments[0] === "projects" && segments[2] === "search" && segments[3] === "runs") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.search) return sendError(res, "not_found", "Search is not available.");
+        const ws = await deps.search.workspace(project.id);
+        return sendJson(res, 200, { runs: ws.recentRuns });
+      }
+
+      if (req.method === "GET" && segments.length === 5 && segments[0] === "projects" && segments[2] === "search" && segments[3] === "runs") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.search) return sendError(res, "not_found", "Search is not available.");
+        const detail = await deps.search.runDetail(project.id, segments[4]!);
+        if (!detail) return sendError(res, "search_run_not_found", "Search run not found.");
+        return sendJson(res, 200, detail);
       }
 
       return sendError(res, "not_found", "Unknown endpoint.");

@@ -186,7 +186,7 @@ describe("normalizeDfsItems determinism", () => {
   test("preserves ranking order and ignores unknown item types", () => {
     const data = normalizeDfsItems([
       { type: "organic", rank_absolute: 2, url: "https://b.example.com/", title: "B", description: "" },
-      { type: "mystery_widget" },
+      { type: "mystery_widget", foo: "bar" },
       { type: "organic", rank_absolute: 1, url: "https://a.example.com/", title: "A", description: "" },
     ]);
     assert.deepEqual(

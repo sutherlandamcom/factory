@@ -37,7 +37,6 @@ export interface SearchAnalystResult {
     costMicros: number | null;
   } | null;
 }
-
 export interface SearchAnalystModel {
   readonly model: string;
   readonly provider: string;

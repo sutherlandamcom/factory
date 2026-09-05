@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/index.ts",
+    "serve": "tsx src/operator/server.ts",
     "check": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "db:generate": "drizzle-kit generate",

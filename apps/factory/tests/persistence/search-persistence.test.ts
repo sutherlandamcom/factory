@@ -153,7 +153,7 @@ test("search persistence: run + snapshots persist with lineage and re-parse on r
     assert.equal(reread?.acceptedInputSnapshotId, snapshot.id);
     const serpBack = await search.getSerpSnapshot(project.id, run.id);
     assert.equal(serpBack?.snapshotDigest, serp.snapshotDigest);
-    assert.equal(serpBack?.organic.length, 2);
+    assert.equal((serpBack?.organic as unknown[]).length, 2);
     const intelBack = await search.getIntelligenceSnapshot(project.id, run.id);
     assert.equal(intelBack?.snapshotDigest, intel.snapshotDigest);
     parseSearchIntelligenceData(intelBack!.data);

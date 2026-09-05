@@ -214,7 +214,7 @@ export class ProjectIntakeStore {
           projectId: input.projectId,
           version: nextVersion,
           sourceRevision: draft.revision,
-          payload,
+          payload: deepFreeze(structuredClone(payload)),
           digest,
           acceptedBy: "operator",
           acceptanceState: "human_accepted",
@@ -292,4 +292,16 @@ function zodMessage(err: unknown): string {
     return issues.map((i) => i.message).join("; ");
   }
   return err instanceof Error ? err.message : String(err);
+}
+
+
+/** Recursively freeze a payload so accepted snapshots cannot be mutated. */
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object") {
+    for (const entry of Object.values(value as Record<string, unknown>)) {
+      deepFreeze(entry);
+    }
+    Object.freeze(value);
+  }
+  return value;
 }

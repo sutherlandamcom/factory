@@ -29,7 +29,6 @@ import { FactoryError } from "../executor/errors.js";
  *   (payload bytes, brief bounds, section instance bound) always apply.
  */
 
-const MAX_PRODUCTION_GUIDANCE_CHARS = 280;
 
 interface SectionRealization {
   readonly sectionType: SiteTask["page"]["sections"][number];
@@ -60,12 +59,6 @@ function realizeBlueprintSection(section: PageSectionBlueprint): SiteTask["page"
   }
 }
 
-function boundedGuidance(text: string | undefined, label: string): string | undefined {
-  if (!text || text.trim().length === 0) return undefined;
-  const trimmed = text.trim();
-  if (trimmed.length <= MAX_PRODUCTION_GUIDANCE_CHARS) return trimmed;
-  return `${trimmed.slice(0, MAX_PRODUCTION_GUIDANCE_CHARS - 1)}…`;
-}
 
 export interface ProjectPacketToSiteTaskInput {
   readonly packet: PageProductionPacket;
@@ -137,28 +130,90 @@ export function projectPacketToSiteTask(input: ProjectPacketToSiteTaskInput): Si
   //    truth lives in purpose + cta job); the projection promotes that
   //    accepted purpose into the keyPoints slot so the brief invariant
   //    (>=1 key point per section) holds without inventing claims.
+  //
+  //    NO SILENT SEMANTIC LOSS: the projection never slices, ellipsizes, or
+  //    drops accepted values. Where an upstream bound exceeds the downstream
+  //    contract bound (contract §PR16-P2), the projection FAILS CLOSED with a
+  //    typed diagnostic instead of silently shortening accepted meaning.
   const briefSections = realizations.map((realization, index) => {
     const productionSection = packet.pageProduction.orderedSections[index]!;
     const blueprintSection = realization.blueprintSection;
-    const guidanceParts: string[] = [];
-    const layout = boundedGuidance(productionSection.layoutDirection, "layout");
-    const editorial = boundedGuidance(productionSection.editorialDirection, "editorial");
-    if (layout) guidanceParts.push(`Layout: ${layout}`);
-    if (editorial) guidanceParts.push(`Editorial: ${editorial}`);
 
-    let keyPoints = blueprintSection.keyPoints.slice(0, 8);
+    // headingIntent (accepted per-instance production intent) wins over the
+    // Blueprint's generic heading; repeated instances keep distinct intents.
+    const heading = (productionSection.headingIntent ?? blueprintSection.heading).trim();
+    if (heading.length > 120) {
+      throw new FactoryError(
+        "packet_projection_failed",
+        `resolved heading for production section "${productionSection.id}" is ${heading.length} characters; the SiteTask contract bound is 120 — shorten the accepted heading intent instead of truncating it`,
+      );
+    }
+
+    if (blueprintSection.keyPoints.length > 8) {
+      throw new FactoryError(
+        "packet_projection_failed",
+        `blueprint section "${blueprintSection.id}" carries ${blueprintSection.keyPoints.length} key points; the SiteTask contract bound is 8 — narrow the accepted Blueprint instead of dropping points`,
+      );
+    }
+    for (const point of blueprintSection.keyPoints) {
+      if (point.length > 280) {
+        throw new FactoryError(
+          "packet_projection_failed",
+          `key point in blueprint section "${blueprintSection.id}" is ${point.length} characters; the SiteTask contract bound is 280 — narrow the accepted Blueprint instead of truncating it`,
+        );
+      }
+    }
+
+    if (blueprintSection.prohibitedClaims.length > 6) {
+      throw new FactoryError(
+        "packet_projection_failed",
+        `blueprint section "${blueprintSection.id}" carries ${blueprintSection.prohibitedClaims.length} prohibited claims; the SiteTask contract bound is 6 — narrow the accepted Blueprint instead of dropping claims`,
+      );
+    }
+    for (const claim of blueprintSection.prohibitedClaims) {
+      if (claim.length > 240) {
+        throw new FactoryError(
+          "packet_projection_failed",
+          `prohibited claim in blueprint section "${blueprintSection.id}" is ${claim.length} characters; the SiteTask contract bound is 240 — narrow the accepted Blueprint instead of truncating it`,
+        );
+      }
+    }
+
+    const guidanceParts: string[] = [];
+    if (productionSection.layoutDirection?.trim()) {
+      guidanceParts.push(`Layout: ${productionSection.layoutDirection.trim()}`);
+    }
+    if (productionSection.editorialDirection?.trim()) {
+      guidanceParts.push(`Editorial: ${productionSection.editorialDirection.trim()}`);
+    }
+    const productionGuidance = guidanceParts.length > 0 ? guidanceParts.join(" ") : undefined;
+    if (productionGuidance && productionGuidance.length > 600) {
+      throw new FactoryError(
+        "packet_projection_failed",
+        `combined production guidance for section "${productionSection.id}" is ${productionGuidance.length} characters; the SiteTask contract bound is 600 — narrow the accepted Production Spec instead of truncating it`,
+      );
+    }
+
+    if (productionSection.purpose && productionSection.purpose.length > 300) {
+      throw new FactoryError(
+        "packet_projection_failed",
+        `purpose for production section "${productionSection.id}" is ${productionSection.purpose.length} characters; the SiteTask contract bound is 300 — narrow the accepted Production Spec instead of truncating it`,
+      );
+    }
+
+    const keyPoints = [...blueprintSection.keyPoints];
     if (keyPoints.length === 0) {
-      keyPoints = [boundedGuidance(productionSection.purpose, "purpose")!];
+      keyPoints.push(productionSection.purpose.trim());
     }
 
     return {
       sectionType: realization.sectionType,
-      heading: blueprintSection.heading,
+      heading,
       keyPoints,
-      prohibitedClaims: blueprintSection.prohibitedClaims.slice(0, 6),
+      prohibitedClaims: [...blueprintSection.prohibitedClaims],
       blueprintSectionId: blueprintSection.id,
-      ...(guidanceParts.length > 0 ? { productionGuidance: guidanceParts.join(" ") } : {}),
-      ...(productionSection.purpose ? { purpose: boundedGuidance(productionSection.purpose, "purpose") } : {}),
+      ...(productionGuidance !== undefined ? { productionGuidance } : {}),
+      ...(productionSection.purpose ? { purpose: productionSection.purpose } : {}),
     };
   });
 

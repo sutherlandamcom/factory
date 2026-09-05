@@ -41,6 +41,30 @@ export const OPERATOR_ERROR_CODES = [
   "intake_draft_not_found",
   /** Stored or submitted intake payload violates the Project Intake contract. */
   "intake_schema_invalid",
+  /** No accepted ProjectInputSnapshot exists for the project. */
+  "search_input_not_accepted",
+  /** Search query failed deterministic validation/normalization. */
+  "search_query_invalid",
+  /** No structured SERP provider is configured in trusted backend config. */
+  "search_provider_not_configured",
+  /** Provider endpoint unreachable/failed before or during acquisition. */
+  "search_provider_unavailable",
+  /** Provider rejected authentication (credentials configured but invalid). */
+  "search_provider_auth_failed",
+  /** Trusted budget/quota policy blocks this execution (fail before spend). */
+  "search_provider_budget_blocked",
+  /** Provider rate limit hit; retry later with backoff. */
+  "search_provider_rate_limited",
+  /** Provider response unusable (malformed, schema violation, ceiling). */
+  "search_response_invalid",
+  /** Provider payload could not be deterministically normalized. */
+  "search_normalization_failed",
+  /** Analyst model output failed strict intelligence schema validation. */
+  "search_intelligence_invalid",
+  /** Search run/snapshot does not exist for this project. */
+  "search_run_not_found",
+  /** Search run failed for an internal reason (sanitized diagnostics). */
+  "search_run_failed",
   /** Unexpected server fault (message is always the sanitized fixed string). */
   "internal_error",
 ] as const;
@@ -63,6 +87,18 @@ export const OPERATOR_ERROR_STATUS: Readonly<Record<OperatorErrorCode, number>> 
   intake_digest_mismatch: 409,
   intake_draft_not_found: 404,
   intake_schema_invalid: 422,
+  search_input_not_accepted: 409,
+  search_query_invalid: 400,
+  search_provider_not_configured: 409,
+  search_provider_unavailable: 502,
+  search_provider_auth_failed: 502,
+  search_provider_budget_blocked: 402,
+  search_provider_rate_limited: 429,
+  search_response_invalid: 502,
+  search_normalization_failed: 502,
+  search_intelligence_invalid: 502,
+  search_run_not_found: 404,
+  search_run_failed: 500,
   internal_error: 500,
 };
 

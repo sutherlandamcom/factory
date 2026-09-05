@@ -74,24 +74,28 @@ export interface ProjectOperatorWorkspace {
   nextActions: string[];
 }
 
+const OPERATOR_ERROR_CODES: readonly OperatorErrorCode[] = [
+  "invalid_json",
+  "validation_error",
+  "payload_too_large",
+  "unsupported_media_type",
+  "invalid_host",
+  "cross_origin_forbidden",
+  "not_found",
+  "invalid_version",
+  "intake_stale_revision",
+  "intake_blocked",
+  "intake_revision_mismatch",
+  "intake_digest_mismatch",
+  "intake_draft_not_found",
+  "intake_schema_invalid",
+  "internal_error",
+];
+
+const OPERATOR_ERROR_CODES_SET = new Set<string>(OPERATOR_ERROR_CODES);
+
 function isOperatorErrorCode(value: string): value is OperatorErrorCode {
-  return (
-    value === "invalid_json" ||
-    value === "validation_error" ||
-    value === "payload_too_large" ||
-    value === "unsupported_media_type" ||
-    value === "invalid_host" ||
-    value === "cross_origin_forbidden" ||
-    value === "not_found" ||
-    value === "invalid_version" ||
-    value === "intake_stale_revision" ||
-    value === "intake_blocked" ||
-    value === "intake_revision_mismatch" ||
-    value === "intake_digest_mismatch" ||
-    value === "intake_draft_not_found" ||
-    value === "intake_schema_invalid" ||
-    value === "internal_error"
-  );
+  return OPERATOR_ERROR_CODES_SET.has(value);
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {

@@ -10,8 +10,5 @@ export type {
   ProjectOperatorWorkspace,
   ProjectSummary,
   SnapshotInfo,
-  SearchWorkspaceReadModel,
-  SearchRunSummary,
-  SearchRunReadModel,
 } from "./client";
 export { OperatorApiError } from "./client";

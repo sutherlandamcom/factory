@@ -264,3 +264,67 @@ export type InsertQualityResult = typeof qualityResults.$inferInsert;
 
 export type ModelInvocationRecord = typeof modelInvocations.$inferSelect;
 export type InsertModelInvocation = typeof modelInvocations.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Operator Kernel: Project Intake drafts + accepted input snapshots (v0)
+// ---------------------------------------------------------------------------
+
+/**
+ * The single editable Project Intake draft per project. One row per project
+ * (PK = project_id). `revision` starts at 0 (empty draft); every save
+ * increments it and binds the payload to its canonical digest.
+ */
+export const projectInputDrafts = pgTable(
+  "project_input_drafts",
+  {
+    projectId: text("project_id")
+      .primaryKey()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    revision: integer("revision").notNull().default(0),
+    payload: jsonb("payload"),
+    digest: text("digest"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check("project_input_drafts_revision_non_negative", sql`${table.revision} >= 0`),
+  ],
+);
+
+/**
+ * Immutable accepted ProjectInputSnapshot versions. Once accepted, a row is
+ * never mutated; re-acceptance after edits creates the next version.
+ * `unique(project_id, version)` enforces monotonic per-project versions.
+ */
+export const projectInputSnapshots = pgTable(
+  "project_input_snapshots",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    sourceRevision: integer("source_revision").notNull(),
+    payload: jsonb("payload").notNull(),
+    digest: text("digest").notNull(),
+    acceptedBy: text("accepted_by").notNull().default("operator"),
+    acceptanceState: text("acceptance_state").notNull().default("human_accepted"),
+    provenance: jsonb("provenance").notNull().default({}),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("project_input_snapshots_project_version_unique").on(table.projectId, table.version),
+    check("project_input_snapshots_version_positive", sql`${table.version} >= 1`),
+    check("project_input_snapshots_source_revision_positive", sql`${table.sourceRevision} >= 1`),
+    check(
+      "project_input_snapshots_acceptance_state_valid",
+      sql`${table.acceptanceState} IN ('human_accepted')`,
+    ),
+    index("project_input_snapshots_project_idx").on(table.projectId, table.version),
+  ],
+);
+
+export type ProjectInputDraftRecord = typeof projectInputDrafts.$inferSelect;
+export type InsertProjectInputDraft = typeof projectInputDrafts.$inferInsert;
+
+export type ProjectInputSnapshotRecord = typeof projectInputSnapshots.$inferSelect;
+export type InsertProjectInputSnapshot = typeof projectInputSnapshots.$inferInsert;

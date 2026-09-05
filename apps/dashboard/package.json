@@ -1,0 +1,27 @@
+{
+  "name": "@factory/dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "check": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "test:e2e": "node scripts/operator-e2e-setup.mjs && node scripts/operator-e2e-run.mjs"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "~1.61.1",
+    "@types/node": "^26.3.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tsx": "^4.23.12",
+    "typescript": "^5.9.3",
+    "vite": "^6.3.5"
+  }
+}

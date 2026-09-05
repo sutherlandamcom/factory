@@ -11,7 +11,7 @@
     "dev": "pnpm --filter @factory/site-starter run dev",
     "build": "pnpm -r --if-present run build",
     "check": "pnpm -r --if-present run check",
-    "test": "pnpm --filter @factory/factory run test && pnpm --filter @factory/site-starter run test",
+    "test": "pnpm --filter @factory/factory run test && pnpm --filter @factory/dashboard run test && pnpm --filter @factory/site-starter run test",
     "qa": "pnpm run check && pnpm run build && pnpm run test",
     "factory": "pnpm --filter @factory/factory run start"
   },

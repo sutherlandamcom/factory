@@ -154,12 +154,39 @@ Backend semantics lead by a small step; the real operator workflow should land
 in the same macro-run. CLI and Dashboard should use the same application
 services.
 
+### Verification and completion evidence
+
+- For each mandatory acceptance criterion, record the relevant test/evidence
+  path, exact command, observed result and candidate SHA in the final PR report.
+  Distinguish implemented, verified, independently accepted and merged.
+- Mark unexecuted required checks `NOT VERIFIED`; missing or failing required
+  checks prevent an implementation-complete claim. Report the remaining work.
+  A green CI badge proves only the suites that the workflow actually ran.
+- New workspace tests ADD to existing regression coverage. Removing, replacing,
+  skipping or weakening a required suite/assertion needs explicit justification
+  and review; it must never be an incidental way to obtain green CI.
+- A browser capability requires its real acceptance journey against the built
+  UI and actual API/persistence boundary where applicable. Typechecks, manually
+  constructed objects and mocked UI/API tests do not establish that journey.
+- Derive test counts and PASS claims from the final execution evidence, including
+  skipped tests. Builder self-verification is not independent QA.
+- During development run focused checks for affected behavior; run the full
+  required QA at the final candidate checkpoint. A 2–3 hour session is a scope
+  guideline, not permission to waive acceptance criteria.
+
 After meaningful website changes, run `pnpm qa` (typecheck -> build ->
 Playwright). **A task is never complete while required QA is failing.**
 
+Repository engineering agents may change the Factory code, tests and policy
+files needed for their explicitly assigned task, under the merge rules below.
+The narrower runtime boundary below applies to workers executing a `SiteTask`;
+it is not a general ban on authorized Factory maintenance. Neither role may
+broaden its own assignment by inference.
+
 When implementing a current `SiteTask`:
-- **Authorized write scope**: the coding agent may modify only files within the
-  explicitly authorized site source scope, initially `sites/starter/src/**`.
+- **Authorized write scope**: current `create_page` permits only the exact page
+  path derived from its validated slug by the trusted `TaskWritePolicy`.
+  Other files under `sites/starter/src/**` remain read-only for that task.
 - **Deny-listed paths**: tests (`sites/starter/tests/**`), Playwright
   configuration (`sites/starter/playwright.config.ts`), root scripts,
   package manifests (`package.json`), lockfiles (`pnpm-lock.yaml`),
@@ -188,6 +215,13 @@ explicitly persists them.
 
 ## Instruction and evidence hygiene
 
+- At session start inspect current Git/PR state and read this policy, the
+  relevant roadmap slice and the task delta. Consult domain documents/code as
+  needed. Instruction precedence is not an obligation to reload every document
+  on every turn; see `docs/instruction-authority.md`.
+- Reuse unchanged context, use targeted searches/ranges and keep successful
+  logs compact. After repeated identical failures without new evidence, change
+  the diagnostic approach rather than repeating the same command/prompt.
 - Treat dated audits, bake-offs, build reports and gap reports as historical
   evidence unless a current normative policy explicitly adopts their
   recommendation. A sentence such as "next phase" in a 2026-09-01 handoff does

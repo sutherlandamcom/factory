@@ -4,6 +4,20 @@ Repository policy: [`AGENTS.md`](../AGENTS.md) and
 [`docs/seo-policy.md`](./seo-policy.md) — Google Search / SEO governance is a
 first-class acceptance constraint for all Factory work.
 
+## Reading this implementation record
+
+Current product policy and sequencing live in the [Constitution](./architecture/factory-constitution-vnext.md)
+and [roadmap](./roadmap-vnext.md). The roadmap includes a dated Git/PR status
+index. Historical scope notes describe earlier slices; they do not defer
+capabilities that subsequently landed or authorize new work.
+
+At the 2026-09-05 inspection, accepted main was
+`c6c7e000caf9797398dc4e05642ed42a40e664d0`. Operator Kernel / Dashboard code
+exists in open [PR #18](https://github.com/sutherlandamcom/factory/pull/18),
+not in that accepted base. Its candidate-specific implementation description
+belongs to that PR until acceptance/merge. Recheck current Git state before
+starting a new run.
+
 ## What exists today (execution trust hardening)
 
 Factory is a pnpm monorepo with three packages:
@@ -32,7 +46,7 @@ root, service/blog namespaces, or the Foundation-owned `/404` route.
 - `status`: `"succeeded" | "failed" | "needs_review"`
 - `finalStage`: `"validation" | "preflight" | "isolation" | "worktree" | "dependencies" | "codex" | "scope" | "integrity" | "qa" | "verify" | "complete"`
 - `baseCommit`: Git commit SHA of the base
-- `totalAttempts`: number of Codex execution attempts executed (max 3)
+- `totalAttempts`: number of coding-worker execution attempts executed (max 3)
 - `successfulAttempt`: attempt number that succeeded (nullable)
 - `attempts`: list of structured `AttemptResult` items
 - `changes`: changed files list + relative path to cumulative `diff.patch`
@@ -150,18 +164,18 @@ tools denied, and outputs structured P0/P1/P2 findings; the deterministic
 Factory gates remain authoritative.
 
 - **Isolation**: a detached worktree is source-state isolation, not host-read isolation. The production boundary is a dedicated `factory-sandbox` Colima QEMU VM with exactly four host mounts (`.factory/worktrees`, `.factory/codex-runtime`, `.factory/kimi-runtime`, `.factory/claude-runtime`), an ephemeral hardened Docker worker, and — for the routed runtimes — the outer egress allowlist (the CLIs have no inner sandbox equivalent; see Code Worker Routing v0). Factory verifies the saved mount policy and Linux Docker server before execution and never falls back to the former host-shared runner.
-- **Worker container**: the version-controlled Node 22 image pins `@openai/codex@0.150.1`. Runs are non-root, read-only, capability-free, `no-new-privileges`, resource-bounded, and temporary. Ubuntu's AppArmor user-namespace restriction is disabled only inside this dedicated VM and the worker's AppArmor/seccomp profiles are unconfined so Codex's inner bubblewrap sandbox can create its own user/mount namespaces; this does not change the VM mount boundary, grant Linux capabilities, or expose host paths. The current worktree is read-only except for the target page's parent directory; the immutable task policy still permits only the exact page and post-execution Git/integrity checks remain authoritative. No Docker/SSH-agent socket, host HOME, browser profile, primary checkout, or host `/tmp` is mounted.
-- **Dependency prep**: Factory (never Codex) installs dependencies offline from the pnpm store against the committed lockfile once per run.
-- **Layered sandbox policy**: Factory copies only the host Codex `auth.json` into a per-run directory, mounts it read-only, ignores user configuration, and deletes the copy during cleanup. The outer container permits Codex model-service connectivity; the inner `workspace-write` policy keeps approval disabled, shell/tool network disabled, and web search disabled. Necessary Codex authentication remains a residual readable secret inside that isolated runtime.
+- **Legacy Codex worker container**: the version-controlled Node 22 image pins `@openai/codex@0.150.1`. Runs are non-root, read-only, capability-free, `no-new-privileges`, resource-bounded, and temporary. Ubuntu's AppArmor user-namespace restriction is disabled only inside this dedicated VM and the worker's AppArmor/seccomp profiles are unconfined so Codex's inner bubblewrap sandbox can create its own user/mount namespaces; this does not change the VM mount boundary, grant Linux capabilities, or expose host paths. The current worktree is read-only except for the target page's parent directory; the immutable task policy still permits only the exact page and post-execution Git/integrity checks remain authoritative. No Docker/SSH-agent socket, host HOME, browser profile, primary checkout, or host `/tmp` is mounted.
+- **Dependency prep**: Factory (never the coding worker) installs dependencies offline from the pnpm store against the committed lockfile once per run.
+- **Legacy Codex layered sandbox policy**: Factory copies only the host Codex `auth.json` into a per-run directory, mounts it read-only, ignores user configuration, and deletes the copy during cleanup. The outer container permits Codex model-service connectivity; the inner `workspace-write` policy keeps approval disabled, shell/tool network disabled, and web search disabled. Necessary Codex authentication remains a residual readable secret inside that isolated runtime.
 - **Scope enforcement**: the validated slug maps to exactly one writable `.astro` page. NUL-delimited `git diff --raw -z --no-renames` makes every rename source/destination visible as delete/add; only regular non-executable `100644` files pass. Symlinks, gitlinks, special modes, and unrelated source paths are terminal violations.
 - **Ignored-input integrity**: Factory snapshots ignored state after dependency preparation and before each attempt, hashes contents/types/modes (including `.env*`, `.astro`, and `node_modules`), and compares immediately after Codex. Output exclusions are strictly anchored to explicit known repository roots (`.factory/**`, `sites/starter/dist/**`, `sites/starter/.astro/**`, `sites/starter/test-results/**`, `sites/starter/playwright-report/**`, `sites/starter/qa-artifacts/**`); nested unanchored names (such as `.../dist/helper.ts`) are never ignored or excluded.
 - **Independent QA Oracle**: unchanged Foundation `pnpm qa` runs first. Factory then creates a validated task QA spec outside the worktree and runs immutable Playwright assertions for the requested route on desktop and mobile: response/errors, exact metadata/H1/canonical/OG, page-type JSON-LD, requested CTA/FAQ, bounded internal links, image semantics, meaningful body content, and mobile overflow.
 - **Task verification**: a dependency-free semantic extractor checks fresh built HTML for exact title, one exact H1, description, canonical origin/path, and route existence. Comments, scripts, JSON blobs, footer text, and unrelated body text cannot satisfy title checks.
 - **Patch self-containment verification (Replay)**: before returning `succeeded`, Factory creates a separate disposable worktree at `baseCommit`, applies the binary-safe `diff.patch`, and proves that `check` and `build` succeed from pristine base state without relying on untracked or ignored artifacts from the execution worktree.
 - **Bounded Repair Loop**:
-  - `MAX_TOTAL_ATTEMPTS = 3` (Attempt 1 = initial, Attempt 2 = repair 1, Attempt 3 = repair 2; Attempt 4 is mechanically and contractually impossible). Configuration (env or programmatic) may lower attempts (1..3) but any value > 3 or invalid fails closed before Codex.
+  - `MAX_TOTAL_ATTEMPTS = 3`; attempt 1 is initial implementation, later attempts follow the runtime-specific repair/escalation rules above. Attempt 4 is mechanically and contractually impossible. Configuration may lower the ceiling (1..3); invalid values fail before worker execution.
   - **Repairable defects**: Foundation/dynamic `qa_failed`, semantic `verification_failed`, and replay `replay_failed`.
-  - **Terminal failures (stop immediately)**: input/configuration/preflight/dependency failures, `strong_execution_isolation_unavailable`, `scope_violation`, `integrity_violation`, unsafe file modes/types, Codex failures, and timeouts.
+  - **Terminal failures (stop immediately)**: input/configuration/preflight/dependency failures, `strong_execution_isolation_unavailable`, `scope_violation`, `integrity_violation`, unsafe file modes/types, QA timeouts and legacy Codex failures/timeouts. Routed worker failures/timeouts follow `executor/router.ts`; they are not universally terminal.
   - **FailureReport**: structured, bounded diagnostic report (max 8 KB excerpt, secrets scrubbed, ANSI stripped) embedded in the repair prompt.
   - **No-progress detection**: if a repair attempt produces an identical patch or makes no source changes, the loop stops early with `needs_review` and `no_progress`.
 - **Artifacts**: existing task/result/patch/Codex artifacts remain. Each attempted change additionally records escaped changed-path evidence, raw NUL-delimited Git evidence, pre/post integrity manifests, the Factory-owned task QA spec, separate Foundation/dynamic QA logs, screenshots/traces, bounded failure reports, and replay verification records.
@@ -233,7 +247,8 @@ not model-generated runtime authority. It is a strict Zod contract
 
 ### Data model & relational structure
 
-The control plane persists exactly 7 tables:
+The accepted base has eight operational tables (the original seven plus
+`deployments` from Production Delivery). PR #18 adds intake tables separately:
 
 ```
 [projects]
@@ -249,9 +264,10 @@ The control plane persists exactly 7 tables:
 - `sites`: Individual websites registered within a project (e.g. `starter`). Unique `(project_id, key)` composite index.
 - `runs`: Top-level durable execution instance. Unique `idempotency_key = sha256(siteKey + taskJson + baseCommit)`. Status: `running | succeeded | failed | interrupted | needs_review`.
 - `tasks`: Individual unit of work within a run (e.g. `create_page` with full JSON payload).
-- `attempts`: Bounded Codex attempt record (enforced `attempt_number BETWEEN 1 AND 3` via SQL CHECK constraint). Stores start/finish timestamps, duration, exit classification, and error excerpts.
+- `attempts`: Bounded coding-worker attempt record (enforced `attempt_number BETWEEN 1 AND 3` via SQL CHECK constraint). Stores start/finish timestamps, duration, exit classification, and error excerpts.
 - `quality_results`: Structured evaluation from each quality gate (`scope`, `integrity`, `foundation_qa`, `dynamic_qa`, `semantic_verification`, `patch_replay`).
 - `model_invocations`: Audit trail of model executions (tokens, durations, runtime provider).
+- `deployments`: Durable Cloudflare version/artifact lineage, promotion and verification state, and rollback/recovery metadata.
 
 ### Single-writer concurrency control
 
@@ -457,7 +473,8 @@ production mutation. A later invocation reconciles only `promoting` or
 candidate is active, recognizing an already-restored previous version, and
 otherwise failing closed as `deployment_drift` / `needs_review`.
 
-Explicitly deferred: account/DNS/domain provisioning, automatic deployment on
+Historical scope note for the original Delivery MVP (current sequencing is in
+`docs/roadmap-vnext.md`): account/DNS/domain provisioning, automatic deployment on
 merge, Cloudflare Access, multi-provider abstractions, environments/releases
 platforms, dashboards, queues, schedules, and gradual/canary rollout.
 
@@ -487,12 +504,13 @@ operator-fixed champion model, explicit challenger fallbacks, capability
 requirements, sensitive-data policy, implementation status, timeout, and
 bounded attempts. Fallback is only ever champion → explicit configured
 challenger, and the actually used model is recorded in every artifact
-together with the policy version. The accepted Codex site-engineering worker
-is untouched: Autonomy v0 affects planning, not the code-execution boundary.
+together with the policy version. Autonomy v0 originally changed planning only;
+subsequent code-worker routing activated Kimi/Claude as described above. The
+separate current First-Site Intelligence driver still uses isolated Codex.
 
-### Factory Model Policy v0
+### Factory Model Policy v0.1
 
-`FACTORY_MODEL_POLICY_VERSION = "factory-model-policy-v0"` (recorded in
+`FACTORY_MODEL_POLICY_VERSION = "factory-model-policy-v0.1"` (recorded in
 invocation provenance). The model-to-role mapping is **fixed by explicit
 operator architecture decision for the MVP** — version-controlled, not
 dynamically benchmark-selected, not judge-selected, not "newest in family",
@@ -512,7 +530,13 @@ evaluation tooling is non-authoritative and cannot modify the policy.
 | `visual_critic` | `openai/gpt-5.6-sol` | openrouter | future |
 | `cheap_repair` | `z-ai/glm-5.3-flash` | openrouter | future |
 | `image_generator` | `openai/gpt-image-2` | dedicated provider path when implemented | future |
-| `code_worker` | `anthropic/claude-opus-5` | coding runtime target: `claude-code` | policy target only — active runtime remains the isolated Codex CLI worker; migration NOT activated, requires separate acceptance |
+| `code_worker` | Kimi K3 primary / Claude Opus 5 senior | `kimi-code-cli` / `claude-code` via Factory relay | Active (`migrationActivated: true`); Codex retained as legacy reference |
+
+The executable assignments above include v0 evaluation roles and future
+placeholders. They do not establish a production writer/design/image workflow:
+vNext requires approved WriterPromptSnapshot and AcceptedPageContent, external
+DesignProvider and governed VisualAssetProvider respectively. Exact executable
+model/runtime assignments remain in `apps/factory/src/models/policy.ts`.
 
 Intentional separations: writer ≠ factuality critic; design director ≠
 visual critic; bulk extraction ≠ competitor analysis; `cheap_repair` is
@@ -538,7 +562,9 @@ A Factory-owned component capability registry describes the real starter
 capabilities (hero, feature_cards, content_section, faq, cta — `benefits` has
 no component and is realized through the documented mapping). Blueprint output
 may only reference registered capabilities; repeated semantic section instances
-are allowed (richer than SiteTask v0, which is not broadened in this phase).
+are allowed. Current SiteTask contracts also support bounded repeated section
+instances; inspect their current limits instead of treating the original
+Blueprint phase scope as a permanent restriction.
 
 Synthesis runs through the gateway under the role policy with bounded repair
 (≤3 attempts, no-progress detection, explicit fallback recording). Incoming
@@ -566,6 +592,12 @@ blind rubric judges and records a winner among gate-passing candidates.
 Artifacts land under `.factory/evals/autonomy-v0/<runId>/` with
 per-candidate cost/latency from gateway usage accounting, bounded by
 `FACTORY_EVAL_BUDGET_USD` (default 25).
+
+Historical scope at the original Autonomy v0 phase: the deferred list below is
+preserved as chronology, not current sequencing. SiteProfile/shell and
+ProductionSpec packet-to-task projection subsequently landed on main; PR #18
+extends projection hardening and execution preparation. Production writer,
+external design/assets and full operator delivery remain governed by the roadmap.
 
 Explicitly deferred: content synthesis, image generation, visual QA,
 `SiteTask` broadening, blueprint→task compilation, migrating Intelligence

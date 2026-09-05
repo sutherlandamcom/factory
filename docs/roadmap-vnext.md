@@ -1,12 +1,46 @@
 # Factory vNext Roadmap
 
-Status: proposed execution plan after merge of PR #16 (`62d60575f73e70067f83254aa3eff23b5995fdcf`).
+Status: **accepted vNext sequencing policy**, adopted through PR #17 after
+PR #16 (`62d60575f73e70067f83254aa3eff23b5995fdcf`). Planned scope is distinct
+from implemented, verified, independently accepted and merged state.
 
 Instruction precedence: `AGENTS.md` -> `docs/architecture/factory-constitution-vnext.md` -> this roadmap -> specialized current policy. Historical handoff/bake-off sequencing does not override this file; see `docs/instruction-authority.md`.
 
-Development should proceed in 2–3 hour macro-runs. Each macro-run delivers a vertical capability: contract -> application service -> API -> Dashboard -> deterministic tests -> E2E. Backend semantics lead by a small step; frontend is delivered in the same run so operator behavior continuously validates the domain model.
+Prefer focused 2–3 hour working sessions within each macro-run. This is a scope
+and context-management guideline, not a completion deadline. Split large work
+into explicit checkpoints without waiving acceptance criteria. Each macro-run
+delivers a vertical capability: contract -> application service -> API ->
+Dashboard -> deterministic tests -> E2E. Backend semantics lead by a small
+step; frontend belongs to the same capability so operator behavior validates
+the domain model.
 
 Every meaningful implementation PR ends at `IMPLEMENTATION COMPLETE — PENDING INDEPENDENT QA`; independent QA reviews an exact SHA, frozen P0/P1 findings are remediated narrowly, then the exact candidate is re-reviewed before merge.
+
+## Observed implementation status — 2026-09-05
+
+This is a dated navigation snapshot, not a substitute for live Git/PR checks.
+Refresh it when a reviewed milestone changes; never infer completion from a
+handoff, PR description or CI badge alone. Evidence categories are separate:
+code exists -> required checks verified -> independent GO at exact SHA -> merged.
+
+| Workstream | Observed state | Evidence / next gate |
+| --- | --- | --- |
+| Existing execution, SiteProfile/Blueprint/ProductionSpec and delivery foundation | Present on accepted main | Main at `c6c7e000caf9797398dc4e05642ed42a40e664d0`; implementation details in [architecture.md](./architecture.md) |
+| Sutherland one-page proof | Merged (PR #16); historical QA and P2 carry-forward recorded | [PR #16](https://github.com/sutherlandamcom/factory/pull/16), [QA summary](./handoffs/2026-09-04-pr16-independent-qa-summary.md); not proof of the entire vNext pipeline |
+| vNext governance | Merged (PR #17) | [PR #17](https://github.com/sutherlandamcom/factory/pull/17) |
+| Macro Run 1 — Operator Kernel / Intake | Implementation candidate; open, awaiting independent QA | [PR #18](https://github.com/sutherlandamcom/factory/pull/18), head `7ef24e55417038d4b53201944f83fd13d7d34c06`; [CI success](https://github.com/sutherlandamcom/factory/actions/runs/33987804364); no GitHub review GO observed, not merged |
+| Macro Runs 2–13 | Planned vNext capabilities; reuse existing foundation | Exit criteria below; current v0 planning/eval/delivery code is not proof of these complete operator workflows |
+
+PR #18 now contains the restored site-starter test invocation, dedicated
+Operator API/preparation suites and a real-browser E2E file wired into CI.
+Earlier findings against `0266e9a9fad776c1456aefd0c91b0a06091e65fe` are
+historical; verify the new candidate instead of assuming those defects persist.
+This status records code/workflow inspection and GitHub CI results, not a new
+independent acceptance verdict.
+
+Remote Dashboard hosting on Vercel / a proposed "Macro Run 1.5" is not an
+adopted prerequisite in this roadmap. Adding it requires an explicit reviewed
+scope/topology decision; it must not be inferred from historical chat handoffs.
 
 ## Program I — Operator Foundation
 

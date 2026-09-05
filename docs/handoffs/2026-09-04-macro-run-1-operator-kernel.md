@@ -1,5 +1,20 @@
 # Macro Run 1 — Factory Operator Kernel + Project Intake
 
+## Continuation note — 2026-09-05
+
+The original implementation prompt below is preserved as task history.
+Implementation already exists in [PR #18](https://github.com/sutherlandamcom/factory/pull/18),
+branch `feat/operator-kernel-v0`, observed head
+`7ef24e55417038d4b53201944f83fd13d7d34c06`. That candidate has successful
+GitHub CI but is open and awaiting independent QA; this note is not a GO.
+First inspect its current head, review evidence and merge state, then address
+the assigned remaining delta. Do not recreate the Operator Kernel or reuse
+older candidate findings without checking the changed code.
+
+The current status index is [the roadmap](../roadmap-vnext.md), and completion
+evidence requirements are in [AGENTS.md](../../AGENTS.md). The original 2–3
+hour estimate is a session-sizing guideline, never a waiver of required QA.
+
 This file is the implementation prompt for the next build agent after the Factory vNext governance/instruction-alignment PR is accepted and merged.
 
 ## Starting point

@@ -572,3 +572,91 @@ Explicitly deferred: content synthesis, image generation, visual QA,
 execution off Codex, generic workflow engines, multi-site scale
 infrastructure, and Site Shell implementation (see
 `docs/handoffs/site-shell-gap.md`).
+
+## Operator Kernel v0 — Project Intake vertical slice (Macro Run 1)
+
+**Implemented state** (PR #18, branch `feat/operator-kernel-v0`). This section
+describes what exists today; vNext roadmap sequencing lives in
+`docs/roadmap-vnext.md` and is not reinterpreted here.
+
+### Domain and application services
+
+- `packages/contracts/src/project-intake.ts` — strict, bounded Project Intake
+  payload contract (`.strict()` schemas, `schemaVersion: "v1"`), typed
+  provenance vocabulary, credential-shaped-value rejection, and the canonical
+  blank template `emptyProjectIntakePayload()` (no business facts, fails
+  readiness, never accidentally acceptable).
+- `apps/factory/src/operator/intake-store.ts` — `ProjectIntakeStore`: draft
+  revisioning with optimistic concurrency (stale `baseRevision` saves are
+  rejected with `intake_stale_revision`) and transactional immutable snapshot
+  acceptance (deterministic SHA-256 digest recomputed from the stored payload,
+  deep-frozen snapshot payloads, idempotent duplicate acceptance, `intake_blocked`
+  fail-closed readiness gate inside the accept transaction).
+- `apps/factory/src/operator/readiness.ts` — deterministic intake readiness
+  (no AI, no I/O): blockers prevent acceptance, warnings do not; missing
+  FUTURE-stage outputs (SERPs, designs, assets) never block intake.
+- `apps/factory/src/operator/workspace.ts` — the single canonical operator
+  read-model `getProjectOperatorWorkspace()`: project identity, current draft,
+  readiness diagnostics, accepted snapshot/history (ascending; last entry is
+  current), `draftDiffersFromAccepted`, and one status resolver with the full
+  matrix `DRAFT / BLOCKED / READY / APPROVED / CHANGED`. The API and the
+  Dashboard consume this projection; no duplicate status logic exists.
+- `apps/factory/src/operator/prepare.ts` — governed preparation seam:
+  readiness → page packet → digest → `projectPacketToSiteTask()` → task
+  digest → execution eligibility. `executePreparedPageProduction()` reuses the
+  EXISTING persisted-run driver (`runPersistedSiteTask`) via the production
+  default; tests inject an executor spy. Blocked input fails closed before any
+  execution boundary. PR #16 P2-1/P2-2 closed in `packet-projection.ts`:
+  per-instance `headingIntent` projection with Blueprint fallback, and
+  fail-closed (never sliced/ellipsized) keyPoints/prohibitedClaims/guidance/
+  purpose bounds.
+
+### Durable data authority (v0 split)
+
+- **PostgreSQL** (`FACTORY_DATABASE_URL`; tests: dedicated `factory_test` via
+  `FACTORY_TEST_DATABASE_URL`) — projects, `project_input_drafts` (revision,
+  payload, digest), `project_input_snapshots` (immutable accepted versions
+  with unique per-project version, acceptance state, digest). Migration
+  `apps/factory/drizzle/0004_operator_intake_v0.sql` with check constraints.
+- **Git** — source/architecture/production lineage. **`.factory/**`** —
+  runtime evidence only, never authoritative acceptance state.
+
+### Trusted Operator API and browser trust boundary
+
+- `apps/factory/src/operator/server.ts` — Node `http` server (no framework),
+  default bind `127.0.0.1`, Host allowlist (`localhost`/`127.0.0.1`),
+  cross-origin mutation rejection (Origin must match Host or be absent for
+  non-browser clients; deliberate, documented policy), JSON-only mutations,
+  256 KiB body ceiling, sanitized error responses. Serves the BUILT dashboard
+  (`apps/dashboard/dist`, `FACTORY_OPERATOR_DIST` override) with SPA fallback;
+  the normal operator path is same-origin, so no CORS is emitted — ever.
+- `apps/factory/src/operator/api.ts` — narrow semantic endpoints only:
+  `POST /api/projects`, `GET /api/projects`, `GET /api/projects/:id/workspace`,
+  `PUT /api/projects/:id/intake-draft`, `POST /api/projects/:id/intake/accept`,
+  `GET /api/projects/:id/intake/versions[/:version]`. All errors serialize as
+  the stable typed contract `{ error: { code, message } }` from
+  `packages/contracts/src/operator-errors.ts` (closed `OperatorErrorCode`
+  union + fixed HTTP status map); unexpected 500s return the fixed sanitized
+  string `Internal server error.` — raw internal messages, stacks, DB URLs,
+  and provider secrets never reach the client. No filesystem/Git/provider
+  plumbing is exposed as browser parameters.
+
+### Dashboard (operator console, no business logic)
+
+- `apps/dashboard` — React + Vite console rendering the canonical workspace
+  projection only. Journey: create project → grouped intake sections (incl.
+  Content Constitution with custom writer instructions) → Save Draft →
+  Review → ACCEPT INPUTS → version history (CURRENT ACCEPTED badge on exactly
+  the latest accepted version; older versions remain inspectable). Typed
+  `OperatorApiError` handling for stale revision (auto-reload), blocked
+  acceptance, validation, digest/revision mismatch, and generic server
+  faults. Real-browser Playwright journey (`apps/dashboard/e2e/`,
+  `pnpm --filter @factory/dashboard run test:e2e`) runs against the built
+  dashboard + the actual Operator service + the dedicated real PostgreSQL
+  test database, including a real service restart WITHOUT DB reset.
+
+### Explicitly still roadmap-only
+
+Search/Opus/Stitch/Nano-Banana integrations, renderer ADR, queues/CMS/auth/
+RBAC, deployment targets, and all other vNext sequencing — see
+`docs/roadmap-vnext.md`.

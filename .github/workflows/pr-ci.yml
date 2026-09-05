@@ -15,7 +15,7 @@ jobs:
   qa:
     name: Factory QA & Persistence Acceptance
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     services:
       postgres:
@@ -59,7 +59,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install Playwright Chromium with system dependencies
-        run: pnpm --filter @factory/site-starter exec playwright install --with-deps chromium
+        run: |
+          pnpm --filter @factory/site-starter exec playwright install --with-deps chromium
+          pnpm --filter @factory/dashboard exec playwright install --with-deps chromium
 
       - name: Run Factory QA (check -> build -> test)
         run: pnpm qa
@@ -68,3 +70,15 @@ jobs:
         env:
           FACTORY_TEST_DATABASE_URL: postgresql://factory:factory_test_password@localhost:5432/factory_test
         run: pnpm --filter @factory/factory run test:persistence
+
+      - name: Run Operator API Security + Preparation Seam Tests (Real PostgreSQL 18)
+        env:
+          FACTORY_TEST_DATABASE_URL: postgresql://factory:factory_test_password@localhost:5432/factory_test
+        run: pnpm --filter @factory/factory run test:operator
+
+      - name: Run Real Browser Operator E2E (built Dashboard + Operator service + PostgreSQL 18)
+        env:
+          FACTORY_TEST_DATABASE_URL: postgresql://factory:factory_test_password@localhost:5432/factory_test
+          FACTORY_OPERATOR_PORT: "4175"
+          FACTORY_E2E_SUPERVISOR_PORT: "4177"
+        run: pnpm --filter @factory/dashboard run test:e2e

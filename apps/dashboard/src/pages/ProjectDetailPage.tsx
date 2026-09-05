@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { api } from "../api/client";
+import { api, OperatorApiError } from "../api/client";
 import type { ProjectOperatorWorkspace } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { Section } from "../components/Section";
@@ -26,6 +26,8 @@ export function ProjectDetailPage({ projectId, onBack }: { projectId: string; on
     try {
       const w = await api.getWorkspace(projectId);
       setWs(w);
+      // Keep local edits when polling refreshes; adopt the server payload
+      // when the form is empty (fresh project) or belongs to another revision.
       setForm((prev: any) => prev ?? w.currentDraft?.payload ?? null);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Load failed");
@@ -40,8 +42,18 @@ export function ProjectDetailPage({ projectId, onBack }: { projectId: string; on
     try {
       await api.saveDraft(projectId, { baseRevision: ws.currentDraft.revision, payload: form });
       await load();
-    } catch (e: any) {
-      setError(e.code === "INTAKE_STALE_REVISION" ? "Draft changed elsewhere — reloading latest version." : e.message);
+    } catch (e: unknown) {
+      if (e instanceof OperatorApiError) {
+        if (e.code === "intake_stale_revision") {
+          setError("Draft changed elsewhere — reloading the latest version.");
+        } else if (e.code === "validation_error" || e.code === "intake_schema_invalid") {
+          setError(e.message);
+        } else {
+          setError(e.message);
+        }
+      } else {
+        setError(e instanceof Error ? e.message : "Save failed.");
+      }
       await load();
     } finally { setBusy(false); }
   };
@@ -55,8 +67,18 @@ export function ProjectDetailPage({ projectId, onBack }: { projectId: string; on
         expectedDigest: ws.currentDraft.digest,
       });
       await load();
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      if (e instanceof OperatorApiError) {
+        if (e.code === "intake_blocked") {
+          setError("Acceptance blocked: resolve the listed blockers first.");
+        } else if (e.code === "intake_revision_mismatch" || e.code === "intake_digest_mismatch") {
+          setError("Inputs changed since review — re-check the draft and accept again.");
+        } else {
+          setError(e.message);
+        }
+      } else {
+        setError(e instanceof Error ? e.message : "Accept failed.");
+      }
       await load();
     } finally { setBusy(false); }
   };
@@ -116,7 +138,7 @@ export function ProjectDetailPage({ projectId, onBack }: { projectId: string; on
       <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
         {tab === "Overview" && <Overview ws={ws} />}
         {tab === "Review" && <Review ws={ws} onAccept={acceptInputs} busy={busy} />}
-        {tab === "Versions" && <History history={history} />}
+        {tab === "Versions" && <History history={history} currentAccepted={currentAcceptedSnapshot} />}
         {tab === "Content Constitution" && <Constitution form={form} setForm={setForm} />}
         {["Business","Offering","Audience","Markets","Site Identity","Conversion","Evidence & Claims","Search Seeds","Competitors","Brand","References","Assets","Constraints"].includes(tab) && (
           <GenericForm tab={tab} form={form} setForm={setForm} />
@@ -209,22 +231,33 @@ function Review({ ws, onAccept, busy }: { ws: ProjectOperatorWorkspace; onAccept
   );
 }
 
-function History({ history }: { history: any[] }) {
+function History({
+  history,
+  currentAccepted,
+}: {
+  history: any[];
+  currentAccepted: { version: number; digest: string; acceptedAt: string; sourceRevision: number } | null;
+}) {
   if (history.length === 0) return <p className="text-gray-500">No accepted versions yet.</p>;
   return (
     <div className="space-y-3">
-      {history.map((s, i) => (
-        <div key={s.id} className={`rounded-lg border p-4 ${i === 0 ? "border-green-400 bg-green-50" : "border-gray-200"}`}>
-          <div className="flex items-center justify-between">
-            <div className="font-bold">
-              v{s.version} {i === 0 && <span className="ml-2 text-xs bg-green-600 text-white px-2 py-0.5 rounded">CURRENT ACCEPTED</span>}
+      {history.map((s) => {
+        // Exactly the latest accepted version is CURRENT ACCEPTED; older
+        // versions remain inspectable in history without the badge.
+        const isCurrent = currentAccepted !== null && s.version === currentAccepted.version;
+        return (
+          <div key={s.id ?? s.version} className={`rounded-lg border p-4 ${isCurrent ? "border-green-400 bg-green-50" : "border-gray-200"}`}>
+            <div className="flex items-center justify-between">
+              <div className="font-bold">
+                v{s.version} {isCurrent && <span className="ml-2 text-xs bg-green-600 text-white px-2 py-0.5 rounded">CURRENT ACCEPTED</span>}
+              </div>
+              <div className="text-sm text-gray-500">{new Date(s.acceptedAt).toLocaleString()}</div>
             </div>
-            <div className="text-sm text-gray-500">{new Date(s.acceptedAt).toLocaleString()}</div>
+            <div className="mt-2 text-xs font-mono text-gray-600">digest: {s.digest}</div>
+            <div className="text-xs text-gray-500">source revision: r{s.sourceRevision}</div>
           </div>
-          <div className="mt-2 text-xs font-mono text-gray-600">digest: {s.digest}</div>
-          <div className="text-xs text-gray-500">source revision: r{s.sourceRevision}</div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -273,10 +306,11 @@ function Constitution({ form, setForm }: { form: any; setForm: (f: any) => void 
         <input value={c.localePreferences ?? ""} onChange={(e) => set("localePreferences", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
       </div>
       <div>
-        <label className="mb-1 block text-sm font-medium text-gray-700">
+        <label htmlFor="field-contentConstitution-customWriterInstructions" className="mb-1 block text-sm font-medium text-gray-700">
           Custom Project Writer Instructions <span className="text-red-500">*</span>
         </label>
         <textarea
+          id="field-contentConstitution-customWriterInstructions"
           rows={8}
           value={c.customWriterInstructions ?? ""}
           onChange={(e) => set("customWriterInstructions", e.target.value)}
@@ -303,22 +337,22 @@ function GenericForm({ tab, form, setForm }: { tab: string; form: any; setForm: 
 
   const textField = (label: string, key: string, rows = 2) => (
     <div key={key}>
-      <label className="mb-1 block text-sm font-medium text-gray-700">{label}</label>
-      <textarea rows={rows} value={section[key] ?? ""} onChange={(e) => set(key, e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
+      <label htmlFor={`field-${sectionKey}-${key}`} className="mb-1 block text-sm font-medium text-gray-700">{label}</label>
+      <textarea id={`field-${sectionKey}-${key}`} rows={rows} value={section[key] ?? ""} onChange={(e) => set(key, e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
     </div>
   );
   const listField = (label: string, key: string) => (
     <div key={key}>
-      <label className="mb-1 block text-sm font-medium text-gray-700">{label} <span className="text-xs text-gray-400">(one per line)</span></label>
-      <textarea rows={3} value={(section[key] ?? []).join("\n")} onChange={(e) => set(key, e.target.value.split("\n").filter(Boolean))} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
+      <label htmlFor={`field-${sectionKey}-${key}`} className="mb-1 block text-sm font-medium text-gray-700">{label} <span className="text-xs text-gray-400">(one per line)</span></label>
+      <textarea id={`field-${sectionKey}-${key}`} rows={3} value={(section[key] ?? []).join("\n")} onChange={(e) => set(key, e.target.value.split("\n").filter(Boolean))} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
     </div>
   );
 
   switch (tab) {
     case "Business":
       return (<div className="space-y-4">
-        <div><label className="mb-1 block text-sm font-medium text-gray-700">Business Name *</label>
-          <input value={section.name ?? ""} onChange={(e) => set("name", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" /></div>
+        <div><label htmlFor="field-business-name" className="mb-1 block text-sm font-medium text-gray-700">Business Name *</label>
+          <input id="field-business-name" value={section.name ?? ""} onChange={(e) => set("name", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" /></div>
         {textField("Description *", "description", 3)}
         {textField("Business Model", "businessModel")}
         {textField("Positioning", "positioning")}
@@ -338,14 +372,14 @@ function GenericForm({ tab, form, setForm }: { tab: string; form: any; setForm: 
       </div>);
     case "Site Identity":
       return (<div className="space-y-4">
-        <div><label className="mb-1 block text-sm font-medium text-gray-700">Site Name</label>
-          <input value={section.siteName ?? ""} onChange={(e) => set("siteName", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" /></div>
-        <div><label className="mb-1 block text-sm font-medium text-gray-700">Candidate Domain</label>
-          <input value={section.candidateDomain ?? ""} onChange={(e) => set("candidateDomain", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="e.g. example.com" /></div>
-        <div><label className="mb-1 block text-sm font-medium text-gray-700">Language</label>
-          <input value={section.language ?? ""} onChange={(e) => set("language", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="e.g. en" /></div>
-        <div><label className="mb-1 block text-sm font-medium text-gray-700">Locale</label>
-          <input value={section.locale ?? ""} onChange={(e) => set("locale", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="e.g. en-US" /></div>
+        <div><label htmlFor="field-siteIdentity-siteName" className="mb-1 block text-sm font-medium text-gray-700">Site Name</label>
+          <input id="field-siteIdentity-siteName" value={section.siteName ?? ""} onChange={(e) => set("siteName", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" /></div>
+        <div><label htmlFor="field-siteIdentity-candidateDomain" className="mb-1 block text-sm font-medium text-gray-700">Candidate Domain</label>
+          <input id="field-siteIdentity-candidateDomain" value={section.candidateDomain ?? ""} onChange={(e) => set("candidateDomain", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="e.g. example.com" /></div>
+        <div><label htmlFor="field-siteIdentity-language" className="mb-1 block text-sm font-medium text-gray-700">Language</label>
+          <input id="field-siteIdentity-language" value={section.language ?? ""} onChange={(e) => set("language", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="e.g. en" /></div>
+        <div><label htmlFor="field-siteIdentity-locale" className="mb-1 block text-sm font-medium text-gray-700">Locale</label>
+          <input id="field-siteIdentity-locale" value={section.locale ?? ""} onChange={(e) => set("locale", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="e.g. en-US" /></div>
       </div>);
     case "Conversion":
       return (<div className="space-y-4">

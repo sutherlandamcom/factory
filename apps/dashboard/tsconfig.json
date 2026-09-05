@@ -12,7 +12,10 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "@factory/contracts": ["../../packages/contracts/src/index.ts"]
+    }
   },
   "include": ["src", "e2e", "tests"]
 }

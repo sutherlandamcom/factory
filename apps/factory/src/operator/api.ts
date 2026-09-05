@@ -1,9 +1,8 @@
 import type http from "node:http";
 import { z } from "zod";
 import { FactoryError } from "../executor/errors.js";
-import type { ProjectInputSnapshotRecord } from "../persistence/schema.js";
-import type { ProjectIntakeStore } from "./intake-store.js";
-import type { FactoryStore } from "../persistence/store.js";
+import { ProjectIntakeStore } from "./intake-store.js";
+import { FactoryStore } from "../persistence/store.js";
 
 export interface OperatorApiDeps {
   readonly store: FactoryStore;
@@ -77,7 +76,6 @@ export function createOperatorApi(deps: OperatorApiDeps) {
     const segments = pathname.replace(/^\/api\//, "").split("/").filter(Boolean);
 
     try {
-      // POST /api/projects
       if (req.method === "POST" && pathname === "/api/projects") {
         const parsed = parseJsonBody(body);
         const input = parseOr400(createProjectSchema, parsed);
@@ -85,20 +83,17 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         return sendJson(res, 201, project);
       }
 
-      // GET /api/projects
       if (req.method === "GET" && pathname === "/api/projects") {
         const projects = await deps.store.listProjects();
         return sendJson(res, 200, { projects });
       }
 
-      // GET /api/projects/:id/workspace
       if (req.method === "GET" && segments.length === 3 && segments[0] === "projects" && segments[2] === "workspace") {
         const ws = await deps.intake.getWorkspace(segments[1]!);
         if (!ws) return errorResponse(res, 404, "not_found", "Project not found.");
         return sendJson(res, 200, ws);
       }
 
-      // PUT /api/projects/:id/intake-draft
       if (req.method === "PUT" && segments.length === 3 && segments[0] === "projects" && segments[2] === "intake-draft") {
         const parsed = parseJsonBody(body);
         const input = parseOr400(saveDraftSchema, parsed);
@@ -106,7 +101,6 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         return sendJson(res, 200, result);
       }
 
-      // POST /api/projects/:id/intake/accept
       if (req.method === "POST" && segments.length === 4 && segments[0] === "projects" && segments[2] === "intake" && segments[3] === "accept") {
         const parsed = parseJsonBody(body);
         const input = parseOr400(acceptSchema, parsed);
@@ -114,13 +108,11 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         return sendJson(res, 200, result);
       }
 
-      // GET /api/projects/:id/intake/versions
       if (req.method === "GET" && segments.length === 4 && segments[0] === "projects" && segments[2] === "intake" && segments[3] === "versions") {
         const versions = await deps.intake.listSnapshots(segments[1]!);
         return sendJson(res, 200, { versions });
       }
 
-      // GET /api/projects/:id/intake/versions/:version
       if (req.method === "GET" && segments.length === 5 && segments[0] === "projects" && segments[2] === "intake" && segments[3] === "versions") {
         const version = Number.parseInt(segments[4]!, 10);
         if (!Number.isFinite(version) || version < 1) {
@@ -143,25 +135,4 @@ export function createOperatorApi(deps: OperatorApiDeps) {
       return errorResponse(res, 500, "internal_error", message);
     }
   };
-}
-
-let sharedDeps: OperatorApiDeps | null = null;
-
-export function setOperatorApiDeps(deps: OperatorApiDeps): void {
-  sharedDeps = deps;
-}
-
-function getDeps(): OperatorApiDeps {
-  if (!sharedDeps) throw new FactoryError("operator_not_initialized", "Operator API not initialized.");
-  return sharedDeps;
-}
-
-export async function handleApiRequest(
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  pathname: string,
-  body: string,
-): Promise<void> {
-  const handler = createOperatorApi(getDeps());
-  return handler(req, res, pathname, body);
 }

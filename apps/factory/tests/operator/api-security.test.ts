@@ -446,6 +446,53 @@ test("API error contract: known codes map to stable statuses via createOperatorA
   assert.equal(JSON.parse(blocked.payload).error.code, "intake_blocked");
 });
 
+test("API error contract: intake_digest_mismatch and intake_revision_mismatch map to 409", async () => {
+  const { FactoryError } = await import("../../src/executor/errors.js");
+  let acceptError: InstanceType<typeof FactoryError> | null = null;
+  const intake = {
+    getDraft: async () => null,
+    listSnapshots: async () => [],
+    accept: async () => {
+      if (acceptError) throw acceptError;
+      throw new Error("unexpected call");
+    },
+  } as unknown as ProjectIntakeStore;
+
+  const handleApiRequest = createOperatorApi(makeDeps({ intake }));
+
+  const respond = async (method: string, pathname: string, body: string) => {
+    let status = 0;
+    const chunks: string[] = [];
+    const res = new http.ServerResponse(new http.IncomingMessage(null as never));
+    (res as unknown as { writeHead: (s: number, h?: unknown) => unknown }).writeHead = (
+      s: number,
+    ) => {
+      status = s;
+    };
+    (res as unknown as { end: (c?: unknown) => unknown }).end = (c?: unknown) => {
+      if (typeof c === "string") chunks.push(c);
+      return res;
+    };
+    await handleApiRequest(
+      { method, headers: { host: "127.0.0.1" } } as unknown as http.IncomingMessage,
+      res,
+      pathname,
+      body,
+    );
+    return { status, payload: chunks.join("") };
+  };
+
+  acceptError = new FactoryError("intake_digest_mismatch", "digest mismatch");
+  const digestRes = await respond("POST", "/api/projects/p-1/intake/accept", JSON.stringify({ expectedRevision: 1, expectedDigest: "forged" }));
+  assert.equal(digestRes.status, 409);
+  assert.equal(JSON.parse(digestRes.payload).error.code, "intake_digest_mismatch");
+
+  acceptError = new FactoryError("intake_revision_mismatch", "revision mismatch");
+  const revRes = await respond("POST", "/api/projects/p-1/intake/accept", JSON.stringify({ expectedRevision: 0, expectedDigest: "valid" }));
+  assert.equal(revRes.status, 409);
+  assert.equal(JSON.parse(revRes.payload).error.code, "intake_revision_mismatch");
+});
+
 // ---------------------------------------------------------------------------
 // Canonical workspace projection (status matrix)
 // ---------------------------------------------------------------------------

@@ -193,7 +193,7 @@ function Review({ ws, onAccept, busy }: { ws: ProjectOperatorWorkspace; onAccept
         <Field label="Model" value={p.business?.businessModel} />
       </Section>
       <Section title="Audience">
-        <Field label="Segments" value={(p.audience?.segments ?? []).map((s: any) => s.label).join(", ")} />
+        <Field label="Segments" value={(p.audience?.segments ?? []).join(", ")} />
         <Field label="Needs" value={(p.audience?.needs ?? []).join("; ")} />
       </Section>
       <Section title="Site Identity">
@@ -203,7 +203,7 @@ function Review({ ws, onAccept, busy }: { ws: ProjectOperatorWorkspace; onAccept
       </Section>
       <Section title="Conversion">
         <Field label="Objective" value={p.conversion?.primaryObjective} />
-        <Field label="CTA" value={p.conversion?.ctaDestination?.value} />
+        <Field label="CTA" value={typeof p.conversion?.ctaDestination === "string" ? p.conversion.ctaDestination : (p.conversion?.ctaDestination?.value ?? "")} />
         <Field label="Verification" value={p.conversion?.verificationState} />
       </Section>
       <Section title="Content Constitution">
@@ -359,6 +359,11 @@ function GenericForm({ tab, form, setForm }: { tab: string; form: any; setForm: 
         {listField("Offerings / Services", "offerings")}
         {listField("Priorities", "priorities")}
       </div>);
+    case "Offering":
+      return (<div className="space-y-4">
+        {listField("Offerings / Services", "offerings")}
+        {listField("Priorities", "priorities")}
+      </div>);
     case "Audience":
       return (<div className="space-y-4">
         {listField("Segments", "segments")}
@@ -386,12 +391,33 @@ function GenericForm({ tab, form, setForm }: { tab: string; form: any; setForm: 
         {textField("Primary Objective", "primaryObjective")}
         {textField("CTA Type", "ctaType")}
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">CTA Destination</label>
-          <input value={section.ctaDestination?.value ?? ""} onChange={(e) => set("ctaDestination", { ...section.ctaDestination, kind: section.ctaDestination?.kind ?? "url", value: e.target.value })} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
+          <label htmlFor="field-conversion-ctaDestination" className="mb-1 block text-sm font-medium text-gray-700">CTA Destination</label>
+          <input
+            id="field-conversion-ctaDestination"
+            value={typeof section.ctaDestination === "string" ? section.ctaDestination : (section.ctaDestination?.value ?? "")}
+            onChange={(e) => set("ctaDestination", e.target.value)}
+            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+          />
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700">Verification State</label>
-          <select value={section.verificationState ?? "UNKNOWN"} onChange={(e) => set("verificationState", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
+          <label htmlFor="field-conversion-ctaDestinationType" className="mb-1 block text-sm font-medium text-gray-700">Destination Type</label>
+          <select
+            id="field-conversion-ctaDestinationType"
+            value={section.ctaDestinationType ?? "other"}
+            onChange={(e) => set("ctaDestinationType", e.target.value)}
+            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+          >
+            <option value="phone">phone</option>
+            <option value="email">email</option>
+            <option value="url">url</option>
+            <option value="form">form</option>
+            <option value="in_person">in_person</option>
+            <option value="other">other</option>
+          </select>
+        </div>
+        <div>
+          <label htmlFor="field-conversion-verificationState" className="mb-1 block text-sm font-medium text-gray-700">Verification State</label>
+          <select id="field-conversion-verificationState" value={section.verificationState ?? "UNKNOWN"} onChange={(e) => set("verificationState", e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
             <option>VERIFIED</option><option>UNVERIFIED</option><option>UNKNOWN</option><option>DEFERRED</option>
           </select>
         </div>

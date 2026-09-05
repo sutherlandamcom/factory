@@ -41,8 +41,8 @@ const PROJECT = {
   name: "E2E Journey Roofing",
 };
 
-/** Fill the minimal intake fields needed to reach READY (no invented facts: values are test operator input). */
-async function fillMinimalIntake(page: Page) {
+/** Fill intake fields needed to reach READY (including Audience segments and Conversion CTA destination). */
+async function fillIntake(page: Page) {
   const set = async (tab: string, label: string, value: string) => {
     await page.getByRole("button", { name: tab, exact: true }).click();
     await page.getByLabel(label, { exact: false }).first().fill(value);
@@ -50,7 +50,9 @@ async function fillMinimalIntake(page: Page) {
 
   await set("Business", "Business Name", "Journey Test Roofing Co");
   await set("Business", "Description", "Family roofing company used by the automated operator journey test.");
+  await set("Audience", "Segments", "Residential Homeowners\nCommercial Property Managers");
   await set("Site Identity", "Language", "en");
+  await set("Conversion", "CTA Destination", "tel:+15550100100");
   await set("Content Constitution", "Custom Project Writer Instructions", "Keep sentences short. Never invent testimonials.");
 }
 
@@ -62,12 +64,12 @@ async function expectStatus(page: Page, status: string) {
 }
 
 /** Re-open the project from the Projects list after a full page reload. */
-async function openProject(page: Page) {
+async function openProject(page: Page, projectName = PROJECT.name) {
   await page.goto("/");
-  const projectButton = page.getByRole("button", { name: new RegExp(PROJECT.name) }).first();
+  const projectButton = page.getByRole("button", { name: new RegExp(projectName) }).first();
   await projectButton.waitFor({ state: "visible", timeout: 15_000 });
   await projectButton.click();
-  await expect(page.locator("h1", { hasText: PROJECT.name })).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator("h1", { hasText: projectName })).toBeVisible({ timeout: 10_000 });
 }
 
 test.describe("Operator journey", () => {
@@ -85,15 +87,20 @@ test.describe("Operator journey", () => {
     await expect(page.locator("h1", { hasText: PROJECT.name })).toBeVisible({ timeout: 10_000 });
     await expectStatus(page, "DRAFT");
 
-    // 3. Enter Project Intake (Business, Site Identity) + Content Constitution.
-    await fillMinimalIntake(page);
+    // 3. Enter Project Intake: Business, Audience with Segments, Site Identity, Conversion with CTA Destination, Content Constitution.
+    await fillIntake(page);
 
-    // 4. Save Draft -> READY.
+    // 4. Save Draft -> READY (verify save succeeds without schema error).
     await page.getByRole("button", { name: "Save Draft" }).click();
+    await expect(page.locator("div.bg-red-50")).toHaveCount(0);
     await expectStatus(page, "READY");
 
-    // 5. Review tab -> ACCEPT INPUTS -> APPROVED, current v1.
+    // 5. Review tab -> visibly contains actual audience segments and CTA destination.
     await page.getByRole("button", { name: "Review", exact: true }).click();
+    await expect(page.getByText("Residential Homeowners, Commercial Property Managers")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("tel:+15550100100")).toBeVisible({ timeout: 10_000 });
+
+    // ACCEPT v1 -> APPROVED, current v1.
     await expect(page.getByRole("button", { name: "ACCEPT INPUTS" })).toBeEnabled();
     await page.getByRole("button", { name: "ACCEPT INPUTS" }).click();
     await expectStatus(page, "APPROVED");
@@ -127,6 +134,7 @@ test.describe("Operator journey", () => {
       "UPDATED after acceptance by the operator journey (v2 candidate).",
     );
     await page.getByRole("button", { name: "Save Draft" }).click();
+    await expect(page.locator("div.bg-red-50")).toHaveCount(0);
     await expectStatus(page, "CHANGED");
 
     // v1 digest must be unchanged.
@@ -150,5 +158,43 @@ test.describe("Operator journey", () => {
     const v1Final = page.locator("div.rounded-lg.border.p-4", { hasText: /^v1/ }).first();
     await expect(v1Final.locator("div.font-mono")).toContainText(v1DigestValue);
     await expect(v1Final.locator("span", { hasText: "CURRENT ACCEPTED" })).toHaveCount(0);
+  });
+
+  test("regression: conversion CTA destination string round-trips through Dashboard UI without intake_schema_invalid", async ({ page }) => {
+    test.setTimeout(120_000);
+    const regKey = `cta-reg-${Date.now()}`;
+    const regName = "CTA Regression Roofing";
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "New Project" }).click();
+    await page.locator('input[placeholder="e.g. summit-roofing"]').fill(regKey);
+    await page.locator('input[placeholder="e.g. Summit Roofing"]').fill(regName);
+    await page.getByRole("button", { name: "Create", exact: true }).click();
+
+    await expect(page.locator("h1", { hasText: regName })).toBeVisible({ timeout: 10_000 });
+    await expectStatus(page, "DRAFT");
+
+    // Navigate to Conversion tab and enter CTA Destination
+    await page.getByRole("button", { name: "Conversion", exact: true }).click();
+    await page.getByLabel("CTA Destination", { exact: false }).first().fill("https://example.com/contact-us");
+
+    // Save Draft
+    await page.getByRole("button", { name: "Save Draft" }).click();
+
+    // Verify Save succeeds and no schema error is shown
+    await expect(page.locator("div.bg-red-50")).toHaveCount(0);
+
+    // Full page reload to prove round-trip through backend and DB
+    await page.reload();
+    await openProject(page, regName);
+
+    // Inspect Conversion tab again: CTA destination input must contain the exact string
+    await page.getByRole("button", { name: "Conversion", exact: true }).click();
+    const ctaInput = page.getByLabel("CTA Destination", { exact: false }).first();
+    await expect(ctaInput).toHaveValue("https://example.com/contact-us");
+
+    // Inspect Review tab: CTA field must visibly render the string
+    await page.getByRole("button", { name: "Review", exact: true }).click();
+    await expect(page.getByText("https://example.com/contact-us")).toBeVisible();
   });
 });

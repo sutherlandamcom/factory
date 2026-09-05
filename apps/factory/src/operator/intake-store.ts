@@ -4,7 +4,7 @@ import { parseProjectIntakePayload, type ProjectIntakePayload } from "@factory/c
 import type { FactoryDb } from "../persistence/db.js";
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
-import { evaluateIntakeReadiness, type IntakeReadiness } from "./readiness.js";
+import { evaluateIntakeReadiness } from "./readiness.js";
 import {
   projectInputDrafts,
   projectInputSnapshots,
@@ -246,44 +246,6 @@ export class ProjectIntakeStore {
         ),
       );
     return row ? deepFreeze({ ...row }) : null;
-  }
-
-  async getWorkspace(projectId: string): Promise<{
-    currentDraft: { revision: number; digest: string | null; updatedAt: Date; payload: ProjectIntakePayload | null };
-    currentAcceptedSnapshot: ProjectInputSnapshotRecord | null;
-    history: ProjectInputSnapshotRecord[];
-    draftDiffersFromAccepted: boolean;
-    status: "DRAFT" | "READY" | "APPROVED" | "CHANGED" | "BLOCKED";
-  }> {
-    const draft = await this.getDraft(projectId);
-    const history = await this.listSnapshots(projectId);
-    const currentAcceptedSnapshot = history.length > 0 ? history[history.length - 1]! : null;
-
-    const payload = draft?.payload ?? null;
-    const hasDraftPayload = payload !== null && draft?.digest != null;
-    let readiness: IntakeReadiness = hasDraftPayload
-      ? evaluateIntakeReadiness(payload)
-      : { status: "DRAFT", blockers: [], warnings: [], nextActions: [] };
-
-    let status = readiness.status;
-    if (currentAcceptedSnapshot && draft?.digest && draft.digest !== currentAcceptedSnapshot.digest) {
-      status = "CHANGED";
-    }
-
-    return {
-      currentDraft: {
-        revision: draft?.revision ?? 0,
-        digest: draft?.digest ?? null,
-        updatedAt: draft?.updatedAt ?? new Date(0),
-        payload,
-      },
-      currentAcceptedSnapshot,
-      history,
-      draftDiffersFromAccepted: Boolean(
-        currentAcceptedSnapshot && draft?.digest && draft.digest !== currentAcceptedSnapshot.digest,
-      ),
-      status,
-    };
   }
 }
 

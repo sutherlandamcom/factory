@@ -282,6 +282,7 @@ export {
   constraintsSchema,
   conversionSchema,
   designReferencesSchema,
+  emptyProjectIntakePayload,
   evidenceSchema,
   intakeProvenanceSchema,
   marketsSchema,
@@ -304,3 +305,9 @@ export type {
   SearchSeeds,
   SiteIdentity,
 } from "./project-intake.js";
+export {
+  OPERATOR_ERROR_CODES,
+  OPERATOR_ERROR_STATUS,
+  OPERATOR_INTERNAL_ERROR_MESSAGE,
+} from "./operator-errors.js";
+export type { OperatorErrorCode } from "./operator-errors.js";

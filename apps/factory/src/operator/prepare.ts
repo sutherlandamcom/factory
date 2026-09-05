@@ -86,20 +86,29 @@ export async function preparePageProductionExecution(input: {
 
 /**
  * Execute a prepared page production through the EXISTING executor boundary.
- * `opts` carries ExecutorDeps (workerRuntimes/primaryRunner) so tests can
- * inject mocks; no live paid execution happens unless a production executor
- * is explicitly provided.
+ *
+ * `executor` injects the persisted-run driver so tests can supply a spy/mock;
+ * production callers omit it and the real `runPersistedSiteTask` driver is
+ * used. No new executor is created and no live paid execution happens unless
+ * a production executor is explicitly provided.
  */
 export async function executePreparedPageProduction(
   prepared: PreparedPageProduction,
   opts: import("../persistence/driver.js").PersistedRunOptions,
-) {
+  executor: (
+    task: PreparedPageProduction["siteTask"],
+    runOpts: import("../persistence/driver.js").PersistedRunOptions,
+  ) => Promise<Awaited<ReturnType<typeof import("../persistence/driver.js").runPersistedSiteTask>>> =
+    async (task, runOpts) => {
+      const { runPersistedSiteTask } = await import("../persistence/driver.js");
+      return await runPersistedSiteTask(task, runOpts);
+    },
+): Promise<Awaited<ReturnType<typeof import("../persistence/driver.js").runPersistedSiteTask>>> {
   if (!prepared.eligible) {
     throw new FactoryError(
       "execution_blocked",
       prepared.ineligibleReason ?? "page production is not eligible for execution",
     );
   }
-  const { runPersistedSiteTask } = await import("../persistence/driver.js");
-  return await runPersistedSiteTask(prepared.siteTask, opts);
+  return await executor(prepared.siteTask, opts);
 }

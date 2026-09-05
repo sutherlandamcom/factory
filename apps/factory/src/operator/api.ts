@@ -1,8 +1,14 @@
 import type http from "node:http";
 import { z } from "zod";
+import {
+  OPERATOR_ERROR_STATUS,
+  OPERATOR_INTERNAL_ERROR_MESSAGE,
+  type OperatorErrorCode,
+} from "@factory/contracts";
 import { FactoryError } from "../executor/errors.js";
 import { ProjectIntakeStore } from "./intake-store.js";
 import { FactoryStore } from "../persistence/store.js";
+import { getProjectOperatorWorkspace } from "./workspace.js";
 
 export interface OperatorApiDeps {
   readonly store: FactoryStore;
@@ -42,8 +48,17 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
   res.end(JSON.stringify(body));
 }
 
-function errorResponse(res: http.ServerResponse, status: number, code: string, message: string): void {
-  sendJson(res, status, { error: { code, message } });
+/**
+ * Single serialization point for the stable typed error contract:
+ * `{ error: { code: OperatorErrorCode, message: string } }` with a fixed
+ * HTTP status per code. No other response path may emit errors.
+ */
+function sendError(
+  res: http.ServerResponse,
+  code: OperatorErrorCode,
+  message: string,
+): void {
+  sendJson(res, OPERATOR_ERROR_STATUS[code], { error: { code, message } });
 }
 
 function parseJsonBody(raw: string): unknown {
@@ -65,6 +80,13 @@ function parseOr400<T extends z.ZodTypeAny>(schema: T, input: unknown): z.infer<
   }
   return result.data;
 }
+
+/**
+ * FactoryError codes that follow the stable operator error contract map
+ * directly onto the contract's status table. Any other code is treated as
+ * an unexpected internal fault and sanitized.
+ */
+const CONTRACT_ERROR_CODES = new Set<string>(Object.keys(OPERATOR_ERROR_STATUS));
 
 export function createOperatorApi(deps: OperatorApiDeps) {
   return async function handleApiRequest(
@@ -89,8 +111,14 @@ export function createOperatorApi(deps: OperatorApiDeps) {
       }
 
       if (req.method === "GET" && segments.length === 3 && segments[0] === "projects" && segments[2] === "workspace") {
-        const ws = await deps.intake.getWorkspace(segments[1]!);
-        if (!ws) return errorResponse(res, 404, "not_found", "Project not found.");
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        const ws = await getProjectOperatorWorkspace(deps.intake, {
+          id: project.id,
+          key: project.key,
+          name: project.name,
+        });
+        if (!ws) return sendError(res, "not_found", "Project not found.");
         return sendJson(res, 200, ws);
       }
 
@@ -116,23 +144,24 @@ export function createOperatorApi(deps: OperatorApiDeps) {
       if (req.method === "GET" && segments.length === 5 && segments[0] === "projects" && segments[2] === "intake" && segments[3] === "versions") {
         const version = Number.parseInt(segments[4]!, 10);
         if (!Number.isFinite(version) || version < 1) {
-          return errorResponse(res, 400, "invalid_version", "Version must be a positive integer.");
+          return sendError(res, "invalid_version", "Version must be a positive integer.");
         }
         const snapshot = await deps.intake.getSnapshot(segments[1]!, version);
-        if (!snapshot) return errorResponse(res, 404, "not_found", "Snapshot not found.");
+        if (!snapshot) return sendError(res, "not_found", "Snapshot not found.");
         return sendJson(res, 200, snapshot);
       }
 
-      return errorResponse(res, 404, "not_found", "Unknown endpoint.");
+      return sendError(res, "not_found", "Unknown endpoint.");
     } catch (error) {
-      if (error instanceof FactoryError) {
-        return errorResponse(res, 422, error.code, error.message);
+      if (error instanceof FactoryError && CONTRACT_ERROR_CODES.has(error.code)) {
+        return sendError(res, error.code as OperatorErrorCode, error.message);
       }
       if (error instanceof z.ZodError) {
-        return errorResponse(res, 400, "validation_error", error.issues.map((i) => i.message).join("; "));
+        return sendError(res, "validation_error", error.issues.map((i) => i.message).join("; "));
       }
-      const message = error instanceof Error ? error.message : "Internal server error";
-      return errorResponse(res, 500, "internal_error", message);
+      // Sanitized: unexpected internal failures never leak error.message
+      // (stacks, driver text, DB URLs, provider secrets) to the client.
+      return sendError(res, "internal_error", OPERATOR_INTERNAL_ERROR_MESSAGE);
     }
   };
 }

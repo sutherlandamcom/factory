@@ -291,3 +291,100 @@ export type ContentConstitution = z.infer<typeof contentConstitutionSchema>;
 export function parseProjectIntakePayload(input: unknown): ProjectIntakePayload {
   return projectIntakePayloadSchema.parse(input);
 }
+
+/**
+ * Canonical BLANK intake payload: schema-valid, contains no business facts,
+ * and fails intake readiness (empty name/description/language), so a freshly
+ * created project is immediately editable but never accidentally acceptable.
+ * Returned fresh on every call — callers may treat it as their own object.
+ */
+export function emptyProjectIntakePayload(): ProjectIntakePayload {
+  return {
+    schemaVersion: PROJECT_INTAKE_SCHEMA_VERSION,
+    business: {
+      name: "",
+      description: "",
+      businessModel: "",
+      positioning: "",
+      offerings: [],
+      priorities: [],
+    },
+    audience: {
+      segments: [],
+      needs: [],
+      decisionContext: "",
+    },
+    markets: {
+      geographies: [],
+      priorityLocations: [],
+    },
+    siteIdentity: {
+      siteName: "",
+      candidateDomain: "",
+      language: "",
+      locale: "",
+    },
+    conversion: {
+      primaryObjective: "",
+      ctaType: "",
+      ctaDestinationType: "other",
+      ctaDestination: "",
+      verificationState: "UNKNOWN",
+    },
+    evidence: {
+      operatorFacts: [],
+      evidenceNotes: [],
+      allowedClaims: [],
+      prohibitedClaims: [],
+      unknownClaims: [],
+    },
+    searchSeeds: {
+      topics: [],
+      queries: [],
+      competitors: [],
+      marketHints: [],
+    },
+    brand: {
+      facts: [],
+      positioning: "",
+      tone: "",
+      visualIdentityNotes: "",
+    },
+    designReferences: {
+      referenceUrls: [],
+      antiReferenceUrls: [],
+      learn: [],
+      avoid: [],
+      preferredPerception: "",
+    },
+    assetAvailability: {
+      hasLogo: false,
+      hasAuthenticPhotography: false,
+      hasLocalFirstPartyPhotography: false,
+      otherAssets: [],
+      notes: "",
+    },
+    constraints: {
+      legal: [],
+      editorial: [],
+      technical: [],
+      regulatory: [],
+      mustNot: [],
+    },
+    contentConstitution: {
+      brandVoice: "",
+      tone: "",
+      audiencePrinciples: [],
+      writingPrinciples: [],
+      preferredTerminology: [],
+      forbiddenTerminology: [],
+      evidencePolicy: "",
+      peopleFirstPrinciples: [],
+      trustExpectations: "",
+      aiLanguageAvoidance: [],
+      clicheAvoidance: [],
+      localePreferences: "",
+      customWriterInstructions: "",
+    },
+  };
+}

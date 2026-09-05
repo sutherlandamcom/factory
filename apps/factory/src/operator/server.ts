@@ -1,7 +1,9 @@
 import http from "node:http";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { OPERATOR_ERROR_STATUS, OPERATOR_INTERNAL_ERROR_MESSAGE } from "@factory/contracts";
 import { createOperatorApi, type OperatorApiDeps } from "./api.js";
 import { ProjectIntakeStore } from "./intake-store.js";
 import { FactoryStore } from "../persistence/store.js";
@@ -21,27 +23,59 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
+    let rejected = false;
     req.on("data", (chunk: Buffer) => {
+      if (rejected) return;
       size += chunk.length;
       if (size > MAX_BODY_BYTES) {
+        rejected = true;
+        chunks.length = 0;
         reject(new Error("payload_too_large"));
-        req.destroy();
+        // Stop consuming so the 413 response can be written; the request
+        // stream is destroyed by the HTTP layer after the response ends.
+        req.pause();
         return;
       }
       chunks.push(chunk);
     });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
+    req.on("end", () => {
+      if (!rejected) resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+    req.on("error", (err) => {
+      if (!rejected) reject(err);
+    });
   });
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DIST_DIR = path.resolve(__dirname, "../../dashboard/dist");
+
+/**
+ * Resolve the built Dashboard dist directory for static serving.
+ *
+ * Precedence:
+ * 1. FACTORY_OPERATOR_DIST (explicit operator-controlled override);
+ * 2. monorepo layout `apps/dashboard/dist` relative to this source file
+ *    (`apps/factory/src/operator` -> repo root -> `apps/dashboard/dist`);
+ * 3. layout relative to the compiled output, when present.
+ */
+function resolveDashboardDist(): string {
+  const override = process.env.FACTORY_OPERATOR_DIST?.trim();
+  if (override) return path.resolve(override);
+  // __dirname = apps/factory/src/operator (tsx) -> repo root is ../../..
+  const monorepo = path.resolve(__dirname, "../../../dashboard/dist");
+  if (existsSync(monorepo)) return monorepo;
+  // Fallback for compiled layouts (dist/operator -> ../../dashboard/dist).
+  return path.resolve(__dirname, "../../dashboard/dist");
+}
 
 const MAX_BODY_BYTES = 256 * 1024;
 
-export function createOperatorServer(deps: OperatorApiDeps): http.Server {
+export function createOperatorServer(
+  deps: OperatorApiDeps,
+  options: { distDir?: string } = {},
+): http.Server {
   const handleApiRequest = createOperatorApi(deps);
+  const distDir = options.distDir ?? resolveDashboardDist();
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -93,15 +127,15 @@ export function createOperatorServer(deps: OperatorApiDeps): http.Server {
       }
 
       if (method === "GET" || method === "HEAD") {
-        return await serveStatic(res, pathname);
+        return await serveStatic(res, pathname, distDir);
       }
 
       return errorResponse(res, 405, "method_not_allowed", "Method not allowed.");
     } catch (error) {
       // Sanitized error output: never leak stack traces or environment details.
-      const message = error instanceof Error ? "Internal server error" : "Internal server error";
+      const message = OPERATOR_INTERNAL_ERROR_MESSAGE;
       if (!res.headersSent) {
-        res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+        res.writeHead(OPERATOR_ERROR_STATUS.internal_error, { "Content-Type": "application/json; charset=utf-8" });
       }
       res.end(JSON.stringify({ error: { code: "internal_error", message } }));
     }
@@ -110,18 +144,21 @@ export function createOperatorServer(deps: OperatorApiDeps): http.Server {
   return server;
 }
 
-async function serveStatic(res: http.ServerResponse, pathname: string): Promise<void> {
+async function serveStatic(
+  res: http.ServerResponse,
+  pathname: string,
+  distDir: string,
+): Promise<void> {
   const safePath = path.normalize(pathname).replace(/^(\.\.[/\\])+/, "");
-  let filePath = path.join(DIST_DIR, safePath === "/" ? "index.html" : safePath);
-  if (!filePath.startsWith(DIST_DIR)) {
+  let filePath = path.join(distDir, safePath === "/" ? "index.html" : safePath);
+  if (!filePath.startsWith(distDir)) {
     res.writeHead(403, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ error: { code: "forbidden", message: "Forbidden." } }));
     return;
   }
   try {
     const content = await readFile(filePath);
-    const ext = path.extname(filePath);
-    const mime =
+    const ext = path.extname(filePath);    const mime =
       ext === ".html" ? "text/html; charset=utf-8" :
       ext === ".js" || ext === ".mjs" ? "text/javascript; charset=utf-8" :
       ext === ".css" ? "text/css; charset=utf-8" :
@@ -133,7 +170,7 @@ async function serveStatic(res: http.ServerResponse, pathname: string): Promise<
   } catch {
     // SPA fallback: serve index.html for client-side routes.
     try {
-      const content = await readFile(path.join(DIST_DIR, "index.html"));
+      const content = await readFile(path.join(distDir, "index.html"));
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(content);
     } catch {

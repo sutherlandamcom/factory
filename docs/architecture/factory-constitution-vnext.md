@@ -1,6 +1,9 @@
 # Factory vNext Constitution
 
-Status: **proposed authoritative architecture policy for the next Factory workstream**.
+Status: **accepted normative vNext architecture policy**, adopted through
+PR #17 (`c6c7e000caf9797398dc4e05642ed42a40e664d0`). Acceptance of this policy
+does not assert that all capabilities below are implemented or verified;
+implementation status and sequencing live in `docs/roadmap-vnext.md`.
 
 This document records the product and engineering direction accepted after the first real Sutherland one-page workflow proof. It governs new vNext work unless a later reviewed ADR explicitly supersedes a rule.
 

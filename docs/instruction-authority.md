@@ -2,8 +2,9 @@
 
 This document defines how humans and agents resolve repository instructions when multiple files discuss the same subject.
 
-The latest audit of repository instruction surfaces is recorded in
-`docs/instruction-surface-audit-2026-09-04.md`.
+The latest instruction-alignment audit is recorded in
+`docs/instruction-surface-audit-2026-09-05.md`. The 2026-09-04 audit remains
+historical evidence of the PR #17 alignment.
 
 ## Precedence
 
@@ -18,6 +19,27 @@ Use this order when instructions conflict:
 7. **Historical audits, bake-offs, build reports and gap reports** — evidence about past states. They are not current implementation instructions unless a newer normative document explicitly adopts their recommendation.
 
 Runtime prompt builders under `apps/factory/src/**/prompt.ts` are scoped execution contracts for the specific runtime that consumes them. They are not general architecture policy.
+
+## Reading and resuming work
+
+Precedence resolves conflicts; it is not a requirement to reread every file on
+every turn. At session start inspect the current branch/base, worktree changes
+and relevant PRs, read `AGENTS.md`, the applicable roadmap slice and the task
+delta. For architecture/provider changes consult the Constitution; for public
+Search changes consult SEO policy. Read implementation/domain documentation and
+historical evidence only as needed to resolve the task. Reuse unchanged context
+and use focused code searches rather than repeated full repository scans.
+
+Before executing an old handoff's "next step", verify whether a PR already
+implements it, which SHA is being reviewed, and whether it is merged. Continue
+from the actual delta; do not restart completed work or label an open candidate
+accepted. Preserve other agents' changes and use an isolated branch/worktree
+for the assigned task.
+
+Roadmap status is a dated index with evidence links, not a second operational
+database. Live Git/CI and exact-SHA review evidence determine current state.
+The Constitution governs design decisions; accepted policy does not mean every
+capability it describes has been delivered.
 
 ## Historical documents
 

@@ -53,12 +53,23 @@ the vNext roadmap.
 
 ## Prerequisites
 
+Choose prerequisites for the operation you will run; provider credentials are
+not required merely to install, typecheck or build the repository.
+
 - Node.js >=22.12.0
-- pnpm 11 (`corepack enable` if needed)
-- PostgreSQL 18 (e.g. via local Postgres or Docker container)
-- Codex CLI authentication (`@openai/codex` is pinned at `0.150.1`). Factory
+- pnpm as pinned by root `packageManager`, with dependencies resolved by
+  `pnpm-lock.yaml`; use `pnpm install --frozen-lockfile` for reproducible checks.
+- PostgreSQL 18 for persistent execution and database integration tests. Use an
+  explicitly selected dedicated database for destructive test setup.
+- Current site-task execution: Kimi Code CLI / Claude Code images and trusted
+  OpenRouter credentials via Factory's model relay; follow the current routing
+  and credential boundary in `docs/architecture.md` and
+  `apps/factory/src/models/policy.ts`.
+- Legacy Codex execution and the current isolated Intelligence path: Codex CLI
+  authentication (`@openai/codex` is pinned in root `package.json`). Factory
   copies only `auth.json` into an ephemeral worker-specific runtime directory.
-- Colima + Docker CLI, using the dedicated `factory-sandbox` profile below.
+- Isolated worker execution: Colima + Docker CLI, using the dedicated
+  `factory-sandbox` profile below. Local typecheck/build do not require this VM.
 - A pre-provisioned Cloudflare Worker, production hostname, and trusted
   `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` environment for delivery.
   Factory does not provision accounts, DNS, routes, domains, or certificates.
@@ -66,7 +77,7 @@ the vNext roadmap.
 ## Install
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 ```
 
 ## Database setup (PostgreSQL 18)
@@ -78,6 +89,14 @@ Factory uses a minimal, durable PostgreSQL operational-state layer. Set `FACTORY
 FACTORY_DATABASE_URL="postgresql://factory:factory_password@localhost:5432/factory"
 FACTORY_TEST_DATABASE_URL="postgresql://factory:factory_test_password@localhost:5432/factory_test"
 ```
+
+The addresses above are examples, not discovered local configuration. Before
+running persistence tests, explicitly export `FACTORY_TEST_DATABASE_URL` for
+the dedicated `factory_test` database you verified. Do not rely on a port or an
+implicit fallback to identify a safe database. The accepted base still has a
+legacy localhost fallback in `tests/persistence/helpers.ts`; PR #18 adds
+fail-before-connection enforcement. See the dated status in
+[`docs/roadmap-vnext.md`](./docs/roadmap-vnext.md) before assuming it is merged.
 
 Apply database migrations:
 
@@ -95,19 +114,22 @@ pnpm factory site register default starter "Starter Template"
 
 ## Strong execution isolation
 
-Factory never runs production Codex directly on the host. On macOS, install the
+Factory never runs production coding workers directly on the host. On macOS, install the
 approved local boundary and start a dedicated profile (do not use the default
 Colima profile):
 
 ```bash
 brew install colima docker qemu
-mkdir -p "$PWD/.factory/worktrees" "$PWD/.factory/codex-runtime"
+mkdir -p "$PWD/.factory/worktrees" "$PWD/.factory/codex-runtime" \
+  "$PWD/.factory/kimi-runtime" "$PWD/.factory/claude-runtime"
 colima start factory-sandbox \
   --template=false \
   --vm-type qemu \
   --runtime docker \
   --mount "$PWD/.factory/worktrees:w" \
   --mount "$PWD/.factory/codex-runtime:w" \
+  --mount "$PWD/.factory/kimi-runtime:w" \
+  --mount "$PWD/.factory/claude-runtime:w" \
   --cpus 4 --memory 8 --disk 30 \
   --ssh-agent=false --ssh-config=false \
   --activate=false --port-forwarder none
@@ -130,9 +152,12 @@ provision:
 ```
 
 The profile mounts neither the user's home nor `/Users` or host `/tmp`. Factory
-checks the saved profile and Docker server mechanically before each production
-run and builds the pinned Linux worker image from
-`apps/factory/isolation/codex-worker.Dockerfile` when needed. Do not configure a
+checks all four saved mount locations and the Docker server mechanically before
+each production run. The matching pinned images live under
+`apps/factory/isolation/` (`kimi-worker.Dockerfile`, `claude-worker.Dockerfile`,
+and the legacy `codex-worker.Dockerfile`). If an existing profile has only the
+old two mounts, reconcile it with the exact `expectedColimaMounts()` policy;
+never bypass or relax the checker. Do not configure a
 system-wide Docker socket symlink or enable Kubernetes.
 
 ## Playwright browser
@@ -143,12 +168,12 @@ The QA suite needs a Chromium build:
 pnpm --filter @factory/site-starter exec playwright install chromium
 ```
 
-(On Linux CI you would add `--with-deps`; on macOS that flag does not exist
-and is not needed.)
+(Linux CI additionally installs Chromium system dependencies with `--with-deps`,
+as specified in `.github/workflows/pr-ci.yml`.)
 
-> Note: `@playwright/test` is pinned to `~1.61.1` as a verified stable baseline
-> across development and CI hosts. Any future upgrade should be verified against
-> the test suite across supported platforms.
+> Playwright's declared range lives in `sites/starter/package.json`; the lockfile
+> records the exact installed version. Install browsers using that workspace's
+> Playwright command. Verify upgrades against the supported test environments.
 
 ## Commands
 
@@ -174,6 +199,12 @@ All commands run from the repository root.
 | `pnpm factory run show <runId>` | Inspect durable run state, attempt breakdown, quality gates, and model metrics |
 | `pnpm --filter @factory/factory test:persistence` | Run real PostgreSQL persistence integration tests |
 
+`pnpm qa` and database acceptance are separate commands on the accepted base;
+CI runs both. PR #18 adds Dashboard, operator and browser-journey coverage while
+retaining site-starter QA. Consult the checked-out manifests/workflow and the
+roadmap status before using commands from that open PR. A green badge does not
+replace checking which suites actually executed.
+
 ## Running a site-task
 
 ```bash
@@ -196,7 +227,7 @@ The current bounded loop remains specified as follows:
 6. **Automatic Repair Loop**: Dynamic/static quality failures produce a bounded `FailureReport` and can retry; security failures never retry.
 7. **Outcomes**:
    - `succeeded`: Full verification passes on attempt 1, 2, or 3.
-   - `failed`: Non-repairable execution/input/security defect (including unavailable isolation, scope/type violation, ignored-input mutation, timeout, or worker exit).
+   - `failed`: Terminal execution/input/security defect (including unavailable isolation, scope/type violation, ignored-input mutation, or QA timeout). Routed worker failures/timeouts may be escalation-eligible; `executor/router.ts` defines the exact classification.
    - `needs_review`: Bounded attempts exhausted (3 failed repair attempts) or no source progress made on repair.
 
 Factory's module rule is **READ MANY / WRITE FEW**. The version-controlled
@@ -264,13 +295,17 @@ Copy `.env.example` to `.env` in the repository root (or create `sites/starter/.
 to configure environment variables.
 
 - **`FACTORY_DATABASE_URL`**: PostgreSQL connection string for Factory persistent control plane. Required for production `site-task` execution.
-- **`FACTORY_TEST_DATABASE_URL`**: Optional PostgreSQL connection string used for integration tests (`test:persistence`).
+- **`FACTORY_TEST_DATABASE_URL`**: Explicitly set this to the verified dedicated test database before integration tests (`test:persistence`). Enforcement differs between the accepted base and PR #18 as described under Database setup; never rely on the legacy fallback.
 - **`PUBLIC_SITE_URL`**: Canonical origin of the current Astro-rendered site. Used for canonical `<link>`, Open Graph URLs, and JSON-LD identifiers.
 - **`FACTORY_QA_PORT`**: Optional TCP port for Playwright preview server. Allows isolated concurrent QA runs across separate worktrees.
 - **`FACTORY_QA_BASE_URL`**: Trusted internal QA override for remote preview/production QA.
 - **`CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`**: Required only by the trusted Wrangler subprocess used for `deploy` and `rollback`; never forward them into coding workers or browser state.
 
 ## Production Delivery MVP
+
+The implemented target is **Cloudflare Workers Static Assets**, using Wrangler
+version upload/promotion/rollback. Earlier Cloudflare Pages Direct Upload
+planning is historical; Dashboard hosting is a separate future decision.
 
 Wrangler is pinned to the repository's accepted version. Apply migrations,
 register a site, and store its delivery target once:

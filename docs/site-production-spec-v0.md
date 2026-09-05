@@ -1,5 +1,12 @@
 # Site Production Spec v0 — Production Input Contract
 
+Status: current v0 contract documentation with historical motivation and
+follow-up notes. Current sequencing is governed by [roadmap-vnext.md](./roadmap-vnext.md).
+This production overlay remains compatible with the accepted Astro path;
+its creative/layout fields are transitional implementation guidance, not a
+replacement for future human-accepted writer content or external DesignProvider
+artifacts. Preserve business/structural authority in the Blueprint.
+
 ## 1. Why This Layer Exists
 
 The first real-site experiment proved that Factory's autonomous execution mechanics operate reliably:
@@ -376,7 +383,13 @@ pnpm factory site-production page-packet site-production-spec.json / \
 
 ---
 
-## 9. Next Steps
+## 9. Historical next steps at the original ProductionSpec PR
+
+The list below preserves the original sequence; it is not the current task
+queue. The Sutherland one-page proof subsequently landed in PR #16, and packet
+projection exists on main. Its hardening and the governed execution preparation
+seam are part of PR #18. Consult the dated [roadmap status](./roadmap-vnext.md)
+and actual PR state before planning remaining work.
 
 After this PR is independently reviewed and accepted:
 1. **Sutherland High-Quality Rebuild**:

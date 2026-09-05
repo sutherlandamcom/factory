@@ -5,12 +5,13 @@ import { StatusBadge } from "../components/StatusBadge";
 import { Section } from "../components/Section";
 import { Field } from "../components/Field";
 import { usePolling } from "../hooks/usePolling";
+import { SearchPage } from "./SearchPage";
 
 const TABS = [
   "Overview", "Business", "Offering", "Audience", "Markets", "Site Identity",
   "Conversion", "Evidence & Claims", "Search Seeds", "Competitors", "Brand",
   "References", "Assets", "Constraints", "Content Constitution", "Review",
-  "Versions",
+  "Versions", "Search",
 ] as const;
 
 type Tab = (typeof TABS)[number];
@@ -150,6 +151,7 @@ export function ProjectDetailPage({ projectId, onBack }: { projectId: string; on
         {tab === "Overview" && <Overview ws={ws} />}
         {tab === "Review" && <Review ws={ws} onAccept={acceptInputs} busy={busy} />}
         {tab === "Versions" && <History history={history} currentAccepted={currentAcceptedSnapshot} />}
+        {tab === "Search" && <SearchPage projectId={projectId} />}
         {tab === "Content Constitution" && <Constitution form={form} setForm={setForm} />}
         {["Business","Offering","Audience","Markets","Site Identity","Conversion","Evidence & Claims","Search Seeds","Competitors","Brand","References","Assets","Constraints"].includes(tab) && (
           <GenericForm tab={tab} form={form} setForm={setForm} />

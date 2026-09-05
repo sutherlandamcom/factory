@@ -1,0 +1,593 @@
+import {
+  normalizeSearchQuery,
+  MAX_SERP_RAW_BYTES,
+  type SearchDevice,
+  type SearchUsage,
+} from "@factory/contracts";
+import { FactoryError } from "../executor/errors.js";
+import { deterministicDigest } from "../intelligence/digest.js";
+import type { ProjectIntakeStore } from "../operator/intake-store.js";
+import type { SearchStore } from "./search-store.js";
+import type { StructuredSerpProvider } from "./provider-types.js";
+import type { GroundedSearchProvider } from "./grounded-types.js";
+import type { SearchAnalystModel } from "./analyst.js";
+
+/**
+ * SearchIntelligenceService — the governed application service.
+ *
+ * Pipeline: preflight → resolve accepted inputs → normalize request →
+ * cache check → acquire structured SERP → persist SerpSnapshot →
+ * optional grounded research → derive intelligence (analyst) →
+ * persist SearchIntelligenceSnapshot → bounded operator read-model.
+ *
+ * Trusted policy (provider mode, budgets, freshness) comes from backend
+ * configuration; the browser never controls provider plumbing.
+ */
+
+export const SEARCH_REQUEST_VERSION = "search-request-v1";
+
+export interface SearchServiceConfig {
+  /** Freshness window for cache reuse (hours). */
+  freshnessHours: number;
+  /** Daily spend ceiling in USD (recorded costMicros only; UNKNOWN uncounted). */
+  dailyLimitUsd: number;
+  /** Trusted provider selection: production adapter id or 'fixture'. */
+  providerMode: "production" | "fixture";
+}
+
+export const DEFAULT_SEARCH_CONFIG: SearchServiceConfig = {
+  freshnessHours: 24,
+  dailyLimitUsd: 5,
+  providerMode: "production",
+};
+
+export interface SearchServiceDeps {
+  intake: ProjectIntakeStore;
+  searchStore: SearchStore;
+  productionSerpProvider: StructuredSerpProvider;
+  fixtureSerpProvider?: StructuredSerpProvider;
+  groundedProvider?: GroundedSearchProvider | null;
+  analyst: SearchAnalystModel;
+  config?: Partial<SearchServiceConfig>;
+  now?: () => Date;
+}
+
+export interface RunSearchInput {
+  projectId: string;
+  query: string;
+  location?: string;
+  language?: string;
+  device: SearchDevice;
+  refresh?: boolean;
+}
+
+export interface SearchRunReadModel {
+  run: {
+    id: string;
+    status: "succeeded" | "failed";
+    query: string;
+    location: string | null;
+    language: string | null;
+    device: SearchDevice;
+    provider: string;
+    cacheReused: boolean;
+    refreshRequested: boolean;
+    startedAt: string;
+    finishedAt: string | null;
+    durationMs: number | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+  };
+  acceptedInput: {
+    snapshotId: string;
+    version: number;
+    digest: string;
+    /** True when a newer accepted snapshot exists than the one this run used. */
+    stale: boolean;
+  };
+  serp: {
+    snapshotId: string;
+    snapshotDigest: string;
+    observedAt: string;
+    provider: string;
+    providerRequestId: string | null;
+    organic: Array<{ position: number; url: string; domain: string; title: string; snippet: string }>;
+    features: string[] | null;
+    peopleAlsoAsk: Array<{ question: string; answer?: string }> | null;
+    relatedSearches: string[] | null;
+    rawDigest: string;
+    usage: SearchUsage | null;
+  } | null;
+  grounded: {
+    snapshotId: string;
+    snapshotDigest: string;
+    model: string;
+    promptVersion: string;
+    observedAt: string;
+    webSearchQueries: string[];
+    sources: Array<{ title?: string; uri: string }>;
+  } | null;
+  intelligence: {
+    snapshotId: string;
+    snapshotDigest: string;
+    model: string;
+    promptVersion: string;
+    data: Record<string, unknown>;
+  } | null;
+}
+
+export interface SearchWorkspaceReadModel {
+  acceptedInput: {
+    snapshotId: string;
+    version: number;
+    digest: string;
+    acceptedAt: string;
+  } | null;
+  seeds: {
+    topics: string[];
+    queries: string[];
+    competitors: string[];
+    marketHints: string[];
+  };
+  readiness: {
+    canRun: boolean;
+    providerConfigured: boolean;
+    providerReason: string | null;
+    providerMode: "production" | "fixture";
+    blockers: string[];
+  };
+  recentRuns: Array<{
+    id: string;
+    status: string;
+    query: string;
+    provider: string;
+    startedAt: string;
+    errorCode: string | null;
+  }>;
+}
+
+export class SearchIntelligenceService {
+  private readonly config: SearchServiceConfig;
+  private readonly now: () => Date;
+
+  constructor(private readonly deps: SearchServiceDeps) {
+    this.config = { ...DEFAULT_SEARCH_CONFIG, ...deps.config };
+    this.now = deps.now ?? (() => new Date());
+  }
+
+  private serpProvider(): StructuredSerpProvider {
+    if (this.config.providerMode === "fixture") {
+      if (!this.deps.fixtureSerpProvider) {
+        throw new FactoryError(
+          "search_provider_not_configured",
+          "Fixture provider selected but not wired.",
+        );
+      }
+      return this.deps.fixtureSerpProvider;
+    }
+    return this.deps.productionSerpProvider;
+  }
+
+  /** Operator-facing readiness (human terms; no secrets, no provider plumbing). */
+  async workspace(projectId: string): Promise<SearchWorkspaceReadModel> {
+    const snapshots = await this.deps.intake.listSnapshots(projectId);
+    const latest = snapshots.at(-1) ?? null;
+    let seeds: SearchWorkspaceReadModel["seeds"] = {
+      topics: [],
+      queries: [],
+      competitors: [],
+      marketHints: [],
+    };
+    if (latest) {
+      const payload = latest.payload as { searchSeeds?: SearchWorkspaceReadModel["seeds"] };
+      seeds = {
+        topics: payload.searchSeeds?.topics ?? [],
+        queries: payload.searchSeeds?.queries ?? [],
+        competitors: payload.searchSeeds?.competitors ?? [],
+        marketHints: payload.searchSeeds?.marketHints ?? [],
+      };
+    }
+
+    const readiness = await this.serpProvider().readiness();
+    const groundedReady = this.deps.groundedProvider
+      ? this.deps.groundedProvider.readiness().configured
+      : false;
+
+    const blockers: string[] = [];
+    if (!latest) blockers.push("No accepted project inputs. Complete Intake first.");
+    if (!readiness.configured) blockers.push(readiness.reason);
+    if (!groundedProviderOptional()) {
+      // Grounded research is optional; absence is surfaced honestly, not a blocker.
+    }
+
+    const recentRuns = await this.deps.searchStore.listRuns(projectId, 20);
+
+    return {
+      acceptedInput: latest
+        ? {
+            snapshotId: latest.id,
+            version: latest.version,
+            digest: latest.digest,
+            acceptedAt: latest.acceptedAt.toISOString(),
+          }
+        : null,
+      seeds,
+      readiness: {
+        canRun: Boolean(latest) && readiness.configured,
+        providerConfigured: readiness.configured,
+        providerReason: readiness.configured ? null : readiness.reason,
+        providerMode: this.config.providerMode,
+        blockers,
+      },
+      recentRuns: recentRuns.map((r) => ({
+        id: r.id,
+        status: r.status,
+        query: r.query,
+        provider: r.provider,
+        startedAt: r.startedAt.toISOString(),
+        errorCode: r.errorCode,
+      })),
+    };
+  }
+
+  async runSearch(input: RunSearchInput): Promise<SearchRunReadModel> {
+    // ---- Preflight (fail before spend) -----------------------------------
+    const query = normalizeSearchQuery(input.query);
+    if (!query) {
+      throw new FactoryError("search_query_invalid", "Query is required.");
+    }
+    if (query.length > 200) {
+      throw new FactoryError("search_query_invalid", "Query exceeds 200 characters.");
+    }
+
+    const snapshots = await this.deps.intake.listSnapshots(input.projectId);
+    const accepted = snapshots.at(-1);
+    if (!accepted) {
+      throw new FactoryError(
+        "search_input_not_accepted",
+        "No accepted ProjectInputSnapshot for this project. Complete Intake acceptance first.",
+      );
+    }
+
+    const budgetMicros = this.config.dailyLimitUsd * 1_000_000;
+    const spentToday = await this.deps.searchStore.sumTodaySearchCostMicros();
+    if (spentToday >= budgetMicros) {
+      throw new FactoryError(
+        "search_provider_budget_blocked",
+        `Daily search budget reached (${this.config.dailyLimitUsd} USD).`,
+      );
+    }
+
+    const provider = this.serpProvider();
+    const providerReadiness = await provider.readiness();
+    if (!providerReadiness.configured) {
+      throw new FactoryError("search_provider_not_configured", providerReadiness.reason);
+    }
+
+    const location = input.location?.trim() || null;
+    const language = input.language?.trim() || null;
+
+    // Normalize request + cache key.
+    const requestDigest = deterministicDigest({
+      provider: provider.id,
+      query,
+      location,
+      language,
+      device: input.device,
+      acceptedInputDigest: accepted.digest,
+      requestVersion: SEARCH_REQUEST_VERSION,
+    });
+
+    // ---- Cache check (no accidental duplicate spend) ---------------------
+    if (!input.refresh) {
+      const fresh = await this.deps.searchStore.findFreshSerp(
+        requestDigest,
+        this.config.freshnessHours,
+      );
+      if (fresh) {
+        await this.recordReusedRun(fresh.run.id, {
+          projectId: input.projectId,
+          acceptedInputSnapshotId: accepted.id,
+          acceptedInputVersion: accepted.version,
+          acceptedInputDigest: accepted.digest,
+          query,
+          location,
+          language,
+          device: input.device,
+          provider: provider.id,
+          requestDigest,
+          refreshRequested: false,
+        });
+        const read = await this.buildReadModel(
+          input.projectId,
+          fresh.run.id,
+          accepted,
+          true,
+          false,
+        );
+        return read;
+      }
+    }
+
+    // ---- Execute run -----------------------------------------------------
+    const run = await this.deps.searchStore.createRun({
+      projectId: input.projectId,
+      acceptedInputSnapshotId: accepted.id,
+      acceptedInputVersion: accepted.version,
+      acceptedInputDigest: accepted.digest,
+      query,
+      location,
+      language,
+      device: input.device,
+      provider: provider.id,
+      requestDigest,
+      refreshRequested: Boolean(input.refresh),
+    });
+
+    try {
+      const acquisition = await provider.acquire({ query, location, language, device: input.device });
+
+      if (JSON.stringify(acquisition.rawPayload ?? null).length > MAX_SERP_RAW_BYTES) {
+        throw new FactoryError(
+          "search_response_invalid",
+          "Provider raw payload exceeded the persistence ceiling.",
+        );
+      }
+
+      const serpSnapshot = await this.deps.searchStore.insertSerpSnapshot({
+        runId: run.id,
+        projectId: input.projectId,
+        acceptedInputSnapshotId: accepted.id,
+        acceptedInputVersion: accepted.version,
+        acceptedInputDigest: accepted.digest,
+        query,
+        location,
+        language,
+        device: input.device,
+        provider: provider.id,
+        providerRequestId: acquisition.providerRequestId,
+        observedAt: acquisition.observedAt,
+        requestDigest,
+        data: {
+          organic: acquisition.data.organic,
+          features: acquisition.data.features ?? null,
+          peopleAlsoAsk: acquisition.data.peopleAlsoAsk ?? null,
+          relatedSearches: acquisition.data.relatedSearches ?? null,
+        },
+        rawPayload: acquisition.rawPayload,
+        usage: acquisition.usage,
+      });
+
+      // ---- Grounded research (optional) ----------------------------------
+      let groundedSnapshotId: string | null = null;
+      const grounded = this.deps.groundedProvider;
+      if (grounded && grounded.readiness().configured) {
+        const packet = compilePacket(accepted.payload as Record<string, unknown>, query, location, language);
+        const groundedResult = await grounded.research({
+          query,
+          location,
+          language,
+          packetDigest: deterministicDigest(packet),
+        });
+        const groundedSnapshot = await this.deps.searchStore.insertGroundedSnapshot({
+          runId: run.id,
+          projectId: input.projectId,
+          acceptedInputSnapshotId: accepted.id,
+          acceptedInputVersion: accepted.version,
+          acceptedInputDigest: accepted.digest,
+          query,
+          model: groundedResult.model,
+          provider: groundedResult.provider,
+          promptVersion: groundedResult.promptVersion,
+          promptDigest: groundedResult.promptDigest,
+          data: {
+            webSearchQueries: groundedResult.data.webSearchQueries,
+            sources: groundedResult.data.sources,
+            citations: groundedResult.data.citations ?? null,
+            structuredOutput: groundedResult.data.structuredOutput,
+          },
+          usage: groundedResult.usage,
+          observedAt: groundedResult.observedAt,
+        });
+        groundedSnapshotId = groundedSnapshot.id;
+      }
+
+      // ---- Intelligence derivation ----------------------------------------
+      const analyst = this.deps.analyst;
+      const packet = compilePacket(accepted.payload as Record<string, unknown>, query, location, language);
+      const analystResult = await analyst.analyze({
+        query,
+        location,
+        language,
+        packet,
+        evidenceRefs: [
+          { kind: "serp_snapshot", id: serpSnapshot.id, digest: serpSnapshot.snapshotDigest },
+          ...(groundedSnapshotId
+            ? [
+                {
+                  kind: "grounded_snapshot" as const,
+                  id: groundedSnapshotId,
+                  digest: "pending",
+                },
+              ]
+            : []),
+        ],
+      });
+
+      await this.deps.searchStore.insertIntelligenceSnapshot({
+        runId: run.id,
+        projectId: input.projectId,
+        acceptedInputSnapshotId: accepted.id,
+        acceptedInputVersion: accepted.version,
+        acceptedInputDigest: accepted.digest,
+        query,
+        model: analystResult.model,
+        provider: analystResult.provider,
+        promptVersion: analystResult.promptVersion,
+        promptDigest: analystResult.promptDigest,
+        serpSnapshotId: serpSnapshot.id,
+        groundedSnapshotId,
+        evidenceDigests: { serp: serpSnapshot.snapshotDigest },
+        data: analystResult.data,
+      });
+
+      await this.deps.searchStore.finishRun(run.id, "succeeded", null, null);
+      return await this.buildReadModel(input.projectId, run.id, accepted, false, Boolean(input.refresh));
+    } catch (error) {
+      const code =
+        error instanceof FactoryError && error.code.startsWith("search_")
+          ? error.code
+          : "search_run_failed";
+      const message =
+        error instanceof FactoryError ? error.message : "Search run failed unexpectedly.";
+      await this.deps.searchStore.finishRun(run.id, "failed", code, message);
+      throw error;
+    }
+  }
+
+  async runDetail(projectId: string, runId: string): Promise<SearchRunReadModel | null> {
+    const snapshots = await this.deps.intake.listSnapshots(projectId);
+    const accepted = snapshots.at(-1) ?? null;
+    const run = await this.deps.searchStore.getRun(projectId, runId);
+    if (!run || !accepted) return null;
+    return await this.buildReadModel(projectId, runId, accepted, false, run.refreshRequested);
+  }
+
+  private async recordReusedRun(
+    _sourceRunId: string,
+    runInput: Parameters<SearchStore["createRun"]>[0],
+  ): Promise<string> {
+    // Cache reuse is recorded as its own run row (audit trail) without spend.
+    const run = await this.deps.searchStore.createRun(runInput);
+    await this.deps.searchStore.finishRun(run.id, "succeeded", null, null);
+    return run.id;
+  }
+
+  private async buildReadModel(
+    projectId: string,
+    runId: string,
+    accepted: { id: string; version: number; digest: string },
+    cacheReused: boolean,
+    refreshRequested: boolean,
+  ): Promise<SearchRunReadModel> {
+    const run = (await this.deps.searchStore.getRun(projectId, runId))!;
+    const serp = await this.deps.searchStore.getSerpSnapshot(projectId, runId);
+    const grounded = await this.deps.searchStore.getGroundedSnapshot(projectId, runId);
+    const intelligence = await this.deps.searchStore.getIntelligenceSnapshot(projectId, runId);
+
+    const snapshots = await this.deps.intake.listSnapshots(projectId);
+    const latestVersion = snapshots.at(-1)?.version ?? accepted.version;
+
+    return {
+      run: {
+        id: run.id,
+        status: run.status === "succeeded" ? "succeeded" : "failed",
+        query: run.query,
+        location: run.location,
+        language: run.language,
+        device: run.device as SearchDevice,
+        provider: run.provider,
+        cacheReused,
+        refreshRequested,
+        startedAt: run.startedAt.toISOString(),
+        finishedAt: run.finishedAt ? run.finishedAt.toISOString() : null,
+        durationMs: run.durationMs,
+        errorCode: run.errorCode,
+        errorMessage: run.errorMessage,
+      },
+      acceptedInput: {
+        snapshotId: run.acceptedInputSnapshotId,
+        version: run.acceptedInputVersion,
+        digest: run.acceptedInputDigest,
+        stale: run.acceptedInputVersion < latestVersion,
+      },
+      serp:
+        serp && serp.runId === runId
+          ? {
+              snapshotId: serp.id,
+              snapshotDigest: serp.snapshotDigest,
+              observedAt: serp.observedAt.toISOString(),
+              provider: serp.provider,
+              providerRequestId: serp.providerRequestId,
+              organic: serp.organic as SearchRunReadModel["serp"] extends { organic: infer T }
+                ? T
+                : never,
+              features: (serp.features as string[] | null) ?? null,
+              peopleAlsoAsk:
+                (serp.peopleAlsoAsk as SearchRunReadModel["serp"] extends {
+                  peopleAlsoAsk: infer T;
+                }
+                  ? T
+                  : never) ?? null,
+              relatedSearches: (serp.relatedSearches as string[] | null) ?? null,
+              rawDigest: serp.rawDigest,
+              usage: (serp.usage as SearchUsage | null) ?? null,
+            }
+          : null,
+      grounded: grounded
+        ? {
+            snapshotId: grounded.id,
+            snapshotDigest: grounded.snapshotDigest,
+            model: grounded.model,
+            promptVersion: grounded.promptVersion,
+            observedAt: grounded.observedAt.toISOString(),
+            webSearchQueries: grounded.webSearchQueries as string[],
+            sources: grounded.sources as Array<{ title?: string; uri: string }>,
+          }
+        : null,
+      intelligence: intelligence
+        ? {
+            snapshotId: intelligence.id,
+            snapshotDigest: intelligence.snapshotDigest,
+            model: intelligence.model,
+            promptVersion: intelligence.promptVersion,
+            data: intelligence.data as Record<string, unknown>,
+          }
+        : null,
+    };
+  }
+}
+
+/** Grounded research is optional in v0; helper keeps intent explicit. */
+function groundedProviderOptional(): boolean {
+  return true;
+}
+
+/**
+ * Compile the bounded provider packet: only accepted project facts relevant
+ * to search analysis — never the whole repository or provider plumbing.
+ */
+export function compilePacket(
+  payload: Record<string, unknown>,
+  query: string,
+  location: string | null,
+  language: string | null,
+): Record<string, unknown> {
+  const business = (payload.business ?? {}) as Record<string, unknown>;
+  const audience = (payload.audience ?? {}) as Record<string, unknown>;
+  const markets = (payload.markets ?? {}) as Record<string, unknown>;
+  const evidence = (payload.evidence ?? {}) as Record<string, unknown>;
+  const searchSeeds = (payload.searchSeeds ?? {}) as Record<string, unknown>;
+  return {
+    business: {
+      name: business.name ?? "",
+      description: business.description ?? "",
+      businessModel: business.businessModel ?? "",
+      offerings: business.offerings ?? [],
+    },
+    audience: { segments: audience.segments ?? [], needs: audience.needs ?? [] },
+    markets: {
+      geographies: markets.geographies ?? [],
+      priorityLocations: markets.priorityLocations ?? [],
+    },
+    evidence: {
+      operatorFacts: ((evidence.operatorFacts ?? []) as string[]).slice(0, 10),
+      allowedClaims: ((evidence.allowedClaims ?? []) as string[]).slice(0, 10),
+    },
+    searchSeeds: {
+      topics: searchSeeds.topics ?? [],
+      queries: searchSeeds.queries ?? [],
+    },
+    searchTask: { query, location, language },
+  };
+}

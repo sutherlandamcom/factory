@@ -74,6 +74,10 @@ export async function resetTestDatabase(dbInst: FactoryDatabaseInstance): Promis
       runs,
       sites,
       projects,
+      search_intelligence_snapshots,
+      grounded_search_snapshots,
+      serp_snapshots,
+      search_runs,
       project_input_snapshots,
       project_input_drafts
     CASCADE;

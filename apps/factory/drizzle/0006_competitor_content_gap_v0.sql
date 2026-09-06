@@ -19,7 +19,7 @@ CREATE TABLE "accepted_content_gap_snapshots" (
 	"accepted_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "accepted_content_gap_snapshots_project_version_unique" UNIQUE("project_id","version"),
-	CONSTRAINT "accepted_content_gap_snapshots_report_id_unique" UNIQUE("report_id")
+	CONSTRAINT "accepted_content_gap_snapshots_report_decisions_unique" UNIQUE("report_id","decisions_digest")
 );
 --> statement-breakpoint
 CREATE TABLE "competitor_classification_overrides" (

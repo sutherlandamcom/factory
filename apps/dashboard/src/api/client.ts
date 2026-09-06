@@ -378,7 +378,7 @@ export interface ContentGapReportDetail {
         claimConstraints: string[];
         differentiationOpportunity: string;
         recommendedDisposition: string;
-        priority: string;
+        priority: string | null;
         rationale: string;
         evidenceRefs: Array<{ pageSnapshotId: string; segmentId: string }>;
       }>;
@@ -392,6 +392,16 @@ export interface ContentGapReportDetail {
   staleReasons: string[];
 }
 
+export type ContentGapItemView = ContentGapReportDetail["report"]["data"]["gaps"][number];
+
+export interface AcceptedGapItem extends Omit<ContentGapItemView, "priority"> {
+  disposition: "REQUIRED" | "OPTIONAL" | "EXCLUDE";
+  priority: "HIGH" | "MEDIUM" | "LOW" | null;
+  note: string | null;
+  recommendedDisposition: "REQUIRED" | "OPTIONAL" | "EXCLUDE";
+  recommendedPriority: "HIGH" | "MEDIUM" | "LOW" | null;
+}
+
 export interface AcceptedGapDetail {
   snapshot: {
     id: string;
@@ -401,7 +411,10 @@ export interface AcceptedGapDetail {
     reportId: string;
     reportDigest: string;
     decisionsDigest: string;
-    data: ContentGapReportDetail["report"]["data"];
+    data: Omit<ContentGapReportDetail["report"]["data"], "gaps"> & {
+      gaps: AcceptedGapItem[];
+      decisions?: GapDecisionView[];
+    };
   };
   stale: boolean;
   staleReasons: string[];

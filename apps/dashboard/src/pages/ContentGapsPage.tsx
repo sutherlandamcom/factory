@@ -351,9 +351,22 @@ export function ContentGapsPage({ projectId }: { projectId: string }) {
           </div>
           <ul className="mt-2 list-disc pl-5 text-sm text-gray-700">
             {acceptedDetail.snapshot.data.gaps.map((g) => (
-              <li key={g.id}>
-                {g.userNeed} — <span className="font-medium">{g.recommendedDisposition}</span>
-                {g.priority ? ` (${g.priority})` : ""}
+              <li key={g.id} className="mb-2">
+                <div>
+                  <span className="font-medium">{g.userNeed}</span> —{" "}
+                  <span className="font-semibold text-indigo-700">{g.disposition}</span>
+                  {g.priority ? ` (${g.priority})` : ""}
+                  {g.recommendedDisposition !== g.disposition && (
+                    <span className="ml-2 text-xs text-gray-400">
+                      (model proposed: {g.recommendedDisposition})
+                    </span>
+                  )}
+                </div>
+                {g.note && (
+                  <div className="mt-0.5 text-xs text-gray-600 italic">
+                    Note: {g.note}
+                  </div>
+                )}
               </li>
             ))}
           </ul>

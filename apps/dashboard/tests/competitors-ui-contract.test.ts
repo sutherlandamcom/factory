@@ -169,7 +169,22 @@ const ACCEPTED_DETAIL: AcceptedGapDetail = {
     reportId: "report-1",
     reportDigest: "r".repeat(64),
     decisionsDigest: "d".repeat(64),
-    data: REPORT_DETAIL.report.data,
+    data: {
+      ...REPORT_DETAIL.report.data,
+      gaps: [
+        {
+          ...REPORT_DETAIL.report.data.gaps[0]!,
+          disposition: "REQUIRED",
+          priority: "HIGH",
+          note: "agree",
+          recommendedDisposition: "REQUIRED",
+          recommendedPriority: "HIGH",
+        },
+      ],
+      decisions: [
+        { gapId: "gap-001", disposition: "REQUIRED", priority: "HIGH", note: "agree" },
+      ],
+    },
   },
   stale: false,
   staleReasons: [],
@@ -247,6 +262,9 @@ test("accepted gap detail pins immutability + staleness fields", () => {
     ["snapshot.reportDigest", "r".repeat(64)],
     ["snapshot.decisionsDigest", "d".repeat(64)],
     ["snapshot.data.gaps.0.id", "gap-001"],
+    ["snapshot.data.gaps.0.disposition", "REQUIRED"],
+    ["snapshot.data.gaps.0.priority", "HIGH"],
+    ["snapshot.data.gaps.0.note", "agree"],
     ["stale", false],
   ], "accepted gap detail");
 });

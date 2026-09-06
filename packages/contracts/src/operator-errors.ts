@@ -45,8 +45,10 @@ export const OPERATOR_ERROR_CODES = [
   "search_input_not_accepted",
   /** Search query failed deterministic validation/normalization. */
   "search_query_invalid",
-  /** No structured SERP provider is configured in trusted backend config. */
+  /** Search provider credentials or settings are missing. */
   "search_provider_not_configured",
+  /** Search analyst credentials (e.g. OpenRouter API key) are missing in production mode. */
+  "search_analyst_not_configured",
   /** Provider endpoint unreachable/failed before or during acquisition. */
   "search_provider_unavailable",
   /** Provider rejected authentication (credentials configured but invalid). */
@@ -79,6 +81,8 @@ export const OPERATOR_ERROR_CODES = [
   "competitor_analysis_invalid",
   /** Trusted competitor/analysis budget policy blocks this execution. */
   "competitor_budget_blocked",
+  /** Competitor or gap analyst credentials (e.g. OpenRouter API key) are missing in production mode. */
+  "competitor_analyst_not_configured",
   /** Competitor run failed for an internal reason (sanitized diagnostics). */
   "competitor_run_failed",
   /** Content gap report does not exist for this project. */
@@ -116,6 +120,7 @@ export const OPERATOR_ERROR_STATUS: Readonly<Record<OperatorErrorCode, number>> 
   search_input_not_accepted: 409,
   search_query_invalid: 400,
   search_provider_not_configured: 409,
+  search_analyst_not_configured: 409,
   search_provider_unavailable: 502,
   search_provider_auth_failed: 502,
   search_provider_budget_blocked: 402,
@@ -132,6 +137,7 @@ export const OPERATOR_ERROR_STATUS: Readonly<Record<OperatorErrorCode, number>> 
   competitor_page_failed: 502,
   competitor_analysis_invalid: 502,
   competitor_budget_blocked: 402,
+  competitor_analyst_not_configured: 409,
   competitor_run_failed: 500,
   content_gap_report_not_found: 404,
   content_gap_invalid: 502,

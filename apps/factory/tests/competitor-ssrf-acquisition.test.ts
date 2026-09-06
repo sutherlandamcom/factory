@@ -183,3 +183,101 @@ test("acquisition: timeout produces FAILED outcome", async () => {
   assert.equal(result.status, "FAILED");
   assert.match(result.reason, /timed out/);
 });
+
+test("acquisition: slow chunked body exceeding timeout aborts and fails with timeout", async () => {
+  let streamCancelled = false;
+  const slowStream = new ReadableStream({
+    async start(controller) {
+      controller.enqueue(Buffer.from("<html><body>chunk1"));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      try {
+        controller.enqueue(Buffer.from("chunk2</body></html>"));
+        controller.close();
+      } catch {
+        // stream might already be closed or cancelled
+      }
+    },
+    cancel() {
+      streamCancelled = true;
+    },
+  });
+
+  const fetchImpl: FetchLike = async () =>
+    new Response(slowStream, {
+      status: 200,
+      headers: { "content-type": "text/html" },
+    });
+
+  const provider = new DirectHttpPageProvider({
+    fetchImpl,
+    lookupFn: fakeLookup({ "slow-chunk.example.com": [{ address: "93.184.216.34", family: 4 }] }),
+  });
+
+  const result = await provider.acquire({ url: "https://slow-chunk.example.com/page", timeoutMs: 25 });
+  assert.equal(result.status, "FAILED");
+  assert.match(result.reason, /timed out/i);
+});
+
+test("acquisition: 403/429 cancels body stream immediately without buffering huge body", async () => {
+  let chunksRead = 0;
+  let streamCancelled = false;
+
+  const infiniteStream = new ReadableStream({
+    pull(controller) {
+      chunksRead++;
+      controller.enqueue(Buffer.alloc(64 * 1024, "x"));
+    },
+    cancel() {
+      streamCancelled = true;
+    },
+  });
+
+  const fetchImpl: FetchLike = async () =>
+    new Response(infiniteStream, {
+      status: 403,
+      headers: { "content-type": "text/html" },
+    });
+
+  const provider = new DirectHttpPageProvider({
+    fetchImpl,
+    lookupFn: fakeLookup({ "huge-403.example.com": [{ address: "93.184.216.34", family: 4 }] }),
+  });
+
+  const result = await provider.acquire({ url: "https://huge-403.example.com/blocked" });
+  assert.equal(result.status, "BLOCKED");
+  assert.equal(result.httpStatus, 403);
+  assert.equal(streamCancelled, true);
+  assert.ok(chunksRead <= 1, `Expected immediate cancellation, but read ${chunksRead} chunks`);
+});
+
+test("acquisition: non-HTML cancels body stream immediately without buffering huge body", async () => {
+  let chunksRead = 0;
+  let streamCancelled = false;
+
+  const infiniteStream = new ReadableStream({
+    pull(controller) {
+      chunksRead++;
+      controller.enqueue(Buffer.alloc(64 * 1024, "x"));
+    },
+    cancel() {
+      streamCancelled = true;
+    },
+  });
+
+  const fetchImpl: FetchLike = async () =>
+    new Response(infiniteStream, {
+      status: 200,
+      headers: { "content-type": "application/pdf" },
+    });
+
+  const provider = new DirectHttpPageProvider({
+    fetchImpl,
+    lookupFn: fakeLookup({ "huge-pdf.example.com": [{ address: "93.184.216.34", family: 4 }] }),
+  });
+
+  const result = await provider.acquire({ url: "https://huge-pdf.example.com/doc.pdf" });
+  assert.equal(result.status, "NON_HTML");
+  assert.equal(streamCancelled, true);
+  assert.ok(chunksRead <= 1, `Expected immediate cancellation, but read ${chunksRead} chunks`);
+});
+

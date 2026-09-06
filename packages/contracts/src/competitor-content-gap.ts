@@ -420,6 +420,14 @@ export const gapDecisionSchema = z
   .strict();
 export type GapDecision = z.infer<typeof gapDecisionSchema>;
 
+export const gapDecisionRecordSchema = gapDecisionSchema
+  .extend({
+    priority: gapPrioritySchema.nullable(),
+    note: boundedText(500).nullable(),
+  })
+  .strict();
+export type GapDecisionRecord = z.infer<typeof gapDecisionRecordSchema>;
+
 /**
  * Report digest + all-gap decisions digest bind the accepted snapshot.
  * Every gap of the report must have exactly one decision to accept.
@@ -445,6 +453,56 @@ export const contentGapDecisionsDataSchema = z
     }
   });
 export type ContentGapDecisionsData = z.infer<typeof contentGapDecisionsDataSchema>;
+
+// ---------------------------------------------------------------------------
+// Accepted Content Gap Snapshot data (immutable human-accepted truth)
+// ---------------------------------------------------------------------------
+
+export const acceptedContentGapItemSchema = contentGapSchema
+  .extend({
+    /** Human-reviewed disposition is authoritative after acceptance. */
+    disposition: gapDispositionSchema,
+    /** Operator-decided priority (preserves operator decision or model recommendation). */
+    priority: gapPrioritySchema,
+    /** Operator review note (preserved exactly; null when omitted). */
+    note: boundedText(500).nullable(),
+    /** Model-proposed disposition preserved for provenance. */
+    recommendedDisposition: gapDispositionSchema,
+    /** Model-proposed priority preserved for provenance. */
+    recommendedPriority: gapPrioritySchema,
+  })
+  .strict();
+export type AcceptedContentGapItem = z.infer<typeof acceptedContentGapItemSchema>;
+
+export const acceptedContentGapSnapshotDataSchema = z
+  .object({
+    serpSnapshotId: idSchema,
+    serpSnapshotDigest: digestSchema,
+    intelligenceSnapshotId: idSchema,
+    intelligenceSnapshotDigest: digestSchema,
+    pageSnapshotRefs: z
+      .array(z.object({ id: idSchema, digest: digestSchema }).strict())
+      .max(10),
+    analysisRefs: z
+      .array(z.object({ id: idSchema, digest: digestSchema }).strict())
+      .max(10),
+    acceptedInputSnapshotId: idSchema,
+    acceptedInputSnapshotVersion: z.number().int().min(1),
+    acceptedInputDigest: digestSchema,
+    coverageMatrix: coverageMatrixSchema,
+    /** Gaps with human-reviewed decisions materialized as authoritative. */
+    gaps: z.array(acceptedContentGapItemSchema).max(30),
+    differentiationRequirements: differentiationRequirementsSchema,
+    model: boundedText(200),
+    provider: boundedText(100),
+    promptVersion: z.string().min(1).max(64),
+    /** Review state of the accepted snapshot (always accepted). */
+    reviewState: z.literal("accepted").optional(),
+    /** Exact operator review decisions preserved inside the immutable snapshot. */
+    decisions: z.array(gapDecisionRecordSchema).max(30),
+  })
+  .strict();
+export type AcceptedContentGapSnapshotData = z.infer<typeof acceptedContentGapSnapshotDataSchema>;
 
 // ---------------------------------------------------------------------------
 // Parsers (fail closed on drift, mirroring search contract exports)
@@ -475,4 +533,8 @@ export function parseContentGapReportData(input: unknown): ContentGapReportData 
 
 export function parseContentGapDecisionsData(input: unknown): ContentGapDecisionsData {
   return contentGapDecisionsDataSchema.parse(input);
+}
+
+export function parseAcceptedContentGapSnapshotData(input: unknown): AcceptedContentGapSnapshotData {
+  return acceptedContentGapSnapshotDataSchema.parse(input);
 }

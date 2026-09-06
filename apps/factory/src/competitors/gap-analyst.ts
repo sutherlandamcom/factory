@@ -24,6 +24,8 @@ export interface GapAnalystRequest {
     data: Record<string, unknown>;
   }>;
   searchIntelligence: Record<string, unknown>;
+  serpSnapshot?: { id: string; digest: string };
+  intelligenceSnapshot?: { id: string; digest: string };
   acceptedEvidence: Array<{ field: string; index: number; text: string }>;
   projectContext: Record<string, unknown>;
   /** Factory-computed coverage matrix is supplied as grounding, not output. */
@@ -76,6 +78,9 @@ export function buildGapAnalystPrompt(request: GapAnalystRequest): string {
     "",
     "SEARCH INTELLIGENCE (trusted, inert):",
     JSON.stringify(request.searchIntelligence),
+    "",
+    "BOUND SEARCH EVIDENCE (for searchEvidenceRefs):",
+    JSON.stringify({ serpSnapshot: request.serpSnapshot, intelligenceSnapshot: request.intelligenceSnapshot }),
     "",
     "ACCEPTED FIRST-PARTY EVIDENCE (the ONLY allowable ourEvidenceAvailable targets):",
     JSON.stringify(request.acceptedEvidence),
@@ -164,6 +169,8 @@ export class FixtureGapAnalyst implements GapAnalystModel {
   readonly promptDigest = "f".repeat(64);
 
   async propose(request: GapAnalystRequest): Promise<GapAnalystResult> {
+    const analyzedPageIds = new Set(request.analyses.map((a) => a.pageSnapshotId));
+
     const gaps = request.coverageMatrixSummary.slice(0, 5).map((row, i) => {
       const levels = Object.values(row.coverage);
       const strongest = levels.reduce(
@@ -173,12 +180,46 @@ export class FixtureGapAnalyst implements GapAnalystModel {
       const coverage = (["ABSENT", "WEAK", "PARTIAL", "STRONG"] as const)[Math.min(strongest, 3)]!;
       const covering = Object.entries(row.coverage)
         .filter(([, l]) => l !== "ABSENT")
-        .map(([id]) => id);
+        .map(([id]) => id)
+        .filter((id) => analyzedPageIds.has(id));
+
+      const searchEvidenceRefs = [];
+      if (request.intelligenceSnapshot) {
+        searchEvidenceRefs.push({
+          kind: "search_intelligence_snapshot" as const,
+          id: request.intelligenceSnapshot.id,
+          digest: request.intelligenceSnapshot.digest,
+        });
+      } else if (request.serpSnapshot) {
+        searchEvidenceRefs.push({
+          kind: "serp_snapshot" as const,
+          id: request.serpSnapshot.id,
+          digest: request.serpSnapshot.digest,
+        });
+      }
+
+      const evidenceRefs: Array<{ pageSnapshotId: string; segmentId: string }> = [];
+      for (const covId of covering) {
+        const matching = request.analyses.find((a) => a.pageSnapshotId === covId);
+        const segRefs = (matching?.data?.evidenceSegmentRefs as Array<{ segmentId: string }> | undefined) ?? [];
+        if (segRefs[0]?.segmentId) {
+          evidenceRefs.push({ pageSnapshotId: covId, segmentId: segRefs[0].segmentId });
+          break;
+        }
+      }
+      if (evidenceRefs.length === 0 && request.analyses[0]) {
+        const a = request.analyses[0];
+        const segRefs = (a.data?.evidenceSegmentRefs as Array<{ segmentId: string }> | undefined) ?? [];
+        if (segRefs[0]?.segmentId) {
+          evidenceRefs.push({ pageSnapshotId: a.pageSnapshotId, segmentId: segRefs[0].segmentId });
+        }
+      }
+
       return {
         id: `gap-${String(i + 1).padStart(3, "0")}`,
         userNeed: row.requirement,
         topicQuestion: `${row.requirement}?`,
-        searchEvidenceRefs: [],
+        searchEvidenceRefs,
         competitorCoverage: coverage,
         competitorsCoveringIt: covering,
         treatmentPattern: "Fixture-inferred treatment pattern from analyses.",
@@ -194,7 +235,7 @@ export class FixtureGapAnalyst implements GapAnalystModel {
         recommendedDisposition: (coverage === "STRONG" ? "OPTIONAL" : "REQUIRED") as string,
         priority: (coverage === "STRONG" ? "LOW" : "HIGH") as string,
         rationale: "Fixture rationale derived from deterministic coverage matrix.",
-        evidenceRefs: [],
+        evidenceRefs,
       };
     });
     const differentiationRequirements = {

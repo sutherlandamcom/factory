@@ -21,6 +21,7 @@ import { CompetitorStore } from "../competitors/competitor-store.js";
 import { CompetitorContentGapService, buildCompetitorAnalysts } from "../competitors/service.js";
 import { FixturePageProvider } from "../competitors/fixture-page-provider.js";
 import { DirectHttpPageProvider } from "../competitors/direct-http.js";
+import { FactoryError } from "../executor/errors.js";
 
 /**
  * Trusted backend provider selection for Search Intelligence.
@@ -53,11 +54,18 @@ export function buildSearchIntelligenceService(
   const grounded = mode === "fixture" ? new FixtureGroundedSearchProvider() : null;
 
   const analyst =
-    mode === "fixture" || !env.OPENROUTER_API_KEY
+    mode === "fixture"
       ? new FixtureSearchAnalyst()
       : new OpenRouterSearchAnalyst({
           model: "google/gemini-3.7-flash",
           callModel: async (prompt) => {
+            const apiKey = env.OPENROUTER_API_KEY?.trim();
+            if (!apiKey) {
+              throw new FactoryError(
+                "search_analyst_not_configured",
+                "OpenRouter API key is required for search analyst in production mode (fail closed).",
+              );
+            }
             const result = await invokeModel(
               {
                 roleId: "search_analyst",
@@ -68,7 +76,7 @@ export function buildSearchIntelligenceService(
                 maxTokens: 4096,
                 timeoutMs: 120_000,
               },
-              { loadApiKey: () => env.OPENROUTER_API_KEY ?? null },
+              { loadApiKey: () => apiKey },
             );
             return {
               text: result.content,

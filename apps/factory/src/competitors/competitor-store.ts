@@ -142,6 +142,58 @@ export class CompetitorStore {
     return row ?? null;
   }
 
+  async getIntelligenceSnapshot(
+    projectId: string,
+    intelligenceSnapshotId: string,
+  ): Promise<typeof searchIntelligenceSnapshots.$inferSelect | null> {
+    const [row] = await this.db
+      .select()
+      .from(searchIntelligenceSnapshots)
+      .where(
+        and(
+          eq(searchIntelligenceSnapshots.projectId, projectId),
+          eq(searchIntelligenceSnapshots.id, intelligenceSnapshotId),
+        ),
+      );
+    return row ?? null;
+  }
+
+  async getLatestIntelligenceForQuery(
+    projectId: string,
+    query: string,
+  ): Promise<typeof searchIntelligenceSnapshots.$inferSelect | null> {
+    const [row] = await this.db
+      .select()
+      .from(searchIntelligenceSnapshots)
+      .where(
+        and(
+          eq(searchIntelligenceSnapshots.projectId, projectId),
+          eq(searchIntelligenceSnapshots.query, query),
+        ),
+      )
+      .orderBy(desc(searchIntelligenceSnapshots.createdAt))
+      .limit(1);
+    return row ?? null;
+  }
+
+  async getLatestSerpForQuery(
+    projectId: string,
+    query: string,
+  ): Promise<typeof serpSnapshots.$inferSelect | null> {
+    const [row] = await this.db
+      .select()
+      .from(serpSnapshots)
+      .where(
+        and(
+          eq(serpSnapshots.projectId, projectId),
+          eq(serpSnapshots.query, query),
+        ),
+      )
+      .orderBy(desc(serpSnapshots.observedAt))
+      .limit(1);
+    return row ?? null;
+  }
+
   async listSerpSnapshotsForProject(projectId: string, limit = 20) {
     return await this.db
       .select()
@@ -447,6 +499,13 @@ export class CompetitorStore {
       .where(eq(contentGapReports.id, reportId));
   }
 
+  async markGapReportAccepted(reportId: string): Promise<void> {
+    await this.db
+      .update(contentGapReports)
+      .set({ reviewState: "accepted" })
+      .where(eq(contentGapReports.id, reportId));
+  }
+
   // ---- Decisions -------------------------------------------------------------
 
   async replaceDecisions(
@@ -543,6 +602,17 @@ export class CompetitorStore {
     return row ?? null;
   }
 
+  async getAcceptedGapSnapshotByReportId(
+    reportId: string,
+  ): Promise<AcceptedContentGapSnapshotRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(acceptedContentGapSnapshots)
+      .where(eq(acceptedContentGapSnapshots.reportId, reportId))
+      .limit(1);
+    return row ?? null;
+  }
+
   async listAcceptedGapSnapshots(projectId: string): Promise<AcceptedContentGapSnapshotRecord[]> {
     return await this.db
       .select()
@@ -582,6 +652,19 @@ export class CompetitorStore {
         and(
           eq(competitorPageSnapshots.projectId, projectId),
           inArray(competitorPageSnapshots.id, ids),
+        ),
+      );
+  }
+
+  async analysesByIds(projectId: string, ids: string[]): Promise<CompetitorPageAnalysisRecord[]> {
+    if (ids.length === 0) return [];
+    return await this.db
+      .select()
+      .from(competitorPageAnalyses)
+      .where(
+        and(
+          eq(competitorPageAnalyses.projectId, projectId),
+          inArray(competitorPageAnalyses.id, ids),
         ),
       );
   }

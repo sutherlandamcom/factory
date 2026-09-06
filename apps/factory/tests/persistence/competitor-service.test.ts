@@ -188,6 +188,7 @@ test("gap proposal: coverage matrix, first-party refs, review, accept v1/v2, sta
     ["https://guide-a.example/chamonix", successOutcome("https://guide-a.example/chamonix", PAGE_HTML_1)],
     ["https://guide-b.example/article", successOutcome("https://guide-b.example/article", PAGE_HTML_2)],
   ]);
+  const store = new CompetitorStore(inst.db);
   const service = buildService(inst, outcomes);
   const run = await service.runCompetitors({ projectId: "proj-1", serpSnapshotId: "serp-1" });
 
@@ -206,7 +207,12 @@ test("gap proposal: coverage matrix, first-party refs, review, accept v1/v2, sta
   await service.saveGapDecisions({
     projectId: "proj-1",
     reportId,
-    decisions: reportData.gaps.map((g) => ({ gapId: g.id, disposition: "REQUIRED" as const, priority: "HIGH" as const })),
+    decisions: reportData.gaps.map((g) => ({
+      gapId: g.id,
+      disposition: "REQUIRED" as const,
+      priority: "HIGH" as const,
+      note: "human note",
+    })),
   });
   await assert.rejects(
     service.acceptGapReport({ projectId: "proj-1", reportId, expectedDigest: "0".repeat(64) }),
@@ -217,16 +223,49 @@ test("gap proposal: coverage matrix, first-party refs, review, accept v1/v2, sta
   const v1 = await service.acceptGapReport({ projectId: "proj-1", reportId, expectedDigest: detail.report.snapshotDigest });
   assert.equal(v1.version, 1);
 
-  // Old digest replay (double acceptance) fails: version uniqueness + report digest binding is fine, but accepting again creates v2 — acceptable (new version). Verify v1 remains inspectable:
+  // Verify v1 detail and materialized human truth
   const v1Detail = await service.acceptedGapDetail("proj-1", 1);
   assert.equal(v1Detail.snapshot.version, 1);
   assert.equal(v1Detail.stale, false);
 
-  // Accept again (same reviewed report) => v2 immutable history preserved.
+  const snapshotData = v1Detail.snapshot.data as {
+    gaps: Array<{
+      id: string;
+      disposition: string;
+      priority: string | null;
+      note: string | null;
+      recommendedDisposition: string;
+    }>;
+    decisions: Array<{ gapId: string; disposition: string }>;
+  };
+  const acceptedGaps = snapshotData.gaps;
+  assert.ok(acceptedGaps.length >= 1);
+  for (const gap of acceptedGaps) {
+    assert.equal(gap.disposition, "REQUIRED");
+    assert.equal(gap.priority, "HIGH");
+    assert.equal(gap.note, "human note");
+    assert.ok(gap.recommendedDisposition);
+  }
+  const acceptedDecisions = snapshotData.decisions;
+  assert.ok(Array.isArray(acceptedDecisions));
+  assert.equal(acceptedDecisions.length, acceptedGaps.length);
+
+  // Double acceptance of the same report does NOT mint v2: returns existing snapshot (idempotent)
   const v2 = await service.acceptGapReport({ projectId: "proj-1", reportId, expectedDigest: detail.report.snapshotDigest });
-  assert.equal(v2.version, 2);
-  const v1After = await service.acceptedGapDetail("proj-1", 1);
-  assert.equal(v1After.snapshot.snapshotDigest, v1Detail.snapshot.snapshotDigest);
+  assert.equal(v2.version, 1);
+  assert.equal(v2.snapshotId, v1.snapshotId);
+  const latestVer = await store.latestAcceptedGapVersion("proj-1");
+  assert.equal(latestVer, 1);
+
+  // Modifying decisions for an already accepted report fails closed
+  await assert.rejects(
+    service.saveGapDecisions({
+      projectId: "proj-1",
+      reportId,
+      decisions: reportData.gaps.map((g) => ({ gapId: g.id, disposition: "OPTIONAL" as const })),
+    }),
+    /already accepted/,
+  );
 
   // Accepting a nonexistent report fails.
   await assert.rejects(

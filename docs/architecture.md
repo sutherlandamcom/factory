@@ -743,17 +743,32 @@ away, zero resolvable refs fail closed) → PASS 2 gap analyst (compact analyses
 `ContentGapReport` with Factory-computed coverage matrix (`coverage-matrix-v1`)
 and provenance digests → operator per-gap decisions (disposition/priority/bounded
 note; every gap decided required) → immutable `accepted_content_gap_snapshots`
-(versioned per project, report+decisions digest bound; upstream mutation makes
-accepted state stale by digest comparison).
+(unique per project+version and unique per reportId; report+decisions digest bound;
+human decisions `disposition`, `priority`, `note` are materialized directly into
+accepted gaps while preserving `recommendedDisposition` and `recommendedPriority`;
+double acceptance is idempotent and returns the existing snapshot without minting
+new versions; decision modification is locked post-acceptance).
+
+Centralized staleness evaluation checks all upstream dependencies: latest accepted
+ProjectInput version/digest, authoritative SERP snapshot (verifying digest and
+ensuring no newer SERP was observed for the query), authoritative Search
+Intelligence snapshot (verifying digest and ensuring no newer intelligence was
+created for the query), and bound competitor page snapshots and analyses.
 
 Trust boundaries: candidate URLs come only from persisted SERP evidence (no
 browser-supplied fetch URLs, providers, or prompts); first-party evidence
 separation is enforced (`ourEvidenceAvailable` must resolve to accepted intake
 evidence items with excerpt checks — competitor claims can never become our
-claims); provider mode is trusted backend config
+claims; `validateContentGapGrounding` fails closed on empty or forged search
+evidence, non-INCLUDE competitor coverage, ungrounded segment anchors, or
+smuggled claims); provider mode is trusted backend config
 (`FACTORY_COMPETITOR_MODE=fixture|production`, fixture page provider for CI/E2E
-zero-spend journeys); budget gate on recorded analysis cost
+zero-spend journeys; missing credentials fail closed with typed 409 errors rather
+than silently falling back to fixture mode); budget gate on recorded analysis cost
 (`FACTORY_COMPETITOR_DAILY_LIMIT_USD`, default 5 USD; UNKNOWN costs uncounted).
+Direct HTTP acquisition uses a single global timeout covering all redirects, DNS,
+and chunked body streaming, canceling response body streams immediately on
+403/429/non-HTML without buffering unneeded content.
 
 Persistence (migration `0006_competitor_content_gap_v0`): `competitor_runs`,
 `competitor_page_snapshots` (content-digest dedupe, acquisition lineage),

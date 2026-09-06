@@ -185,6 +185,13 @@
             "project_id",
             "version"
           ]
+        },
+        "accepted_content_gap_snapshots_report_id_unique": {
+          "name": "accepted_content_gap_snapshots_report_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "report_id"
+          ]
         }
       },
       "policies": {},

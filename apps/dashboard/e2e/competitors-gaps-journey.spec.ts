@@ -119,6 +119,13 @@ test.describe("Competitors + Content Gap journey", () => {
     await expect(page.locator("text=/Content gaps accepted as version 1/")).toBeVisible({ timeout: 30_000 });
     await expect(page.locator("text=Accepted snapshot v1 (immutable)")).toBeVisible({ timeout: 30_000 });
 
+    // Accepted view renders human decisions and operator notes (Defect G & A)
+    await expect(page.locator("text=REQUIRED (HIGH)").first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator("text=Note: e2e note 0")).toBeVisible({ timeout: 10_000 });
+
+    // Accept button is hidden after acceptance
+    await expect(page.getByRole("button", { name: /Accept as v/ })).not.toBeVisible();
+
     // ---- Reload persistence ----
     await page.reload();
     // Reload lands on the projects list (view state is not persisted); reopen.
@@ -128,6 +135,8 @@ test.describe("Competitors + Content Gap journey", () => {
     await expect(page.locator("text=Accepted versions")).toBeVisible({ timeout: 15_000 });
     await page.locator("button", { hasText: "v1" }).first().click();
     await expect(page.locator("text=Accepted snapshot v1 (immutable)")).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator("text=REQUIRED (HIGH)").first()).toBeVisible();
+    await expect(page.locator("text=Note: e2e note 0")).toBeVisible();
 
     // ---- Real operator restart WITHOUT database reset ----
     await supervisorCall("/restart");
@@ -141,5 +150,8 @@ test.describe("Competitors + Content Gap journey", () => {
     await expect(page.locator("text=Accepted snapshot v1 (immutable)")).toBeVisible({ timeout: 15_000 });
     // v1 stays inspectable; digest-bound lineage visible.
     await expect(page.locator("text=Report digest:").first()).toBeVisible();
+    await expect(page.locator("text=REQUIRED (HIGH)").first()).toBeVisible();
+    await expect(page.locator("text=Note: e2e note 0")).toBeVisible();
   });
 });
+

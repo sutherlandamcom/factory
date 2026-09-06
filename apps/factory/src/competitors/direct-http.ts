@@ -111,154 +111,169 @@ export class DirectHttpPageProvider implements CompetitorPageProvider {
     const maxBytes = request.maxBytes ?? MAX_PAGE_RAW_BYTES;
     const observedAt = this.now();
 
-    let currentUrl = request.url;
-    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-      // Per-hop SSRF revalidation (fail closed before every fetch).
-      const check = await validateUrlResolved(currentUrl, this.lookupFn);
-      if (!check.ok) {
-        return outcomeFailure("FAILED", null, null, hop === 0 ? null : currentUrl, check.reason ?? "URL rejected by safety policy.", this.now);
-      }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      let response: Response;
-      try {
-        response = await this.fetchImpl(currentUrl, {
-          method: "GET",
-          redirect: "manual",
-          signal: controller.signal,
-          headers: {
-            "User-Agent": SAFE_USER_AGENT,
-            Accept: "text/html,application/xhtml+xml",
-            "Accept-Language": "*",
-          },
-        });
-      } catch (error) {
-        clearTimeout(timer);
-        const aborted = error instanceof Error && error.name === "AbortError";
-        return outcomeFailure(
-          "FAILED",
-          null,
-          null,
-          hop === 0 ? null : currentUrl,
-          aborted ? "Acquisition timed out." : "Network request failed.",
-          this.now,
-        );
-      }
-      clearTimeout(timer);
-
-      // Manual redirect handling: revalidate every hop against the SSRF guard.
-      if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.get("location");
-        if (!location) {
-          return outcomeFailure("FAILED", response.status, response.headers.get("content-type"), currentUrl, "Redirect without Location header.", this.now);
-        }
-        let nextUrl: string;
-        try {
-          nextUrl = new URL(location, currentUrl).toString();
-        } catch {
-          return outcomeFailure("FAILED", response.status, null, currentUrl, "Redirect Location is not a valid URL.", this.now);
-        }
-        if (hop === MAX_REDIRECTS) {
-          return outcomeFailure("FAILED", response.status, null, currentUrl, "Redirect chain exceeded the limit.", this.now);
-        }
-        currentUrl = nextUrl;
-        continue;
-      }
-
-      const contentType = response.headers.get("content-type") ?? "";
-      const mime = contentType.split(";")[0]!.trim().toLowerCase();
-
-      if (response.status === 401 || response.status === 403 || response.status === 429) {
-        await this.drain(response);
-        return outcomeFailure("BLOCKED", response.status, contentType, currentUrl, `Page blocked the acquisition (HTTP ${response.status}).`, this.now);
-      }
-      if (response.status >= 400) {
-        await this.drain(response);
-        return outcomeFailure("FAILED", response.status, contentType, currentUrl, `Page acquisition failed (HTTP ${response.status}).`, this.now);
-      }
-
-      // Content-type validation: HTML only. PDFs/JSON/images are NON_HTML
-      // (acquired but unsupported for structural extraction).
-      const isHtml = mime === "text/html" || mime === "application/xhtml+xml";
-      if (!isHtml) {
-        const isAcquirableBinary = mime !== "" && mime !== "application/octet-stream";
-        await this.drain(response);
-        return outcomeFailure(
-          isAcquirableBinary ? "NON_HTML" : "UNSUPPORTED",
-          response.status,
-          contentType,
-          currentUrl,
-          `Content type ${mime || "unknown"} is not HTML.`,
-          this.now,
-        );
-      }
-
-      // Streamed bounded read: abort as soon as the hard cap is exceeded.
-      const reader = response.body?.getReader();
-      if (!reader) {
-        return outcomeFailure("FAILED", response.status, contentType, currentUrl, "Response had no readable body.", this.now);
-      }
-      const chunks: Buffer[] = [];
-      let total = 0;
-      let truncated = false;
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value) {
-            total += value.byteLength;
-            if (total > maxBytes) {
-              truncated = true;
-              const remaining = Math.max(0, maxBytes - (total - value.byteLength));
-              if (remaining > 0) chunks.push(Buffer.from(value.slice(0, remaining)));
-              break;
-            }
-            chunks.push(Buffer.from(value));
-          }
-        }
-      } catch {
-        return outcomeFailure("FAILED", response.status, contentType, currentUrl, "Response stream failed before completion.", this.now);
-      } finally {
-        reader.releaseLock?.();
-        await this.drainAbort(response);
-      }
-
-      if (truncated) {
-        // Explicit unsupported state — never silently read unbounded pages.
-        return outcomeFailure("UNSUPPORTED", response.status, contentType, currentUrl, `Page exceeded the hard acquisition limit (${maxBytes} bytes).`, this.now);
-      }
-
-      const rawBytes = Buffer.concat(chunks);
-      return {
-        status: "SUCCESS",
-        finalUrl: currentUrl,
-        httpStatus: response.status,
-        contentType,
-        rawBytes,
-        rawDigest: sha256(rawBytes),
-        truncated: false,
-        observedAt,
-      };
-    }
-    // Unreachable: loop returns on every path (hop <= MAX_REDIRECTS inclusive).
-    return outcomeFailure("FAILED", null, null, null, "Redirect handling exhausted.", this.now);
-  }
-
-  /** Bounded drain so the socket can be reused without reading unbounded bodies. */
-  private async drain(response: Response): Promise<void> {
     try {
-      await response.arrayBuffer();
-    } catch {
-      // ignore drain failures
+      let currentUrl = request.url;
+      for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+        // Per-hop SSRF revalidation (fail closed before every fetch).
+        const check = await validateUrlResolved(currentUrl, this.lookupFn);
+        if (!check.ok) {
+          return outcomeFailure("FAILED", null, null, hop === 0 ? null : currentUrl, check.reason ?? "URL rejected by safety policy.", this.now);
+        }
+
+        let response: Response;
+        try {
+          response = await this.fetchImpl(currentUrl, {
+            method: "GET",
+            redirect: "manual",
+            signal: controller.signal,
+            headers: {
+              "User-Agent": SAFE_USER_AGENT,
+              Accept: "text/html,application/xhtml+xml",
+              "Accept-Language": "*",
+            },
+          });
+        } catch (error) {
+          const aborted = controller.signal.aborted || (error instanceof Error && error.name === "AbortError");
+          return outcomeFailure(
+            "FAILED",
+            null,
+            null,
+            hop === 0 ? null : currentUrl,
+            aborted ? "Acquisition timed out." : "Network request failed.",
+            this.now,
+          );
+        }
+
+        // Manual redirect handling: revalidate every hop against the SSRF guard.
+        if (response.status >= 300 && response.status < 400) {
+          await this.drain(response);
+          const location = response.headers.get("location");
+          if (!location) {
+            return outcomeFailure("FAILED", response.status, response.headers.get("content-type"), currentUrl, "Redirect without Location header.", this.now);
+          }
+          let nextUrl: string;
+          try {
+            nextUrl = new URL(location, currentUrl).toString();
+          } catch {
+            return outcomeFailure("FAILED", response.status, null, currentUrl, "Redirect Location is not a valid URL.", this.now);
+          }
+          if (hop === MAX_REDIRECTS) {
+            return outcomeFailure("FAILED", response.status, null, currentUrl, "Redirect chain exceeded the limit.", this.now);
+          }
+          currentUrl = nextUrl;
+          continue;
+        }
+
+        const contentType = response.headers.get("content-type") ?? "";
+        const mime = contentType.split(";")[0]!.trim().toLowerCase();
+
+        if (response.status === 401 || response.status === 403 || response.status === 429) {
+          await this.drain(response);
+          return outcomeFailure("BLOCKED", response.status, contentType, currentUrl, `Page blocked the acquisition (HTTP ${response.status}).`, this.now);
+        }
+        if (response.status >= 400) {
+          await this.drain(response);
+          return outcomeFailure("FAILED", response.status, contentType, currentUrl, `Page acquisition failed (HTTP ${response.status}).`, this.now);
+        }
+
+        // Content-type validation: HTML only. PDFs/JSON/images are NON_HTML
+        // (acquired but unsupported for structural extraction).
+        const isHtml = mime === "text/html" || mime === "application/xhtml+xml";
+        if (!isHtml) {
+          const isAcquirableBinary = mime !== "" && mime !== "application/octet-stream";
+          await this.drain(response);
+          return outcomeFailure(
+            isAcquirableBinary ? "NON_HTML" : "UNSUPPORTED",
+            response.status,
+            contentType,
+            currentUrl,
+            `Content type ${mime || "unknown"} is not HTML.`,
+            this.now,
+          );
+        }
+
+        // Streamed bounded read: abort as soon as the hard cap is exceeded or timeout occurs.
+        const reader = response.body?.getReader();
+        if (!reader) {
+          return outcomeFailure("FAILED", response.status, contentType, currentUrl, "Response had no readable body.", this.now);
+        }
+        const chunks: Buffer[] = [];
+        let total = 0;
+        let truncated = false;
+
+        const onAbort = () => {
+          reader.cancel().catch(() => {});
+        };
+        controller.signal.addEventListener("abort", onAbort, { once: true });
+
+        try {
+          for (;;) {
+            if (controller.signal.aborted) {
+              throw new Error("AbortError");
+            }
+            const { done, value } = await reader.read();
+            if (controller.signal.aborted) {
+              throw new Error("AbortError");
+            }
+            if (done) break;
+            if (value) {
+              total += value.byteLength;
+              if (total > maxBytes) {
+                truncated = true;
+                const remaining = Math.max(0, maxBytes - (total - value.byteLength));
+                if (remaining > 0) chunks.push(Buffer.from(value.slice(0, remaining)));
+                break;
+              }
+              chunks.push(Buffer.from(value));
+            }
+          }
+        } catch (error) {
+          const isAbort =
+            controller.signal.aborted ||
+            (error instanceof Error && (error.name === "AbortError" || error.message === "AbortError"));
+          if (isAbort) {
+            return outcomeFailure("FAILED", null, null, currentUrl, "Acquisition timed out.", this.now);
+          }
+          return outcomeFailure("FAILED", response.status, contentType, currentUrl, "Response stream failed before completion.", this.now);
+        } finally {
+          controller.signal.removeEventListener("abort", onAbort);
+          reader.releaseLock?.();
+          await this.drain(response);
+        }
+
+        if (truncated) {
+          // Explicit unsupported state — never silently read unbounded pages.
+          return outcomeFailure("UNSUPPORTED", response.status, contentType, currentUrl, `Page exceeded the hard acquisition limit (${maxBytes} bytes).`, this.now);
+        }
+
+        const rawBytes = Buffer.concat(chunks);
+        return {
+          status: "SUCCESS",
+          finalUrl: currentUrl,
+          httpStatus: response.status,
+          contentType,
+          rawBytes,
+          rawDigest: sha256(rawBytes),
+          truncated: false,
+          observedAt,
+        };
+      }
+      // Unreachable: loop returns on every path (hop <= MAX_REDIRECTS inclusive).
+      return outcomeFailure("FAILED", null, null, null, "Redirect handling exhausted.", this.now);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
-  private async drainAbort(response: Response): Promise<void> {
+  /** Bounded drain: cancel body stream immediately so hostile/unbounded bodies are never buffered. */
+  private async drain(response: Response): Promise<void> {
     try {
       await response.body?.cancel();
     } catch {
-      // ignore
+      // ignore drain failures
     }
   }
 }

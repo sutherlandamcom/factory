@@ -196,6 +196,9 @@ export class SearchIntelligenceService {
     const blockers: string[] = [];
     if (!latest) blockers.push("No accepted project inputs. Complete Intake first.");
     if (!readiness.configured) blockers.push(readiness.reason);
+    if (this.deps.analyst.provider === "openrouter" && !process.env.OPENROUTER_API_KEY?.trim()) {
+      blockers.push("OpenRouter API key is required for search intelligence in production mode.");
+    }
     // Grounded research is optional in v0; absence is surfaced honestly in
     // run details, never treated as a blocker.
 
@@ -212,7 +215,10 @@ export class SearchIntelligenceService {
         : null,
       seeds,
       readiness: {
-        canRun: Boolean(latest) && readiness.configured,
+        canRun:
+          Boolean(latest) &&
+          readiness.configured &&
+          (this.deps.analyst.provider !== "openrouter" || Boolean(process.env.OPENROUTER_API_KEY?.trim())),
         providerConfigured: readiness.configured,
         providerReason: readiness.configured ? null : readiness.reason,
         providerMode: this.config.providerMode,
@@ -254,6 +260,13 @@ export class SearchIntelligenceService {
       throw new FactoryError(
         "search_provider_budget_blocked",
         `Daily search budget reached (${this.config.dailyLimitUsd} USD).`,
+      );
+    }
+
+    if (this.deps.analyst.provider === "openrouter" && !process.env.OPENROUTER_API_KEY?.trim()) {
+      throw new FactoryError(
+        "search_analyst_not_configured",
+        "OpenRouter API key is required for search intelligence in production mode (fail closed).",
       );
     }
 

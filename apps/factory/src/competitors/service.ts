@@ -1,9 +1,13 @@
 import {
+  parseAcceptedContentGapSnapshotData,
   type CompetitorAcquisitionStatus,
   type CompetitorCandidate,
   type CompetitorClassification,
   type CompetitorPageAnalysisData,
   type CompetitorPageExtracted,
+  type ContentGap,
+  type ContentGapReportData,
+  type GapDecisionRecord,
   type SearchIntelligenceData,
   type SerpSnapshotData,
 } from "@factory/contracts";
@@ -253,6 +257,9 @@ export class CompetitorContentGapService {
     if (latest && usable.length === 0) {
       blockers.push("No search run with SERP + intelligence evidence yet. Run Search first.");
     }
+    if (this.deps.competitorAnalyst.provider === "openrouter" && !process.env.OPENROUTER_API_KEY?.trim()) {
+      blockers.push("OpenRouter API key is required for competitor analysis in production mode.");
+    }
     const recentRuns = await this.deps.competitorStore.listRuns(projectId, 20);
     return {
       acceptedInput: latest
@@ -276,6 +283,12 @@ export class CompetitorContentGapService {
     serpSnapshotId: string;
     maxPages?: number;
   }): Promise<CompetitorRunReadModel> {
+    if (this.deps.competitorAnalyst.provider === "openrouter" && !process.env.OPENROUTER_API_KEY?.trim()) {
+      throw new FactoryError(
+        "competitor_analyst_not_configured",
+        "OpenRouter API key is required for competitor analysis in production mode (fail closed).",
+      );
+    }
     const { accepted, snapshots } = await this.resolveAcceptedInputs(input.projectId);
     await this.checkBudget();
 
@@ -604,6 +617,12 @@ export class CompetitorContentGapService {
   // ---- Gap proposal ------------------------------------------------------------
 
   async proposeGaps(input: { projectId: string; competitorRunId?: string }): Promise<{ reportId: string }> {
+    if (this.deps.gapAnalyst.provider === "openrouter" && !process.env.OPENROUTER_API_KEY?.trim()) {
+      throw new FactoryError(
+        "competitor_analyst_not_configured",
+        "OpenRouter API key is required for gap analysis in production mode (fail closed).",
+      );
+    }
     const { accepted } = await this.resolveAcceptedInputs(input.projectId);
     await this.checkBudget();
 
@@ -663,6 +682,8 @@ export class CompetitorContentGapService {
         questions: intelData.questions.slice(0, 15),
         topics: intelData.topics.slice(0, 10),
       },
+      serpSnapshot: { id: run.serpSnapshotId, digest: run.serpSnapshotDigest },
+      intelligenceSnapshot: { id: intelRow.id, digest: intelRow.snapshotDigest },
       acceptedEvidence: acceptedEvidence.map((e) => ({ field: e.field, index: e.index, text: e.text })),
       projectContext: {
         businessName: ((intakePayload.business ?? {}) as Record<string, unknown>).name ?? "",
@@ -716,6 +737,25 @@ export class CompetitorContentGapService {
       provider: gapResult.provider,
       promptVersion: gapResult.promptVersion,
       acceptedEvidence,
+      grounding: {
+        serpSnapshotId: run.serpSnapshotId,
+        serpSnapshotDigest: run.serpSnapshotDigest,
+        intelligenceSnapshotId: intelRow.id,
+        intelligenceSnapshotDigest: intelRow.snapshotDigest,
+        pageSnapshots: pageRows.map((p) => ({
+          id: p.id,
+          digest: p.snapshotDigest,
+          classification: p.classification as CompetitorClassification,
+          validSegmentIds: new Set(
+            ((p.extracted as CompetitorPageExtracted | undefined)?.segments ?? []).map((s) => s.id),
+          ),
+        })),
+        analyses: analysisRows.map((a) => ({
+          id: a.id,
+          pageSnapshotId: a.pageSnapshotId,
+          digest: a.snapshotDigest,
+        })),
+      },
     });
 
     const report = await this.deps.competitorStore.insertGapReport({
@@ -738,6 +778,112 @@ export class CompetitorContentGapService {
 
   // ---- Review + acceptance ----------------------------------------------------
 
+  async evaluateUpstreamStaleness(
+    projectId: string,
+    bound: {
+      acceptedInputSnapshotId: string;
+      acceptedInputVersion: number;
+      acceptedInputDigest: string;
+      serpSnapshotId: string;
+      serpSnapshotDigest: string;
+      intelligenceSnapshotId: string;
+      intelligenceSnapshotDigest: string;
+      pageSnapshotRefs: Array<{ id: string; digest: string }>;
+      analysisRefs: Array<{ id: string; digest: string }>;
+    },
+  ): Promise<{ stale: boolean; staleReasons: string[] }> {
+    const reasons: string[] = [];
+
+    // 1. Accepted Project Inputs
+    const snapshots = await this.deps.intake.listSnapshots(projectId);
+    const latestInput = snapshots.at(-1) ?? null;
+    if (!latestInput) {
+      reasons.push("No accepted project input found.");
+    } else if (
+      latestInput.version !== bound.acceptedInputVersion ||
+      latestInput.digest !== bound.acceptedInputDigest
+    ) {
+      reasons.push(
+        `Accepted project inputs changed (bound v${bound.acceptedInputVersion}, current v${latestInput.version}).`,
+      );
+    }
+
+    // 2. Authoritative SERP snapshot
+    const boundSerp = await this.deps.competitorStore.getSerpSnapshot(projectId, bound.serpSnapshotId);
+    if (!boundSerp) {
+      reasons.push(`Bound SERP snapshot "${bound.serpSnapshotId}" no longer exists.`);
+    } else if (boundSerp.snapshotDigest !== bound.serpSnapshotDigest) {
+      reasons.push("Bound SERP snapshot digest mismatch.");
+    } else {
+      const latestSerp = await this.deps.competitorStore.getLatestSerpForQuery(projectId, boundSerp.query);
+      if (
+        latestSerp &&
+        latestSerp.id !== bound.serpSnapshotId &&
+        latestSerp.observedAt > boundSerp.observedAt
+      ) {
+        reasons.push(`A newer SERP snapshot was observed for query "${boundSerp.query}".`);
+      }
+    }
+
+    // 3. Authoritative Search Intelligence snapshot
+    const boundIntel = await this.deps.competitorStore.getIntelligenceSnapshot(
+      projectId,
+      bound.intelligenceSnapshotId,
+    );
+    if (!boundIntel) {
+      reasons.push(
+        `Bound search intelligence snapshot "${bound.intelligenceSnapshotId}" no longer exists.`,
+      );
+    } else if (boundIntel.snapshotDigest !== bound.intelligenceSnapshotDigest) {
+      reasons.push("Bound search intelligence snapshot digest mismatch.");
+    } else if (boundSerp) {
+      const latestIntel = await this.deps.competitorStore.getLatestIntelligenceForQuery(
+        projectId,
+        boundSerp.query,
+      );
+      if (
+        latestIntel &&
+        latestIntel.id !== bound.intelligenceSnapshotId &&
+        latestIntel.createdAt > boundIntel.createdAt
+      ) {
+        reasons.push(
+          `A newer search intelligence snapshot was created for query "${boundSerp.query}".`,
+        );
+      }
+    }
+
+    // 4. Bound competitor page snapshots & analyses
+    if (bound.pageSnapshotRefs && bound.pageSnapshotRefs.length > 0) {
+      const pageIds = bound.pageSnapshotRefs.map((r) => r.id);
+      const pages = await this.deps.competitorStore.pageSnapshotsByIds(projectId, pageIds);
+      const pageMap = new Map(pages.map((p) => [p.id, p]));
+      for (const ref of bound.pageSnapshotRefs) {
+        const page = pageMap.get(ref.id);
+        if (!page) {
+          reasons.push(`Bound competitor page snapshot "${ref.id}" no longer exists.`);
+        } else if (page.snapshotDigest !== ref.digest) {
+          reasons.push(`Bound competitor page snapshot "${ref.id}" digest changed.`);
+        }
+      }
+    }
+
+    if (bound.analysisRefs && bound.analysisRefs.length > 0) {
+      const analysisIds = bound.analysisRefs.map((r) => r.id);
+      const analyses = await this.deps.competitorStore.analysesByIds(projectId, analysisIds);
+      const analysisMap = new Map(analyses.map((a) => [a.id, a]));
+      for (const ref of bound.analysisRefs) {
+        const analysis = analysisMap.get(ref.id);
+        if (!analysis) {
+          reasons.push(`Bound competitor analysis "${ref.id}" no longer exists.`);
+        } else if (analysis.snapshotDigest !== ref.digest) {
+          reasons.push(`Bound competitor analysis "${ref.id}" digest changed.`);
+        }
+      }
+    }
+
+    return { stale: reasons.length > 0, staleReasons: reasons };
+  }
+
   async gapWorkspace(projectId: string): Promise<GapWorkspaceReadModel> {
     const reports = await this.deps.competitorStore.listGapReports(projectId, 20);
     const accepted = await this.deps.competitorStore.listAcceptedGapSnapshots(projectId);
@@ -745,14 +891,24 @@ export class CompetitorContentGapService {
 
     const reportModels = [];
     for (const report of reports) {
-      const data = report.data as { gaps: Array<{ recommendedDisposition: string }> };
+      const data = report.data as ContentGapReportData;
       const gapCounts = {
         total: data.gaps.length,
         required: data.gaps.filter((g) => g.recommendedDisposition === "REQUIRED").length,
         optional: data.gaps.filter((g) => g.recommendedDisposition === "OPTIONAL").length,
         excluded: data.gaps.filter((g) => g.recommendedDisposition === "EXCLUDE").length,
       };
-      const staleness = await this.reportStaleness(projectId, report);
+      const staleness = await this.evaluateUpstreamStaleness(projectId, {
+        acceptedInputSnapshotId: report.acceptedInputSnapshotId,
+        acceptedInputVersion: report.acceptedInputVersion,
+        acceptedInputDigest: report.acceptedInputDigest,
+        serpSnapshotId: report.serpSnapshotId,
+        serpSnapshotDigest: report.serpSnapshotDigest,
+        intelligenceSnapshotId: report.intelligenceSnapshotId,
+        intelligenceSnapshotDigest: report.intelligenceSnapshotDigest,
+        pageSnapshotRefs: data.pageSnapshotRefs ?? [],
+        analysisRefs: data.analysisRefs ?? [],
+      });
       reportModels.push({
         id: report.id,
         snapshotDigest: report.snapshotDigest,
@@ -766,13 +922,22 @@ export class CompetitorContentGapService {
 
     const acceptedModels = [];
     for (const snap of accepted) {
-      const data = snap.data as { gaps: Array<{ recommendedDisposition: string }> };
-      const staleness = {
-        stale:
-          snap.serpSnapshotDigest !== (await this.currentSerpDigest(projectId, snap.serpSnapshotId)) ||
-          snap.acceptedInputDigest !== (await this.currentInputDigest(projectId, snap.acceptedInputSnapshotId)),
-        reasons: [] as string[],
+      const data = snap.data as {
+        gaps: Array<{ recommendedDisposition: string; disposition?: string }>;
+        pageSnapshotRefs?: Array<{ id: string; digest: string }>;
+        analysisRefs?: Array<{ id: string; digest: string }>;
       };
+      const staleness = await this.evaluateUpstreamStaleness(projectId, {
+        acceptedInputSnapshotId: snap.acceptedInputSnapshotId,
+        acceptedInputVersion: snap.acceptedInputVersion,
+        acceptedInputDigest: snap.acceptedInputDigest,
+        serpSnapshotId: snap.serpSnapshotId,
+        serpSnapshotDigest: snap.serpSnapshotDigest,
+        intelligenceSnapshotId: snap.intelligenceSnapshotId,
+        intelligenceSnapshotDigest: snap.intelligenceSnapshotDigest,
+        pageSnapshotRefs: (snap.pageSnapshotRefs as Array<{ id: string; digest: string }>) ?? [],
+        analysisRefs: (snap.analysisRefs as Array<{ id: string; digest: string }>) ?? [],
+      });
       acceptedModels.push({
         id: snap.id,
         version: snap.version,
@@ -780,12 +945,12 @@ export class CompetitorContentGapService {
         acceptedAt: snap.acceptedAt.toISOString(),
         reportId: snap.reportId,
         stale: staleness.stale,
-        staleReasons: staleness.stale ? ["Upstream evidence changed since acceptance."] : [],
+        staleReasons: staleness.staleReasons,
         gapCounts: {
           total: data.gaps.length,
-          required: data.gaps.filter((g) => g.recommendedDisposition === "REQUIRED").length,
-          optional: data.gaps.filter((g) => g.recommendedDisposition === "OPTIONAL").length,
-          excluded: data.gaps.filter((g) => g.recommendedDisposition === "EXCLUDE").length,
+          required: data.gaps.filter((g) => (g.disposition ?? g.recommendedDisposition) === "REQUIRED").length,
+          optional: data.gaps.filter((g) => (g.disposition ?? g.recommendedDisposition) === "OPTIONAL").length,
+          excluded: data.gaps.filter((g) => (g.disposition ?? g.recommendedDisposition) === "EXCLUDE").length,
         },
       });
     }
@@ -801,31 +966,22 @@ export class CompetitorContentGapService {
     };
   }
 
-  private async currentSerpDigest(projectId: string, serpSnapshotId: string): Promise<string | null> {
-    const serp = await this.deps.competitorStore.getSerpSnapshot(projectId, serpSnapshotId);
-    return serp?.snapshotDigest ?? null;
-  }
-
-  private async currentInputDigest(projectId: string, snapshotId: string): Promise<string | null> {
-    const snapshots = await this.deps.intake.listSnapshots(projectId);
-    const match = snapshots.find((s) => s.id === snapshotId);
-    return match?.digest ?? null;
-  }
-
-  private async reportStaleness(
-    projectId: string,
-    report: { acceptedInputDigest: string; serpSnapshotDigest: string; intelligenceSnapshotDigest: string; pageSnapshotRefs?: unknown },
-  ): Promise<{ stale: boolean; staleReasons: string[] }> {
-    const currentSerp = await this.currentSerpDigest(projectId, (report as unknown as { serpSnapshotId: string }).serpSnapshotId);
-    const stale = currentSerp !== null && currentSerp !== report.serpSnapshotDigest;
-    return { stale, staleReasons: stale ? ["SERP evidence changed since proposal."] : [] };
-  }
-
   async getGapReportDetail(projectId: string, reportId: string) {
     const report = await this.deps.competitorStore.getGapReport(projectId, reportId);
     if (!report) throw new FactoryError("content_gap_report_not_found", "Content gap report not found.");
     const decisions = await this.deps.competitorStore.listDecisions(reportId);
-    const staleness = await this.reportStaleness(projectId, report);
+    const reportData = report.data as ContentGapReportData;
+    const staleness = await this.evaluateUpstreamStaleness(projectId, {
+      acceptedInputSnapshotId: report.acceptedInputSnapshotId,
+      acceptedInputVersion: report.acceptedInputVersion,
+      acceptedInputDigest: report.acceptedInputDigest,
+      serpSnapshotId: report.serpSnapshotId,
+      serpSnapshotDigest: report.serpSnapshotDigest,
+      intelligenceSnapshotId: report.intelligenceSnapshotId,
+      intelligenceSnapshotDigest: report.intelligenceSnapshotDigest,
+      pageSnapshotRefs: reportData.pageSnapshotRefs ?? [],
+      analysisRefs: reportData.analysisRefs ?? [],
+    });
     return {
       report: {
         id: report.id,
@@ -853,6 +1009,19 @@ export class CompetitorContentGapService {
   }): Promise<void> {
     const report = await this.deps.competitorStore.getGapReport(input.projectId, input.reportId);
     if (!report) throw new FactoryError("content_gap_report_not_found", "Content gap report not found.");
+    if (report.reviewState === "accepted") {
+      throw new FactoryError(
+        "content_gap_decision_invalid",
+        "Cannot modify decisions for an already accepted content gap report.",
+      );
+    }
+    const existing = await this.deps.competitorStore.getAcceptedGapSnapshotByReportId(input.reportId);
+    if (existing) {
+      throw new FactoryError(
+        "content_gap_decision_invalid",
+        "Cannot modify decisions for an already accepted content gap report.",
+      );
+    }
     const data = report.data as { gaps: Array<{ id: string }> };
     const gapIds = new Set(data.gaps.map((g) => g.id));
     for (const decision of input.decisions) {
@@ -893,6 +1062,12 @@ export class CompetitorContentGapService {
     const report = await this.deps.competitorStore.getGapReport(input.projectId, input.reportId);
     if (!report) throw new FactoryError("content_gap_report_not_found", "Content gap report not found.");
 
+    // Idempotent acceptance check: if already accepted, return existing snapshot without minting v2
+    const existingSnapshot = await this.deps.competitorStore.getAcceptedGapSnapshotByReportId(input.reportId);
+    if (existingSnapshot) {
+      return { version: existingSnapshot.version, snapshotId: existingSnapshot.id };
+    }
+
     // Fail closed: acceptance binds the exact digest the operator reviewed.
     if (input.expectedDigest !== report.snapshotDigest) {
       throw new FactoryError(
@@ -901,20 +1076,60 @@ export class CompetitorContentGapService {
       );
     }
     const decisions = await this.deps.competitorStore.listDecisions(input.reportId);
-    const data = report.data as { gaps: Array<{ id: string }> };
-    if (decisions.length !== data.gaps.length) {
+    const reportData = report.data as ContentGapReportData;
+    if (decisions.length !== reportData.gaps.length) {
       throw new FactoryError(
         "content_gap_accept_failed",
         "Acceptance requires a recorded decision for every gap.",
       );
     }
-    const staleness = await this.reportStaleness(input.projectId, report);
+
+    const staleness = await this.evaluateUpstreamStaleness(input.projectId, {
+      acceptedInputSnapshotId: report.acceptedInputSnapshotId,
+      acceptedInputVersion: report.acceptedInputVersion,
+      acceptedInputDigest: report.acceptedInputDigest,
+      serpSnapshotId: report.serpSnapshotId,
+      serpSnapshotDigest: report.serpSnapshotDigest,
+      intelligenceSnapshotId: report.intelligenceSnapshotId,
+      intelligenceSnapshotDigest: report.intelligenceSnapshotDigest,
+      pageSnapshotRefs: reportData.pageSnapshotRefs ?? [],
+      analysisRefs: reportData.analysisRefs ?? [],
+    });
     if (staleness.stale) {
       throw new FactoryError(
         "content_gap_stale",
         `Upstream evidence changed since review: ${staleness.staleReasons.join(" ")}`,
       );
     }
+
+    // Materialize human operator decisions into the accepted snapshot
+    const decisionByGapId = new Map(decisions.map((d) => [d.gapId, d]));
+    const materializedGaps = reportData.gaps.map((g) => {
+      const d = decisionByGapId.get(g.id);
+      if (!d) {
+        throw new FactoryError("content_gap_accept_failed", `Missing decision for gap "${g.id}".`);
+      }
+      return {
+        ...g,
+        recommendedDisposition: g.recommendedDisposition,
+        recommendedPriority: g.priority ?? null,
+        disposition: d.disposition as "REQUIRED" | "OPTIONAL" | "EXCLUDE",
+        priority: (d.priority as "HIGH" | "MEDIUM" | "LOW" | null) ?? g.priority ?? null,
+        note: d.note ?? null,
+      };
+    });
+
+    const acceptedData = parseAcceptedContentGapSnapshotData({
+      ...reportData,
+      gaps: materializedGaps,
+      decisions: decisions.map((d) => ({
+        gapId: d.gapId,
+        disposition: d.disposition,
+        priority: d.priority ?? null,
+        note: d.note ?? null,
+      })),
+      reviewState: "accepted",
+    });
 
     const version = (await this.deps.competitorStore.latestAcceptedGapVersion(input.projectId)) + 1;
     const decDigest = computeDecisionsDigest(
@@ -926,51 +1141,52 @@ export class CompetitorContentGapService {
         note: d.note,
       })),
     );
-    const reportData = report.data as {
-      pageSnapshotRefs: Array<{ id: string; digest: string }>;
-      analysisRefs: Array<{ id: string; digest: string }>;
-    };
-    const snapshot = await this.deps.competitorStore.insertAcceptedGapSnapshot({
-      projectId: input.projectId,
-      version,
-      reportId: report.id,
-      reportDigest: report.snapshotDigest,
-      decisionsDigest: decDigest,
-      acceptedInputSnapshotId: report.acceptedInputSnapshotId,
-      acceptedInputVersion: report.acceptedInputVersion,
-      acceptedInputDigest: report.acceptedInputDigest,
-      serpSnapshotId: report.serpSnapshotId,
-      serpSnapshotDigest: report.serpSnapshotDigest,
-      intelligenceSnapshotId: report.intelligenceSnapshotId,
-      intelligenceSnapshotDigest: report.intelligenceSnapshotDigest,
-      pageSnapshotRefs: reportData.pageSnapshotRefs,
-      analysisRefs: reportData.analysisRefs,
-      data: report.data,
-    });
-    await this.deps.competitorStore.markGapReportReviewed(report.id);
+
+    let snapshot;
+    try {
+      snapshot = await this.deps.competitorStore.insertAcceptedGapSnapshot({
+        projectId: input.projectId,
+        version,
+        reportId: report.id,
+        reportDigest: report.snapshotDigest,
+        decisionsDigest: decDigest,
+        acceptedInputSnapshotId: report.acceptedInputSnapshotId,
+        acceptedInputVersion: report.acceptedInputVersion,
+        acceptedInputDigest: report.acceptedInputDigest,
+        serpSnapshotId: report.serpSnapshotId,
+        serpSnapshotDigest: report.serpSnapshotDigest,
+        intelligenceSnapshotId: report.intelligenceSnapshotId,
+        intelligenceSnapshotDigest: report.intelligenceSnapshotDigest,
+        pageSnapshotRefs: reportData.pageSnapshotRefs,
+        analysisRefs: reportData.analysisRefs,
+        data: acceptedData,
+      });
+    } catch (err: unknown) {
+      // Handle unique constraint race condition on reportId
+      const raceExisting = await this.deps.competitorStore.getAcceptedGapSnapshotByReportId(input.reportId);
+      if (raceExisting) {
+        return { version: raceExisting.version, snapshotId: raceExisting.id };
+      }
+      throw err;
+    }
+
+    await this.deps.competitorStore.markGapReportAccepted(report.id);
     return { version: snapshot.version, snapshotId: snapshot.id };
   }
 
   async acceptedGapDetail(projectId: string, version: number) {
     const snapshot = await this.deps.competitorStore.getAcceptedGapSnapshot(projectId, version);
     if (!snapshot) throw new FactoryError("content_gap_report_not_found", "Accepted gap snapshot not found.");
-    const snapshots = await this.deps.intake.listSnapshots(projectId);
-    const latestInput = snapshots.at(-1);
-    const staleness = computeGapStaleness({
-      bound: {
-        acceptedInputVersion: snapshot.acceptedInputVersion,
-        acceptedInputDigest: snapshot.acceptedInputDigest,
-        serpSnapshotDigest: snapshot.serpSnapshotDigest,
-        intelligenceSnapshotDigest: snapshot.intelligenceSnapshotDigest,
-        pageSnapshotDigests: (snapshot.pageSnapshotRefs as Array<{ digest: string }>).map((r) => r.digest),
-      },
-      current: {
-        acceptedInputVersion: latestInput?.version ?? snapshot.acceptedInputVersion,
-        acceptedInputDigest: latestInput?.digest ?? snapshot.acceptedInputDigest,
-        serpSnapshotDigest: (await this.currentSerpDigest(projectId, snapshot.serpSnapshotId)) ?? snapshot.serpSnapshotDigest,
-        intelligenceSnapshotDigest: snapshot.intelligenceSnapshotDigest,
-        pageSnapshotDigests: (snapshot.pageSnapshotRefs as Array<{ digest: string }>).map((r) => r.digest),
-      },
+    const staleness = await this.evaluateUpstreamStaleness(projectId, {
+      acceptedInputSnapshotId: snapshot.acceptedInputSnapshotId,
+      acceptedInputVersion: snapshot.acceptedInputVersion,
+      acceptedInputDigest: snapshot.acceptedInputDigest,
+      serpSnapshotId: snapshot.serpSnapshotId,
+      serpSnapshotDigest: snapshot.serpSnapshotDigest,
+      intelligenceSnapshotId: snapshot.intelligenceSnapshotId,
+      intelligenceSnapshotDigest: snapshot.intelligenceSnapshotDigest,
+      pageSnapshotRefs: (snapshot.pageSnapshotRefs as Array<{ id: string; digest: string }>) ?? [],
+      analysisRefs: (snapshot.analysisRefs as Array<{ id: string; digest: string }>) ?? [],
     });
     return {
       snapshot: {
@@ -993,11 +1209,18 @@ export function buildCompetitorAnalysts(env: NodeJS.ProcessEnv, invokeModelFn: t
   competitorAnalyst: CompetitorAnalystModel;
   gapAnalyst: GapAnalystModel;
 } {
-  const fixtureMode = env.FACTORY_COMPETITOR_MODE === "fixture" || !env.OPENROUTER_API_KEY;
+  const fixtureMode = env.FACTORY_COMPETITOR_MODE === "fixture";
   if (fixtureMode) {
     return { competitorAnalyst: new FixtureCompetitorAnalyst(), gapAnalyst: new FixtureGapAnalyst() };
   }
   const callGemini = async (systemPrompt: string, prompt: string) => {
+    const apiKey = env.OPENROUTER_API_KEY?.trim();
+    if (!apiKey) {
+      throw new FactoryError(
+        "competitor_analyst_not_configured",
+        "OpenRouter API key is required for competitor analysis in production mode (fail closed).",
+      );
+    }
     const result = await invokeModelFn(
       {
         roleId: "search_analyst",
@@ -1007,7 +1230,7 @@ export function buildCompetitorAnalysts(env: NodeJS.ProcessEnv, invokeModelFn: t
         maxTokens: 8192,
         timeoutMs: 120_000,
       },
-      { loadApiKey: () => env.OPENROUTER_API_KEY ?? null },
+      { loadApiKey: () => apiKey },
     );
     return {
       text: result.content,

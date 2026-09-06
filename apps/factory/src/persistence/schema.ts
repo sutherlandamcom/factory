@@ -794,6 +794,7 @@ export const acceptedContentGapSnapshots = pgTable(
   },
   (table) => [
     unique("accepted_content_gap_snapshots_project_version_unique").on(table.projectId, table.version),
+    unique("accepted_content_gap_snapshots_report_id_unique").on(table.reportId),
     index("accepted_content_gap_snapshots_project_idx").on(table.projectId, table.version),
   ],
 );

@@ -7,6 +7,7 @@ import {
   type CoverageMatrix,
 } from "@factory/contracts";
 import { deterministicDigest } from "../intelligence/digest.js";
+import { FactoryError } from "../executor/errors.js";
 
 /**
  * Content Gap Engine (Macro Run 3, P5) — deterministic aggregation layer.
@@ -185,6 +186,133 @@ export function computeGapStaleness(input: {
   return { stale: reasons.length > 0, reasons };
 }
 
+export interface GapGroundingContext {
+  serpSnapshotId: string;
+  serpSnapshotDigest: string;
+  intelligenceSnapshotId: string;
+  intelligenceSnapshotDigest: string;
+  pageSnapshots: Array<{
+    id: string;
+    digest: string;
+    classification: string;
+    validSegmentIds?: ReadonlySet<string> | string[];
+  }>;
+  analyses: Array<{
+    id: string;
+    digest: string;
+    pageSnapshotId: string;
+  }>;
+}
+
+/**
+ * Strict cross-validation of model proposal grounding against authoritative upstream inputs:
+ * 1. searchEvidenceRefs:
+ *    - must be non-empty (at least one valid ref required)
+ *    - every referenced ID + digest must match either the bound SERP snapshot or bound Search Intelligence snapshot
+ *    - fabricated/foreign/mismatched refs throw
+ * 2. competitorsCoveringIt:
+ *    - every ID must resolve to an included analyzed competitor page snapshot in this exact run lineage
+ *    - unknown IDs or pages classified EXCLUDE / REFERENCE_ONLY throw
+ * 3. evidenceRefs:
+ *    - pageSnapshotId must resolve to an analyzed page in this run
+ *    - segmentId must exist in that exact snapshot's extracted segments
+ * 4. pageSnapshotRefs & analysisRefs:
+ *    - cross-checks IDs + digests against persisted dependencies; rejects mismatches
+ * 5. first-party evidence:
+ *    - separate from competitor claims; exact excerpt check
+ */
+export function validateContentGapGrounding(
+  gaps: ContentGap[],
+  context: GapGroundingContext,
+): void {
+  const pageMap = new Map(context.pageSnapshots.map((p) => [p.id, p]));
+  const analysisPageIds = new Set(context.analyses.map((a) => a.pageSnapshotId));
+
+  for (const gap of gaps) {
+    // 1. searchEvidenceRefs: cannot be empty where search evidence is required
+    if (!gap.searchEvidenceRefs || gap.searchEvidenceRefs.length === 0) {
+      throw new FactoryError(
+        "content_gap_invalid",
+        `gap "${gap.id}" requires searchEvidenceRefs; empty array is not grounded`,
+      );
+    }
+    for (const ref of gap.searchEvidenceRefs) {
+      if (ref.kind === "serp_snapshot") {
+        if (ref.id !== context.serpSnapshotId || ref.digest !== context.serpSnapshotDigest) {
+          throw new FactoryError(
+            "content_gap_invalid",
+            `gap "${gap.id}" references invalid or foreign SERP snapshot "${ref.id}" (digest mismatch or unknown ID)`,
+          );
+        }
+      } else if (ref.kind === "search_intelligence_snapshot") {
+        if (ref.id !== context.intelligenceSnapshotId || ref.digest !== context.intelligenceSnapshotDigest) {
+          throw new FactoryError(
+            "content_gap_invalid",
+            `gap "${gap.id}" references invalid or foreign search intelligence snapshot "${ref.id}" (digest mismatch or unknown ID)`,
+          );
+        }
+      } else {
+        throw new FactoryError(
+          "content_gap_invalid",
+          `gap "${gap.id}" has unsupported searchEvidenceRef kind "${(ref as { kind: string }).kind}"`,
+        );
+      }
+    }
+
+    // 2. competitorsCoveringIt: must resolve to included analyzed competitor page snapshots
+    for (const competitorId of gap.competitorsCoveringIt) {
+      const page = pageMap.get(competitorId);
+      if (!page) {
+        throw new FactoryError(
+          "content_gap_invalid",
+          `gap "${gap.id}" references unknown competitor page "${competitorId}"`,
+        );
+      }
+      if (page.classification !== "INCLUDE") {
+        throw new FactoryError(
+          "content_gap_invalid",
+          `gap "${gap.id}" references competitor page "${competitorId}" with classification ${page.classification}; only INCLUDE pages may represent competitive coverage`,
+        );
+      }
+      if (!analysisPageIds.has(competitorId)) {
+        throw new FactoryError(
+          "content_gap_invalid",
+          `gap "${gap.id}" references competitor page "${competitorId}" which was not analyzed in this run`,
+        );
+      }
+    }
+
+    // 3. evidenceRefs: pageSnapshotId and segmentId must exist in the exact extracted snapshot
+    for (const evRef of gap.evidenceRefs) {
+      const page = pageMap.get(evRef.pageSnapshotId);
+      if (!page) {
+        throw new FactoryError(
+          "content_gap_invalid",
+          `gap "${gap.id}" references unknown page snapshot "${evRef.pageSnapshotId}" in evidenceRefs`,
+        );
+      }
+      if (!analysisPageIds.has(evRef.pageSnapshotId)) {
+        throw new FactoryError(
+          "content_gap_invalid",
+          `gap "${gap.id}" references page "${evRef.pageSnapshotId}" in evidenceRefs that does not belong to the analyzed set for this report`,
+        );
+      }
+      if (page.validSegmentIds) {
+        const segSet =
+          page.validSegmentIds instanceof Set
+            ? page.validSegmentIds
+            : new Set(page.validSegmentIds);
+        if (!segSet.has(evRef.segmentId)) {
+          throw new FactoryError(
+            "content_gap_invalid",
+            `gap "${gap.id}" references unknown segment "${evRef.segmentId}" for page "${evRef.pageSnapshotId}"`,
+          );
+        }
+      }
+    }
+  }
+}
+
 /**
  * Finalize the model gap proposal into the strict report contract with
  * Factory-computed provenance (the model never sets digests/review state).
@@ -205,6 +333,7 @@ export function finalizeGapReport(input: {
   provider: string;
   promptVersion: string;
   acceptedEvidence: FirstPartyEvidenceItem[];
+  grounding?: GapGroundingContext;
 }): ReturnType<typeof parseContentGapReportData> {
   const parsed = input.modelGaps as { gaps?: unknown; differentiationRequirements?: unknown };
   const gaps = Array.isArray(parsed?.gaps) ? parsed.gaps : [];
@@ -229,6 +358,31 @@ export function finalizeGapReport(input: {
     reviewState: "model_proposed" as const,
   };
   const data = parseContentGapReportData(report);
+
+  if (input.grounding) {
+    const pageMap = new Map(input.grounding.pageSnapshots.map((p) => [p.id, p]));
+    for (const ref of input.pageSnapshotRefs) {
+      const page = pageMap.get(ref.id);
+      if (!page || page.digest !== ref.digest) {
+        throw new FactoryError(
+          "content_gap_invalid",
+          `Page snapshot ref "${ref.id}" does not match authoritative stored dependencies`,
+        );
+      }
+    }
+    const analysisMap = new Map(input.grounding.analyses.map((a) => [a.id, a]));
+    for (const ref of input.analysisRefs) {
+      const analysis = analysisMap.get(ref.id);
+      if (!analysis || analysis.digest !== ref.digest) {
+        throw new FactoryError(
+          "content_gap_invalid",
+          `Analysis ref "${ref.id}" does not match authoritative stored dependencies`,
+        );
+      }
+    }
+    validateContentGapGrounding(data.gaps as ContentGap[], input.grounding);
+  }
+
   validateGapFirstPartyRefs(data.gaps as ContentGap[], input.acceptedEvidence);
   return data;
 }

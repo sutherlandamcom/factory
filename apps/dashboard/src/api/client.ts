@@ -278,7 +278,7 @@ export const api = {
 export interface CompetitorsWorkspaceReadModel {
   acceptedInput: { snapshotId: string; version: number; digest: string } | null;
   readiness: { canRun: boolean; blockers: string[]; mode: "production" | "fixture" };
-  serpRuns: Array<{ serpSnapshotId: string; query: string; observedAt: string; hasIntelligence: boolean }>;
+  serpRuns: Array<{ serpSnapshotId: string; query: string; observedAt: string; hasIntelligence: boolean; stale?: boolean }>;
   recentRuns: Array<{ id: string; status: string; startedAt: string; errorCode: string | null }>;
 }
 

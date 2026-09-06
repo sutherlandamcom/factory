@@ -657,3 +657,34 @@ test("mutations and versions on unknown project return 404 not_found", async () 
     await h.close();
   }
 });
+
+test("PATCH candidate classification route dispatches with 6 segments", async () => {
+  let calledWith: unknown = null;
+  const deps = makeDeps({
+    competitors: {
+      setClassification: async (input: unknown) => {
+        calledWith = input;
+      },
+    } as never,
+  });
+  const h = await listen(deps);
+  try {
+    const res = await apiRequest(h.port, {
+      method: "PATCH",
+      path: `/api/projects/${PROJECT.id}/competitors/candidates/page-123/classification`,
+      body: JSON.stringify({
+        classification: "EXCLUDE",
+        reason: "Irrelevant directory site",
+      }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(calledWith, {
+      projectId: PROJECT.id,
+      pageSnapshotId: "page-123",
+      classification: "EXCLUDE",
+      reason: "Irrelevant directory site",
+    });
+  } finally {
+    await h.close();
+  }
+});

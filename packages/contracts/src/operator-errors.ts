@@ -85,6 +85,8 @@ export const OPERATOR_ERROR_CODES = [
   "competitor_analyst_not_configured",
   /** Competitor run failed for an internal reason (sanitized diagnostics). */
   "competitor_run_failed",
+  /** Competitor run or underlying SERP is stale versus current accepted ProjectInput. */
+  "competitor_upstream_stale",
   /** Content gap report does not exist for this project. */
   "content_gap_report_not_found",
   /** Content gap proposal failed strict contract validation. */
@@ -139,6 +141,7 @@ export const OPERATOR_ERROR_STATUS: Readonly<Record<OperatorErrorCode, number>> 
   competitor_budget_blocked: 402,
   competitor_analyst_not_configured: 409,
   competitor_run_failed: 500,
+  competitor_upstream_stale: 409,
   content_gap_report_not_found: 404,
   content_gap_invalid: 502,
   content_gap_stale: 409,

@@ -287,7 +287,7 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         return sendJson(res, 200, detail);
       }
 
-      if (req.method === "PATCH" && segments.length === 7 && segments[0] === "projects" && segments[2] === "competitors" && segments[3] === "candidates" && segments[5] === "classification") {
+      if (req.method === "PATCH" && segments.length === 6 && segments[0] === "projects" && segments[2] === "competitors" && segments[3] === "candidates" && segments[5] === "classification") {
         const project = await deps.store.getProjectById(segments[1]!);
         if (!project) return sendError(res, "not_found", "Project not found.");
         if (!deps.competitors) return sendError(res, "not_found", "Competitors are not available.");

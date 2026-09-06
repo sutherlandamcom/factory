@@ -138,6 +138,7 @@ export function validateUrlStructure(rawUrl: string): UrlSafetyCheck {
 export async function validateUrlResolved(
   rawUrl: string,
   lookupFn: typeof lookup = lookup,
+  signal?: AbortSignal,
 ): Promise<UrlSafetyCheck> {
   const structural = validateUrlStructure(rawUrl);
   if (!structural.ok) return structural;
@@ -149,8 +150,35 @@ export async function validateUrlResolved(
 
   let addresses: Array<{ address: string; family: number }>;
   try {
-    addresses = await lookupFn(host, { all: true, verbatim: true });
-  } catch {
+    if (signal?.aborted) {
+      const err = new Error("The operation was aborted");
+      err.name = "AbortError";
+      throw err;
+    }
+    const lookupPromise = lookupFn(host, { all: true, verbatim: true });
+    if (!signal) {
+      addresses = await lookupPromise;
+    } else {
+      addresses = await Promise.race([
+        lookupPromise,
+        new Promise<never>((_, reject) => {
+          const onAbort = () => {
+            const err = new Error("The operation was aborted");
+            err.name = "AbortError";
+            reject(err);
+          };
+          if (signal.aborted) {
+            onAbort();
+          } else {
+            signal.addEventListener("abort", onAbort, { once: true });
+          }
+        }),
+      ]);
+    }
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw err;
+    }
     return { ok: false, reason: "DNS resolution failed." };
   }
   if (addresses.length === 0) {

@@ -668,4 +668,116 @@ export class CompetitorStore {
         ),
       );
   }
+
+  async getLatestClassificationOverridesForPages(
+    projectId: string,
+    pageSnapshotIds: string[],
+  ): Promise<Map<string, { classification: "INCLUDE" | "EXCLUDE" | "REFERENCE_ONLY"; reason: string }>> {
+    if (pageSnapshotIds.length === 0) return new Map();
+    const rows = await this.db
+      .select()
+      .from(competitorClassificationOverrides)
+      .where(
+        and(
+          eq(competitorClassificationOverrides.projectId, projectId),
+          inArray(competitorClassificationOverrides.pageSnapshotId, pageSnapshotIds),
+        ),
+      )
+      .orderBy(desc(competitorClassificationOverrides.createdAt));
+
+    const map = new Map<string, { classification: "INCLUDE" | "EXCLUDE" | "REFERENCE_ONLY"; reason: string }>();
+    for (const r of rows) {
+      if (!map.has(r.pageSnapshotId)) {
+        map.set(r.pageSnapshotId, {
+          classification: r.classification as "INCLUDE" | "EXCLUDE" | "REFERENCE_ONLY",
+          reason: r.reason,
+        });
+      }
+    }
+    return map;
+  }
+
+  async getLatestSerpForSearchIdentity(
+    projectId: string,
+    identity: {
+      query: string;
+      location: string | null;
+      language: string | null;
+      device: string;
+    },
+  ): Promise<typeof serpSnapshots.$inferSelect | null> {
+    const conditions = [
+      eq(serpSnapshots.projectId, projectId),
+      eq(serpSnapshots.query, identity.query),
+      eq(serpSnapshots.device, identity.device),
+    ];
+    if (identity.location != null) {
+      conditions.push(eq(serpSnapshots.location, identity.location));
+    } else {
+      conditions.push(sql`${serpSnapshots.location} IS NULL`);
+    }
+    if (identity.language != null) {
+      conditions.push(eq(serpSnapshots.language, identity.language));
+    } else {
+      conditions.push(sql`${serpSnapshots.language} IS NULL`);
+    }
+    const [row] = await this.db
+      .select()
+      .from(serpSnapshots)
+      .where(and(...conditions))
+      .orderBy(desc(serpSnapshots.observedAt))
+      .limit(1);
+    return row ?? null;
+  }
+
+  async getLatestIntelligenceForSearchIdentity(
+    projectId: string,
+    identity: {
+      query: string;
+      location: string | null;
+      language: string | null;
+      device: string;
+    },
+  ): Promise<typeof searchIntelligenceSnapshots.$inferSelect | null> {
+    const latestSerp = await this.getLatestSerpForSearchIdentity(projectId, identity);
+    if (!latestSerp) return null;
+    return await this.getIntelligenceForSerpSnapshot(projectId, latestSerp.id);
+  }
+
+  async getLatestPageSnapshotForUrl(
+    projectId: string,
+    requestedUrl: string,
+  ): Promise<typeof competitorPageSnapshots.$inferSelect | null> {
+    const [row] = await this.db
+      .select()
+      .from(competitorPageSnapshots)
+      .where(
+        and(
+          eq(competitorPageSnapshots.projectId, projectId),
+          eq(competitorPageSnapshots.requestedUrl, requestedUrl),
+        ),
+      )
+      .orderBy(desc(competitorPageSnapshots.observedAt))
+      .limit(1);
+    return row ?? null;
+  }
+
+  async latestSucceededRunForSerp(
+    projectId: string,
+    serpSnapshotId: string,
+  ): Promise<typeof competitorRuns.$inferSelect | null> {
+    const [row] = await this.db
+      .select()
+      .from(competitorRuns)
+      .where(
+        and(
+          eq(competitorRuns.projectId, projectId),
+          eq(competitorRuns.serpSnapshotId, serpSnapshotId),
+          eq(competitorRuns.status, "succeeded"),
+        ),
+      )
+      .orderBy(desc(competitorRuns.createdAt))
+      .limit(1);
+    return row ?? null;
+  }
 }

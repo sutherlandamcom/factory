@@ -118,7 +118,20 @@ export class DirectHttpPageProvider implements CompetitorPageProvider {
       let currentUrl = request.url;
       for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
         // Per-hop SSRF revalidation (fail closed before every fetch).
-        const check = await validateUrlResolved(currentUrl, this.lookupFn);
+        let check;
+        try {
+          check = await validateUrlResolved(currentUrl, this.lookupFn, controller.signal);
+        } catch (error) {
+          const aborted = controller.signal.aborted || (error instanceof Error && error.name === "AbortError");
+          return outcomeFailure(
+            "FAILED",
+            null,
+            null,
+            hop === 0 ? null : currentUrl,
+            aborted ? "Acquisition timed out." : "DNS resolution failed.",
+            this.now,
+          );
+        }
         if (!check.ok) {
           return outcomeFailure("FAILED", null, null, hop === 0 ? null : currentUrl, check.reason ?? "URL rejected by safety policy.", this.now);
         }

@@ -70,8 +70,35 @@ export function CompetitorsPage({ projectId }: { projectId: string }) {
     }
   };
 
+  const updateCandidateClassification = async (
+    pageSnapshotId: string,
+    classification: "INCLUDE" | "EXCLUDE" | "REFERENCE_ONLY",
+  ) => {
+    try {
+      await api.setCandidateClassification(projectId, pageSnapshotId, {
+        classification,
+        reason: "Operator classification override",
+      });
+      if (lastRun) {
+        const refreshed = await api.getCompetitorRun(projectId, lastRun.run.id);
+        setLastRun(refreshed);
+      }
+    } catch (e) {
+      setError(errorMessage(e, "Failed to update classification."));
+    }
+  };
+
   return (
     <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-gray-900">Competitors</h1>
+          <p className="text-xs text-gray-500">
+            Acquire and analyze competitor evidence from real SERP observations.
+          </p>
+        </div>
+      </div>
+
       {error && (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{error}</div>
       )}
@@ -88,13 +115,14 @@ export function CompetitorsPage({ projectId }: { projectId: string }) {
               >
                 {ws.serpRuns.map((s) => (
                   <option key={s.serpSnapshotId} value={s.serpSnapshotId}>
-                    {s.query} — observed {new Date(s.observedAt).toLocaleString()}
+                    {s.query} — observed {new Date(s.observedAt).toLocaleString()}{s.stale ? " (stale)" : ""}
                   </option>
                 ))}
               </select>
             </label>
             <button
-              className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+              type="button"
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
               disabled={busy || !selectedSerp}
               onClick={run}
             >
@@ -156,7 +184,23 @@ export function CompetitorsPage({ projectId }: { projectId: string }) {
                       <div className="font-medium text-gray-800">{c.domain}</div>
                       <div className="text-xs text-gray-400">{c.classificationReason}</div>
                     </td>
-                    <td className="px-2 py-1.5">{c.classification}</td>
+                    <td className="px-2 py-1.5">
+                      <select
+                        aria-label={`Classification for ${c.domain}`}
+                        value={c.classification}
+                        onChange={(e) =>
+                          updateCandidateClassification(
+                            c.pageSnapshotId,
+                            e.target.value as "INCLUDE" | "EXCLUDE" | "REFERENCE_ONLY",
+                          )
+                        }
+                        className="rounded border border-gray-200 bg-white px-1.5 py-0.5 text-xs text-gray-700 focus:border-blue-500 focus:outline-none"
+                      >
+                        <option value="INCLUDE">INCLUDE</option>
+                        <option value="EXCLUDE">EXCLUDE</option>
+                        <option value="REFERENCE_ONLY">REFERENCE_ONLY</option>
+                      </select>
+                    </td>
                     <td className="px-2 py-1.5">
                       <StatusBadge
                         status={c.acquisitionStatus}

@@ -117,16 +117,17 @@ describe("Bright Data SERP adapter", () => {
   });
 
   test("uses the Factory Bright Data zone default when no override is configured", async () => {
-    let body: Record<string, unknown> | null = null;
+    let bodyZone = "";
     const provider = new BrightDataSerpProvider({
       env: { BRIGHTDATA_API_KEY: "test-bright-key" },
       fetchImpl: async (_input, init) => {
-        body = JSON.parse(String(init.body));
+        const body = JSON.parse(String(init.body)) as { zone?: string };
+        bodyZone = body.zone ?? "";
         return new Response(JSON.stringify(brightBody), { status: 200 });
       },
     });
     await provider.acquire(request);
-    assert.equal(body?.zone, DEFAULT_BRIGHTDATA_ZONE);
+    assert.equal(bodyZone, DEFAULT_BRIGHTDATA_ZONE);
   });
 
   test("normalizes provider rank, PAA, related searches and known SERP features", () => {

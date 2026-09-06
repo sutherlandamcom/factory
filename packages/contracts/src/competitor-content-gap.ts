@@ -205,7 +205,8 @@ export const competitorPageSnapshotDataSchema = z
     /** Retained bounded raw HTML digest of the extraction input. */
     extractionDigest: digestSchema,
     extracted: competitorPageExtractedSchema,
-    provider: z.literal("direct_http"),
+    /** Trusted acquisition provider id (direct HTTP or fixture for CI). */
+    provider: z.enum(["direct_http", "fixture_page"]),
     acquisitionMethodVersion: z.string().min(1).max(64),
   })
   .strict();

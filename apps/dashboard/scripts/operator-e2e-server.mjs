@@ -39,6 +39,7 @@ const CHILD_ENV = {
   // full journey never touches a paid provider or the network. This env is
   // read only by the trusted backend (never by the browser).
   FACTORY_SEARCH_MODE: process.env.FACTORY_SEARCH_MODE || "fixture",
+  FACTORY_COMPETITOR_MODE: process.env.FACTORY_COMPETITOR_MODE || "fixture",
 };
 
 /** @type {import('node:child_process').ChildProcess | null} */

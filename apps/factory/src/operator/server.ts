@@ -19,6 +19,8 @@ import { FixtureSearchAnalyst, OpenRouterSearchAnalyst } from "../search/analyst
 import { invokeModel } from "../models/gateway.js";
 import { CompetitorStore } from "../competitors/competitor-store.js";
 import { CompetitorContentGapService, buildCompetitorAnalysts } from "../competitors/service.js";
+import { FixturePageProvider } from "../competitors/fixture-page-provider.js";
+import { DirectHttpPageProvider } from "../competitors/direct-http.js";
 
 /**
  * Trusted backend provider selection for Search Intelligence.
@@ -281,13 +283,18 @@ export async function startOperatorServer(): Promise<http.Server> {
   const search = buildSearchIntelligenceService({ intake, searchStore });
   const competitorStore = new CompetitorStore(dbInstance.db);
   const { competitorAnalyst, gapAnalyst } = buildCompetitorAnalysts(process.env, invokeModel);
+  const competitorMode = process.env.FACTORY_COMPETITOR_MODE === "fixture" ? "fixture" : "production";
   const competitors = new CompetitorContentGapService({
     intake,
     competitorStore,
     competitorAnalyst,
     gapAnalyst,
+    pageProvider:
+      competitorMode === "fixture"
+        ? new FixturePageProvider()
+        : new DirectHttpPageProvider(),
     config: {
-      mode: process.env.FACTORY_COMPETITOR_MODE === "fixture" ? "fixture" : "production",
+      mode: competitorMode,
       ...(process.env.FACTORY_COMPETITOR_MAX_PAGES
         ? { maxPages: Math.max(1, Math.min(10, Number(process.env.FACTORY_COMPETITOR_MAX_PAGES))) }
         : {}),

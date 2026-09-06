@@ -2,9 +2,9 @@
 
 This document defines how humans and agents resolve repository instructions when multiple files discuss the same subject.
 
-The latest instruction-alignment audit is recorded in
-`docs/instruction-surface-audit-2026-09-05.md`. The 2026-09-04 audit remains
-historical evidence of the PR #17 alignment.
+The latest instruction-alignment follow-up is recorded in
+`docs/instruction-surface-audit-2026-09-06.md`. The 2026-09-04 and 2026-09-05
+audits remain historical evidence; their past PR states are not today's task queue.
 
 ## Precedence
 

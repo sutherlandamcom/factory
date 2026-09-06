@@ -1,6 +1,16 @@
 # Macro Run 1 — Factory Operator Kernel + Project Intake
 
-## Continuation note — 2026-09-05
+## Continuation update — 2026-09-06
+
+PR #18 merged on 2026-09-05 with final head
+`dd1cda5d5efe7394335c7bf0ca1678fde8ac5f15`; Operator Kernel exists on inspected
+main `d6eeaaa593e45be3be259feb9cda61fa8b6567c4`.
+Macro Run 2 is now the separate open [PR #21](https://github.com/sutherlandamcom/factory/pull/21).
+Use the [current roadmap snapshot](../roadmap-vnext.md) and live PR evidence
+to identify the assigned delta. Merge is recorded here, not an independent GO.
+The previous note and original implementation prompt below remain history.
+
+## Historical continuation note — 2026-09-05
 
 The original implementation prompt below is preserved as task history.
 Implementation already exists in [PR #18](https://github.com/sutherlandamcom/factory/pull/18),

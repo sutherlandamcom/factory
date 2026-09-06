@@ -16,7 +16,35 @@ the domain model.
 
 Every meaningful implementation PR ends at `IMPLEMENTATION COMPLETE — PENDING INDEPENDENT QA`; independent QA reviews an exact SHA, frozen P0/P1 findings are remediated narrowly, then the exact candidate is re-reviewed before merge.
 
-## Observed implementation status — 2026-09-05
+## Observed implementation status — 2026-09-06
+
+Verified main: `d6eeaaa593e45be3be259feb9cda61fa8b6567c4`.
+This entry supersedes the previous snapshot for navigation; the original
+2026-09-05 snapshot below remains historical evidence. Recheck live Git/PR state
+at session start. Merge, executed checks and independent acceptance remain
+distinct facts.
+
+| Workstream | Observed state | Evidence / next gate |
+| --- | --- | --- |
+| Macro Run 1 — Operator Kernel / Intake | Implemented and merged | [PR #18](https://github.com/sutherlandamcom/factory/pull/18), final head `dd1cda5d5efe7394335c7bf0ca1678fde8ac5f15`; merged 2026-09-05; Operator code exists on inspected main |
+| Agent-instruction alignment | Merged; post-merge documentation inconsistencies require the present follow-up | [PR #19](https://github.com/sutherlandamcom/factory/pull/19), head `88c83e87cdbecb24d99839ab046790f9a615b5a2`; [candidate CI success](https://github.com/sutherlandamcom/factory/actions/runs/33989714882) |
+| Macro Run 2 — Live Search Intelligence | In implementation/review as an open candidate; not merged | [PR #21](https://github.com/sutherlandamcom/factory/pull/21), observed head `433844a716b484e3b32f55c699d268ee253d7c60`; inspect its exact candidate and live-provider evidence before acceptance |
+| Macro Runs 3–13 | Planned | Exit criteria below; no completion inferred from provider/eval scaffolding |
+
+Inspected main's [CI](https://github.com/sutherlandamcom/factory/actions/runs/33998967648)
+checked out the exact SHA above and passed: Factory unit 582, Dashboard unit 6,
+persistence 34, Operator 31, real-browser Operator E2E 2; site-starter 8 passed
+and 2 skipped. These are main results, not PR #21 acceptance or live-provider
+proof. The PR #21 author reports live structured SERP and native grounding
+blocked on credentials; this documentation update does not independently
+verify those claims or issue a GO.
+
+No separate exact-SHA independent GO for PR #19 was found in the inspected
+GitHub reviews/comments or repository audit records. This is an evidence gap,
+not proof that no external review occurred. PR #18's merge likewise must not
+be used as a substitute for its independent review evidence.
+
+## Historical implementation snapshot — 2026-09-05
 
 This is a dated navigation snapshot, not a substitute for live Git/PR checks.
 Refresh it when a reviewed milestone changes; never infer completion from a

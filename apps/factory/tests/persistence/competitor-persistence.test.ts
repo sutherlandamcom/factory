@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
+import type { FactoryDb } from "../../src/persistence/db.js";
 import { setupMigratedTestDatabase } from "./helpers.js";
 import { CompetitorStore } from "../../src/competitors/competitor-store.js";
 import { projects } from "../../src/persistence/schema.js";
@@ -12,14 +13,11 @@ import { projects } from "../../src/persistence/schema.js";
  * immutability, v1/v2 versions, constraints.
  */
 
-async function seedProject(db: ReturnType<Awaited<ReturnType<typeof setupMigratedTestDatabase>>["db"]> extends never ? never : any) {
-  // Helper: create a project + minimal SERP/intelligence lineage rows.
-}
-
 test("competitor persistence: lineage, isolation, dedupe, accepted immutability", async (t) => {
   const inst = await setupMigratedTestDatabase();
   t.after(() => inst.close());
-  const store = new CompetitorStore(inst.db);
+  const db: FactoryDb = inst.db;
+  const store = new CompetitorStore(db);
 
   // Seed two projects with intake snapshots and SERP/intelligence lineage.
   const [p1] = await inst.db
@@ -239,8 +237,8 @@ test("competitor persistence: lineage, isolation, dedupe, accepted immutability"
   ]);
   await assert.rejects(
     store.replaceDecisions(p1.id, report.id, [
-      { gapId: "gap-001", disposition: "REQUIRED" },
-      { gapId: "gap-001", disposition: "EXCLUDE" },
+      { gapId: "gap-001", disposition: "REQUIRED", priority: null, note: null },
+      { gapId: "gap-001", disposition: "EXCLUDE", priority: null, note: null },
     ]),
     /content_gap_decisions_report_gap_unique|duplicate key|Failed query/,
   );

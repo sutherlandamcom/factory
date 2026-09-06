@@ -18,11 +18,12 @@ function fakeLookup(map: Record<string, Array<{ address: string; family: number 
 }
 
 function htmlResponse(url: string, body: string, init?: { status?: number; headers?: Record<string, string> }): Response {
-  return new Response(body, {
+  const response = new Response(body, {
     status: init?.status ?? 200,
     headers: { "content-type": "text/html; charset=utf-8", ...(init?.headers ?? {}) },
-    url,
   });
+  Object.defineProperty(response, "url", { value: url });
+  return response;
 }
 
 test("SSRF guard: structure rejects non-http, credentials and forbidden IP literals", () => {

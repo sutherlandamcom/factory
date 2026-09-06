@@ -92,10 +92,10 @@ export const searchDeviceSchema = z.enum(["desktop", "mobile", "tablet"]);
 export type SearchDevice = z.infer<typeof searchDeviceSchema>;
 
 /**
- * Provider identifiers. `fixture` is the deterministic test provider; it is
- * only selectable through trusted backend configuration, never by the browser.
+ * Provider identifiers. `fixture` is the deterministic test provider; live
+ * provider selection remains trusted backend configuration, never browser input.
  */
-export const searchProviderIdSchema = z.enum(["dataforseo", "fixture"]);
+export const searchProviderIdSchema = z.enum(["brightdata", "dataforseo", "fixture"]);
 export type SearchProviderId = z.infer<typeof searchProviderIdSchema>;
 
 export const searchRequestSchema = z

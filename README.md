@@ -93,10 +93,12 @@ FACTORY_TEST_DATABASE_URL="postgresql://factory:factory_test_password@localhost:
 The addresses above are examples, not discovered local configuration. Before
 running persistence tests, explicitly export `FACTORY_TEST_DATABASE_URL` for
 the dedicated `factory_test` database you verified. Do not rely on a port or an
-implicit fallback to identify a safe database. The accepted base still has a
-legacy localhost fallback in `tests/persistence/helpers.ts`; PR #18 adds
-fail-before-connection enforcement. See the dated status in
-[`docs/roadmap-vnext.md`](./docs/roadmap-vnext.md) before assuming it is merged.
+implicit fallback to identify a safe database.
+`apps/factory/tests/persistence/helpers.ts` requires a non-empty
+`FACTORY_TEST_DATABASE_URL` whose database name is exactly `factory_test`;
+missing or invalid selection fails before connecting. There is no implicit
+test-connection fallback. Persistence, Operator and Dashboard E2E tests mutate
+this dedicated database; do not run these suites concurrently against it.
 
 Apply database migrations:
 
@@ -166,14 +168,15 @@ The QA suite needs a Chromium build:
 
 ```bash
 pnpm --filter @factory/site-starter exec playwright install chromium
+pnpm --filter @factory/dashboard exec playwright install chromium
 ```
 
 (Linux CI additionally installs Chromium system dependencies with `--with-deps`,
 as specified in `.github/workflows/pr-ci.yml`.)
 
 > Playwright's declared range lives in `sites/starter/package.json`; the lockfile
-> records the exact installed version. Install browsers using that workspace's
-> Playwright command. Verify upgrades against the supported test environments.
+> records the exact installed version. Install browsers using each tested workspace's
+> Playwright command; Dashboard's declared range is in `apps/dashboard/package.json`. Verify upgrades against the supported test environments.
 
 ## Commands
 
@@ -184,7 +187,7 @@ All commands run from the repository root.
 | `pnpm dev` | Start the starter site's dev server (http://localhost:4321) |
 | `pnpm check` | Typecheck all workspaces (`tsc` + `astro check`) |
 | `pnpm build` | Build all workspaces (static site output in `sites/starter/dist/`) |
-| `pnpm test` | Factory unit tests (deterministic, no Codex calls) + Playwright QA against the **built** site |
+| `pnpm test` | Factory unit tests + Dashboard unit tests + site-starter Playwright QA against the **built** site (no paid model calls) |
 | `pnpm qa` | `check` → `build` → `test` in one command |
 | `pnpm factory` | Run the Factory control-plane CLI |
 | `pnpm factory site-task <task.json>` | Execute one current SiteTask end to end with persisted state & bounded repair (requires DB + routed worker credentials) |
@@ -197,13 +200,25 @@ All commands run from the repository root.
 | `pnpm factory deploy <siteKey>` | Deliver exact current `origin/main` through preview and production QA |
 | `pnpm factory rollback <siteKey>` | Roll back to an earlier Factory-verified Cloudflare version and verify production |
 | `pnpm factory run show <runId>` | Inspect durable run state, attempt breakdown, quality gates, and model metrics |
-| `pnpm --filter @factory/factory test:persistence` | Run real PostgreSQL persistence integration tests |
+| `pnpm --filter @factory/factory run test:persistence` | Run real PostgreSQL persistence integration tests |
+| `pnpm --filter @factory/factory run test:operator` | Run Operator API/security and preparation tests against the dedicated test DB |
+| `pnpm --filter @factory/dashboard run test:e2e` | Run real-browser journeys against the built Dashboard, actual Operator service and dedicated test DB |
 
-`pnpm qa` and database acceptance are separate commands on the accepted base;
-CI runs both. PR #18 adds Dashboard, operator and browser-journey coverage while
-retaining site-starter QA. Consult the checked-out manifests/workflow and the
-roadmap status before using commands from that open PR. A green badge does not
-replace checking which suites actually executed.
+The required repository CI sequence in `.github/workflows/pr-ci.yml` is frozen
+installation, Chromium installation for both browser workspaces, then these
+commands in order (with the verified dedicated test DB exported for the last
+three):
+
+```bash
+pnpm qa
+pnpm --filter @factory/factory run test:persistence
+pnpm --filter @factory/factory run test:operator
+pnpm --filter @factory/dashboard run test:e2e
+```
+
+`pnpm qa` alone does not run the three separate database acceptance suites.
+Site-starter regression QA remains mandatory. A green badge proves only the
+suites actually executed; report exact SHA, results and skips.
 
 ## Running a site-task
 
@@ -228,7 +243,7 @@ The current bounded loop remains specified as follows:
 7. **Outcomes**:
    - `succeeded`: Full verification passes on attempt 1, 2, or 3.
    - `failed`: Terminal execution/input/security defect (including unavailable isolation, scope/type violation, ignored-input mutation, or QA timeout). Routed worker failures/timeouts may be escalation-eligible; `executor/router.ts` defines the exact classification.
-   - `needs_review`: Bounded attempts exhausted (3 failed repair attempts) or no source progress made on repair.
+   - `needs_review`: Bounded attempts exhausted (at most 3 total attempts, including the initial implementation) or no source progress made on repair.
 
 Factory's module rule is **READ MANY / WRITE FEW**. The version-controlled
 registry contains only current modules; accepted contracts, control-plane,
@@ -295,7 +310,7 @@ Copy `.env.example` to `.env` in the repository root (or create `sites/starter/.
 to configure environment variables.
 
 - **`FACTORY_DATABASE_URL`**: PostgreSQL connection string for Factory persistent control plane. Required for production `site-task` execution.
-- **`FACTORY_TEST_DATABASE_URL`**: Explicitly set this to the verified dedicated test database before integration tests (`test:persistence`). Enforcement differs between the accepted base and PR #18 as described under Database setup; never rely on the legacy fallback.
+- **`FACTORY_TEST_DATABASE_URL`**: Explicitly set this to the verified dedicated test database before integration tests (`test:persistence`). The harness requires database name `factory_test` and fails before connection if the variable is missing or invalid; there is no fallback.
 - **`PUBLIC_SITE_URL`**: Canonical origin of the current Astro-rendered site. Used for canonical `<link>`, Open Graph URLs, and JSON-LD identifiers.
 - **`FACTORY_QA_PORT`**: Optional TCP port for Playwright preview server. Allows isolated concurrent QA runs across separate worktrees.
 - **`FACTORY_QA_BASE_URL`**: Trusted internal QA override for remote preview/production QA.

@@ -11,19 +11,22 @@ and [roadmap](./roadmap-vnext.md). The roadmap includes a dated Git/PR status
 index. Historical scope notes describe earlier slices; they do not defer
 capabilities that subsequently landed or authorize new work.
 
-At the 2026-09-05 inspection, accepted main was
-`c6c7e000caf9797398dc4e05642ed42a40e664d0`. Operator Kernel / Dashboard code
-exists in open [PR #18](https://github.com/sutherlandamcom/factory/pull/18),
-not in that accepted base. Its candidate-specific implementation description
-belongs to that PR until acceptance/merge. Recheck current Git state before
-starting a new run.
+At the 2026-09-06 inspection, main was
+`d6eeaaa593e45be3be259feb9cda61fa8b6567c4`. Operator Kernel / Dashboard
+[PR #18](https://github.com/sutherlandamcom/factory/pull/18) and instruction
+alignment [PR #19](https://github.com/sutherlandamcom/factory/pull/19) are merged.
+The Operator section below describes code present on that base. Search
+Intelligence [PR #21](https://github.com/sutherlandamcom/factory/pull/21) is an
+open candidate, not functionality on this main. Merge and CI are not independent
+GO evidence; see the roadmap status index and recheck Git before starting work.
 
 ## What exists today (execution trust hardening)
 
-Factory is a pnpm monorepo with three packages:
+Factory has four application/library workspaces (plus the private root orchestrator):
 
 ```
-apps/factory        @factory/factory      — control-plane CLI + site-task executor (tsx, TypeScript)
+apps/factory        @factory/factory      — control-plane CLI, Operator API + site-task executor (tsx, TypeScript)
+apps/dashboard      @factory/dashboard    — React + Vite operator console
 packages/contracts  @factory/contracts    — shared machine-readable contracts (Zod schemas + types)
 sites/starter       @factory/site-starter — Astro 7 + Tailwind 4 website template
 ```
@@ -168,7 +171,7 @@ Factory gates remain authoritative.
 - **Dependency prep**: Factory (never the coding worker) installs dependencies offline from the pnpm store against the committed lockfile once per run.
 - **Legacy Codex layered sandbox policy**: Factory copies only the host Codex `auth.json` into a per-run directory, mounts it read-only, ignores user configuration, and deletes the copy during cleanup. The outer container permits Codex model-service connectivity; the inner `workspace-write` policy keeps approval disabled, shell/tool network disabled, and web search disabled. Necessary Codex authentication remains a residual readable secret inside that isolated runtime.
 - **Scope enforcement**: the validated slug maps to exactly one writable `.astro` page. NUL-delimited `git diff --raw -z --no-renames` makes every rename source/destination visible as delete/add; only regular non-executable `100644` files pass. Symlinks, gitlinks, special modes, and unrelated source paths are terminal violations.
-- **Ignored-input integrity**: Factory snapshots ignored state after dependency preparation and before each attempt, hashes contents/types/modes (including `.env*`, `.astro`, and `node_modules`), and compares immediately after Codex. Output exclusions are strictly anchored to explicit known repository roots (`.factory/**`, `sites/starter/dist/**`, `sites/starter/.astro/**`, `sites/starter/test-results/**`, `sites/starter/playwright-report/**`, `sites/starter/qa-artifacts/**`); nested unanchored names (such as `.../dist/helper.ts`) are never ignored or excluded.
+- **Ignored-input integrity**: Factory snapshots ignored state after dependency preparation and before each attempt, hashes contents/types/modes (including `.env*`, `.astro`, and `node_modules`), and compares immediately after the selected coding worker. Output exclusions are strictly anchored to explicit known repository roots (`.factory/**`, `sites/starter/dist/**`, `sites/starter/.astro/**`, `sites/starter/test-results/**`, `sites/starter/playwright-report/**`, `sites/starter/qa-artifacts/**`); nested unanchored names (such as `.../dist/helper.ts`) are never ignored or excluded.
 - **Independent QA Oracle**: unchanged Foundation `pnpm qa` runs first. Factory then creates a validated task QA spec outside the worktree and runs immutable Playwright assertions for the requested route on desktop and mobile: response/errors, exact metadata/H1/canonical/OG, page-type JSON-LD, requested CTA/FAQ, bounded internal links, image semantics, meaningful body content, and mobile overflow.
 - **Task verification**: a dependency-free semantic extractor checks fresh built HTML for exact title, one exact H1, description, canonical origin/path, and route existence. Comments, scripts, JSON blobs, footer text, and unrelated body text cannot satisfy title checks.
 - **Patch self-containment verification (Replay)**: before returning `succeeded`, Factory creates a separate disposable worktree at `baseCommit`, applies the binary-safe `diff.patch`, and proves that `check` and `build` succeed from pristine base state without relying on untracked or ignored artifacts from the execution worktree.
@@ -226,12 +229,20 @@ not model-generated runtime authority. It is a strict Zod contract
 
 `pnpm qa` = `check` → `build` → `test`:
 
-1. **check** — `tsc --noEmit` for contracts and factory, `astro check` for
-   the site.
-2. **build** — `astro build`; fails on type or build errors.
-3. **test** — Factory executor unit tests (deterministic, Codex mocked),
-   then Playwright runs against the built site served by `astro preview` in
-   the foreground across desktop (1280×800) and mobile (390×844) viewports.
+1. **check** — `tsc --noEmit` for contracts, Factory and Dashboard;
+   `astro check` for the site.
+2. **build** — workspace build scripts: Astro static site and Vite Dashboard.
+3. **test** — Factory unit tests, Dashboard unit tests, then site-starter
+   Playwright against built Astro served by `astro preview` in the foreground
+   across desktop (1280×800) and mobile (390×844) viewports.
+
+Repository CI additionally runs, sequentially, `@factory/factory`
+`test:persistence`, `test:operator`, and `@factory/dashboard` `test:e2e`.
+These use explicit `FACTORY_TEST_DATABASE_URL` targeting `factory_test`;
+missing/invalid selection fails before connection. Operator E2E exercises the
+built Dashboard with the real service and PostgreSQL, including service restart.
+It is not replaced by Dashboard unit tests. See the [README commands](../README.md#commands)
+and `.github/workflows/pr-ci.yml` for the complete sequence.
 
 ## Persistent control plane (`apps/factory/src/persistence`)
 
@@ -247,8 +258,9 @@ not model-generated runtime authority. It is a strict Zod contract
 
 ### Data model & relational structure
 
-The accepted base has eight operational tables (the original seven plus
-`deployments` from Production Delivery). PR #18 adds intake tables separately:
+The current schema has ten tables: the eight execution/delivery tables listed
+here plus `project_input_drafts` and `project_input_snapshots` from merged
+PR #18, detailed in the Operator Kernel section below:
 
 ```
 [projects]
@@ -417,7 +429,13 @@ directories, so stale artifacts from previous runs can never satisfy a current
 run. Non-success runs leave honest partial/failed evidence and no
 `succeeded` result file.
 
-### Explicitly deferred (out of scope by design)
+### Historical deferrals at the original First-Site Intelligence v0 slice
+
+The following paragraph preserves that slice's original boundary, not current
+program sequencing. Operator Dashboard subsequently landed in PR #18; live
+Search Intelligence is the open Macro Run 2 candidate in PR #21. The
+[roadmap](./roadmap-vnext.md), not the original first-site prerequisite below,
+governs new work.
 
 Live research acquisition (DataForSEO, Firecrawl, crawler, SERP pipeline),
 research/keyword/competitor warehouses, vector DB, embeddings, RAG, generic
@@ -607,7 +625,7 @@ infrastructure, and Site Shell implementation (see
 
 ## Operator Kernel v0 — Project Intake vertical slice (Macro Run 1)
 
-**Implemented state** (PR #18, branch `feat/operator-kernel-v0`). This section
+**Implemented and merged state** (PR #18; independent GO is not asserted here). This section
 describes what exists today; vNext roadmap sequencing lives in
 `docs/roadmap-vnext.md` and is not reinterpreted here.
 
@@ -690,114 +708,6 @@ describes what exists today; vNext roadmap sequencing lives in
 ### Explicitly still roadmap-only
 
 Search/Opus/Stitch/Nano-Banana integrations, renderer ADR, queues/CMS/auth/
-RBAC, deployment targets, and all other vNext sequencing — see
+RBAC, full operator-controlled delivery and additional deployment targets
+beyond the existing Cloudflare delivery path remain roadmap-only — see
 `docs/roadmap-vnext.md`.
-
-## Search Intelligence v0 — Live Search vertical slice (Macro Run 2)
-
-Implements `docs/roadmap-vnext.md` Macro Run 2. One accepted project/topic goes
-seed/query → real structured SERP → normalized evidence → derived Search
-Intelligence → persisted history → Dashboard, without raw-JSON operation.
-
-### Provider authority split (never collapsed)
-
-- **StructuredSerpProvider** (`apps/factory/src/search/provider-types.ts`,
-  `serp-dataforseo.ts`) = WHAT THE SEARCH ENGINE RETURNED (measurement). v0
-  adapter: DataForSEO Live Google Organic Advanced (basic auth from
-  `DATAFORSEO_LOGIN`/`DATAFORSEO_PASSWORD`, read only inside the adapter).
-  Normalization is deterministic: `rank_absolute` position order preserved,
-  unknown item types ignored (never invented), features/PAA/related searches
-  recorded only when provider exposes them (absent = UNKNOWN). Typed failure
-  mapping: auth (HTTP 401/403 + task codes), rate limit, unavailable, invalid
-  response. SerpApi remains replaceable behind the same boundary.
-- **GroundedSearchProvider** (`grounded-types.ts`) = WHAT CURRENT WEB EVIDENCE
-  TELLS US (model-mediated research with sources). Native Gemini grounding is
-  NOT reachable via the OpenRouter gateway, so v0 ships the boundary plus a
-  deterministic fixture; production mode surfaces honest absence
-  (`grounded: null`, "not configured" in UI). Grounded sources are never
-  labeled or treated as rankings.
-- **Search analyst** (`analyst.ts`) = interpretation only, NOT factual
-  authority. Role `search_analyst`, champion `google/gemini-3.7-flash`
-  (OpenRouter, verified against `MODEL_ROLE_POLICY`). Bounded versioned prompt
-  (`search-analyst-v1`, digested), compact evidence packet (accepted project
-  facts + SERP summary only). `evidenceRefs` and `reviewState` are
-  Factory-owned (model cannot forge provenance). Malformed output fails closed
-  (`search_intelligence_invalid`) — never silently repaired. No LSI scores,
-  keyword density, or SEO-plugin-style numeric scores exist anywhere in the
-  contract (strict schemas reject unknown fields).
-
-### Contracts and persistence
-
-`packages/contracts/src/search-intelligence.ts` (schema-version `v1`,
-`.strict()`): `searchRequestSchema`, `serpSnapshotDataSchema` (organic ordered
-by ascending position, closed feature vocabulary), `groundedSearchDataSchema`,
-`searchIntelligenceDataSchema` (intent, query clusters with
-primary/secondary relationships, long-tail opportunities, entities, topics,
-questions, modifiers, vocabulary, related concepts, semantic coverage
-requirements, user needs, evidence refs, review state). Search error codes
-extend the closed `OperatorErrorCode` union.
-
-Four tables (`apps/factory/src/persistence/schema.ts`, migration
-`drizzle/0005_search_intelligence_v0.sql`): `search_runs` (accepted-input
-lineage: snapshotId + version + digest; requestDigest cache key; status
-running/succeeded/failed), `serp_snapshots` (immutable; rawPayload +
-`rawDigest` so normalization is reproducible from stored evidence; provider
-request id; observedAt; usage jsonb), `grounded_search_snapshots` (model,
-prompt version/digest, web search queries, sources), and
-`search_intelligence_snapshots` (model, prompt version/digest, derivedFrom
-serp/grounded snapshot ids, evidence digests, strict-reparsed data,
-`reviewState`). JSONB is re-parsed through the current contracts on every read
-(fail closed on drift). Project isolation is enforced by `project_id`
-predicates on every store read; failed runs persist `status='failed'` with a
-typed code and never produce snapshots.
-
-### Governed application service and Operator API
-
-`SearchIntelligenceService` (`apps/factory/src/search/service.ts`):
-preflight (accepted snapshot exists; query normalized/validated; provider
-configured; daily budget `FACTORY_SEARCH_DAILY_LIMIT_USD` (default 5 USD,
-summed from recorded `costMicros` — UNKNOWN cost is uncounted, never
-fabricated)) → freshness cache check (`FACTORY_SEARCH_FRESHNESS_HOURS`,
-default 24, keyed by requestDigest = provider+query+location+language+device+
-acceptedInputDigest+requestVersion) → acquire → persist SerpSnapshot →
-optional grounded research → analyst → persist intelligence → bounded
-read-model. Cache reuse records a new run row (audit trail) without spend;
-`refresh: true` forces a new immutable observation; history is never
-rewritten.
-
-Operator API (same-origin hardened server, typed error contract): `GET
-/api/projects/:id/search/workspace` (accepted-input lineage, seeds, human
-readiness, recent runs), `POST /api/projects/:id/search/runs` (query,
-location?, language?, device, refresh? — strict zod body; no provider
-selection, mode, or plumbing is browser-controllable), `GET .../search/runs`
-and `GET .../search/runs/:runId`. Provider secrets never reach the browser;
-unexpected failures sanitize to `internal_error`.
-
-### Dashboard
-
-Search workspace tab (`apps/dashboard/src/pages/SearchPage.tsx`): accepted
-version + digest + staleness vs current accepted inputs; seed topics/queries
-click-to-fill; query/location/device form (no JSON); human-terms readiness
-panel; run + "Refresh (new observation)"; SERP list (position/title/domain/
-snippet) with features, People Also Ask, related searches, and an opt-in raw
-evidence digest disclosure; separate GROUNDED RESEARCH section (labeled
-"model-mediated web evidence — not rankings"); grouped Search Intelligence;
-evidence timestamps, provider/model, usage/cost when known; history table.
-`tests/search-ui-contract.test.ts` pins every UI-consumed field against the
-read-model (Macro Run 1 UI↔contract drift defect class prevention).
-
-### Cost rule and live-vs-CI provider testing policy
-
-CI and unit tests never call paid providers: the trusted backend selects the
-deterministic fixture provider/analyst only when `FACTORY_SEARCH_MODE=fixture`
-(set by the E2E supervisor; never browser-selectable). Live acceptance is a
-separate manual/gated script (`apps/factory/scripts/search-live-proof.ts`)
-which records truthful provider/model/usage/digests. Actual spend during this
-run: one bounded analyst call (2,770 tokens, $0.008879 recorded
-`costMicros`); zero SERP/grounding spend (blocked). Live structured-SERP
-acceptance remains blocked pending DataForSEO credentials; live native
-grounding blocked pending GOOGLE_API_KEY. The E2E search journey
-(`apps/dashboard/e2e/search-journey.spec.ts`) proves the full operator flow —
-Intake accept → search run → SERP/grounded/intelligence rendering → browser
-reload → real service restart without DB reset → history inspectable — against
-the built dashboard, real Operator service, and dedicated real PostgreSQL.

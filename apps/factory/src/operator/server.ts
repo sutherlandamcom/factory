@@ -11,6 +11,7 @@ import { resolveDatabaseConfig } from "../persistence/config.js";
 import { createDatabaseInstance } from "../persistence/db.js";
 import { SearchStore } from "../search/search-store.js";
 import { SearchIntelligenceService, DEFAULT_SEARCH_CONFIG, type SearchServiceConfig } from "../search/service.js";
+import { BrightDataSerpProvider } from "../search/serp-brightdata.js";
 import { DataForSeoSerpProvider } from "../search/serp-dataforseo.js";
 import { FixtureSerpProvider } from "../search/serp-fixture.js";
 import { FixtureGroundedSearchProvider } from "../search/grounded-types.js";
@@ -21,6 +22,7 @@ import { invokeModel } from "../models/gateway.js";
  * Trusted backend provider selection for Search Intelligence.
  *
  * FACTORY_SEARCH_MODE: 'production' (default) | 'fixture'.
+ * FACTORY_SERP_PROVIDER: 'brightdata' (default) | 'dataforseo'.
  * The browser can NEVER select providers or modes — this is config-only.
  */
 export function buildSearchIntelligenceService(
@@ -29,13 +31,21 @@ export function buildSearchIntelligenceService(
 ): SearchIntelligenceService {
   const mode = process.env.FACTORY_SEARCH_MODE === "fixture" ? "fixture" : "production";
   const env: NodeJS.ProcessEnv = process.env;
-  const productionSerp = new DataForSeoSerpProvider({ env });
+  const configuredSerpProvider = env.FACTORY_SERP_PROVIDER?.trim().toLowerCase() || "brightdata";
+  const productionSerp =
+    configuredSerpProvider === "brightdata"
+      ? new BrightDataSerpProvider({ env })
+      : configuredSerpProvider === "dataforseo"
+        ? new DataForSeoSerpProvider({ env })
+        : (() => {
+            throw new Error("FACTORY_SERP_PROVIDER must be 'brightdata' or 'dataforseo'.");
+          })();
   const fixtureSerp = new FixtureSerpProvider();
 
-  // Grounded research: native Gemini grounding is not yet reachable through
-  // the current gateway; in fixture mode the deterministic fixture provider
-  // is wired so the full journey can be exercised. In production mode it
-  // stays absent (honest absence) until a native adapter lands.
+  // Grounded research is optional in v0. Fixture mode wires a deterministic
+  // provider so the full UI/application journey is exercised; production
+  // remains absent until an optional grounded-search adapter is deliberately
+  // adopted. Structured SERP measurement does not depend on this capability.
   const grounded = mode === "fixture" ? new FixtureGroundedSearchProvider() : null;
 
   const analyst =

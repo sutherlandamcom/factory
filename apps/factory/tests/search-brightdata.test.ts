@@ -83,6 +83,7 @@ describe("Bright Data SERP adapter", () => {
     assert.equal(url.pathname, "/search");
     assert.equal(url.searchParams.get("q"), "investment property chamonix");
     assert.equal(url.searchParams.get("uule"), request.location);
+    assert.equal(url.searchParams.get("gl"), "fr");
     assert.equal(url.searchParams.get("hl"), "fr");
     assert.equal(url.searchParams.get("pws"), "0");
     assert.equal(url.searchParams.get("brd_mobile"), "0");
@@ -92,6 +93,16 @@ describe("Bright Data SERP adapter", () => {
     const tablet = new URL(buildBrightDataGoogleUrl({ ...request, device: "tablet" }));
     assert.equal(mobile.searchParams.get("brd_mobile"), "1");
     assert.equal(tablet.searchParams.get("brd_mobile"), "ipad");
+
+    // 2-letter ISO code: sets gl only, never pollutes uule with non-canonical code
+    const countryCodeUrl = new URL(buildBrightDataGoogleUrl({ ...request, location: "FR" }));
+    assert.equal(countryCodeUrl.searchParams.get("gl"), "fr");
+    assert.equal(countryCodeUrl.searchParams.get("uule"), null);
+
+    // City abbreviation: expands to canonical format and pairs with gl
+    const expandedUrl = new URL(buildBrightDataGoogleUrl({ ...request, location: "Austin, TX" }));
+    assert.equal(expandedUrl.searchParams.get("uule"), "Austin,Texas,United States");
+    assert.equal(expandedUrl.searchParams.get("gl"), "us");
   });
 
   test("uses Bright Data request endpoint, bearer auth, configured zone and parsed JSON", async () => {

@@ -204,6 +204,40 @@ export class BrightDataSerpProvider implements StructuredSerpProvider {
   }
 }
 
+const KNOWN_COUNTRY_CODES: Record<string, string> = {
+  france: "fr",
+  "united states": "us",
+  usa: "us",
+  "united kingdom": "gb",
+  uk: "gb",
+  germany: "de",
+  spain: "es",
+  italy: "it",
+  switzerland: "ch",
+  canada: "ca",
+  australia: "au",
+  japan: "jp",
+};
+
+const US_STATE_EXPANSIONS: Record<string, string> = {
+  tx: "Texas",
+  ca: "California",
+  ny: "New York",
+  fl: "Florida",
+  il: "Illinois",
+  wa: "Washington",
+  co: "Colorado",
+  az: "Arizona",
+  ma: "Massachusetts",
+  pa: "Pennsylvania",
+  oh: "Ohio",
+  ga: "Georgia",
+  nc: "North Carolina",
+  mi: "Michigan",
+  va: "Virginia",
+  nj: "New Jersey",
+};
+
 /** Build an exact Google request without semantically rewriting the query. */
 export function buildBrightDataGoogleUrl(request: SerpAcquisitionRequest): string {
   const url = new URL("https://www.google.com/search");
@@ -212,11 +246,36 @@ export function buildBrightDataGoogleUrl(request: SerpAcquisitionRequest): strin
   url.searchParams.set("brd_browser", "chrome");
 
   if (request.location?.trim()) {
-    // Bright Data accepts Google canonical location names directly in `uule`
-    // and performs the provider-side lookup/encoding.
-    url.searchParams.set("uule", request.location.trim());
-    if (/^[a-z]{2}$/i.test(request.location.trim())) {
-      url.searchParams.set("gl", request.location.trim().toLowerCase());
+    const rawLoc = request.location.trim();
+    if (/^[a-z]{2}$/i.test(rawLoc)) {
+      // 2-letter ISO country code: set gl only, never pollute uule with a non-canonical code
+      url.searchParams.set("gl", rawLoc.toLowerCase());
+    } else {
+      const lower = rawLoc.toLowerCase();
+      if (KNOWN_COUNTRY_CODES[lower]) {
+        url.searchParams.set("gl", KNOWN_COUNTRY_CODES[lower]!);
+        url.searchParams.set("uule", rawLoc);
+      } else {
+        // Expand common City, ST format (e.g. "Austin, TX" -> "Austin,Texas,United States")
+        const usStateMatch = /^([^,]+),\s*([a-zA-Z]{2})$/.exec(rawLoc);
+        let normalizedLoc = rawLoc;
+        if (usStateMatch) {
+          const stateAbbr = usStateMatch[2]!.toLowerCase();
+          const expandedState = US_STATE_EXPANSIONS[stateAbbr];
+          if (expandedState) {
+            normalizedLoc = `${usStateMatch[1]!.trim()},${expandedState},United States`;
+          }
+        }
+        url.searchParams.set("uule", normalizedLoc);
+
+        // Pair with gl country code from location tail per Bright Data best practice
+        const countryMatch = /,\s*([a-zA-Z\s]+)$/.exec(normalizedLoc);
+        if (countryMatch) {
+          const countryName = countryMatch[1]!.trim().toLowerCase();
+          const code = KNOWN_COUNTRY_CODES[countryName];
+          if (code) url.searchParams.set("gl", code);
+        }
+      }
     }
   }
   if (request.language?.trim()) {

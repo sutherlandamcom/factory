@@ -5,9 +5,9 @@ import type { SearchUsage } from "@factory/contracts";
  *
  * What this run performed:
  *
- * 1. Structured SERP (exact measurement): BLOCKED — no DataForSEO/SerpApi
+ * 1. Structured SERP (exact measurement): BLOCKED — no Bright Data
  *    credentials exist in the environment (only OPENROUTER_API_KEY is
- *    configured). The DataForSEO adapter is implemented, fixture-tested, and
+ *    configured). The Bright Data adapter is implemented, fixture-tested, and
  *    fails closed with `search_provider_not_configured`. No live SERP proof
  *    was possible and none was faked.
  *
@@ -112,7 +112,7 @@ async function main(): Promise<void> {
     clusterCount: result.data.queryClusters.length,
     evidenceRefs: result.data.evidenceRefs,
     structuredOutputValid: true,
-    structuredSerpLive: "BLOCKED — no DataForSEO credentials configured",
+    structuredSerpLive: "BLOCKED — no Bright Data credentials configured (BRIGHTDATA_API_KEY)",
     groundedLive: "BLOCKED — no GOOGLE_API_KEY; native grounding unreachable via OpenRouter",
   };
   console.log(JSON.stringify(report, null, 2));

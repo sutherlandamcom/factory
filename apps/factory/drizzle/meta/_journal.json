@@ -36,6 +36,13 @@
       "when": 1788563406053,
       "tag": "0004_operator_intake_v0",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788647486207,
+      "tag": "0005_search_intelligence_v0",
+      "breakpoints": true
     }
   ]
 }

@@ -9,6 +9,96 @@ import { ProjectIntakeStore } from "./intake-store.js";
 import { FactoryStore } from "../persistence/store.js";
 import { resolveDatabaseConfig } from "../persistence/config.js";
 import { createDatabaseInstance } from "../persistence/db.js";
+import { SearchStore } from "../search/search-store.js";
+import { SearchIntelligenceService, DEFAULT_SEARCH_CONFIG, type SearchServiceConfig } from "../search/service.js";
+import { BrightDataSerpProvider } from "../search/serp-brightdata.js";
+import { DataForSeoSerpProvider } from "../search/serp-dataforseo.js";
+import { FixtureSerpProvider } from "../search/serp-fixture.js";
+import { FixtureGroundedSearchProvider } from "../search/grounded-types.js";
+import { FixtureSearchAnalyst, OpenRouterSearchAnalyst } from "../search/analyst.js";
+import { invokeModel } from "../models/gateway.js";
+
+/**
+ * Trusted backend provider selection for Search Intelligence.
+ *
+ * FACTORY_SEARCH_MODE: 'production' (default) | 'fixture'.
+ * FACTORY_SERP_PROVIDER: 'brightdata' (default) | 'dataforseo'.
+ * The browser can NEVER select providers or modes — this is config-only.
+ */
+export function buildSearchIntelligenceService(
+  deps: { intake: ProjectIntakeStore; searchStore: SearchStore },
+  config?: Partial<SearchServiceConfig>,
+): SearchIntelligenceService {
+  const mode = process.env.FACTORY_SEARCH_MODE === "fixture" ? "fixture" : "production";
+  const env: NodeJS.ProcessEnv = process.env;
+  const configuredSerpProvider = env.FACTORY_SERP_PROVIDER?.trim().toLowerCase() || "brightdata";
+  const productionSerp =
+    configuredSerpProvider === "brightdata"
+      ? new BrightDataSerpProvider({ env })
+      : configuredSerpProvider === "dataforseo"
+        ? new DataForSeoSerpProvider({ env })
+        : (() => {
+            throw new Error("FACTORY_SERP_PROVIDER must be 'brightdata' or 'dataforseo'.");
+          })();
+  const fixtureSerp = new FixtureSerpProvider();
+
+  // Grounded research is optional in v0. Fixture mode wires a deterministic
+  // provider so the full UI/application journey is exercised; production
+  // remains absent until an optional grounded-search adapter is deliberately
+  // adopted. Structured SERP measurement does not depend on this capability.
+  const grounded = mode === "fixture" ? new FixtureGroundedSearchProvider() : null;
+
+  const analyst =
+    mode === "fixture" || !env.OPENROUTER_API_KEY
+      ? new FixtureSearchAnalyst()
+      : new OpenRouterSearchAnalyst({
+          model: "google/gemini-3.7-flash",
+          callModel: async (prompt) => {
+            const result = await invokeModel(
+              {
+                roleId: "search_analyst",
+                model: "google/gemini-3.7-flash",
+                systemPrompt:
+                  "You are Factory's search analyst. Output only strict JSON matching the requested schema. Ground every claim in the provided evidence; never invent rankings, volumes, statistics, or business facts.",
+                prompt,
+                maxTokens: 4096,
+                timeoutMs: 120_000,
+              },
+              { loadApiKey: () => env.OPENROUTER_API_KEY ?? null },
+            );
+            return {
+              text: result.content,
+              usage: {
+                inputTokens: result.promptTokens,
+                outputTokens: result.completionTokens,
+                totalTokens: result.totalTokens,
+                costMicros:
+                  result.costUsd != null ? Math.round(result.costUsd * 1_000_000) : null,
+              },
+            };
+          },
+        });
+
+  return new SearchIntelligenceService({
+    intake: deps.intake,
+    searchStore: deps.searchStore,
+    productionSerpProvider: productionSerp,
+    fixtureSerpProvider: fixtureSerp,
+    groundedProvider: grounded,
+    analyst,
+    config: {
+      ...DEFAULT_SEARCH_CONFIG,
+      providerMode: mode,
+      ...(process.env.FACTORY_SEARCH_FRESHNESS_HOURS
+        ? { freshnessHours: Number(process.env.FACTORY_SEARCH_FRESHNESS_HOURS) }
+        : {}),
+      ...(process.env.FACTORY_SEARCH_DAILY_LIMIT_USD
+        ? { dailyLimitUsd: Number(process.env.FACTORY_SEARCH_DAILY_LIMIT_USD) }
+        : {}),
+      ...config,
+    },
+  });
+}
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
@@ -183,10 +273,11 @@ async function serveStatic(
 export async function startOperatorServer(): Promise<http.Server> {
   const config = resolveDatabaseConfig(process.env);
   const dbInstance = createDatabaseInstance(config);
-  const deps: OperatorApiDeps = {
-    store: new FactoryStore(dbInstance.db),
-    intake: new ProjectIntakeStore(dbInstance.db),
-  };
+  const store = new FactoryStore(dbInstance.db);
+  const intake = new ProjectIntakeStore(dbInstance.db);
+  const searchStore = new SearchStore(dbInstance.db);
+  const search = buildSearchIntelligenceService({ intake, searchStore });
+  const deps: OperatorApiDeps = { store, intake, search };
   const server = createOperatorServer(deps);
   const host = process.env.FACTORY_OPERATOR_HOST ?? "127.0.0.1";
   const port = Number(process.env.FACTORY_OPERATOR_PORT ?? 3000);

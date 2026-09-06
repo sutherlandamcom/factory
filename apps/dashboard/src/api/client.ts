@@ -89,6 +89,18 @@ const OPERATOR_ERROR_CODES: readonly OperatorErrorCode[] = [
   "intake_digest_mismatch",
   "intake_draft_not_found",
   "intake_schema_invalid",
+  "search_input_not_accepted",
+  "search_query_invalid",
+  "search_provider_not_configured",
+  "search_provider_unavailable",
+  "search_provider_auth_failed",
+  "search_provider_budget_blocked",
+  "search_provider_rate_limited",
+  "search_response_invalid",
+  "search_normalization_failed",
+  "search_intelligence_invalid",
+  "search_run_not_found",
+  "search_run_failed",
   "internal_error",
 ];
 
@@ -165,4 +177,152 @@ export const api = {
     request<SnapshotInfo>(
       `/api/projects/${encodeURIComponent(projectId)}/intake/versions/${version}`,
     ),
+
+  // ---- Search Intelligence (Macro Run 2) ---------------------------------
+
+  getSearchWorkspace: (projectId: string) =>
+    request<SearchWorkspaceReadModel>(
+      `/api/projects/${encodeURIComponent(projectId)}/search/workspace`,
+    ),
+
+  runSearch: (
+    projectId: string,
+    input: { query: string; location?: string; language?: string; device: "desktop" | "mobile" | "tablet"; refresh?: boolean },
+  ) =>
+    request<SearchRunReadModel>(
+      `/api/projects/${encodeURIComponent(projectId)}/search/runs`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+
+  listSearchRuns: (projectId: string) =>
+    request<{ runs: SearchRunSummary[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/search/runs`,
+    ),
+
+  getSearchRun: (projectId: string, runId: string) =>
+    request<SearchRunReadModel>(
+      `/api/projects/${encodeURIComponent(projectId)}/search/runs/${encodeURIComponent(runId)}`,
+    ),
 };
+
+// ---- Search read-model shapes (mirror the Operator API exactly) ----------
+
+export interface SearchWorkspaceReadModel {
+  acceptedInput: {
+    snapshotId: string;
+    version: number;
+    digest: string;
+    acceptedAt: string;
+  } | null;
+  seeds: {
+    topics: string[];
+    queries: string[];
+    competitors: string[];
+    marketHints: string[];
+  };
+  readiness: {
+    canRun: boolean;
+    providerConfigured: boolean;
+    providerReason: string | null;
+    providerMode: "production" | "fixture";
+    blockers: string[];
+  };
+  recentRuns: SearchRunSummary[];
+}
+
+export interface SearchRunSummary {
+  id: string;
+  status: string;
+  query: string;
+  provider: string;
+  startedAt: string;
+  errorCode: string | null;
+}
+
+export interface SearchRunReadModel {
+  run: {
+    id: string;
+    status: "succeeded" | "failed";
+    query: string;
+    location: string | null;
+    language: string | null;
+    device: "desktop" | "mobile" | "tablet";
+    provider: string;
+    cacheReused: boolean;
+    refreshRequested: boolean;
+    startedAt: string;
+    finishedAt: string | null;
+    durationMs: number | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+  };
+  acceptedInput: {
+    snapshotId: string;
+    version: number;
+    digest: string;
+    /** True when a newer accepted snapshot exists than the one this run used. */
+    stale: boolean;
+  };
+  serp: {
+    snapshotId: string;
+    snapshotDigest: string;
+    observedAt: string;
+    provider: string;
+    providerRequestId: string | null;
+    organic: Array<{ position: number; url: string; domain: string; title: string; snippet: string }>;
+    features: string[] | null;
+    peopleAlsoAsk: Array<{ question: string; answer?: string }> | null;
+    relatedSearches: string[] | null;
+    rawDigest: string;
+    usage: {
+      costMicros?: number | null;
+      currency?: string;
+      costUnknown?: boolean;
+      inputTokens?: number | null;
+      outputTokens?: number | null;
+      totalTokens?: number | null;
+      searchQueriesCount?: number | null;
+    } | null;
+  } | null;
+  grounded: {
+    snapshotId: string;
+    snapshotDigest: string;
+    model: string;
+    promptVersion: string;
+    observedAt: string;
+    webSearchQueries: string[];
+    sources: Array<{ title?: string; uri: string }>;
+  } | null;
+  intelligence: {
+    snapshotId: string;
+    snapshotDigest: string;
+    model: string;
+    promptVersion: string;
+    data: {
+      primaryIntent: string;
+      intentRationale: string;
+      secondaryIntents: string[];
+      queryClusters: Array<{
+        id: string;
+        label: string;
+        queries: string[];
+        intent: string;
+        primaryQuery: string;
+        secondaryQueries: string[];
+        rationale?: string;
+        confidence: number;
+      }>;
+      longTailOpportunities: Array<{ query: string; rationale?: string; confidence: number }>;
+      entities: Array<{ name: string; kind?: string; notes?: string }>;
+      topics: Array<{ topic: string; subtopics: string[] }>;
+      questions: string[];
+      modifiers: string[];
+      searchVocabulary: string[];
+      relatedConcepts: string[];
+      semanticCoverageRequirements: string[];
+      userNeeds: string[];
+      evidenceRefs: Array<{ kind: string; id: string; digest: string }>;
+      reviewState: string;
+    };
+  } | null;
+}

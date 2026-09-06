@@ -11,19 +11,22 @@ and [roadmap](./roadmap-vnext.md). The roadmap includes a dated Git/PR status
 index. Historical scope notes describe earlier slices; they do not defer
 capabilities that subsequently landed or authorize new work.
 
-At the 2026-09-05 inspection, accepted main was
-`c6c7e000caf9797398dc4e05642ed42a40e664d0`. Operator Kernel / Dashboard code
-exists in open [PR #18](https://github.com/sutherlandamcom/factory/pull/18),
-not in that accepted base. Its candidate-specific implementation description
-belongs to that PR until acceptance/merge. Recheck current Git state before
-starting a new run.
+At the 2026-09-06 inspection, main was
+`d6eeaaa593e45be3be259feb9cda61fa8b6567c4`. Operator Kernel / Dashboard
+[PR #18](https://github.com/sutherlandamcom/factory/pull/18) and instruction
+alignment [PR #19](https://github.com/sutherlandamcom/factory/pull/19) are merged.
+The Operator section below describes code present on that base. Search
+Intelligence [PR #21](https://github.com/sutherlandamcom/factory/pull/21) is an
+open candidate, not functionality on this main. Merge and CI are not independent
+GO evidence; see the roadmap status index and recheck Git before starting work.
 
 ## What exists today (execution trust hardening)
 
-Factory is a pnpm monorepo with three packages:
+Factory has four application/library workspaces (plus the private root orchestrator):
 
 ```
-apps/factory        @factory/factory      — control-plane CLI + site-task executor (tsx, TypeScript)
+apps/factory        @factory/factory      — control-plane CLI, Operator API + site-task executor (tsx, TypeScript)
+apps/dashboard      @factory/dashboard    — React + Vite operator console
 packages/contracts  @factory/contracts    — shared machine-readable contracts (Zod schemas + types)
 sites/starter       @factory/site-starter — Astro 7 + Tailwind 4 website template
 ```
@@ -168,7 +171,7 @@ Factory gates remain authoritative.
 - **Dependency prep**: Factory (never the coding worker) installs dependencies offline from the pnpm store against the committed lockfile once per run.
 - **Legacy Codex layered sandbox policy**: Factory copies only the host Codex `auth.json` into a per-run directory, mounts it read-only, ignores user configuration, and deletes the copy during cleanup. The outer container permits Codex model-service connectivity; the inner `workspace-write` policy keeps approval disabled, shell/tool network disabled, and web search disabled. Necessary Codex authentication remains a residual readable secret inside that isolated runtime.
 - **Scope enforcement**: the validated slug maps to exactly one writable `.astro` page. NUL-delimited `git diff --raw -z --no-renames` makes every rename source/destination visible as delete/add; only regular non-executable `100644` files pass. Symlinks, gitlinks, special modes, and unrelated source paths are terminal violations.
-- **Ignored-input integrity**: Factory snapshots ignored state after dependency preparation and before each attempt, hashes contents/types/modes (including `.env*`, `.astro`, and `node_modules`), and compares immediately after Codex. Output exclusions are strictly anchored to explicit known repository roots (`.factory/**`, `sites/starter/dist/**`, `sites/starter/.astro/**`, `sites/starter/test-results/**`, `sites/starter/playwright-report/**`, `sites/starter/qa-artifacts/**`); nested unanchored names (such as `.../dist/helper.ts`) are never ignored or excluded.
+- **Ignored-input integrity**: Factory snapshots ignored state after dependency preparation and before each attempt, hashes contents/types/modes (including `.env*`, `.astro`, and `node_modules`), and compares immediately after the selected coding worker. Output exclusions are strictly anchored to explicit known repository roots (`.factory/**`, `sites/starter/dist/**`, `sites/starter/.astro/**`, `sites/starter/test-results/**`, `sites/starter/playwright-report/**`, `sites/starter/qa-artifacts/**`); nested unanchored names (such as `.../dist/helper.ts`) are never ignored or excluded.
 - **Independent QA Oracle**: unchanged Foundation `pnpm qa` runs first. Factory then creates a validated task QA spec outside the worktree and runs immutable Playwright assertions for the requested route on desktop and mobile: response/errors, exact metadata/H1/canonical/OG, page-type JSON-LD, requested CTA/FAQ, bounded internal links, image semantics, meaningful body content, and mobile overflow.
 - **Task verification**: a dependency-free semantic extractor checks fresh built HTML for exact title, one exact H1, description, canonical origin/path, and route existence. Comments, scripts, JSON blobs, footer text, and unrelated body text cannot satisfy title checks.
 - **Patch self-containment verification (Replay)**: before returning `succeeded`, Factory creates a separate disposable worktree at `baseCommit`, applies the binary-safe `diff.patch`, and proves that `check` and `build` succeed from pristine base state without relying on untracked or ignored artifacts from the execution worktree.
@@ -226,12 +229,20 @@ not model-generated runtime authority. It is a strict Zod contract
 
 `pnpm qa` = `check` → `build` → `test`:
 
-1. **check** — `tsc --noEmit` for contracts and factory, `astro check` for
-   the site.
-2. **build** — `astro build`; fails on type or build errors.
-3. **test** — Factory executor unit tests (deterministic, Codex mocked),
-   then Playwright runs against the built site served by `astro preview` in
-   the foreground across desktop (1280×800) and mobile (390×844) viewports.
+1. **check** — `tsc --noEmit` for contracts, Factory and Dashboard;
+   `astro check` for the site.
+2. **build** — workspace build scripts: Astro static site and Vite Dashboard.
+3. **test** — Factory unit tests, Dashboard unit tests, then site-starter
+   Playwright against built Astro served by `astro preview` in the foreground
+   across desktop (1280×800) and mobile (390×844) viewports.
+
+Repository CI additionally runs, sequentially, `@factory/factory`
+`test:persistence`, `test:operator`, and `@factory/dashboard` `test:e2e`.
+These use explicit `FACTORY_TEST_DATABASE_URL` targeting `factory_test`;
+missing/invalid selection fails before connection. Operator E2E exercises the
+built Dashboard with the real service and PostgreSQL, including service restart.
+It is not replaced by Dashboard unit tests. See the [README commands](../README.md#commands)
+and `.github/workflows/pr-ci.yml` for the complete sequence.
 
 ## Persistent control plane (`apps/factory/src/persistence`)
 
@@ -247,8 +258,9 @@ not model-generated runtime authority. It is a strict Zod contract
 
 ### Data model & relational structure
 
-The accepted base has eight operational tables (the original seven plus
-`deployments` from Production Delivery). PR #18 adds intake tables separately:
+The current schema has ten tables: the eight execution/delivery tables listed
+here plus `project_input_drafts` and `project_input_snapshots` from merged
+PR #18, detailed in the Operator Kernel section below:
 
 ```
 [projects]
@@ -417,7 +429,13 @@ directories, so stale artifacts from previous runs can never satisfy a current
 run. Non-success runs leave honest partial/failed evidence and no
 `succeeded` result file.
 
-### Explicitly deferred (out of scope by design)
+### Historical deferrals at the original First-Site Intelligence v0 slice
+
+The following paragraph preserves that slice's original boundary, not current
+program sequencing. Operator Dashboard subsequently landed in PR #18; live
+Search Intelligence is the open Macro Run 2 candidate in PR #21. The
+[roadmap](./roadmap-vnext.md), not the original first-site prerequisite below,
+governs new work.
 
 Live research acquisition (DataForSEO, Firecrawl, crawler, SERP pipeline),
 research/keyword/competitor warehouses, vector DB, embeddings, RAG, generic
@@ -607,7 +625,7 @@ infrastructure, and Site Shell implementation (see
 
 ## Operator Kernel v0 — Project Intake vertical slice (Macro Run 1)
 
-**Implemented state** (PR #18, branch `feat/operator-kernel-v0`). This section
+**Implemented and merged state** (PR #18; independent GO is not asserted here). This section
 describes what exists today; vNext roadmap sequencing lives in
 `docs/roadmap-vnext.md` and is not reinterpreted here.
 
@@ -690,5 +708,6 @@ describes what exists today; vNext roadmap sequencing lives in
 ### Explicitly still roadmap-only
 
 Search/Opus/Stitch/Nano-Banana integrations, renderer ADR, queues/CMS/auth/
-RBAC, deployment targets, and all other vNext sequencing — see
+RBAC, full operator-controlled delivery and additional deployment targets
+beyond the existing Cloudflare delivery path remain roadmap-only — see
 `docs/roadmap-vnext.md`.

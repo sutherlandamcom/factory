@@ -29,7 +29,7 @@ const inst = createDatabaseInstance(
   resolveDatabaseConfig({ test: true, url: raw, requireConfigured: true }),
 );
 await inst.db.execute(
-  sql`TRUNCATE TABLE deployments, model_invocations, quality_results, attempts, tasks, runs, sites, projects, project_input_snapshots, project_input_drafts CASCADE;`,
+  sql`TRUNCATE TABLE accepted_content_gap_snapshots, content_gap_decisions, content_gap_reports, competitor_page_analyses, competitor_classification_overrides, competitor_page_snapshots, competitor_runs, deployments, model_invocations, quality_results, attempts, tasks, runs, sites, projects, project_input_snapshots, project_input_drafts CASCADE;`,
 );
 console.log("[truncate-test-db] done");
 await inst.close();

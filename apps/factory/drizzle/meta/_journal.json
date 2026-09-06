@@ -43,6 +43,13 @@
       "when": 1788647486207,
       "tag": "0005_search_intelligence_v0",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788686164402,
+      "tag": "0006_competitor_content_gap_v0",
+      "breakpoints": true
     }
   ]
 }

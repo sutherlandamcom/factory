@@ -511,3 +511,307 @@ export type InsertGroundedSearchSnapshot = typeof groundedSearchSnapshots.$infer
 
 export type SearchIntelligenceSnapshotRecord = typeof searchIntelligenceSnapshots.$inferSelect;
 export type InsertSearchIntelligenceSnapshot = typeof searchIntelligenceSnapshots.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Competitors + Content Gap v0 (Macro Run 3): runs, page snapshots, analyses,
+// gap reports, decisions, accepted gap snapshots
+// ---------------------------------------------------------------------------
+
+/**
+ * One governed competitor run: resolve accepted upstreams -> select candidates
+ * from a persisted SerpSnapshot -> acquire -> extract -> analyze -> propose.
+ * Completed runs never mutate their snapshots; a refresh creates a NEW run
+ * and NEW observations.
+ */
+export const competitorRuns = pgTable(
+  "competitor_runs",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    acceptedInputSnapshotId: text("accepted_input_snapshot_id")
+      .notNull()
+      .references(() => projectInputSnapshots.id, { onDelete: "cascade" }),
+    acceptedInputVersion: integer("accepted_input_version").notNull(),
+    acceptedInputDigest: text("accepted_input_digest").notNull(),
+    /** Exact SERP evidence the candidates were selected from. */
+    serpSnapshotId: text("serp_snapshot_id")
+      .notNull()
+      .references(() => serpSnapshots.id, { onDelete: "cascade" }),
+    serpSnapshotDigest: text("serp_snapshot_digest").notNull(),
+    intelligenceSnapshotId: text("intelligence_snapshot_id")
+      .notNull()
+      .references(() => searchIntelligenceSnapshots.id, { onDelete: "cascade" }),
+    intelligenceSnapshotDigest: text("intelligence_snapshot_digest").notNull(),
+    /** Deterministic acquisition/analysis pipeline version (audit key). */
+    pipelineVersion: text("pipeline_version").notNull(),
+    /** 'running' | 'succeeded' | 'failed' — failed runs never masquerade. */
+    status: text("status").notNull(),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    durationMs: integer("duration_ms"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check("competitor_runs_status_valid", sql`${table.status} IN ('running', 'succeeded', 'failed')`),
+    check(
+      "competitor_runs_duration_ms_non_negative",
+      sql`${table.durationMs} IS NULL OR ${table.durationMs} >= 0`,
+    ),
+    index("competitor_runs_project_created_idx").on(table.projectId, table.createdAt),
+    index("competitor_runs_serp_snapshot_idx").on(table.serpSnapshotId),
+  ],
+);
+
+/**
+ * Immutable competitor page observation + deterministic structural extraction.
+ * Raw HTML is retained only within the explicit acquisition ceiling; its
+ * digest keeps lineage honest even when content is not retained. Candidate
+ * selection lineage (SERP position, classification) is preserved.
+ */
+export const competitorPageSnapshots = pgTable(
+  "competitor_page_snapshots",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => competitorRuns.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    serpSnapshotId: text("serp_snapshot_id")
+      .notNull()
+      .references(() => serpSnapshots.id, { onDelete: "cascade" }),
+    serpPosition: integer("serp_position").notNull(),
+    requestedUrl: text("requested_url").notNull(),
+    finalUrl: text("final_url"),
+    domain: text("domain").notNull(),
+    classification: text("classification").notNull(),
+    classificationReason: text("classification_reason").notNull(),
+    /** 'SUCCESS' | 'BLOCKED' | 'NON_HTML' | 'UNSUPPORTED' | 'FAILED' */
+    acquisitionStatus: text("acquisition_status").notNull(),
+    httpStatus: integer("http_status"),
+    contentType: text("content_type"),
+    observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+    rawDigest: text("raw_digest"),
+    extractionDigest: text("extraction_digest"),
+    extracted: jsonb("extracted"),
+    snapshotDigest: text("snapshot_digest").notNull(),
+    /** Content digest of the final page body (dedupe/change detection). */
+    contentDigest: text("content_digest"),
+    /** Content-digest dedupe: snapshot reused for an identical page. */
+    dedupedFromSnapshotId: text("deduped_from_snapshot_id"),
+    /** True when acquired content exceeded the retention ceiling. */
+    rawTruncated: boolean("raw_truncated").notNull().default(false),
+    provider: text("provider").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check(
+      "competitor_page_snapshots_classification_valid",
+      sql`${table.classification} IN ('INCLUDE', 'EXCLUDE', 'REFERENCE_ONLY')`,
+    ),
+    check(
+      "competitor_page_snapshots_acquisition_status_valid",
+      sql`${table.acquisitionStatus} IN ('SUCCESS', 'BLOCKED', 'NON_HTML', 'UNSUPPORTED', 'FAILED')`,
+    ),
+    index("competitor_page_snapshots_project_idx").on(table.projectId, table.observedAt),
+    index("competitor_page_snapshots_run_idx").on(table.runId),
+    index("competitor_page_snapshots_content_digest_idx").on(table.projectId, table.contentDigest),
+  ],
+);
+
+/** Deterministic classification override by the operator (audit trail). */
+export const competitorClassificationOverrides = pgTable(
+  "competitor_classification_overrides",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageSnapshotId: text("page_snapshot_id")
+      .notNull()
+      .references(() => competitorPageSnapshots.id, { onDelete: "cascade" }),
+    classification: text("classification").notNull(),
+    reason: text("reason").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check(
+      "competitor_classification_overrides_class_valid",
+      sql`${table.classification} IN ('INCLUDE', 'EXCLUDE', 'REFERENCE_ONLY')`,
+    ),
+    index("competitor_classification_overrides_page_idx").on(table.pageSnapshotId),
+  ],
+);
+
+/**
+ * Immutable bounded model interpretation of one competitor page (analyst is
+ * NOT factual authority). Conclusions must reference normalized evidence
+ * segment IDs; unknown references fail closed before persistence.
+ */
+export const competitorPageAnalyses = pgTable(
+  "competitor_page_analyses",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => competitorRuns.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageSnapshotId: text("page_snapshot_id")
+      .notNull()
+      .references(() => competitorPageSnapshots.id, { onDelete: "cascade" }),
+    model: text("model").notNull(),
+    provider: text("provider").notNull(),
+    promptVersion: text("prompt_version").notNull(),
+    promptDigest: text("prompt_digest").notNull(),
+    packetDigest: text("packet_digest").notNull(),
+    data: jsonb("data").notNull(),
+    snapshotDigest: text("snapshot_digest").notNull(),
+    usage: jsonb("usage"),
+    observedAt: timestamp("observed_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("competitor_page_analyses_project_idx").on(table.projectId, table.createdAt),
+    index("competitor_page_analyses_page_idx").on(table.pageSnapshotId),
+  ],
+);
+
+/**
+ * Content gap proposal (model_proposed) + reviewed state. Immutable once the
+ * reviewed gap set is accepted; a post-acceptance edit flow creates a new
+ * proposal/acceptance cycle with a new version.
+ */
+export const contentGapReports = pgTable(
+  "content_gap_reports",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => competitorRuns.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    acceptedInputSnapshotId: text("accepted_input_snapshot_id")
+      .notNull()
+      .references(() => projectInputSnapshots.id, { onDelete: "cascade" }),
+    acceptedInputVersion: integer("accepted_input_version").notNull(),
+    acceptedInputDigest: text("accepted_input_digest").notNull(),
+    serpSnapshotId: text("serp_snapshot_id")
+      .notNull()
+      .references(() => serpSnapshots.id, { onDelete: "cascade" }),
+    serpSnapshotDigest: text("serp_snapshot_digest").notNull(),
+    intelligenceSnapshotId: text("intelligence_snapshot_id")
+      .notNull()
+      .references(() => searchIntelligenceSnapshots.id, { onDelete: "cascade" }),
+    intelligenceSnapshotDigest: text("intelligence_snapshot_digest").notNull(),
+    model: text("model").notNull(),
+    provider: text("provider").notNull(),
+    promptVersion: text("prompt_version").notNull(),
+    data: jsonb("data").notNull(),
+    snapshotDigest: text("snapshot_digest").notNull(),
+    /** 'model_proposed' | 'operator_reviewed' | 'accepted' */
+    reviewState: text("review_state").notNull().default("model_proposed"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check(
+      "content_gap_reports_review_state_valid",
+      sql`${table.reviewState} IN ('model_proposed', 'operator_reviewed', 'accepted')`,
+    ),
+    index("content_gap_reports_project_idx").on(table.projectId, table.createdAt),
+  ],
+);
+
+/** Operator per-gap review decisions for one report (audit trail). */
+export const contentGapDecisions = pgTable(
+  "content_gap_decisions",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    reportId: text("report_id")
+      .notNull()
+      .references(() => contentGapReports.id, { onDelete: "cascade" }),
+    gapId: text("gap_id").notNull(),
+    disposition: text("disposition").notNull(),
+    priority: text("priority"),
+    note: text("note"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check(
+      "content_gap_decisions_disposition_valid",
+      sql`${table.disposition} IN ('REQUIRED', 'OPTIONAL', 'EXCLUDE')`,
+    ),
+    check(
+      "content_gap_decisions_priority_valid",
+      sql`${table.priority} IS NULL OR ${table.priority} IN ('HIGH', 'MEDIUM', 'LOW')`,
+    ),
+    unique("content_gap_decisions_report_gap_unique").on(table.reportId, table.gapId),
+    index("content_gap_decisions_report_idx").on(table.reportId),
+  ],
+);
+
+/**
+ * Immutable accepted gap set (human acceptance binds exact report + decision
+ * digests). Old versions remain inspectable; staleness is computed by
+ * comparing stored upstream refs to current upstream digests.
+ */
+export const acceptedContentGapSnapshots = pgTable(
+  "accepted_content_gap_snapshots",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    reportId: text("report_id")
+      .notNull()
+      .references(() => contentGapReports.id, { onDelete: "cascade" }),
+    reportDigest: text("report_digest").notNull(),
+    decisionsDigest: text("decisions_digest").notNull(),
+    acceptedInputSnapshotId: text("accepted_input_snapshot_id").notNull(),
+    acceptedInputVersion: integer("accepted_input_version").notNull(),
+    acceptedInputDigest: text("accepted_input_digest").notNull(),
+    serpSnapshotId: text("serp_snapshot_id").notNull(),
+    serpSnapshotDigest: text("serp_snapshot_digest").notNull(),
+    intelligenceSnapshotId: text("intelligence_snapshot_id").notNull(),
+    intelligenceSnapshotDigest: text("intelligence_snapshot_digest").notNull(),
+    pageSnapshotRefs: jsonb("page_snapshot_refs").notNull(),
+    analysisRefs: jsonb("analysis_refs").notNull(),
+    data: jsonb("data").notNull(),
+    snapshotDigest: text("snapshot_digest").notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("accepted_content_gap_snapshots_project_version_unique").on(table.projectId, table.version),
+    index("accepted_content_gap_snapshots_project_idx").on(table.projectId, table.version),
+  ],
+);
+
+export type CompetitorRunRecord = typeof competitorRuns.$inferSelect;
+export type InsertCompetitorRun = typeof competitorRuns.$inferInsert;
+
+export type CompetitorPageSnapshotRecord = typeof competitorPageSnapshots.$inferSelect;
+export type InsertCompetitorPageSnapshot = typeof competitorPageSnapshots.$inferInsert;
+
+export type CompetitorPageAnalysisRecord = typeof competitorPageAnalyses.$inferSelect;
+export type InsertCompetitorPageAnalysis = typeof competitorPageAnalyses.$inferInsert;
+
+export type ContentGapReportRecord = typeof contentGapReports.$inferSelect;
+export type InsertContentGapReport = typeof contentGapReports.$inferInsert;
+
+export type ContentGapDecisionRecord = typeof contentGapDecisions.$inferSelect;
+export type InsertContentGapDecision = typeof contentGapDecisions.$inferInsert;
+
+export type AcceptedContentGapSnapshotRecord = typeof acceptedContentGapSnapshots.$inferSelect;
+export type InsertAcceptedContentGapSnapshot = typeof acceptedContentGapSnapshots.$inferInsert;

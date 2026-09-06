@@ -74,7 +74,7 @@ async function runSearch(page: Page) {
   await page.getByRole("button", { name: "Search", exact: true }).click();
   await page.getByLabel("Query", { exact: false }).first().fill("roof repair austin");
   await page.getByRole("button", { name: "Run Search", exact: false }).click();
-  await expect(page.locator("text=SERP", { exact: false }).first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("text=SERP", { hasText: "SERP" }).first()).toBeVisible({ timeout: 30_000 });
 }
 
 test.describe("Competitors + Content Gap journey", () => {

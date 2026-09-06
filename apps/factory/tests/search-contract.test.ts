@@ -148,7 +148,11 @@ describe("serp snapshot data", () => {
   });
 
   test("raw payload ceiling constant is bounded", () => {
-    assert.ok(MAX_SERP_RAW_BYTES <= 256 * 1024);
+    // Raised from 256KB to 2MiB on Run 3 live evidence (real Bright Data
+    // payloads for competitive queries exceed 256KB); still hard-bounded
+    // and matched to the raw page-acquisition ceiling.
+    assert.ok(MAX_SERP_RAW_BYTES <= 2 * 1024 * 1024);
+    assert.ok(MAX_SERP_RAW_BYTES > 256 * 1024);
   });
 });
 

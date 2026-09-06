@@ -5,13 +5,13 @@ import {
   CompetitorContentGapService,
   DEFAULT_COMPETITOR_CONFIG,
   CLASSIFICATION_POLICY_VERSION,
-} from "../src/competitors/service.js";
-import { CompetitorStore } from "../src/competitors/competitor-store.js";
-import { FixtureCompetitorAnalyst } from "../src/competitors/analyst.js";
-import { FixtureGapAnalyst } from "../src/competitors/gap-analyst.js";
-import type { CompetitorPageProvider, PageAcquisitionOutcome } from "../src/competitors/direct-http.js";
-import { setupMigratedTestDatabase } from "./persistence/helpers.js";
-import { projects } from "../src/persistence/schema.js";
+} from "../../src/competitors/service.js";
+import { CompetitorStore } from "../../src/competitors/competitor-store.js";
+import { FixtureCompetitorAnalyst } from "../../src/competitors/analyst.js";
+import { FixtureGapAnalyst } from "../../src/competitors/gap-analyst.js";
+import type { CompetitorPageProvider, PageAcquisitionOutcome } from "../../src/competitors/direct-http.js";
+import { setupMigratedTestDatabase } from "./helpers.js";
+import { projects } from "../../src/persistence/schema.js";
 
 /**
  * Governed service tests (real PostgreSQL, injected page provider +

@@ -178,6 +178,7 @@ export class FixtureGapAnalyst implements GapAnalystModel {
         id: `gap-${String(i + 1).padStart(3, "0")}`,
         userNeed: row.requirement,
         topicQuestion: `${row.requirement}?`,
+        searchEvidenceRefs: [],
         competitorCoverage: coverage,
         competitorsCoveringIt: covering,
         treatmentPattern: "Fixture-inferred treatment pattern from analyses.",

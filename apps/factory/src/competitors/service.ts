@@ -1,0 +1,1038 @@
+import {
+  type CompetitorAcquisitionStatus,
+  type CompetitorCandidate,
+  type CompetitorClassification,
+  type CompetitorPageAnalysisData,
+  type CompetitorPageExtracted,
+  type SearchIntelligenceData,
+  type SerpSnapshotData,
+} from "@factory/contracts";
+import { FactoryError } from "../executor/errors.js";
+import { deterministicDigest } from "../intelligence/digest.js";
+import type { ProjectIntakeStore } from "../operator/intake-store.js";
+import type { CompetitorStore } from "./competitor-store.js";
+import { DirectHttpPageProvider, type CompetitorPageProvider, type PageAcquisitionOutcome } from "./direct-http.js";
+import { extractCompetitorPage } from "./extract.js";
+import { buildEvidencePacket } from "./packet.js";
+import {
+  FixtureCompetitorAnalyst,
+  OpenRouterCompetitorAnalyst,
+  type CompetitorAnalystModel,
+} from "./analyst.js";
+import {
+  buildCoverageMatrix,
+  collectFirstPartyEvidence,
+  computeGapStaleness,
+  decisionsDigest as computeDecisionsDigest,
+  finalizeGapReport,
+} from "./gap-engine.js";
+import {
+  FixtureGapAnalyst,
+  OpenRouterGapAnalyst,
+  type GapAnalystModel,
+} from "./gap-analyst.js";
+
+/**
+ * CompetitorContentGapService — the governed application service (P6).
+ *
+ * Vertical pipeline:
+ * resolve accepted upstreams -> select candidates from the persisted SERP
+ * -> acquire (SSRF-safe, bounded) -> extract deterministically -> analyze
+ * (bounded, evidence-ref'd) -> aggregate proposal (two-pass) -> review ->
+ * accept immutable versioned snapshot.
+ *
+ * Trusted configuration owns provider mode/budgets; the browser can only
+ * reference existing persisted artifacts (never fetch URLs, providers or
+ * prompts). All semantics live here; the Operator API is a thin projection.
+ */
+
+export const COMPETITOR_PIPELINE_VERSION = "competitor-pipeline-v1";
+
+export interface CompetitorServiceConfig {
+  /** Trusted mode: fixture (CI/E2E, zero external calls) or production. */
+  mode: "production" | "fixture";
+  /** Max pages acquired per run (<=10 enforced). */
+  maxPages: number;
+  /** Max concurrent fetches. */
+  maxConcurrency: number;
+  /** Daily spend ceiling for recorded competitor/analysis costs (USD). */
+  dailyLimitUsd: number;
+}
+
+export const DEFAULT_COMPETITOR_CONFIG: CompetitorServiceConfig = {
+  mode: "production",
+  maxPages: 10,
+  maxConcurrency: 3,
+  dailyLimitUsd: 5,
+};
+
+export interface CompetitorServiceDeps {
+  intake: ProjectIntakeStore;
+  competitorStore: CompetitorStore;
+  pageProvider?: CompetitorPageProvider;
+  competitorAnalyst: CompetitorAnalystModel;
+  gapAnalyst: GapAnalystModel;
+  config?: Partial<CompetitorServiceConfig>;
+  now?: () => Date;
+}
+
+// ---------------------------------------------------------------------------
+// Classification heuristics (deterministic, versioned)
+// ---------------------------------------------------------------------------
+
+export const CLASSIFICATION_POLICY_VERSION = "classification-v1";
+
+const EXCLUDE_HOST_PATTERNS = [
+  /^www\.google\./,
+  /facebook\.com$/,
+  /instagram\.com$/,
+  /pinterest\./,
+  /linkedin\.com$/,
+  /twitter\.com$/,
+  /x\.com$/,
+  /amazon\./,
+  /booking\.com$/,
+  /airbnb\./,
+  /tripadvisor\./,
+  /\.gouv\.fr$/,
+  /\.gov$/,
+  /\.edu$/,
+];
+
+const REFERENCE_HOST_PATTERNS = [
+  /reddit\.com$/,
+  /youtube\.com$/,
+  /youtu\.be$/,
+  /wikipedia\.org$/,
+  /forum/,
+];
+
+function classifyCandidate(url: string, domain: string): { classification: CompetitorClassification; reason: string; kind: CompetitorCandidate["kind"] } {
+  const lower = url.toLowerCase();
+  if (lower.endsWith(".pdf")) {
+    return { classification: "REFERENCE_ONLY", reason: "PDF document: acquired evidence only, not an HTML competitor page.", kind: "document" };
+  }
+  if (EXCLUDE_HOST_PATTERNS.some((p) => p.test(domain))) {
+    return { classification: "EXCLUDE", reason: "Aggregator/marketplace/social/government domain, not a direct competitor.", kind: /amazon\.|booking\.|airbnb\.|tripadvisor\./.test(domain) ? "marketplace" : "other" };
+  }
+  if (REFERENCE_HOST_PATTERNS.some((p) => p.test(domain))) {
+    return { classification: "REFERENCE_ONLY", reason: "Community/video/encyclopedia source: reference context, not a competing page.", kind: domain.includes("reddit") || domain.includes("forum") ? "forum" : "video" };
+  }
+  if (/annuaire|directory|list/.test(lower)) {
+    return { classification: "REFERENCE_ONLY", reason: "Directory-style result; reference context only.", kind: "directory" };
+  }
+  return { classification: "INCLUDE", reason: "Organic result plausibly competing for this query intent.", kind: "editorial_guide" };
+}
+
+// ---------------------------------------------------------------------------
+// Read models
+// ---------------------------------------------------------------------------
+
+export interface CompetitorRunReadModel {
+  run: {
+    id: string;
+    status: "succeeded" | "failed";
+    serpSnapshotId: string;
+    pipelineVersion: string;
+    startedAt: string;
+    finishedAt: string | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+  };
+  acceptedInput: { snapshotId: string; version: number; digest: string; stale: boolean };
+  candidates: Array<{
+    pageSnapshotId: string;
+    serpPosition: number;
+    requestedUrl: string;
+    domain: string;
+    classification: CompetitorClassification;
+    classificationReason: string;
+    acquisitionStatus: CompetitorAcquisitionStatus;
+    httpStatus: number | null;
+    observedAt: string;
+    analyzed: boolean;
+    dedupedFromSnapshotId: string | null;
+    pageType: string | null;
+    topics: string[];
+    questions: string[];
+    freshness: string | null;
+    commercialPositioning: string | null;
+    evidenceSegmentCount: number;
+  }>;
+  usage: { competitorPagesFetched: number; analyzedCount: number; blockedCount: number; failedCount: number };
+}
+
+export interface CompetitorWorkspaceReadModel {
+  acceptedInput: { snapshotId: string; version: number; digest: string } | null;
+  readiness: { canRun: boolean; blockers: string[]; mode: "production" | "fixture" };
+  serpRuns: Array<{ serpSnapshotId: string; query: string; observedAt: string; hasIntelligence: boolean }>;
+  recentRuns: Array<{ id: string; status: string; startedAt: string; errorCode: string | null }>;
+}
+
+export interface GapWorkspaceReadModel {
+  reports: Array<{
+    id: string;
+    snapshotDigest: string;
+    reviewState: string;
+    createdAt: string;
+    gapCounts: { total: number; required: number; optional: number; excluded: number };
+    serpSnapshotId: string;
+    stale: boolean;
+    staleReasons: string[];
+  }>;
+  accepted: Array<{
+    id: string;
+    version: number;
+    snapshotDigest: string;
+    acceptedAt: string;
+    reportId: string;
+    stale: boolean;
+    staleReasons: string[];
+    gapCounts: { total: number; required: number; optional: number; excluded: number };
+  }>;
+  readiness: { canPropose: boolean; blockers: string[] };
+}
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
+export class CompetitorContentGapService {
+  private readonly config: CompetitorServiceConfig;
+  private readonly now: () => Date;
+  private readonly pageProvider: CompetitorPageProvider;
+
+  constructor(private readonly deps: CompetitorServiceDeps) {
+    this.config = { ...DEFAULT_COMPETITOR_CONFIG, ...deps.config };
+    this.now = deps.now ?? (() => new Date());
+    this.pageProvider = deps.pageProvider ?? new DirectHttpPageProvider();
+  }
+
+  private async resolveAcceptedInputs(projectId: string) {
+    const snapshots = await this.deps.intake.listSnapshots(projectId);
+    const accepted = snapshots.at(-1);
+    if (!accepted) {
+      throw new FactoryError(
+        "competitor_input_not_accepted",
+        "No accepted ProjectInputSnapshot for this project. Complete Intake acceptance first.",
+      );
+    }
+    return { accepted, snapshots };
+  }
+
+  private async checkBudget(): Promise<void> {
+    const budgetMicros = this.config.dailyLimitUsd * 1_000_000;
+    const spent = await this.deps.competitorStore.sumTodayCompetitorCostMicros();
+    if (spent >= budgetMicros) {
+      throw new FactoryError(
+        "competitor_budget_blocked",
+        `Daily competitor budget reached (${this.config.dailyLimitUsd} USD).`,
+      );
+    }
+  }
+
+  // ---- Workspace ----------------------------------------------------------
+
+  async workspace(projectId: string): Promise<CompetitorWorkspaceReadModel> {
+    const snapshots = await this.deps.intake.listSnapshots(projectId);
+    const latest = snapshots.at(-1) ?? null;
+    const serpRows = await this.deps.competitorStore.listSerpSnapshotsForProject(projectId, 20);
+    const serpRuns = [];
+    for (const serp of serpRows) {
+      const intel = await this.deps.competitorStore.getIntelligenceForSerpSnapshot(projectId, serp.id);
+      serpRuns.push({
+        serpSnapshotId: serp.id,
+        query: serp.query,
+        observedAt: serp.observedAt.toISOString(),
+        hasIntelligence: Boolean(intel),
+      });
+    }
+    const blockers: string[] = [];
+    if (!latest) blockers.push("No accepted project inputs. Complete Intake first.");
+    const usable = serpRuns.filter((s) => s.hasIntelligence);
+    if (latest && usable.length === 0) {
+      blockers.push("No search run with SERP + intelligence evidence yet. Run Search first.");
+    }
+    const recentRuns = await this.deps.competitorStore.listRuns(projectId, 20);
+    return {
+      acceptedInput: latest
+        ? { snapshotId: latest.id, version: latest.version, digest: latest.digest }
+        : null,
+      readiness: { canRun: blockers.length === 0, blockers, mode: this.config.mode },
+      serpRuns: usable,
+      recentRuns: recentRuns.map((r) => ({
+        id: r.id,
+        status: r.status,
+        startedAt: r.startedAt.toISOString(),
+        errorCode: r.errorCode,
+      })),
+    };
+  }
+
+  // ---- Run ------------------------------------------------------------------
+
+  async runCompetitors(input: {
+    projectId: string;
+    serpSnapshotId: string;
+    maxPages?: number;
+  }): Promise<CompetitorRunReadModel> {
+    const { accepted, snapshots } = await this.resolveAcceptedInputs(input.projectId);
+    await this.checkBudget();
+
+    const serp = await this.deps.competitorStore.getSerpSnapshot(input.projectId, input.serpSnapshotId);
+    if (!serp) {
+      throw new FactoryError("competitor_serp_not_found", "SERP snapshot not found for this project.");
+    }
+    const intelligence = await this.deps.competitorStore.getIntelligenceForSerpSnapshot(
+      input.projectId,
+      input.serpSnapshotId,
+    );
+    if (!intelligence) {
+      throw new FactoryError(
+        "competitor_serp_not_found",
+        "No Search Intelligence snapshot is bound to this SERP evidence. Run Search first.",
+      );
+    }
+
+    const serpData = serp.organic as SerpSnapshotData["organic"];
+    const maxPages = Math.min(Math.max(1, input.maxPages ?? this.config.maxPages), 10);
+
+    // Candidate selection: INCLUDE candidates from persisted organic results
+    // (SERP rank preserved), bounded by maxPages.
+    const candidates: CompetitorCandidate[] = [];
+    for (const organic of serpData) {
+      const { classification, reason, kind } = classifyCandidate(organic.url, organic.domain);
+      if (classification === "INCLUDE") {
+        candidates.push({
+          serpPosition: organic.position,
+          url: organic.url,
+          domain: organic.domain,
+          title: organic.title,
+          kind,
+          classification,
+          classificationReason: reason,
+          classificationPolicyVersion: CLASSIFICATION_POLICY_VERSION,
+        });
+      }
+      if (candidates.length >= maxPages) break;
+    }
+    if (candidates.length === 0) {
+      throw new FactoryError(
+        "competitor_no_candidates",
+        "No includable competitor candidates in this SERP evidence.",
+      );
+    }
+
+    const run = await this.deps.competitorStore.createRun({
+      projectId: input.projectId,
+      acceptedInputSnapshotId: accepted.id,
+      acceptedInputVersion: accepted.version,
+      acceptedInputDigest: accepted.digest,
+      serpSnapshotId: serp.id,
+      serpSnapshotDigest: serp.snapshotDigest,
+      intelligenceSnapshotId: intelligence.id,
+      intelligenceSnapshotDigest: intelligence.snapshotDigest,
+      pipelineVersion: COMPETITOR_PIPELINE_VERSION,
+    });
+
+    try {
+      const intelData = intelligence.data as unknown as SearchIntelligenceData;
+
+      for (const candidate of candidates) {
+        const outcome = await this.pageProvider.acquire({ url: candidate.url });
+        await this.persistPageOutcome({
+          runId: run.id,
+          projectId: input.projectId,
+          serpSnapshotId: serp.id,
+          candidate,
+          outcome,
+        });
+      }
+
+      // Analyze successful, non-deduped snapshots (bounded by budget gate).
+      const pageRows = await this.deps.competitorStore.listPageSnapshotsForRun(run.id);
+      const intakePayload = accepted.payload as Record<string, unknown>;
+      let analyzedCount = 0;
+      for (const pageRow of pageRows) {
+        if (pageRow.acquisitionStatus !== "SUCCESS" || !pageRow.extracted) continue;
+        if (pageRow.dedupedFromSnapshotId) continue;
+        if (analyzedCount >= maxPages) break;
+        if (pageRow.classification !== "INCLUDE") continue;
+        await this.analyzePage({
+          runId: run.id,
+          projectId: input.projectId,
+          pageRowId: pageRow.id,
+          requestedUrl: pageRow.requestedUrl,
+          extracted: pageRow.extracted as CompetitorPageExtracted,
+          observedAt: pageRow.observedAt,
+          intelligence: intelData,
+          intakePayload,
+        });
+        analyzedCount++;
+      }
+
+      await this.deps.competitorStore.finishRun(run.id, "succeeded", null, null);
+      const read = await this.runReadModel(input.projectId, run.id, snapshots);
+      return read;
+    } catch (error) {
+      const code =
+        error instanceof FactoryError && error.code.startsWith("competitor_")
+          ? error.code
+          : "competitor_run_failed";
+      const message = error instanceof FactoryError ? error.message : "Competitor run failed unexpectedly.";
+      await this.deps.competitorStore.finishRun(run.id, "failed", code, message);
+      throw error;
+    }
+  }
+
+  private async persistPageOutcome(input: {
+    runId: string;
+    projectId: string;
+    serpSnapshotId: string;
+    candidate: CompetitorCandidate;
+    outcome: PageAcquisitionOutcome;
+  }): Promise<void> {
+    const { outcome } = input;
+    if (outcome.status === "SUCCESS") {
+      const extracted = extractCompetitorPage(outcome.rawBytes.toString("utf8"));
+      const contentDigest = deterministicDigest({
+        finalUrl: outcome.finalUrl,
+        rawDigest: outcome.rawDigest,
+      });
+      const dedupeTarget = await this.deps.competitorStore.findContentDedupeTarget(
+        input.projectId,
+        contentDigest,
+      );
+      await this.deps.competitorStore.insertPageSnapshot({
+        runId: input.runId,
+        projectId: input.projectId,
+        serpSnapshotId: input.serpSnapshotId,
+        serpPosition: input.candidate.serpPosition,
+        requestedUrl: input.candidate.url,
+        finalUrl: outcome.finalUrl,
+        domain: input.candidate.domain,
+        classification: input.candidate.classification,
+        classificationReason: input.candidate.classificationReason,
+        acquisitionStatus: "SUCCESS",
+        httpStatus: outcome.httpStatus,
+        contentType: outcome.contentType,
+        observedAt: outcome.observedAt,
+        rawDigest: outcome.rawDigest,
+        extractionDigest: deterministicDigest(extracted),
+        extracted,
+        contentDigest,
+        dedupedFromSnapshotId: dedupeTarget && dedupeTarget.id !== null ? dedupeTarget.id : null,
+        rawTruncated: false,
+        provider: this.pageProvider.id,
+      });
+      return;
+    }
+    await this.deps.competitorStore.insertPageSnapshot({
+      runId: input.runId,
+      projectId: input.projectId,
+      serpSnapshotId: input.serpSnapshotId,
+      serpPosition: input.candidate.serpPosition,
+      requestedUrl: input.candidate.url,
+      finalUrl: outcome.finalUrl,
+      domain: input.candidate.domain,
+      classification: input.candidate.classification,
+      classificationReason: input.candidate.classificationReason,
+      acquisitionStatus: outcome.status,
+      httpStatus: outcome.httpStatus,
+      contentType: outcome.contentType,
+      observedAt: outcome.observedAt,
+      rawDigest: null,
+      extractionDigest: null,
+      extracted: null,
+      contentDigest: null,
+      dedupedFromSnapshotId: null,
+      rawTruncated: false,
+      provider: this.pageProvider.id,
+    });
+  }
+
+  private async analyzePage(input: {
+    runId: string;
+    projectId: string;
+    pageRowId: string;
+    requestedUrl: string;
+    extracted: CompetitorPageExtracted;
+    observedAt: Date;
+    intelligence: SearchIntelligenceData;
+    intakePayload: Record<string, unknown>;
+  }): Promise<void> {
+    // Analysis dedupe: same page + model + prompt version => reuse.
+    const existing = await this.deps.competitorStore.findAnalysisForPage(
+      input.pageRowId,
+      this.deps.competitorAnalyst.model,
+      this.deps.competitorAnalyst.promptVersion,
+    );
+    if (existing) return;
+
+    const pageRow = await this.deps.competitorStore.getPageSnapshot(input.projectId, input.pageRowId);
+    if (!pageRow) return;
+
+    const packet = buildEvidencePacket({
+      pageSnapshotId: input.pageRowId,
+      pageSnapshotDigest: pageRow.snapshotDigest,
+      url: pageRow.finalUrl ?? input.requestedUrl,
+      domain: pageRow.domain,
+      observedAt: input.observedAt,
+      extracted: input.extracted,
+    });
+
+    const result = await this.deps.competitorAnalyst.analyze({
+      packet,
+      projectContext: {
+        businessName: ((input.intakePayload.business ?? {}) as Record<string, unknown>).name ?? "",
+        offering: ((input.intakePayload.business ?? {}) as Record<string, unknown>).offerings ?? [],
+      },
+      searchContext: {
+        primaryIntent: input.intelligence.primaryIntent,
+        userNeeds: input.intelligence.userNeeds.slice(0, 10),
+        semanticCoverageRequirements: input.intelligence.semanticCoverageRequirements.slice(0, 10),
+        questions: input.intelligence.questions.slice(0, 10),
+      },
+    });
+
+    const validSegmentIds = new Set(packet.extracted.segments.map((s) => s.id));
+    await this.deps.competitorStore.insertPageAnalysis({
+      runId: input.runId,
+      projectId: input.projectId,
+      pageSnapshotId: input.pageRowId,
+      model: result.model,
+      provider: result.provider,
+      promptVersion: result.promptVersion,
+      promptDigest: result.promptDigest,
+      packetDigest: result.packetDigest,
+      data: result.data,
+      validSegmentIds,
+      usage: result.usage
+        ? {
+            costMicros: result.usage.costMicros ?? null,
+            inputTokens: result.usage.inputTokens ?? null,
+            outputTokens: result.usage.outputTokens ?? null,
+            totalTokens: result.usage.totalTokens ?? null,
+          }
+        : null,
+      observedAt: this.now(),
+    });
+  }
+
+  async runReadModel(
+    projectId: string,
+    runId: string,
+    snapshots?: Array<{ id: string; version: number; digest: string; acceptedAt: Date }>,
+  ): Promise<CompetitorRunReadModel> {
+    const run = await this.deps.competitorStore.getRun(projectId, runId);
+    if (!run) throw new FactoryError("competitor_run_not_found", "Competitor run not found.");
+    const pageRows = await this.deps.competitorStore.listPageSnapshotsForRun(runId);
+    const analysisRows = await this.deps.competitorStore.listAnalysesForRun(runId);
+    const analysisByPage = new Map(analysisRows.map((a) => [a.pageSnapshotId, a]));
+    const snapshotList = snapshots ?? (await this.deps.intake.listSnapshots(projectId));
+    const latestVersion = snapshotList.at(-1)?.version ?? run.acceptedInputVersion;
+
+    let analyzed = 0;
+    let blocked = 0;
+    let failed = 0;
+    const candidates = pageRows.map((row) => {
+      if (row.acquisitionStatus === "SUCCESS") analyzed++;
+      if (row.acquisitionStatus === "BLOCKED") blocked++;
+      if (row.acquisitionStatus === "FAILED" || row.acquisitionStatus === "UNSUPPORTED") failed++;
+      const analysis = analysisByPage.get(row.id);
+      const data = (analysis?.data ?? null) as CompetitorPageAnalysisData | null;
+      return {
+        pageSnapshotId: row.id,
+        serpPosition: row.serpPosition,
+        requestedUrl: row.requestedUrl,
+        domain: row.domain,
+        classification: row.classification as CompetitorClassification,
+        classificationReason: row.classificationReason,
+        acquisitionStatus: row.acquisitionStatus as CompetitorAcquisitionStatus,
+        httpStatus: row.httpStatus,
+        observedAt: row.observedAt.toISOString(),
+        analyzed: Boolean(analysis),
+        dedupedFromSnapshotId: row.dedupedFromSnapshotId,
+        pageType: data?.pageType ?? null,
+        topics: (data?.topics ?? []).slice(0, 8),
+        questions: (data?.questionsAnswered ?? []).slice(0, 5),
+        freshness: data?.freshnessAssessment ?? null,
+        commercialPositioning: data?.commercialPositioning ?? null,
+        evidenceSegmentCount: data?.evidenceSegmentRefs.length ?? 0,
+      };
+    });
+
+    return {
+      run: {
+        id: run.id,
+        status: run.status === "succeeded" ? "succeeded" : "failed",
+        serpSnapshotId: run.serpSnapshotId,
+        pipelineVersion: run.pipelineVersion,
+        startedAt: run.startedAt.toISOString(),
+        finishedAt: run.finishedAt ? run.finishedAt.toISOString() : null,
+        errorCode: run.errorCode,
+        errorMessage: run.errorMessage,
+      },
+      acceptedInput: {
+        snapshotId: run.acceptedInputSnapshotId,
+        version: run.acceptedInputVersion,
+        digest: run.acceptedInputDigest,
+        stale: run.acceptedInputVersion < latestVersion,
+      },
+      candidates,
+      usage: {
+        competitorPagesFetched: pageRows.length,
+        analyzedCount: analysisRows.length,
+        blockedCount: blocked,
+        failedCount: failed,
+      },
+    };
+  }
+
+  /** Operator classification override (audit-trailed). */
+  async setClassification(input: {
+    projectId: string;
+    pageSnapshotId: string;
+    classification: CompetitorClassification;
+    reason: string;
+  }): Promise<void> {
+    const page = await this.deps.competitorStore.getPageSnapshot(input.projectId, input.pageSnapshotId);
+    if (!page) throw new FactoryError("competitor_run_not_found", "Page snapshot not found.");
+    await this.deps.competitorStore.insertClassificationOverride(input);
+  }
+
+  // ---- Gap proposal ------------------------------------------------------------
+
+  async proposeGaps(input: { projectId: string; competitorRunId?: string }): Promise<{ reportId: string }> {
+    const { accepted } = await this.resolveAcceptedInputs(input.projectId);
+    await this.checkBudget();
+
+    const run = input.competitorRunId
+      ? await this.deps.competitorStore.getRun(input.projectId, input.competitorRunId)
+      : await this.deps.competitorStore.latestSucceededRun(input.projectId);
+    if (!run || run.status !== "succeeded") {
+      throw new FactoryError("competitor_run_not_found", "No succeeded competitor run to propose gaps from.");
+    }
+    const pageRows = (await this.deps.competitorStore.listPageSnapshotsForRun(run.id)).filter(
+      (r) => r.acquisitionStatus === "SUCCESS",
+    );
+    const analysisRows = await this.deps.competitorStore.listAnalysesForRun(run.id);
+    if (analysisRows.length === 0) {
+      throw new FactoryError("competitor_run_not_found", "No page analyses in this run. Acquire competitors first.");
+    }
+
+    const intelRow = await this.deps.competitorStore.getIntelligenceForSerpSnapshot(
+      input.projectId,
+      run.serpSnapshotId,
+    );
+    if (!intelRow) {
+      throw new FactoryError("competitor_serp_not_found", "Bound search intelligence not found.");
+    }
+    const intelData = intelRow.data as unknown as SearchIntelligenceData;
+    const intakePayload = accepted.payload as Record<string, unknown>;
+    const acceptedEvidence = collectFirstPartyEvidence(intakePayload);
+
+    // Deterministic matrix from stored analyses.
+    const pageDomainById = new Map(pageRows.map((p) => [p.id, p.domain]));
+    const matrix = buildCoverageMatrix({
+      requirements: [
+        ...intelData.userNeeds.slice(0, 20).map((need) => ({ requirement: need })),
+        ...intelData.semanticCoverageRequirements.slice(0, 20).map((req) => ({ requirement: req })),
+      ],
+      pages: analysisRows
+        .filter((a) => pageDomainById.has(a.pageSnapshotId))
+        .map((a) => ({
+          pageSnapshotId: a.pageSnapshotId,
+          domain: pageDomainById.get(a.pageSnapshotId)!,
+          analysis: a.data as never,
+        })),
+    });
+
+    // PASS 2: compact analyses only.
+    const analyses = analysisRows.slice(0, 10).map((a) => ({
+      analysisId: a.id,
+      pageSnapshotId: a.pageSnapshotId,
+      domain: pageDomainById.get(a.pageSnapshotId) ?? "",
+      data: a.data as Record<string, unknown>,
+    }));
+    const gapResult = await this.deps.gapAnalyst.propose({
+      analyses,
+      searchIntelligence: {
+        primaryIntent: intelData.primaryIntent,
+        userNeeds: intelData.userNeeds.slice(0, 15),
+        questions: intelData.questions.slice(0, 15),
+        topics: intelData.topics.slice(0, 10),
+      },
+      acceptedEvidence: acceptedEvidence.map((e) => ({ field: e.field, index: e.index, text: e.text })),
+      projectContext: {
+        businessName: ((intakePayload.business ?? {}) as Record<string, unknown>).name ?? "",
+        prohibitedClaims: (((intakePayload.evidence ?? {}) as Record<string, unknown>).prohibitedClaims ?? []) as string[],
+      },
+      coverageMatrixSummary: matrix.rows.map((row) => ({
+        requirement: row.requirement,
+        coverage: Object.fromEntries(row.cells.map((c) => [c.pageSnapshotId, c.level])),
+      })),
+    });
+
+    // Segment-ref anchoring: every gap evidenceRef must resolve to a real
+    // segment of a real analyzed page in this run.
+    const segmentsByPage = new Map<string, Set<string>>();
+    for (const a of analysisRows) {
+      const page = pageRows.find((p) => p.id === a.pageSnapshotId);
+      const extracted = page?.extracted as CompetitorPageExtracted | undefined;
+      segmentsByPage.set(
+        a.pageSnapshotId,
+        new Set((extracted?.segments ?? extracted?.headings ?? []).map((s) => s.id)),
+      );
+    }
+    for (const gap of gapResult.gaps as Array<{ evidenceRefs?: Array<{ pageSnapshotId: string; segmentId: string }> }>) {
+      for (const ref of gap.evidenceRefs ?? []) {
+        const segs = segmentsByPage.get(ref.pageSnapshotId);
+        if (!segs || !segs.has(ref.segmentId)) {
+          throw new FactoryError(
+            "content_gap_invalid",
+            "Gap proposal references page evidence that does not exist in this run (fail closed).",
+          );
+        }
+      }
+    }
+
+    const reportData = finalizeGapReport({
+      modelGaps: {
+        gaps: gapResult.gaps,
+        differentiationRequirements: gapResult.differentiationRequirements,
+      },
+      serpSnapshotId: run.serpSnapshotId,
+      serpSnapshotDigest: run.serpSnapshotDigest,
+      intelligenceSnapshotId: intelRow.id,
+      intelligenceSnapshotDigest: intelRow.snapshotDigest,
+      pageSnapshotRefs: pageRows.map((p) => ({ id: p.id, digest: p.snapshotDigest })),
+      analysisRefs: analysisRows.map((a) => ({ id: a.id, digest: a.snapshotDigest })),
+      acceptedInputSnapshotId: accepted.id,
+      acceptedInputSnapshotVersion: accepted.version,
+      acceptedInputDigest: accepted.digest,
+      coverageMatrix: matrix,
+      model: gapResult.model,
+      provider: gapResult.provider,
+      promptVersion: gapResult.promptVersion,
+      acceptedEvidence,
+    });
+
+    const report = await this.deps.competitorStore.insertGapReport({
+      runId: run.id,
+      projectId: input.projectId,
+      acceptedInputSnapshotId: accepted.id,
+      acceptedInputVersion: accepted.version,
+      acceptedInputDigest: accepted.digest,
+      serpSnapshotId: run.serpSnapshotId,
+      serpSnapshotDigest: run.serpSnapshotDigest,
+      intelligenceSnapshotId: intelRow.id,
+      intelligenceSnapshotDigest: intelRow.snapshotDigest,
+      model: gapResult.model,
+      provider: gapResult.provider,
+      promptVersion: gapResult.promptVersion,
+      data: reportData,
+    });
+    return { reportId: report.id };
+  }
+
+  // ---- Review + acceptance ----------------------------------------------------
+
+  async gapWorkspace(projectId: string): Promise<GapWorkspaceReadModel> {
+    const reports = await this.deps.competitorStore.listGapReports(projectId, 20);
+    const accepted = await this.deps.competitorStore.listAcceptedGapSnapshots(projectId);
+    const latestAccepted = accepted.at(0) ?? null;
+
+    const reportModels = [];
+    for (const report of reports) {
+      const data = report.data as { gaps: Array<{ recommendedDisposition: string }> };
+      const gapCounts = {
+        total: data.gaps.length,
+        required: data.gaps.filter((g) => g.recommendedDisposition === "REQUIRED").length,
+        optional: data.gaps.filter((g) => g.recommendedDisposition === "OPTIONAL").length,
+        excluded: data.gaps.filter((g) => g.recommendedDisposition === "EXCLUDE").length,
+      };
+      const staleness = await this.reportStaleness(projectId, report);
+      reportModels.push({
+        id: report.id,
+        snapshotDigest: report.snapshotDigest,
+        reviewState: report.reviewState,
+        createdAt: report.createdAt.toISOString(),
+        gapCounts,
+        serpSnapshotId: report.serpSnapshotId,
+        ...staleness,
+      });
+    }
+
+    const acceptedModels = [];
+    for (const snap of accepted) {
+      const data = snap.data as { gaps: Array<{ recommendedDisposition: string }> };
+      const staleness = {
+        stale:
+          snap.serpSnapshotDigest !== (await this.currentSerpDigest(projectId, snap.serpSnapshotId)) ||
+          snap.acceptedInputDigest !== (await this.currentInputDigest(projectId, snap.acceptedInputSnapshotId)),
+        reasons: [] as string[],
+      };
+      acceptedModels.push({
+        id: snap.id,
+        version: snap.version,
+        snapshotDigest: snap.snapshotDigest,
+        acceptedAt: snap.acceptedAt.toISOString(),
+        reportId: snap.reportId,
+        stale: staleness.stale,
+        staleReasons: staleness.stale ? ["Upstream evidence changed since acceptance."] : [],
+        gapCounts: {
+          total: data.gaps.length,
+          required: data.gaps.filter((g) => g.recommendedDisposition === "REQUIRED").length,
+          optional: data.gaps.filter((g) => g.recommendedDisposition === "OPTIONAL").length,
+          excluded: data.gaps.filter((g) => g.recommendedDisposition === "EXCLUDE").length,
+        },
+      });
+    }
+
+    const blockers: string[] = [];
+    if (!latestAccepted && reports.length === 0) {
+      blockers.push("No gap report yet. Acquire competitors, then propose gaps.");
+    }
+    return {
+      reports: reportModels,
+      accepted: acceptedModels,
+      readiness: { canPropose: true, blockers },
+    };
+  }
+
+  private async currentSerpDigest(projectId: string, serpSnapshotId: string): Promise<string | null> {
+    const serp = await this.deps.competitorStore.getSerpSnapshot(projectId, serpSnapshotId);
+    return serp?.snapshotDigest ?? null;
+  }
+
+  private async currentInputDigest(projectId: string, snapshotId: string): Promise<string | null> {
+    const snapshots = await this.deps.intake.listSnapshots(projectId);
+    const match = snapshots.find((s) => s.id === snapshotId);
+    return match?.digest ?? null;
+  }
+
+  private async reportStaleness(
+    projectId: string,
+    report: { acceptedInputDigest: string; serpSnapshotDigest: string; intelligenceSnapshotDigest: string; pageSnapshotRefs?: unknown },
+  ): Promise<{ stale: boolean; staleReasons: string[] }> {
+    const currentSerp = await this.currentSerpDigest(projectId, (report as unknown as { serpSnapshotId: string }).serpSnapshotId);
+    const stale = currentSerp !== null && currentSerp !== report.serpSnapshotDigest;
+    return { stale, staleReasons: stale ? ["SERP evidence changed since proposal."] : [] };
+  }
+
+  async getGapReportDetail(projectId: string, reportId: string) {
+    const report = await this.deps.competitorStore.getGapReport(projectId, reportId);
+    if (!report) throw new FactoryError("content_gap_report_not_found", "Content gap report not found.");
+    const decisions = await this.deps.competitorStore.listDecisions(reportId);
+    const staleness = await this.reportStaleness(projectId, report);
+    return {
+      report: {
+        id: report.id,
+        snapshotDigest: report.snapshotDigest,
+        reviewState: report.reviewState,
+        createdAt: report.createdAt.toISOString(),
+        model: report.model,
+        provider: report.provider,
+        data: report.data,
+      },
+      decisions: decisions.map((d) => ({
+        gapId: d.gapId,
+        disposition: d.disposition,
+        priority: d.priority,
+        note: d.note,
+      })),
+      ...staleness,
+    };
+  }
+
+  async saveGapDecisions(input: {
+    projectId: string;
+    reportId: string;
+    decisions: Array<{ gapId: string; disposition: CompetitorClassification | string; priority?: string | null; note?: string | null }>;
+  }): Promise<void> {
+    const report = await this.deps.competitorStore.getGapReport(input.projectId, input.reportId);
+    if (!report) throw new FactoryError("content_gap_report_not_found", "Content gap report not found.");
+    const data = report.data as { gaps: Array<{ id: string }> };
+    const gapIds = new Set(data.gaps.map((g) => g.id));
+    for (const decision of input.decisions) {
+      if (!gapIds.has(decision.gapId)) {
+        throw new FactoryError("content_gap_decision_invalid", `Unknown gap "${decision.gapId}".`);
+      }
+      if (!["REQUIRED", "OPTIONAL", "EXCLUDE"].includes(decision.disposition)) {
+        throw new FactoryError("content_gap_decision_invalid", `Invalid disposition for "${decision.gapId}".`);
+      }
+    }
+    // Review requires every gap to have a decision (operator authority).
+    if (input.decisions.length !== data.gaps.length) {
+      throw new FactoryError(
+        "content_gap_decision_invalid",
+        `Every gap requires a decision (${data.gaps.length} gaps, ${input.decisions.length} decisions).`,
+      );
+    }
+    await this.deps.competitorStore.replaceDecisions(
+      input.projectId,
+      input.reportId,
+      input.decisions.map((d) => ({
+        gapId: d.gapId,
+        disposition: d.disposition,
+        priority: d.priority ?? null,
+        note: d.note === undefined || d.note === null ? null : String(d.note).slice(0, 500),
+      })),
+    );
+    if (report.reviewState === "model_proposed") {
+      await this.deps.competitorStore.markGapReportReviewed(report.id);
+    }
+  }
+
+  async acceptGapReport(input: {
+    projectId: string;
+    reportId: string;
+    expectedDigest: string;
+  }): Promise<{ version: number; snapshotId: string }> {
+    const report = await this.deps.competitorStore.getGapReport(input.projectId, input.reportId);
+    if (!report) throw new FactoryError("content_gap_report_not_found", "Content gap report not found.");
+
+    // Fail closed: acceptance binds the exact digest the operator reviewed.
+    if (input.expectedDigest !== report.snapshotDigest) {
+      throw new FactoryError(
+        "content_gap_accept_failed",
+        "Report digest mismatch: the report changed since review. Re-review and retry.",
+      );
+    }
+    const decisions = await this.deps.competitorStore.listDecisions(input.reportId);
+    const data = report.data as { gaps: Array<{ id: string }> };
+    if (decisions.length !== data.gaps.length) {
+      throw new FactoryError(
+        "content_gap_accept_failed",
+        "Acceptance requires a recorded decision for every gap.",
+      );
+    }
+    const staleness = await this.reportStaleness(input.projectId, report);
+    if (staleness.stale) {
+      throw new FactoryError(
+        "content_gap_stale",
+        `Upstream evidence changed since review: ${staleness.staleReasons.join(" ")}`,
+      );
+    }
+
+    const version = (await this.deps.competitorStore.latestAcceptedGapVersion(input.projectId)) + 1;
+    const decDigest = computeDecisionsDigest(
+      report.snapshotDigest,
+      decisions.map((d) => ({
+        gapId: d.gapId,
+        disposition: d.disposition,
+        priority: d.priority,
+        note: d.note,
+      })),
+    );
+    const reportData = report.data as {
+      pageSnapshotRefs: Array<{ id: string; digest: string }>;
+      analysisRefs: Array<{ id: string; digest: string }>;
+    };
+    const snapshot = await this.deps.competitorStore.insertAcceptedGapSnapshot({
+      projectId: input.projectId,
+      version,
+      reportId: report.id,
+      reportDigest: report.snapshotDigest,
+      decisionsDigest: decDigest,
+      acceptedInputSnapshotId: report.acceptedInputSnapshotId,
+      acceptedInputVersion: report.acceptedInputVersion,
+      acceptedInputDigest: report.acceptedInputDigest,
+      serpSnapshotId: report.serpSnapshotId,
+      serpSnapshotDigest: report.serpSnapshotDigest,
+      intelligenceSnapshotId: report.intelligenceSnapshotId,
+      intelligenceSnapshotDigest: report.intelligenceSnapshotDigest,
+      pageSnapshotRefs: reportData.pageSnapshotRefs,
+      analysisRefs: reportData.analysisRefs,
+      data: report.data,
+    });
+    await this.deps.competitorStore.markGapReportReviewed(report.id);
+    return { version: snapshot.version, snapshotId: snapshot.id };
+  }
+
+  async acceptedGapDetail(projectId: string, version: number) {
+    const snapshot = await this.deps.competitorStore.getAcceptedGapSnapshot(projectId, version);
+    if (!snapshot) throw new FactoryError("content_gap_report_not_found", "Accepted gap snapshot not found.");
+    const snapshots = await this.deps.intake.listSnapshots(projectId);
+    const latestInput = snapshots.at(-1);
+    const staleness = computeGapStaleness({
+      bound: {
+        acceptedInputVersion: snapshot.acceptedInputVersion,
+        acceptedInputDigest: snapshot.acceptedInputDigest,
+        serpSnapshotDigest: snapshot.serpSnapshotDigest,
+        intelligenceSnapshotDigest: snapshot.intelligenceSnapshotDigest,
+        pageSnapshotDigests: (snapshot.pageSnapshotRefs as Array<{ digest: string }>).map((r) => r.digest),
+      },
+      current: {
+        acceptedInputVersion: latestInput?.version ?? snapshot.acceptedInputVersion,
+        acceptedInputDigest: latestInput?.digest ?? snapshot.acceptedInputDigest,
+        serpSnapshotDigest: (await this.currentSerpDigest(projectId, snapshot.serpSnapshotId)) ?? snapshot.serpSnapshotDigest,
+        intelligenceSnapshotDigest: snapshot.intelligenceSnapshotDigest,
+        pageSnapshotDigests: (snapshot.pageSnapshotRefs as Array<{ digest: string }>).map((r) => r.digest),
+      },
+    });
+    return {
+      snapshot: {
+        id: snapshot.id,
+        version: snapshot.version,
+        snapshotDigest: snapshot.snapshotDigest,
+        acceptedAt: snapshot.acceptedAt.toISOString(),
+        reportId: snapshot.reportId,
+        reportDigest: snapshot.reportDigest,
+        decisionsDigest: snapshot.decisionsDigest,
+        data: snapshot.data,
+      },
+      ...staleness,
+    };
+  }
+}
+
+/** Build the competitor/gap analyst pair per trusted mode (fixture or production). */
+export function buildCompetitorAnalysts(env: NodeJS.ProcessEnv, invokeModelFn: typeof import("../models/gateway.js").invokeModel): {
+  competitorAnalyst: CompetitorAnalystModel;
+  gapAnalyst: GapAnalystModel;
+} {
+  const fixtureMode = env.FACTORY_COMPETITOR_MODE === "fixture" || !env.OPENROUTER_API_KEY;
+  if (fixtureMode) {
+    return { competitorAnalyst: new FixtureCompetitorAnalyst(), gapAnalyst: new FixtureGapAnalyst() };
+  }
+  const callGemini = async (systemPrompt: string, prompt: string) => {
+    const result = await invokeModelFn(
+      {
+        roleId: "search_analyst",
+        model: "google/gemini-3.7-flash",
+        systemPrompt,
+        prompt,
+        maxTokens: 8192,
+        timeoutMs: 120_000,
+      },
+      { loadApiKey: () => env.OPENROUTER_API_KEY ?? null },
+    );
+    return {
+      text: result.content,
+      usage: {
+        inputTokens: result.promptTokens,
+        outputTokens: result.completionTokens,
+        totalTokens: result.totalTokens,
+        costMicros: result.costUsd != null ? Math.round(result.costUsd * 1_000_000) : null,
+      },
+    };
+  };
+  return {
+    competitorAnalyst: new OpenRouterCompetitorAnalyst({
+      model: "google/gemini-3.7-flash",
+      callModel: (prompt) => callGemini(systemPromptOf("competitor"), prompt),
+    }),
+    gapAnalyst: new OpenRouterGapAnalyst({
+      model: "google/gemini-3.7-flash",
+      callModel: (prompt) => callGemini(systemPromptOf("gap"), prompt),
+    }),
+  };
+}
+
+import { COMPETITOR_ANALYST_SYSTEM_PROMPT } from "./analyst.js";
+import { GAP_ANALYST_SYSTEM_PROMPT as GAP_PROMPT } from "./gap-analyst.js";
+function systemPromptOf(kind: "competitor" | "gap"): string {
+  return kind === "competitor" ? COMPETITOR_ANALYST_SYSTEM_PROMPT : GAP_PROMPT;
+}

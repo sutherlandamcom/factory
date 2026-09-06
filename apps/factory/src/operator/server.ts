@@ -17,6 +17,8 @@ import { FixtureSerpProvider } from "../search/serp-fixture.js";
 import { FixtureGroundedSearchProvider } from "../search/grounded-types.js";
 import { FixtureSearchAnalyst, OpenRouterSearchAnalyst } from "../search/analyst.js";
 import { invokeModel } from "../models/gateway.js";
+import { CompetitorStore } from "../competitors/competitor-store.js";
+import { CompetitorContentGapService, buildCompetitorAnalysts } from "../competitors/service.js";
 
 /**
  * Trusted backend provider selection for Search Intelligence.
@@ -277,7 +279,24 @@ export async function startOperatorServer(): Promise<http.Server> {
   const intake = new ProjectIntakeStore(dbInstance.db);
   const searchStore = new SearchStore(dbInstance.db);
   const search = buildSearchIntelligenceService({ intake, searchStore });
-  const deps: OperatorApiDeps = { store, intake, search };
+  const competitorStore = new CompetitorStore(dbInstance.db);
+  const { competitorAnalyst, gapAnalyst } = buildCompetitorAnalysts(process.env, invokeModel);
+  const competitors = new CompetitorContentGapService({
+    intake,
+    competitorStore,
+    competitorAnalyst,
+    gapAnalyst,
+    config: {
+      mode: process.env.FACTORY_COMPETITOR_MODE === "fixture" ? "fixture" : "production",
+      ...(process.env.FACTORY_COMPETITOR_MAX_PAGES
+        ? { maxPages: Math.max(1, Math.min(10, Number(process.env.FACTORY_COMPETITOR_MAX_PAGES))) }
+        : {}),
+      ...(process.env.FACTORY_COMPETITOR_DAILY_LIMIT_USD
+        ? { dailyLimitUsd: Number(process.env.FACTORY_COMPETITOR_DAILY_LIMIT_USD) }
+        : {}),
+    },
+  });
+  const deps: OperatorApiDeps = { store, intake, search, competitors };
   const server = createOperatorServer(deps);
   const host = process.env.FACTORY_OPERATOR_HOST ?? "127.0.0.1";
   const port = Number(process.env.FACTORY_OPERATOR_PORT ?? 3000);

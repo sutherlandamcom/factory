@@ -115,7 +115,7 @@ test("analyst: fake/unknown evidence segment refs fail closed", async () => {
       }),
     }),
   });
-  await assert.rejects(fake.analyze(request(packet)), /unknown evidence segment reference|does not exist on the analyzed page/);
+  await assert.rejects(fake.analyze(request(packet)), /no evidence references resolving to real page segments/);
 
   // Correct shape but referencing another page's segment:
   const crossPage = new OpenRouterCompetitorAnalyst({
@@ -126,7 +126,26 @@ test("analyst: fake/unknown evidence segment refs fail closed", async () => {
       }),
     }),
   });
-  await assert.rejects(crossPage.analyze(request(packet)), /unknown evidence segment reference|does not exist on the analyzed page/);
+  await assert.rejects(crossPage.analyze(request(packet)), /no evidence references resolving to real page segments/);
+
+  // Mixed: real + fabricated refs -> fabricated dropped, analysis survives
+  // anchored to the real evidence only.
+  const mixed = new OpenRouterCompetitorAnalyst({
+    callModel: async () => ({
+      text: JSON.stringify({
+        ...base,
+        evidenceSegmentRefs: [
+          { pageSnapshotId: packet.pageSnapshotId, segmentId: segId },
+          { pageSnapshotId: packet.pageSnapshotId, segmentId: "seg-999" },
+        ],
+      }),
+    }),
+  });
+  const mixedResult = await mixed.analyze(request(packet));
+  assert.deepEqual(
+    mixedResult.data.evidenceSegmentRefs,
+    [{ pageSnapshotId: packet.pageSnapshotId, segmentId: segId }],
+  );
 });
 
 test("analyst: no numeric fake scores possible (schema rejects unknown fields)", async () => {

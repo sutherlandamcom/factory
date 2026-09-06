@@ -133,6 +133,7 @@ export function buildEvidencePacket(input: {
  */
 export function renderPacketForPrompt(packet: CompetitorEvidencePacket): string {
   const lines: string[] = [];
+  lines.push(`PAGE_SNAPSHOT_ID (use exactly this value in evidenceSegmentRefs): ${packet.pageSnapshotId}`);
   lines.push(`PAGE_URL: ${packet.url}`);
   lines.push(`DOMAIN: ${packet.domain}`);
   lines.push(`OBSERVED_AT: ${packet.observedAt}`);

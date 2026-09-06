@@ -123,7 +123,7 @@ const analystOutputShapeSchema = z
     weaknesses: z.array(z.string()).max(20),
     uniqueTreatment: z.array(z.string()).max(20),
     missingTreatment: z.array(z.string()).max(20),
-    evidenceSegmentRefs: z.array(z.any()).max(60).min(1),
+    evidenceSegmentRefs: z.array(z.any()).max(60),
     confidence: z.number().min(0).max(1),
   })
   .strict();
@@ -203,7 +203,11 @@ export function extractJsonObject(text: string): string {
 /**
  * Validate raw model text into a strict CompetitorPageAnalysisData.
  * Fail closed on: unparseable JSON, shape violations, unknown fields,
- * evidence segment refs that do not exist on the analyzed page.
+ * analysis whose every evidence ref is fabricated. A minority of
+ * hallucinated refs is normalized away deterministically (Factory keeps
+ * only refs that resolve to real segments) — the model cannot anchor
+ * conclusions to nonexistent evidence, and an analysis left with zero
+ * refs fails closed.
  */
 export function finalizeCompetitorAnalysis(
   modelText: string,
@@ -229,8 +233,27 @@ export function finalizeCompetitorAnalysis(
     ...shape.data,
     evidenceSegmentRefs: shape.data.evidenceSegmentRefs,
   };
-  const data = finalizeShape(candidate, request);
-  validateAnalysisRefs(data, request.packet);
+  // Normalize fabricated refs BEFORE strict validation so a minority of
+  // hallucinated anchors is dropped deterministically and the strict
+  // contract check sees only resolvable candidates.
+  const segIds = new Set(request.packet.extracted.segments.map((s) => s.id));
+  const refs = Array.isArray(candidate.evidenceSegmentRefs)
+    ? (candidate.evidenceSegmentRefs as Array<{ pageSnapshotId?: unknown; segmentId?: unknown }>).filter(
+        (ref) =>
+          ref &&
+          typeof ref === "object" &&
+          ref.pageSnapshotId === request.packet.pageSnapshotId &&
+          typeof ref.segmentId === "string" &&
+          segIds.has(ref.segmentId),
+      )
+    : [];
+  if (refs.length === 0) {
+    throw new FactoryError(
+      "competitor_analysis_invalid",
+      "Analysis had no evidence references resolving to real page segments (fail closed).",
+    );
+  }
+  const data = finalizeShape({ ...candidate, evidenceSegmentRefs: refs }, request);
   return data;
 }
 

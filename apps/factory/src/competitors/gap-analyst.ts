@@ -87,7 +87,7 @@ export function buildGapAnalystPrompt(request: GapAnalystRequest): string {
     JSON.stringify(request.coverageMatrixSummary),
     "",
     "OUTPUT SCHEMA (JSON object): {",
-    '  "gaps": [{ id, userNeed, topicQuestion, competitorCoverage: "ABSENT|WEAK|PARTIAL|STRONG", competitorsCoveringIt: [pageSnapshotId...], treatmentPattern, baselineExpectation, ourEvidenceAvailable: [{ intakeField: "operatorFacts"|"allowedClaims", itemIndex, excerpt }], ourEvidenceMissing: string[], claimConstraints: string[], differentiationOpportunity, recommendedDisposition: "REQUIRED"|"OPTIONAL"|"EXCLUDE", priority: "HIGH"|"MEDIUM"|"LOW", rationale, evidenceRefs: [{ pageSnapshotId, segmentId }] }],',
+    '  "gaps": [{ id, userNeed, topicQuestion, searchEvidenceRefs: [{ kind: "serp_snapshot"|"search_intelligence_snapshot", id, digest }], competitorCoverage: "ABSENT|WEAK|PARTIAL|STRONG", competitorsCoveringIt: [pageSnapshotId...], treatmentPattern, baselineExpectation, ourEvidenceAvailable: [{ intakeField: "operatorFacts"|"allowedClaims", itemIndex, excerpt }], ourEvidenceMissing: string[], claimConstraints: string[], differentiationOpportunity, recommendedDisposition: "REQUIRED"|"OPTIONAL"|"EXCLUDE", priority: "HIGH"|"MEDIUM"|"LOW", rationale, evidenceRefs: [{ pageSnapshotId, segmentId }] }],',
     '  "differentiationRequirements": { items: [{ requirement, basis: "accepted_evidence"|"editorial_opportunity", rationale }] }',
     "}",
   ].join("\n");

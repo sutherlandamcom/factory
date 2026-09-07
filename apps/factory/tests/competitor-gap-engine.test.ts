@@ -98,6 +98,7 @@ test("first-party evidence: refs must resolve to accepted items; competitor clai
 
   const okGap = {
     id: "gap-1",
+    coverageRequirementId: "req-1",
     userNeed: "n", topicQuestion: "q",
     searchEvidenceRefs: [],
     competitorCoverage: "PARTIAL" as const,
@@ -155,6 +156,7 @@ test("gap report finalization: binds provenance, review state is Factory-owned",
     gaps: [
       {
         id: "gap-001",
+        coverageRequirementId: "req-yield",
         userNeed: "Understand yield",
         topicQuestion: "What yield?",
         searchEvidenceRefs: [
@@ -190,12 +192,28 @@ test("gap report finalization: binds provenance, review state is Factory-owned",
     serpSnapshotDigest: "s".repeat(64),
     intelligenceSnapshotId: "intel-1",
     intelligenceSnapshotDigest: "i".repeat(64),
+    searchSemantics: {
+      intelligenceSnapshotId: "intel-1",
+      intelligenceSnapshotDigest: "i".repeat(64),
+      primaryIntent: "commercial",
+      semanticCoverageRequirements: ["Understand yield"],
+      userNeeds: ["Understand yield"],
+    },
     pageSnapshotRefs: [{ id: "snap-1", digest: "p".repeat(64) }],
     analysisRefs: [{ id: "an-1", digest: "a".repeat(64) }],
     acceptedInputSnapshotId: "in-1",
     acceptedInputSnapshotVersion: 1,
     acceptedInputDigest: "d".repeat(64),
-    coverageMatrix: { policyVersion: "coverage-matrix-v1", rows: [] },
+    coverageMatrix: {
+      policyVersion: "coverage-matrix-v1",
+      rows: [
+        {
+          requirementId: "req-yield",
+          requirement: "Understand yield",
+          cells: [{ pageSnapshotId: "snap-1", domain: "a.example", level: "WEAK" }],
+        },
+      ],
+    },
     model: "fixture-gap-analyst",
     provider: "fixture",
     promptVersion: "gap-analyst-v1",
@@ -214,6 +232,7 @@ test("gap analyst (injected): unsupported first-party claim fails closed at fina
         gaps: [
           {
             id: "gap-1",
+            coverageRequirementId: "req-1",
             userNeed: "n", topicQuestion: "q",
             searchEvidenceRefs: [
               { kind: "serp_snapshot", id: "serp", digest: "s".repeat(64) },
@@ -254,12 +273,28 @@ test("gap analyst (injected): unsupported first-party claim fails closed at fina
         serpSnapshotDigest: "s".repeat(64),
         intelligenceSnapshotId: "intel",
         intelligenceSnapshotDigest: "i".repeat(64),
+        searchSemantics: {
+          intelligenceSnapshotId: "intel",
+          intelligenceSnapshotDigest: "i".repeat(64),
+          primaryIntent: "commercial",
+          semanticCoverageRequirements: ["n"],
+          userNeeds: ["n"],
+        },
         pageSnapshotRefs: [],
         analysisRefs: [],
         acceptedInputSnapshotId: "in",
         acceptedInputSnapshotVersion: 1,
         acceptedInputDigest: "d".repeat(64),
-        coverageMatrix: { policyVersion: "coverage-matrix-v1", rows: [] },
+        coverageMatrix: {
+          policyVersion: "coverage-matrix-v1",
+          rows: [
+            {
+              requirementId: "req-1",
+              requirement: "n",
+              cells: [{ pageSnapshotId: "snap-1", domain: "a.example", level: "PARTIAL" }],
+            },
+          ],
+        },
         model: result.model,
         provider: result.provider,
         promptVersion: result.promptVersion,
@@ -286,7 +321,7 @@ test("gap analyst: invalid JSON fails closed; aggregate with unknown page refs c
     searchIntelligence: { userNeeds: ["Understand yield"] },
     acceptedEvidence: [{ field: "operatorFacts", index: 0, text: "Real fact" }],
     projectContext: {},
-    coverageMatrixSummary: [{ requirement: "Understand yield", coverage: { "snap-1": "PARTIAL" } }],
+    coverageMatrixSummary: [{ requirementId: "req-yield", requirement: "Understand yield", coverage: { "snap-1": "PARTIAL" } }],
   });
   assert.ok(Array.isArray(proposal.gaps));
   assert.ok(proposal.gaps.length >= 1);

@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   validateContentGapGrounding,
+  generateRequirementId,
+  buildCoverageMatrix,
   collectFirstPartyEvidence,
   validateGapFirstPartyRefs,
   decisionsDigest,
@@ -19,14 +21,20 @@ import { SearchIntelligenceService } from "../src/search/service.js";
 import {
   OpenRouterGapAnalyst,
   buildGapAnalystPrompt,
+  compileGapInvocation,
   GAP_ANALYST_PROMPT_VERSION,
   GAP_ANALYST_SYSTEM_PROMPT,
 } from "../src/competitors/gap-analyst.js";
+import {
+  compileCompetitorInvocation,
+} from "../src/competitors/analyst.js";
 import { OpenRouterSearchAnalyst } from "../src/search/analyst.js";
 import {
   contentGapSchema,
+  coverageMatrixSchema,
   acceptedSearchSemanticsSchema,
   parseAcceptedContentGapSnapshotData,
+  parseContentGapReportData,
   type ContentGap,
 } from "@factory/contracts";
 import { FactoryError } from "../src/executor/errors.js";
@@ -35,12 +43,16 @@ import {
   calculateConservativeInvocationCostMicros,
   calculateInvocationActualCostMicros,
   getModelPricing,
+  FACTORY_MODEL_PRICING_POLICY_VERSION,
 } from "../src/models/index.js";
 
 function createValidGap(overrides: Partial<ContentGap> = {}): ContentGap {
+  const userNeed = overrides.userNeed ?? "Understand rental yield calculation";
+  const coverageRequirementId = overrides.coverageRequirementId ?? generateRequirementId(userNeed);
   return {
     id: "gap-001",
-    userNeed: "Understand rental yield calculation",
+    coverageRequirementId,
+    userNeed,
     topicQuestion: "What rental yield can investors expect?",
     searchEvidenceRefs: [
       { kind: "serp_snapshot", id: "serp-1", digest: "s".repeat(64) },
@@ -1117,7 +1129,7 @@ test("A3: proposeGaps binds classificationDigest and changing overrides produces
           model: "m",
           provider: "fixture",
           promptVersion: "v1",
-          gaps: [createValidGap({ id: "gap-1", competitorsCoveringIt: ["p-1"], evidenceRefs: [{ pageSnapshotId: "p-1", segmentId: "seg-101" }], ourEvidenceAvailable: [] })],
+          gaps: [createValidGap({ id: "gap-1", userNeed: "need1", competitorCoverage: "ABSENT", competitorsCoveringIt: [], evidenceRefs: [], ourEvidenceAvailable: [] })],
           differentiationRequirements: { items: [] },
           usage: { costMicros: 1000 },
         }),
@@ -1210,9 +1222,25 @@ test("A5: acceptGapReport preserves classification lineage into AcceptedContentG
     acceptedInputDigest: "d1",
     classificationDigest: boundDigest,
     effectiveClassifications,
-    coverageMatrix: { policyVersion: "coverage-matrix-v1", rows: [] },
+    coverageMatrix: {
+      policyVersion: "coverage-matrix-v1",
+      rows: [
+        {
+          requirementId: generateRequirementId("Understand rental yield calculation"),
+          requirement: "Understand rental yield calculation",
+          cells: [],
+        },
+      ],
+    },
     gaps: [createValidGap({ id: "gap-1" })],
     differentiationRequirements: { items: [] },
+    searchSemantics: {
+      intelligenceSnapshotId: "intel-1",
+      intelligenceSnapshotDigest: "id-1",
+      primaryIntent: "commercial",
+      semanticCoverageRequirements: ["Understand rental yield calculation"],
+      userNeeds: ["Understand rental yield calculation"],
+    },
     pageSnapshotRefs: [],
     analysisRefs: [],
   };
@@ -1341,7 +1369,7 @@ test("B1: proposeGaps persists usage with costMicros into content_gap_reports", 
         model: "gap-model",
         provider: "fixture",
         promptVersion: "v1",
-        gaps: [createValidGap({ id: "gap-1", competitorsCoveringIt: ["p-1"], evidenceRefs: [{ pageSnapshotId: "p-1", segmentId: "seg-101" }], ourEvidenceAvailable: [] })],
+        gaps: [createValidGap({ id: "gap-1", userNeed: "need1", competitorCoverage: "ABSENT", competitorsCoveringIt: [], evidenceRefs: [], ourEvidenceAvailable: [] })],
         differentiationRequirements: { items: [] },
         usage: {
           costMicros: 3500,
@@ -1460,7 +1488,7 @@ test("B4: null costMicros in proposal usage is handled gracefully without NaN", 
         model: "gap-model",
         provider: "fixture",
         promptVersion: "v1",
-        gaps: [createValidGap({ id: "gap-1", competitorsCoveringIt: ["p-1"], evidenceRefs: [{ pageSnapshotId: "p-1", segmentId: "seg-101" }], ourEvidenceAvailable: [] })],
+        gaps: [createValidGap({ id: "gap-1", userNeed: "need1", competitorCoverage: "ABSENT", competitorsCoveringIt: [], evidenceRefs: [], ourEvidenceAvailable: [] })],
         differentiationRequirements: { items: [] },
         usage: {
           costMicros: null,
@@ -2579,14 +2607,14 @@ test("P1-01: unbounded maxOutputTokens fails closed", () => {
 });
 
 test("P1-01: calculateInvocationActualCostMicros computes correct cost for Gemini 3.7 Flash", () => {
-  // Rate: $0.25 / 1M prompt ($0.00000025/token), $1.00 / 1M completion ($0.00000100/token)
+  // Authoritative conservative rate: $1.50 / 1M prompt ($0.00000150/token), $7.50 / 1M completion ($0.00000750/token)
   const cost = calculateInvocationActualCostMicros({
     model: "google/gemini-3.7-flash",
     provider: "openrouter",
-    promptTokens: 10_000, // 10,000 * 0.00000025 = $0.0025 = 2,500 micros
-    completionTokens: 2_000, // 2,000 * 0.00000100 = $0.0020 = 2,000 micros
+    promptTokens: 10_000, // 10,000 * 0.00000150 = $0.015 = 15,000 micros
+    completionTokens: 2_000, // 2,000 * 0.00000750 = $0.015 = 15,000 micros
   });
-  assert.equal(cost, 4500); // 4,500 micros
+  assert.equal(cost, 30_000); // 30,000 micros
 });
 
 test("P1-01: fixture calls incur zero external cost in pricing calculation", () => {
@@ -2863,6 +2891,7 @@ test("P1-05: competitor in competitorsCoveringIt evaluated as ABSENT in determin
       policyVersion: "matrix-v1",
       rows: [
         {
+          requirementId: gap.coverageRequirementId,
           requirement: "Understand rental yield calculation",
           cells: [
             { pageSnapshotId: "page-1", domain: "example.com", level: "ABSENT" },
@@ -2904,6 +2933,7 @@ test("P1-05: all-ABSENT coverage matrix with non-ABSENT model coverage fails clo
       policyVersion: "matrix-v1",
       rows: [
         {
+          requirementId: gap.coverageRequirementId,
           requirement: "Understand rental yield calculation",
           cells: [
             { pageSnapshotId: "page-1", domain: "example.com", level: "ABSENT" },
@@ -2936,6 +2966,7 @@ test("P1-05: STRONG coverage matrix with ABSENT model coverage fails closed", ()
       policyVersion: "matrix-v1",
       rows: [
         {
+          requirementId: gap.coverageRequirementId,
           requirement: "Understand rental yield calculation",
           cells: [
             { pageSnapshotId: "page-1", domain: "example.com", level: "STRONG" },
@@ -2951,6 +2982,452 @@ test("P1-05: STRONG coverage matrix with ABSENT model coverage fails closed", ()
       err instanceof FactoryError &&
       err.code === "content_gap_invalid" &&
       /found STRONG competitor coverage/i.test(err.message),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Macro Run 3 Independent QA Remediation: P1-1, P1-2, P1-3 Targeted Test Suite
+// ---------------------------------------------------------------------------
+
+test("P1-1: model pricing policy version is model-pricing-v0.2 and covers Google Gemini rates conservatively", () => {
+  assert.equal(FACTORY_MODEL_PRICING_POLICY_VERSION, "model-pricing-v0.2");
+
+  const gemini37 = getModelPricing("google/gemini-3.7-flash");
+  assert.ok(gemini37);
+  // Authoritative ceiling: $1.50/1M prompt, $7.50/1M completion
+  assert.equal(gemini37.promptUsdPerToken, 0.00000150);
+  assert.equal(gemini37.completionUsdPerToken, 0.00000750);
+
+  const gemini25 = getModelPricing("google/gemini-2.5-flash");
+  assert.ok(gemini25);
+  // Authoritative ceiling: $0.50/1M prompt, $3.00/1M completion
+  assert.equal(gemini25.promptUsdPerToken, 0.00000050);
+  assert.equal(gemini25.completionUsdPerToken, 0.00000300);
+});
+
+test("P1-1: exact compiled prompt byte upper-bound is used in calculateConservativeInvocationCostMicros", () => {
+  const systemPrompt = "You are a specialized competitor analyst.";
+  const userPrompt = "Analyze this page data: " + "X".repeat(5000);
+  const cost = calculateConservativeInvocationCostMicros({
+    model: "google/gemini-3.7-flash",
+    provider: "openrouter",
+    systemPrompt,
+    userPrompt,
+    maxOutputTokens: 8192,
+  });
+  assert.ok(cost > 0, "Conservative cost must be strictly positive");
+
+  // Missing or unbounded maxOutputTokens fails closed
+  assert.throws(
+    () =>
+      calculateConservativeInvocationCostMicros({
+        model: "google/gemini-3.7-flash",
+        provider: "openrouter",
+        systemPrompt,
+        userPrompt,
+      }),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "competitor_analyst_not_configured" &&
+      /maxOutputTokens/i.test(err.message),
+  );
+
+  // Unpriced model fails closed before provider invocation
+  assert.throws(
+    () =>
+      calculateConservativeInvocationCostMicros({
+        model: "untrusted/unknown-model",
+        provider: "openrouter",
+        systemPrompt,
+        userPrompt,
+        maxOutputTokens: 8192,
+      }),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "competitor_analyst_not_configured" &&
+      /pricing configuration/i.test(err.message),
+  );
+});
+
+test("P1-1: larger-than-old-default gap payload (120k chars) cost exceeds old 80k estimate and authorizes accordingly", () => {
+  const shortPrompt = "A".repeat(80_000);
+  const largePrompt = "A".repeat(120_000);
+
+  const shortCost = calculateConservativeInvocationCostMicros({
+    model: "google/gemini-3.7-flash",
+    provider: "openrouter",
+    systemPrompt: "sys",
+    userPrompt: shortPrompt,
+    maxOutputTokens: 8192,
+  });
+
+  const largeCost = calculateConservativeInvocationCostMicros({
+    model: "google/gemini-3.7-flash",
+    provider: "openrouter",
+    systemPrompt: "sys",
+    userPrompt: largePrompt,
+    maxOutputTokens: 8192,
+  });
+
+  assert.ok(
+    largeCost > shortCost,
+    `120k chars payload (${largeCost} micros) must be priced higher than 80k chars payload (${shortCost} micros)`,
+  );
+});
+
+test("P1-1: fixture competitor and gap analyst invocations incur 0 cost and make 0 provider network calls", () => {
+  const conservative = calculateConservativeInvocationCostMicros({
+    model: "fixture-analyst",
+    provider: "fixture",
+    systemPrompt: "test",
+    userPrompt: "test",
+    maxOutputTokens: 8192,
+  });
+  assert.equal(conservative, 0);
+
+  const actual = calculateInvocationActualCostMicros({
+    model: "fixture-analyst",
+    provider: "fixture",
+    promptTokens: 10_000,
+    completionTokens: 2_000,
+  });
+  assert.equal(actual, 0);
+});
+
+test("P1-2: parseContentGapReportData rejects payload missing searchSemantics", () => {
+  const validData: any = {
+    serpSnapshotId: "serp-1",
+    serpSnapshotDigest: "s".repeat(64),
+    intelligenceSnapshotId: "intel-1",
+    intelligenceSnapshotDigest: "i".repeat(64),
+    pageSnapshotRefs: [{ id: "snap-1", digest: "p".repeat(64) }],
+    analysisRefs: [{ id: "an-1", digest: "a".repeat(64) }],
+    acceptedInputSnapshotId: "in-1",
+    acceptedInputSnapshotVersion: 1,
+    acceptedInputDigest: "d".repeat(64),
+    coverageMatrix: {
+      policyVersion: "coverage-matrix-v1",
+      rows: [
+        {
+          requirementId: "req-yield",
+          requirement: "Understand rental yield",
+          cells: [{ pageSnapshotId: "snap-1", domain: "a.example", level: "PARTIAL" }],
+        },
+      ],
+    },
+    gaps: [
+      createValidGap({
+        id: "gap-1",
+        coverageRequirementId: "req-yield",
+        userNeed: "Understand rental yield",
+        competitorCoverage: "PARTIAL",
+        competitorsCoveringIt: ["snap-1"],
+        evidenceRefs: [{ pageSnapshotId: "snap-1", segmentId: "seg-001" }],
+      }),
+    ],
+    differentiationRequirements: { items: [] },
+    model: "fixture-gap-analyst",
+    provider: "fixture",
+    promptVersion: "gap-analyst-v1",
+    reviewState: "model_proposed",
+  };
+
+  // Missing searchSemantics
+  assert.throws(
+    () => parseContentGapReportData(validData),
+    /searchSemantics/i,
+  );
+});
+
+test("P1-2: parseContentGapReportData rejects searchSemantics with missing userNeeds", () => {
+  const baseData: any = {
+    serpSnapshotId: "serp-1",
+    serpSnapshotDigest: "s".repeat(64),
+    intelligenceSnapshotId: "intel-1",
+    intelligenceSnapshotDigest: "i".repeat(64),
+    pageSnapshotRefs: [{ id: "snap-1", digest: "p".repeat(64) }],
+    analysisRefs: [{ id: "an-1", digest: "a".repeat(64) }],
+    acceptedInputSnapshotId: "in-1",
+    acceptedInputSnapshotVersion: 1,
+    acceptedInputDigest: "d".repeat(64),
+    coverageMatrix: {
+      policyVersion: "coverage-matrix-v1",
+      rows: [
+        {
+          requirementId: "req-yield",
+          requirement: "Understand rental yield",
+          cells: [{ pageSnapshotId: "snap-1", domain: "a.example", level: "PARTIAL" }],
+        },
+      ],
+    },
+    gaps: [
+      createValidGap({
+        id: "gap-1",
+        coverageRequirementId: "req-yield",
+        userNeed: "Understand rental yield",
+        competitorCoverage: "PARTIAL",
+        competitorsCoveringIt: ["snap-1"],
+        evidenceRefs: [{ pageSnapshotId: "snap-1", segmentId: "seg-001" }],
+      }),
+    ],
+    differentiationRequirements: { items: [] },
+    model: "fixture-gap-analyst",
+    provider: "fixture",
+    promptVersion: "gap-analyst-v1",
+    reviewState: "model_proposed",
+    searchSemantics: {
+      intelligenceSnapshotId: "intel-1",
+      intelligenceSnapshotDigest: "i".repeat(64),
+      primaryIntent: "commercial",
+      semanticCoverageRequirements: ["Understand rental yield"],
+      // userNeeds is missing!
+    },
+  };
+
+  assert.throws(
+    () => parseContentGapReportData(baseData),
+    /userNeeds/i,
+  );
+});
+
+test("P1-2: parseAcceptedContentGapSnapshotData rejects payload missing searchSemantics", () => {
+  const validSnapshotData: any = {
+    serpSnapshotId: "serp-1",
+    serpSnapshotDigest: "s".repeat(64),
+    intelligenceSnapshotId: "intel-1",
+    intelligenceSnapshotDigest: "i".repeat(64),
+    acceptedInputSnapshotId: "in-1",
+    acceptedInputSnapshotVersion: 1,
+    acceptedInputDigest: "d".repeat(64),
+    classificationDigest: "c".repeat(64),
+    effectiveClassifications: [{ pageSnapshotId: "snap-1", classification: "INCLUDE" }],
+    coverageMatrix: {
+      policyVersion: "coverage-matrix-v1",
+      rows: [
+        {
+          requirementId: "req-yield",
+          requirement: "Understand rental yield",
+          cells: [{ pageSnapshotId: "snap-1", domain: "a.example", level: "PARTIAL" }],
+        },
+      ],
+    },
+    gaps: [
+      {
+        ...createValidGap({
+          id: "gap-1",
+          coverageRequirementId: "req-yield",
+          userNeed: "Understand rental yield",
+          competitorCoverage: "PARTIAL",
+          competitorsCoveringIt: ["snap-1"],
+          evidenceRefs: [{ pageSnapshotId: "snap-1", segmentId: "seg-001" }],
+        }),
+        disposition: "REQUIRED",
+        priority: "HIGH",
+        note: null,
+        recommendedDisposition: "REQUIRED",
+        recommendedPriority: "HIGH",
+      },
+    ],
+    decisions: [{ gapId: "gap-1", disposition: "REQUIRED", priority: "HIGH", note: null }],
+    differentiationRequirements: { items: [] },
+    pageSnapshotRefs: [{ id: "snap-1", digest: "p".repeat(64) }],
+    analysisRefs: [{ id: "an-1", digest: "a".repeat(64) }],
+    model: "fixture-gap-analyst",
+    provider: "fixture",
+    promptVersion: "gap-analyst-v1",
+    // searchSemantics is missing!
+  };
+
+  assert.throws(
+    () => parseAcceptedContentGapSnapshotData(validSnapshotData),
+    /searchSemantics/i,
+  );
+});
+
+test("P1-2: finalizeGapReport fails closed if searchSemantics digest does not match intelligenceSnapshotDigest", () => {
+  const evidence = collectFirstPartyEvidence({ evidence: { operatorFacts: ["Fact"], allowedClaims: [] } });
+  const modelGaps = {
+    gaps: [
+      createValidGap({
+        id: "gap-1",
+        coverageRequirementId: "req-yield",
+        userNeed: "Understand yield",
+        competitorCoverage: "PARTIAL",
+        competitorsCoveringIt: ["snap-1"],
+        evidenceRefs: [{ pageSnapshotId: "snap-1", segmentId: "seg-001" }],
+        ourEvidenceAvailable: [{ intakeField: "operatorFacts", itemIndex: 0, excerpt: "Fact" }],
+      }),
+    ],
+    differentiationRequirements: { items: [] },
+  };
+
+  assert.throws(
+    () =>
+      finalizeGapReport({
+        modelGaps,
+        serpSnapshotId: "serp-1",
+        serpSnapshotDigest: "s".repeat(64),
+        intelligenceSnapshotId: "intel-1",
+        intelligenceSnapshotDigest: "i".repeat(64),
+        searchSemantics: {
+          intelligenceSnapshotId: "intel-1",
+          intelligenceSnapshotDigest: "MISMATCHED_DIGEST".padEnd(64, "0"),
+          primaryIntent: "commercial",
+          semanticCoverageRequirements: ["Understand yield"],
+          userNeeds: ["Understand yield"],
+        },
+        pageSnapshotRefs: [{ id: "snap-1", digest: "p".repeat(64) }],
+        analysisRefs: [{ id: "an-1", digest: "a".repeat(64) }],
+        acceptedInputSnapshotId: "in-1",
+        acceptedInputSnapshotVersion: 1,
+        acceptedInputDigest: "d".repeat(64),
+        coverageMatrix: {
+          policyVersion: "coverage-matrix-v1",
+          rows: [
+            {
+              requirementId: "req-yield",
+              requirement: "Understand yield",
+              cells: [{ pageSnapshotId: "snap-1", domain: "a.example", level: "PARTIAL" }],
+            },
+          ],
+        },
+        model: "fixture-gap-analyst",
+        provider: "fixture",
+        promptVersion: "gap-analyst-v1",
+        acceptedEvidence: evidence,
+      }),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "content_gap_invalid" &&
+      /searchSemantics intelligence snapshot binding does not match/i.test(err.message),
+  );
+});
+
+test("P1-3: buildCoverageMatrix generates unique stable requirementId for every row", () => {
+  const matrix = buildCoverageMatrix({
+    requirements: [
+      { requirement: "Understand yield" },
+      { requirement: "Local property tax rules" },
+      { requirement: "Ski chalet financing" },
+    ],
+    pages: [
+      {
+        pageSnapshotId: "snap-1",
+        domain: "guide.example",
+        analysis: {
+          coverageAreas: [
+            { area: "Understand yield", level: "PARTIAL", rationale: "Covered partially" },
+            { area: "Local property tax rules", level: "STRONG", rationale: "Detailed guide" },
+          ],
+        } as never,
+      },
+    ],
+  });
+
+  assert.equal(matrix.rows.length, 3);
+  const ids = matrix.rows.map((r) => r.requirementId);
+  assert.equal(new Set(ids).size, 3, "All requirementIds must be distinct");
+
+  for (const row of matrix.rows) {
+    assert.ok(row.requirementId.startsWith("req-"), "requirementId must start with req-");
+    assert.equal(
+      row.requirementId,
+      generateRequirementId(row.requirement),
+      "requirementId must match generateRequirementId output",
+    );
+  }
+});
+
+test("P1-3: coverageMatrixSchema rejects duplicate requirementId across rows", () => {
+  const duplicateIdMatrix = {
+    policyVersion: "coverage-matrix-v1",
+    rows: [
+      {
+        requirementId: "req-same-id",
+        requirement: "First requirement",
+        cells: [],
+      },
+      {
+        requirementId: "req-same-id", // Duplicate!
+        requirement: "Second requirement",
+        cells: [],
+      },
+    ],
+  };
+
+  assert.throws(
+    () => coverageMatrixSchema.parse(duplicateIdMatrix),
+    /duplicate or ambiguous requirementId/i,
+  );
+});
+
+test("P1-3: validateContentGapGrounding fails closed when coverageRequirementId is missing or unknown", () => {
+  const gap = createValidGap({
+    id: "gap-001",
+    coverageRequirementId: "req-nonexistent",
+    userNeed: "Understand rental yield calculation",
+    competitorCoverage: "PARTIAL",
+    competitorsCoveringIt: ["page-1"],
+    evidenceRefs: [{ pageSnapshotId: "page-1", segmentId: "seg-101" }],
+  });
+
+  const ctx = createGroundingContext({
+    coverageMatrix: {
+      policyVersion: "matrix-v1",
+      rows: [
+        {
+          requirementId: "req-actual-matrix-row",
+          requirement: "Understand rental yield calculation",
+          cells: [{ pageSnapshotId: "page-1", domain: "example.com", level: "PARTIAL" }],
+        },
+      ],
+    },
+  });
+
+  assert.throws(
+    () => validateContentGapGrounding([gap], ctx),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "content_gap_invalid" &&
+      /references unknown coverageRequirementId "req-nonexistent"/i.test(err.message),
+  );
+});
+
+test("P1-3: paraphrased userNeed claiming PARTIAL coverage when row is ABSENT cannot bypass requirementId check", () => {
+  // Even if userNeed text is rephrased to evade fuzzy text matching,
+  // coverageRequirementId pins it directly to the exact matrix row.
+  const reqId = "req-rental-yield";
+  const gap = createValidGap({
+    id: "gap-001",
+    coverageRequirementId: reqId,
+    userNeed: "Completely paraphrased user need about investment returns",
+    competitorCoverage: "PARTIAL",
+    competitorsCoveringIt: ["page-1"],
+    evidenceRefs: [{ pageSnapshotId: "page-1", segmentId: "seg-101" }],
+  });
+
+  const ctx = createGroundingContext({
+    coverageMatrix: {
+      policyVersion: "matrix-v1",
+      rows: [
+        {
+          requirementId: reqId,
+          requirement: "Understand expected rental yield",
+          cells: [
+            // Evaluated as ABSENT deterministically
+            { pageSnapshotId: "page-1", domain: "example.com", level: "ABSENT" },
+          ],
+        },
+      ],
+    },
+  });
+
+  assert.throws(
+    () => validateContentGapGrounding([gap], ctx),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "content_gap_invalid" &&
+      /claims competitor "page-1" covers requirement .* but deterministic coverage matrix evaluated it as ABSENT/i.test(err.message),
   );
 });
 

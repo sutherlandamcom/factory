@@ -299,6 +299,7 @@ export const coverageMatrixSchema = z
       .array(
         z
           .object({
+            requirementId: z.string().min(1).max(64),
             requirement: boundedText(300),
             /** Per INCLUDED analyzed competitor, in run order. */
             cells: z.array(
@@ -315,7 +316,20 @@ export const coverageMatrixSchema = z
       )
       .max(40),
   })
-  .strict();
+  .strict()
+  .superRefine((matrix, ctx) => {
+    const seen = new Set<string>();
+    for (const [i, row] of matrix.rows.entries()) {
+      if (seen.has(row.requirementId)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `duplicate or ambiguous requirementId "${row.requirementId}" in coverage matrix`,
+          path: ["rows", i, "requirementId"],
+        });
+      }
+      seen.add(row.requirementId);
+    }
+  });
 export type CoverageMatrix = z.infer<typeof coverageMatrixSchema>;
 
 // ---------------------------------------------------------------------------
@@ -335,6 +349,7 @@ export type FirstPartyEvidenceRef = z.infer<typeof firstPartyEvidenceRefSchema>;
 export const contentGapBaseSchema = z
   .object({
     id: z.string().min(1).max(64),
+    coverageRequirementId: z.string().min(1).max(64),
     userNeed: boundedText(500),
     topicQuestion: boundedText(500),
     searchEvidenceRefs: z
@@ -367,12 +382,20 @@ export const contentGapBaseSchema = z
 export function refineContentGapGrounding<
   T extends {
     id: string;
+    coverageRequirementId?: string;
     competitorCoverage: CoverageLevel;
     evidenceRefs?: Array<{ pageSnapshotId: string; segmentId: string }>;
     competitorsCoveringIt?: string[];
     searchEvidenceRefs?: Array<{ kind: string; id: string; digest: string }>;
   },
 >(gap: T, ctx: z.RefinementCtx): void {
+  if (!gap.coverageRequirementId || !gap.coverageRequirementId.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `gap "${gap.id}" requires a valid coverageRequirementId binding to the coverage matrix`,
+      path: ["coverageRequirementId"],
+    });
+  }
   // Search evidence is strictly required for every gap.
   if (!gap.searchEvidenceRefs || gap.searchEvidenceRefs.length === 0) {
     ctx.addIssue({
@@ -470,7 +493,7 @@ export const acceptedSearchSemanticsSchema = z
     intelligenceSnapshotDigest: digestSchema,
     primaryIntent: searchIntentSchema,
     semanticCoverageRequirements: z.array(boundedText(500)).max(30),
-    userNeeds: z.array(boundedText(500)).max(30).optional(),
+    userNeeds: z.array(boundedText(500)).max(30),
   })
   .strict();
 export type AcceptedSearchSemantics = z.infer<typeof acceptedSearchSemanticsSchema>;
@@ -481,7 +504,7 @@ export const contentGapReportDataSchema = z
     serpSnapshotDigest: digestSchema,
     intelligenceSnapshotId: idSchema,
     intelligenceSnapshotDigest: digestSchema,
-    searchSemantics: acceptedSearchSemanticsSchema.optional(),
+    searchSemantics: acceptedSearchSemanticsSchema,
     pageSnapshotRefs: z
       .array(z.object({ id: idSchema, digest: digestSchema }).strict())
       .max(10),
@@ -579,7 +602,7 @@ export const acceptedContentGapSnapshotDataSchema = z
     serpSnapshotDigest: digestSchema,
     intelligenceSnapshotId: idSchema,
     intelligenceSnapshotDigest: digestSchema,
-    searchSemantics: acceptedSearchSemanticsSchema.optional(),
+    searchSemantics: acceptedSearchSemanticsSchema,
     pageSnapshotRefs: z
       .array(z.object({ id: idSchema, digest: digestSchema }).strict())
       .max(10),

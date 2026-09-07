@@ -217,10 +217,20 @@ test("competitor persistence: lineage, isolation, dedupe, accepted immutability"
       acceptedInputSnapshotId: "in-1",
       acceptedInputSnapshotVersion: 1,
       acceptedInputDigest: "d1",
-      coverageMatrix: { policyVersion: "coverage-matrix-v1", rows: [] },
+      coverageMatrix: {
+        policyVersion: "coverage-matrix-v1",
+        rows: [
+          {
+            requirementId: "req-need",
+            requirement: "Need",
+            cells: [],
+          },
+        ],
+      },
       gaps: [
         {
           id: "gap-001",
+          coverageRequirementId: "req-need",
           userNeed: "Need",
           topicQuestion: "Q?",
           searchEvidenceRefs: [{ kind: "serp_snapshot", id: "serp-1", digest: "sd-1" }],
@@ -239,6 +249,13 @@ test("competitor persistence: lineage, isolation, dedupe, accepted immutability"
         },
       ],
       differentiationRequirements: { items: [] },
+      searchSemantics: {
+        intelligenceSnapshotId: "intel-1",
+        intelligenceSnapshotDigest: "id-1",
+        primaryIntent: "commercial",
+        semanticCoverageRequirements: ["Need"],
+        userNeeds: ["Need"],
+      },
       model: "fixture-gap-analyst",
       provider: "fixture",
       promptVersion: "gap-analyst-v1",

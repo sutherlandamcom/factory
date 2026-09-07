@@ -4,6 +4,7 @@ import {
   type CompetitorAcquisitionStatus,
   type CompetitorCandidate,
   type CompetitorClassification,
+  type CompetitorEvidencePacket,
   type CompetitorPageAnalysisData,
   type CompetitorPageExtracted,
   type ContentGap,
@@ -23,7 +24,11 @@ import { buildEvidencePacket } from "./packet.js";
 import {
   FixtureCompetitorAnalyst,
   OpenRouterCompetitorAnalyst,
+  COMPETITOR_ANALYST_SYSTEM_PROMPT,
+  compileCompetitorInvocation,
+  type CompiledCompetitorInvocation,
   type CompetitorAnalystModel,
+  type CompetitorAnalystRequest,
 } from "./analyst.js";
 import {
   buildCoverageMatrix,
@@ -36,7 +41,11 @@ import {
   FixtureGapAnalyst,
   OpenRouterGapAnalyst,
   GAP_ANALYST_SYSTEM_PROMPT,
+  compileGapInvocation,
+  type CompiledGapInvocation,
   type GapAnalystModel,
+  type GapAnalystRequest,
+  type GapAnalystResult,
 } from "./gap-analyst.js";
 import {
   calculateConservativeInvocationCostMicros,
@@ -296,12 +305,31 @@ export class CompetitorContentGapService {
   }
 
   private async reservePageAnalysisBudget(
-    extracted: CompetitorPageExtracted,
+    compiledOrExtracted: CompiledCompetitorInvocation | CompetitorPageExtracted,
     projectContext?: Record<string, unknown>,
     searchContext?: Record<string, unknown>,
   ): Promise<() => void> {
+    if (
+      typeof compiledOrExtracted === "object" &&
+      "systemPrompt" in compiledOrExtracted &&
+      "userPrompt" in compiledOrExtracted
+    ) {
+      const compiled = compiledOrExtracted as CompiledCompetitorInvocation;
+      const estimatedCostMicros = calculateConservativeInvocationCostMicros({
+        model: compiled.model,
+        provider: compiled.provider,
+        systemPrompt: compiled.systemPrompt,
+        userPrompt: compiled.userPrompt,
+        maxOutputTokens: compiled.maxTokens,
+      });
+      const reservationMicros =
+        compiled.provider === "fixture"
+          ? 0
+          : Math.max(RESERVED_PAGE_ANALYSIS_COST_MICROS, estimatedCostMicros);
+      return await this.checkBudget(reservationMicros);
+    }
     const systemChars = COMPETITOR_ANALYST_SYSTEM_PROMPT.length;
-    const packetChars = JSON.stringify(extracted).length + 4000;
+    const packetChars = JSON.stringify(compiledOrExtracted).length + 4000;
     const projectChars = projectContext ? JSON.stringify(projectContext).length : 2000;
     const searchChars = searchContext ? JSON.stringify(searchContext).length : 4000;
     const totalInputChars = systemChars + packetChars + projectChars + searchChars;
@@ -319,19 +347,36 @@ export class CompetitorContentGapService {
   }
 
   private async reserveGapAnalysisBudget(
-    contextOrChars: {
+    compiledOrContext?: CompiledGapInvocation | {
       candidateCount?: number;
       intelligenceChars?: number;
       actualChars?: number;
-    } | number = 80_000,
+    } | number,
   ): Promise<() => void> {
+    if (
+      compiledOrContext &&
+      typeof compiledOrContext === "object" &&
+      "systemPrompt" in compiledOrContext &&
+      "userPrompt" in compiledOrContext
+    ) {
+      const compiled = compiledOrContext as CompiledGapInvocation;
+      const estimatedCostMicros = calculateConservativeInvocationCostMicros({
+        model: compiled.model,
+        provider: compiled.provider,
+        systemPrompt: compiled.systemPrompt,
+        userPrompt: compiled.userPrompt,
+        maxOutputTokens: compiled.maxTokens,
+      });
+      const reservationMicros =
+        compiled.provider === "fixture"
+          ? 0
+          : Math.max(RESERVED_GAP_ANALYSIS_COST_MICROS, estimatedCostMicros);
+      return await this.checkBudget(reservationMicros);
+    }
     const inputChars =
-      typeof contextOrChars === "number"
-        ? contextOrChars
-        : contextOrChars.actualChars ??
-          GAP_ANALYST_SYSTEM_PROMPT.length +
-            (contextOrChars.candidateCount ?? 10) * 12_000 +
-            (contextOrChars.intelligenceChars ?? 8_000);
+      typeof compiledOrContext === "number"
+        ? compiledOrContext
+        : (compiledOrContext as { actualChars?: number } | undefined)?.actualChars ?? 80_000;
     const estimatedCostMicros = calculateConservativeInvocationCostMicros({
       model: this.deps.gapAnalyst.model,
       provider: this.deps.gapAnalyst.provider,
@@ -569,11 +614,29 @@ export class CompetitorContentGapService {
           }
         }
 
-        const release = await this.reservePageAnalysisBudget(
-          pageRow.extracted as CompetitorPageExtracted,
-          projectContext,
-          searchContext,
-        );
+        const packet = buildEvidencePacket({
+          pageSnapshotId: pageRow.id,
+          pageSnapshotDigest: pageRow.snapshotDigest,
+          url: pageRow.finalUrl ?? pageRow.requestedUrl,
+          domain: pageRow.domain,
+          observedAt: pageRow.observedAt,
+          extracted: pageRow.extracted as CompetitorPageExtracted,
+        });
+        const analystRequest: CompetitorAnalystRequest = {
+          packet,
+          projectContext: {
+            businessName: ((intakePayload.business ?? {}) as Record<string, unknown>).name ?? "",
+            offering: ((intakePayload.business ?? {}) as Record<string, unknown>).offerings ?? [],
+          },
+          searchContext: {
+            primaryIntent: intelData.primaryIntent,
+            userNeeds: intelData.userNeeds.slice(0, 10),
+            semanticCoverageRequirements: intelData.semanticCoverageRequirements.slice(0, 10),
+            questions: intelData.questions.slice(0, 10),
+          },
+        };
+        const compiled = compileCompetitorInvocation(analystRequest, this.deps.competitorAnalyst);
+        const release = await this.reservePageAnalysisBudget(compiled);
         try {
           await this.analyzePage({
             runId: run.id,
@@ -585,6 +648,9 @@ export class CompetitorContentGapService {
             intelligence: intelData,
             intakePayload,
             semanticInputDigest: semanticDigest,
+            packet,
+            analystRequest,
+            compiled,
           });
         } finally {
           release();
@@ -682,6 +748,9 @@ export class CompetitorContentGapService {
     intelligence: SearchIntelligenceData;
     intakePayload: Record<string, unknown>;
     semanticInputDigest?: string;
+    packet?: CompetitorEvidencePacket;
+    analystRequest?: CompetitorAnalystRequest;
+    compiled?: CompiledCompetitorInvocation;
   }): Promise<void> {
     // Analysis dedupe: same page + model + prompt version + semantic digest => reuse.
     const existing = await this.deps.competitorStore.findAnalysisForPage(
@@ -695,30 +764,38 @@ export class CompetitorContentGapService {
     const pageRow = await this.deps.competitorStore.getPageSnapshot(input.projectId, input.pageRowId);
     if (!pageRow) return;
 
-    const packet = buildEvidencePacket({
-      pageSnapshotId: input.pageRowId,
-      pageSnapshotDigest: pageRow.snapshotDigest,
-      url: pageRow.finalUrl ?? input.requestedUrl,
-      domain: pageRow.domain,
-      observedAt: input.observedAt,
-      extracted: input.extracted,
-    });
+    const packet =
+      input.packet ??
+      buildEvidencePacket({
+        pageSnapshotId: input.pageRowId,
+        pageSnapshotDigest: pageRow.snapshotDigest,
+        url: pageRow.finalUrl ?? input.requestedUrl,
+        domain: pageRow.domain,
+        observedAt: input.observedAt,
+        extracted: input.extracted,
+      });
 
-    const result = await this.deps.competitorAnalyst.analyze({
-      packet,
-      projectContext: {
-        businessName: ((input.intakePayload.business ?? {}) as Record<string, unknown>).name ?? "",
-        offering: ((input.intakePayload.business ?? {}) as Record<string, unknown>).offerings ?? [],
-      },
-      searchContext: {
-        primaryIntent: input.intelligence.primaryIntent,
-        userNeeds: input.intelligence.userNeeds.slice(0, 10),
-        semanticCoverageRequirements: input.intelligence.semanticCoverageRequirements.slice(0, 10),
-        questions: input.intelligence.questions.slice(0, 10),
-      },
-    });
+    const analystRequest: CompetitorAnalystRequest =
+      input.analystRequest ?? {
+        packet,
+        projectContext: {
+          businessName: ((input.intakePayload.business ?? {}) as Record<string, unknown>).name ?? "",
+          offering: ((input.intakePayload.business ?? {}) as Record<string, unknown>).offerings ?? [],
+        },
+        searchContext: {
+          primaryIntent: input.intelligence.primaryIntent,
+          userNeeds: input.intelligence.userNeeds.slice(0, 10),
+          semanticCoverageRequirements: input.intelligence.semanticCoverageRequirements.slice(0, 10),
+          questions: input.intelligence.questions.slice(0, 10),
+        },
+      };
 
-    const validSegmentIds = new Set(packet.extracted.segments.map((s) => s.id));
+    const compiled = input.compiled ?? compileCompetitorInvocation(analystRequest, this.deps.competitorAnalyst);
+    const result = await this.deps.competitorAnalyst.analyze(analystRequest, compiled);
+
+    const validSegmentIds: ReadonlySet<string> = new Set<string>(
+      (packet.extracted.segments as Array<{ id: string }>).map((s: { id: string }) => s.id),
+    );
     await this.deps.competitorStore.insertPageAnalysis({
       runId: input.runId,
       projectId: input.projectId,
@@ -841,10 +918,17 @@ export class CompetitorContentGapService {
         "OpenRouter API key is required for gap analysis in production mode (fail closed).",
       );
     }
+    if (this.deps.gapAnalyst.provider !== "fixture") {
+      calculateConservativeInvocationCostMicros({
+        model: this.deps.gapAnalyst.model,
+        provider: this.deps.gapAnalyst.provider,
+        inputChars: 1,
+        maxOutputTokens: this.deps.gapAnalyst.maxTokens,
+      });
+    }
     const { accepted } = await this.resolveAcceptedInputs(input.projectId);
-    const releaseBudget = await this.reserveGapAnalysisBudget();
-    try {
-      const run = input.competitorRunId
+    await this.checkBudget(0);
+    const run = input.competitorRunId
         ? await this.deps.competitorStore.getRun(input.projectId, input.competitorRunId)
         : await this.deps.competitorStore.latestSucceededRun(input.projectId);
       if (!run || run.status !== "succeeded") {
@@ -925,7 +1009,7 @@ export class CompetitorContentGapService {
         domain: pageDomainById.get(a.pageSnapshotId) ?? "",
         data: a.data as Record<string, unknown>,
       }));
-      const gapResult = await this.deps.gapAnalyst.propose({
+      const gapRequest: GapAnalystRequest = {
         analyses,
         searchIntelligence: {
           primaryIntent: intelData.primaryIntent,
@@ -941,10 +1025,20 @@ export class CompetitorContentGapService {
           prohibitedClaims: (((intakePayload.evidence ?? {}) as Record<string, unknown>).prohibitedClaims ?? []) as string[],
         },
         coverageMatrixSummary: matrix.rows.map((row) => ({
+          requirementId: row.requirementId,
           requirement: row.requirement,
           coverage: Object.fromEntries(row.cells.map((c) => [c.pageSnapshotId, c.level])),
         })),
-      });
+      };
+
+      const compiledGap = compileGapInvocation(gapRequest, this.deps.gapAnalyst);
+      const releaseBudget = await this.reserveGapAnalysisBudget(compiledGap);
+      let gapResult: GapAnalystResult;
+      try {
+        gapResult = await this.deps.gapAnalyst.propose(gapRequest, compiledGap);
+      } finally {
+        releaseBudget();
+      }
 
       // Segment-ref anchoring: every gap evidenceRef must resolve to a real
       // segment of a real analyzed page in this run.
@@ -1058,9 +1152,6 @@ export class CompetitorContentGapService {
         data: reportData,
       });
       return { reportId: report.id };
-    } finally {
-      releaseBudget();
-    }
   }
 
   // ---- Review + acceptance ----------------------------------------------------
@@ -1753,8 +1844,6 @@ export function buildCompetitorAnalysts(env: NodeJS.ProcessEnv, invokeModelFn: t
   };
 }
 
-import { COMPETITOR_ANALYST_SYSTEM_PROMPT } from "./analyst.js";
-import { GAP_ANALYST_SYSTEM_PROMPT as GAP_PROMPT } from "./gap-analyst.js";
 function systemPromptOf(kind: "competitor" | "gap"): string {
-  return kind === "competitor" ? COMPETITOR_ANALYST_SYSTEM_PROMPT : GAP_PROMPT;
+  return kind === "competitor" ? COMPETITOR_ANALYST_SYSTEM_PROMPT : GAP_ANALYST_SYSTEM_PROMPT;
 }

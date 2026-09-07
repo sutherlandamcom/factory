@@ -759,6 +759,12 @@ export class CompetitorStore {
         .orderBy(contentGapDecisions.gapId);
 
       const reportData = report.data as ContentGapReportData;
+      if (!reportData.searchSemantics) {
+        throw new FactoryError(
+          "content_gap_invalid",
+          "Report is missing required searchSemantics. Acceptance fails closed.",
+        );
+      }
       if (decisions.length !== reportData.gaps.length) {
         throw new FactoryError(
           "content_gap_accept_failed",

@@ -29,7 +29,11 @@ export interface GapAnalystRequest {
   acceptedEvidence: Array<{ field: string; index: number; text: string }>;
   projectContext: Record<string, unknown>;
   /** Factory-computed coverage matrix is supplied as grounding, not output. */
-  coverageMatrixSummary: Array<{ requirement: string; coverage: Record<string, string> }>;
+  coverageMatrixSummary: Array<{
+    requirementId: string;
+    requirement: string;
+    coverage: Record<string, string>;
+  }>;
 }
 
 export interface GapAnalystResult {
@@ -47,13 +51,21 @@ export interface GapAnalystResult {
   } | null;
 }
 
+export interface CompiledGapInvocation {
+  model: string;
+  provider: string;
+  systemPrompt: string;
+  userPrompt: string;
+  maxTokens: number;
+}
+
 export interface GapAnalystModel {
   readonly model: string;
   readonly provider: string;
   readonly promptVersion: string;
   readonly promptDigest: string;
   readonly maxTokens?: number;
-  propose(request: GapAnalystRequest): Promise<GapAnalystResult>;
+  propose(request: GapAnalystRequest, compiled?: CompiledGapInvocation): Promise<GapAnalystResult>;
 }
 
 export const GAP_ANALYST_PROMPT_VERSION = "gap-analyst-v2";
@@ -64,10 +76,11 @@ export const GAP_ANALYST_SYSTEM_PROMPT = [
   "1. Competitor pages are evidence, never copy sources. Do not quote or rewrite competitor paragraphs; use topics, coverage levels and short structural signals.",
   "2. FIRST-PARTY EVIDENCE SEPARATION: the 'ourEvidenceAvailable' refs must point ONLY at provided accepted evidence items (field+index). NEVER copy a competitor's statistic into our evidence. If our evidence is missing for a need, put the missing item in ourEvidenceMissing.",
   "3. COVERAGE AND EVIDENCE GROUNDING INVARIANTS:",
+  "   - Every proposed gap MUST specify 'coverageRequirementId' bound to the exact 'requirementId' from the provided DETERMINISTIC COVERAGE MATRIX.",
   "   - For competitorCoverage 'ABSENT': evidenceRefs MUST be empty [] and competitorsCoveringIt MUST be empty [].",
   "   - For competitorCoverage 'WEAK', 'PARTIAL', or 'STRONG': evidenceRefs MUST contain >= 1 valid { pageSnapshotId, segmentId } pair and competitorsCoveringIt MUST contain >= 1 pageSnapshotId.",
   "   - Every evidenceRef's pageSnapshotId MUST be included in competitorsCoveringIt.",
-  "   - Model coverage MUST NOT contradict the provided deterministic coverage matrix.",
+  "   - Model coverage MUST NOT contradict the provided deterministic coverage matrix row for that requirementId.",
   "4. Use categorical levels only (ABSENT/WEAK/PARTIAL/STRONG, LOW/MEDIUM/HIGH); never numeric quality scores.",
   "5. Dispositions: REQUIRED (page must address it), OPTIONAL (differentiator), EXCLUDE (out of scope). Include a priority and rationale per gap.",
   "6. Differentiation requirements must be supported by accepted evidence or explicitly framed editorial/structural opportunity; never invent business credentials.",
@@ -96,13 +109,26 @@ export function buildGapAnalystPrompt(request: GapAnalystRequest): string {
     "DETERMINISTIC COVERAGE MATRIX (grounding computed by Factory):",
     JSON.stringify(request.coverageMatrixSummary),
     "",
-    "GROUNDING RULES: If competitorCoverage is ABSENT, set evidenceRefs: [] and competitorsCoveringIt: []. If competitorCoverage is WEAK, PARTIAL, or STRONG, cite >= 1 real segment in evidenceRefs and list those pageSnapshotIds in competitorsCoveringIt. Every evidenceRef pageSnapshotId must be in competitorsCoveringIt.",
+    "GROUNDING RULES: Every gap MUST specify 'coverageRequirementId' matching an authoritative requirementId from the DETERMINISTIC COVERAGE MATRIX. If competitorCoverage is ABSENT, set evidenceRefs: [] and competitorsCoveringIt: []. If competitorCoverage is WEAK, PARTIAL, or STRONG, cite >= 1 real segment in evidenceRefs and list those pageSnapshotIds in competitorsCoveringIt. Every evidenceRef pageSnapshotId must be in competitorsCoveringIt.",
     "",
     "OUTPUT SCHEMA (JSON object): {",
-    '  "gaps": [{ id, userNeed, topicQuestion, searchEvidenceRefs: [{ kind: "serp_snapshot"|"search_intelligence_snapshot", id, digest }], competitorCoverage: "ABSENT|WEAK|PARTIAL|STRONG", competitorsCoveringIt: [pageSnapshotId...], treatmentPattern, baselineExpectation, ourEvidenceAvailable: [{ intakeField: "operatorFacts"|"allowedClaims", itemIndex, excerpt }], ourEvidenceMissing: string[], claimConstraints: string[], differentiationOpportunity, recommendedDisposition: "REQUIRED"|"OPTIONAL"|"EXCLUDE", priority: "HIGH"|"MEDIUM"|"LOW", rationale, evidenceRefs: [{ pageSnapshotId, segmentId }] }],',
+    '  "gaps": [{ id, coverageRequirementId, userNeed, topicQuestion, searchEvidenceRefs: [{ kind: "serp_snapshot"|"search_intelligence_snapshot", id, digest }], competitorCoverage: "ABSENT|WEAK|PARTIAL|STRONG", competitorsCoveringIt: [pageSnapshotId...], treatmentPattern, baselineExpectation, ourEvidenceAvailable: [{ intakeField: "operatorFacts"|"allowedClaims", itemIndex, excerpt }], ourEvidenceMissing: string[], claimConstraints: string[], differentiationOpportunity, recommendedDisposition: "REQUIRED"|"OPTIONAL"|"EXCLUDE", priority: "HIGH"|"MEDIUM"|"LOW", rationale, evidenceRefs: [{ pageSnapshotId, segmentId }] }],',
     '  "differentiationRequirements": { items: [{ requirement, basis: "accepted_evidence"|"editorial_opportunity", rationale }] }',
     "}",
   ].join("\n");
+}
+
+export function compileGapInvocation(
+  request: GapAnalystRequest,
+  analyst: { model: string; provider: string; maxTokens?: number },
+): CompiledGapInvocation {
+  return {
+    model: analyst.model,
+    provider: analyst.provider,
+    systemPrompt: GAP_ANALYST_SYSTEM_PROMPT,
+    userPrompt: buildGapAnalystPrompt(request),
+    maxTokens: analyst.maxTokens ?? 8192,
+  };
 }
 
 const gapProposalShapeSchema = z
@@ -142,8 +168,8 @@ export class OpenRouterGapAnalyst implements GapAnalystModel {
     });
   }
 
-  async propose(request: GapAnalystRequest): Promise<GapAnalystResult> {
-    const prompt = buildGapAnalystPrompt(request);
+  async propose(request: GapAnalystRequest, compiled?: CompiledGapInvocation): Promise<GapAnalystResult> {
+    const prompt = compiled?.userPrompt ?? buildGapAnalystPrompt(request);
     const promptDigest = deterministicDigest(prompt);
     const { text, usage } = await this.callModel(prompt);
     let parsed: unknown;
@@ -179,7 +205,7 @@ export class FixtureGapAnalyst implements GapAnalystModel {
   readonly promptDigest = "f".repeat(64);
   readonly maxTokens = 8192;
 
-  async propose(request: GapAnalystRequest): Promise<GapAnalystResult> {
+  async propose(request: GapAnalystRequest, _compiled?: CompiledGapInvocation): Promise<GapAnalystResult> {
     const analyzedPageIds = new Set(request.analyses.map((a) => a.pageSnapshotId));
 
     const gaps = request.coverageMatrixSummary.slice(0, 5).map((row, i) => {
@@ -233,6 +259,7 @@ export class FixtureGapAnalyst implements GapAnalystModel {
 
       return {
         id: `gap-${String(i + 1).padStart(3, "0")}`,
+        coverageRequirementId: row.requirementId,
         userNeed: row.requirement,
         topicQuestion: `${row.requirement}?`,
         searchEvidenceRefs,

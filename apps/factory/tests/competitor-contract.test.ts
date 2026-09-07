@@ -149,6 +149,7 @@ function validReportData() {
       policyVersion: "coverage-matrix-v1",
       rows: [
         {
+          requirementId: "req-yield",
           requirement: "Expected rental yield",
           cells: [
             { pageSnapshotId: "snap-1", domain: "example.com", level: "PARTIAL" },
@@ -159,6 +160,7 @@ function validReportData() {
     gaps: [
       {
         id: "gap-001",
+        coverageRequirementId: "req-yield",
         userNeed: "Understand expected rental yield",
         topicQuestion: "What rental yield can investors expect?",
         searchEvidenceRefs: [
@@ -186,6 +188,13 @@ function validReportData() {
           rationale: "Operator operates in the market.",
         },
       ],
+    },
+    searchSemantics: {
+      intelligenceSnapshotId: "intel-1",
+      intelligenceSnapshotDigest: "d".repeat(64),
+      primaryIntent: "commercial",
+      semanticCoverageRequirements: ["Expected rental yield"],
+      userNeeds: ["Expected rental yield"],
     },
     model: "fixture-gap-analyst",
     provider: "fixture",

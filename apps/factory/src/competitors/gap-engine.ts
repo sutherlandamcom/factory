@@ -36,6 +36,13 @@ export const COVERAGE_MATRIX_POLICY_VERSION = "coverage-matrix-v1";
 const LEVEL_ORDER: Record<CoverageLevel, number> = { ABSENT: 0, WEAK: 1, PARTIAL: 2, STRONG: 3 };
 
 /**
+ * Deterministically generate a stable requirement ID from requirement text.
+ */
+export function generateRequirementId(requirement: string): string {
+  return `req-${deterministicDigest(requirement.trim().toLowerCase()).slice(0, 12)}`;
+}
+
+/**
  * Deterministic coverage matrix: rows = user needs / semantic requirements
  * (from search intelligence userNeeds + semanticCoverageRequirements),
  * cells = per analyzed competitor page, derived from that page's analysis
@@ -43,14 +50,23 @@ const LEVEL_ORDER: Record<CoverageLevel, number> = { ABSENT: 0, WEAK: 1, PARTIAL
  * topics/subtopics. A cell stays ABSENT when no analysis supports coverage.
  */
 export function buildCoverageMatrix(input: {
-  requirements: Array<{ requirement: string }>;
+  requirements: Array<{ requirementId?: string; requirement: string }>;
   pages: Array<{
     pageSnapshotId: string;
     domain: string;
     analysis: CompetitorPageAnalysisData;
   }>;
 }): CoverageMatrix {
-  const rows = input.requirements.slice(0, 40).map(({ requirement }) => {
+  const seenIds = new Set<string>();
+  const rows = input.requirements.slice(0, 40).map(({ requirementId, requirement }) => {
+    const baseId = requirementId ?? generateRequirementId(requirement);
+    let id = baseId;
+    let counter = 1;
+    while (seenIds.has(id)) {
+      id = `${baseId}-${counter++}`;
+    }
+    seenIds.add(id);
+
     const reqTokens = requirement
       .toLowerCase()
       .split(/[^a-zà-ÿ0-9]+/)
@@ -71,7 +87,7 @@ export function buildCoverageMatrix(input: {
       }
       return { pageSnapshotId, domain, level: best };
     });
-    return { requirement, cells };
+    return { requirementId: id, requirement, cells };
   });
   return { policyVersion: COVERAGE_MATRIX_POLICY_VERSION, rows };
 }
@@ -369,52 +385,63 @@ export function validateContentGapGrounding(
 
     // 4c. Deterministic coverage matrix consistency (when matrix is provided)
     if (context.coverageMatrix) {
-      const reqTokens = (gap.userNeed || "")
-        .toLowerCase()
-        .split(/[^a-zà-ÿ0-9]+/)
-        .filter((t) => t.length >= 4);
-
-      const matchingRow = context.coverageMatrix.rows.find((row) => {
-        const rowTokens = row.requirement
-          .toLowerCase()
-          .split(/[^a-zà-ÿ0-9]+/)
-          .filter((t) => t.length >= 4);
-        return (
-          row.requirement.toLowerCase().trim() === gap.userNeed.toLowerCase().trim() ||
-          (reqTokens.length > 0 &&
-            rowTokens.length > 0 &&
-            reqTokens.every((rt) => rowTokens.some((at) => at.startsWith(rt) || rt.startsWith(at))))
-        );
-      });
-
-      if (matchingRow) {
-        // A competitor in competitorsCoveringIt cannot be evaluated as ABSENT in the deterministic coverage matrix
-        for (const competitorId of gap.competitorsCoveringIt) {
-          const cell = matchingRow.cells.find((c) => c.pageSnapshotId === competitorId);
-          if (cell && cell.level === "ABSENT") {
-            throw new FactoryError(
-              "content_gap_invalid",
-              `gap "${gap.id}" claims competitor "${competitorId}" covers requirement "${matchingRow.requirement}", but deterministic coverage matrix evaluated it as ABSENT (fail closed)`,
-            );
-          }
-        }
-
-        const maxLevel = matchingRow.cells.reduce(
-          (acc, c) => (LEVEL_ORDER[c.level] > LEVEL_ORDER[acc] ? c.level : acc),
-          "ABSENT" as CoverageLevel,
-        );
-        if (maxLevel === "ABSENT" && gap.competitorCoverage !== "ABSENT") {
+      const rowsById = new Map<string, (typeof context.coverageMatrix.rows)[number]>();
+      const seenRowIds = new Set<string>();
+      for (const row of context.coverageMatrix.rows) {
+        if (seenRowIds.has(row.requirementId)) {
           throw new FactoryError(
             "content_gap_invalid",
-            `gap "${gap.id}" claims ${gap.competitorCoverage} coverage for requirement "${matchingRow.requirement}", but deterministic coverage matrix evaluated all competitors as ABSENT (fail closed)`,
+            `Coverage matrix contains duplicate or ambiguous requirementId "${row.requirementId}" (fail closed)`,
           );
         }
-        if (maxLevel === "STRONG" && gap.competitorCoverage === "ABSENT") {
+        seenRowIds.add(row.requirementId);
+        rowsById.set(row.requirementId, row);
+      }
+
+      if (!gap.coverageRequirementId) {
+        throw new FactoryError(
+          "content_gap_invalid",
+          `gap "${gap.id}" requires a coverageRequirementId linking to the coverage matrix`,
+        );
+      }
+
+      const boundRow = rowsById.get(gap.coverageRequirementId);
+      if (!boundRow) {
+        throw new FactoryError(
+          "content_gap_invalid",
+          `gap "${gap.id}" references unknown coverageRequirementId "${gap.coverageRequirementId}" (fail closed)`,
+        );
+      }
+
+      // 4c-1. Competitor in competitorsCoveringIt cannot be evaluated as ABSENT in the deterministic coverage matrix for that requirement
+      for (const competitorId of gap.competitorsCoveringIt) {
+        const cell = boundRow.cells.find((c) => c.pageSnapshotId === competitorId);
+        if (cell && cell.level === "ABSENT") {
           throw new FactoryError(
             "content_gap_invalid",
-            `gap "${gap.id}" claims ABSENT coverage for requirement "${matchingRow.requirement}", but deterministic coverage matrix found STRONG competitor coverage (fail closed)`,
+            `gap "${gap.id}" claims competitor "${competitorId}" covers requirement "${boundRow.requirement}" (id "${boundRow.requirementId}"), but deterministic coverage matrix evaluated it as ABSENT (fail closed)`,
           );
         }
+      }
+
+      // 4c-2. Claimed non-ABSENT coverage must be consistent with the exact bound row
+      const maxLevel = boundRow.cells.reduce(
+        (acc, c) => (LEVEL_ORDER[c.level] > LEVEL_ORDER[acc] ? c.level : acc),
+        "ABSENT" as CoverageLevel,
+      );
+      if (maxLevel === "ABSENT" && gap.competitorCoverage !== "ABSENT") {
+        throw new FactoryError(
+          "content_gap_invalid",
+          `gap "${gap.id}" claims ${gap.competitorCoverage} coverage for requirement "${boundRow.requirement}" (id "${boundRow.requirementId}"), but deterministic coverage matrix evaluated all competitors as ABSENT (fail closed)`,
+        );
+      }
+
+      // 4c-3. Claimed ABSENT coverage must be consistent with the exact bound row
+      if (maxLevel === "STRONG" && gap.competitorCoverage === "ABSENT") {
+        throw new FactoryError(
+          "content_gap_invalid",
+          `gap "${gap.id}" claims ABSENT coverage for requirement "${boundRow.requirement}" (id "${boundRow.requirementId}"), but deterministic coverage matrix found STRONG competitor coverage (fail closed)`,
+        );
       }
     }
   }
@@ -435,7 +462,7 @@ export function finalizeGapReport(input: {
   serpSnapshotDigest: string;
   intelligenceSnapshotId: string;
   intelligenceSnapshotDigest: string;
-  searchSemantics?: AcceptedSearchSemantics;
+  searchSemantics: AcceptedSearchSemantics;
   pageSnapshotRefs: Array<{ id: string; digest: string }>;
   analysisRefs: Array<{ id: string; digest: string }>;
   acceptedInputSnapshotId: string;
@@ -450,6 +477,21 @@ export function finalizeGapReport(input: {
   acceptedEvidence: FirstPartyEvidenceItem[];
   grounding?: GapGroundingContext;
 }): ReturnType<typeof parseContentGapReportData> {
+  if (!input.searchSemantics) {
+    throw new FactoryError(
+      "content_gap_invalid",
+      "searchSemantics is mandatory for ContentGapReportData (fail closed).",
+    );
+  }
+  if (
+    input.searchSemantics.intelligenceSnapshotId !== input.intelligenceSnapshotId ||
+    input.searchSemantics.intelligenceSnapshotDigest !== input.intelligenceSnapshotDigest
+  ) {
+    throw new FactoryError(
+      "content_gap_invalid",
+      "searchSemantics intelligence snapshot binding does not match report intelligence snapshot (fail closed).",
+    );
+  }
   const parsed = input.modelGaps as { gaps?: unknown; differentiationRequirements?: unknown };
   const gaps = Array.isArray(parsed?.gaps) ? parsed.gaps : [];
   const differentiation =

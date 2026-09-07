@@ -126,6 +126,7 @@ const REPORT_DETAIL: ContentGapReportDetail = {
         policyVersion: "coverage-matrix-v1",
         rows: [
           {
+            requirementId: "req-yield",
             requirement: "Understand expected rental yield",
             cells: [{ pageSnapshotId: "snap-1", domain: "guide-a.example", level: "PARTIAL" }],
           },
@@ -134,6 +135,7 @@ const REPORT_DETAIL: ContentGapReportDetail = {
       gaps: [
         {
           id: "gap-001",
+          coverageRequirementId: "req-yield",
           userNeed: "Understand expected rental yield",
           topicQuestion: "What rental yield can investors expect?",
           competitorCoverage: "PARTIAL",
@@ -152,6 +154,13 @@ const REPORT_DETAIL: ContentGapReportDetail = {
       ],
       differentiationRequirements: {
         items: [{ requirement: "First-party market evidence", basis: "accepted_evidence", rationale: "Operator evidence exists." }],
+      },
+      searchSemantics: {
+        intelligenceSnapshotId: "intel-1",
+        intelligenceSnapshotDigest: "i".repeat(64),
+        primaryIntent: "commercial_investigation",
+        semanticCoverageRequirements: ["Understand expected rental yield"],
+        userNeeds: ["Understand expected rental yield"],
       },
     },
   },

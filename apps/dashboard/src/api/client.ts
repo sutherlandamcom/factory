@@ -359,12 +359,14 @@ export interface ContentGapReportDetail {
       coverageMatrix: {
         policyVersion: string;
         rows: Array<{
+          requirementId: string;
           requirement: string;
           cells: Array<{ pageSnapshotId: string; domain: string; level: string }>;
         }>;
       };
       gaps: Array<{
         id: string;
+        coverageRequirementId: string;
         userNeed: string;
         topicQuestion: string;
         competitorCoverage: string;
@@ -383,12 +385,12 @@ export interface ContentGapReportDetail {
       differentiationRequirements: {
         items: Array<{ requirement: string; basis: string; rationale: string }>;
       };
-      searchSemantics?: {
+      searchSemantics: {
         intelligenceSnapshotId: string;
         intelligenceSnapshotDigest: string;
         primaryIntent: string;
         semanticCoverageRequirements: string[];
-        userNeeds?: string[];
+        userNeeds: string[];
       };
     };
   };

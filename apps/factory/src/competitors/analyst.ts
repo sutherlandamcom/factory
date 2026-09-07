@@ -46,13 +46,24 @@ export interface CompetitorAnalystResult {
   } | null;
 }
 
+export interface CompiledCompetitorInvocation {
+  model: string;
+  provider: string;
+  systemPrompt: string;
+  userPrompt: string;
+  maxTokens: number;
+}
+
 export interface CompetitorAnalystModel {
   readonly model: string;
   readonly provider: string;
   readonly promptVersion: string;
   readonly promptDigest: string;
   readonly maxTokens?: number;
-  analyze(request: CompetitorAnalystRequest): Promise<CompetitorAnalystResult>;
+  analyze(
+    request: CompetitorAnalystRequest,
+    compiled?: CompiledCompetitorInvocation,
+  ): Promise<CompetitorAnalystResult>;
 }
 
 export const COMPETITOR_ANALYST_PROMPT_VERSION = "competitor-analyst-v1";
@@ -136,6 +147,19 @@ export type CompetitorAnalystModelDeps = {
   maxTokens?: number;
 };
 
+export function compileCompetitorInvocation(
+  request: CompetitorAnalystRequest,
+  analyst: { model: string; provider: string; maxTokens?: number },
+): CompiledCompetitorInvocation {
+  return {
+    model: analyst.model,
+    provider: analyst.provider,
+    systemPrompt: COMPETITOR_ANALYST_SYSTEM_PROMPT,
+    userPrompt: buildCompetitorAnalystPrompt(request),
+    maxTokens: analyst.maxTokens ?? 8192,
+  };
+}
+
 /**
  * OpenRouter-backed competitor analyst (production path). Uses the EXISTING
  * search_analyst model path (configured Gemini Flash via the model gateway);
@@ -161,8 +185,11 @@ export class OpenRouterCompetitorAnalyst implements CompetitorAnalystModel {
     });
   }
 
-  async analyze(request: CompetitorAnalystRequest): Promise<CompetitorAnalystResult> {
-    const prompt = buildCompetitorAnalystPrompt(request);
+  async analyze(
+    request: CompetitorAnalystRequest,
+    compiled?: CompiledCompetitorInvocation,
+  ): Promise<CompetitorAnalystResult> {
+    const prompt = compiled?.userPrompt ?? buildCompetitorAnalystPrompt(request);
     const promptDigest = deterministicDigest(prompt);
     const packetDigest = deterministicDigest(request.packet);
     const { text, usage } = await this.callModel(prompt);

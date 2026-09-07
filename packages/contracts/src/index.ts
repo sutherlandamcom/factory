@@ -399,6 +399,7 @@ export {
   gapAcceptInputSchema,
   parseGapDecisionsInput,
   parseGapAcceptInput,
+  acceptedSearchSemanticsSchema,
 } from "./competitor-content-gap.js";
 export type {
   CompetitorErrorCode,
@@ -429,4 +430,5 @@ export type {
   EvidenceSegment,
   GapDecisionsInput,
   GapAcceptInput,
+  AcceptedSearchSemantics,
 } from "./competitor-content-gap.js";

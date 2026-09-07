@@ -255,6 +255,37 @@ export function ContentGapsPage({ projectId }: { projectId: string }) {
               {detail.stale ? `Upstream evidence changed: ${detail.staleReasons.join(" ")}` : "This report has been accepted."}
             </div>
           )}
+          {detail.report.data.searchSemantics && (
+            <Section title="Search intelligence semantics">
+              <div className="space-y-2 text-xs text-gray-700">
+                <div data-testid="search-primary-intent">
+                  <span className="font-semibold text-gray-800">Primary search intent: </span>
+                  <span className="font-mono text-indigo-700">{detail.report.data.searchSemantics.primaryIntent}</span>
+                </div>
+                <div>
+                  <span className="font-semibold text-gray-800">Semantic coverage requirements: </span>
+                  <ul className="mt-1 list-disc pl-5 space-y-0.5" data-testid="search-coverage-requirements">
+                    {detail.report.data.searchSemantics.semanticCoverageRequirements.map((req, i) => (
+                      <li key={i}>{req}</li>
+                    ))}
+                  </ul>
+                </div>
+                {detail.report.data.searchSemantics.userNeeds && detail.report.data.searchSemantics.userNeeds.length > 0 && (
+                  <div>
+                    <span className="font-semibold text-gray-800">User needs: </span>
+                    <ul className="mt-1 list-disc pl-5 space-y-0.5" data-testid="search-user-needs">
+                      {detail.report.data.searchSemantics.userNeeds.map((need, i) => (
+                        <li key={i}>{need}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <div className="text-gray-400">
+                  Bound intelligence: <code className="font-mono">{detail.report.data.searchSemantics.intelligenceSnapshotDigest.slice(0, 16)}…</code>
+                </div>
+              </div>
+            </Section>
+          )}
           <Section title={`Review gaps (${detail.report.data.gaps.length})`}>
             <div className="mb-2 flex flex-wrap gap-4 text-xs text-gray-500">
               <span>Report digest: <code className="font-mono">{detail.report.snapshotDigest.slice(0, 16)}…</code></span>
@@ -395,6 +426,26 @@ export function ContentGapsPage({ projectId }: { projectId: string }) {
             <div>Decisions digest: {acceptedDetail.snapshot.decisionsDigest.slice(0, 16)}…</div>
             <div>Accepted: {new Date(acceptedDetail.snapshot.acceptedAt).toLocaleString()}</div>
           </div>
+          {acceptedDetail.snapshot.data.searchSemantics && (
+            <div className="mt-4 rounded-md border border-gray-100 bg-gray-50 p-3 text-xs text-gray-700">
+              <div className="font-semibold text-gray-800 mb-1">Accepted search semantics:</div>
+              <div data-testid="accepted-primary-intent">
+                <span className="font-medium">Primary intent: </span>
+                <span className="font-mono text-indigo-700">{acceptedDetail.snapshot.data.searchSemantics.primaryIntent}</span>
+              </div>
+              <div className="mt-1">
+                <span className="font-medium">Coverage requirements: </span>
+                <ul className="mt-0.5 list-disc pl-5 space-y-0.5" data-testid="accepted-coverage-requirements">
+                  {acceptedDetail.snapshot.data.searchSemantics.semanticCoverageRequirements.map((req, i) => (
+                    <li key={i}>{req}</li>
+                  ))}
+                </ul>
+              </div>
+              <div className="mt-1 text-gray-400">
+                Bound intelligence: <code className="font-mono">{acceptedDetail.snapshot.data.searchSemantics.intelligenceSnapshotDigest.slice(0, 16)}…</code>
+              </div>
+            </div>
+          )}
           <ul className="mt-2 list-disc pl-5 text-sm text-gray-700">
             {acceptedDetail.snapshot.data.gaps.map((g) => (
               <li key={g.id} className="mb-2">

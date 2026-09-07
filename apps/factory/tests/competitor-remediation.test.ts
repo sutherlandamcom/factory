@@ -5,20 +5,37 @@ import {
   collectFirstPartyEvidence,
   validateGapFirstPartyRefs,
   decisionsDigest,
+  finalizeGapReport,
   type GapGroundingContext,
 } from "../src/competitors/gap-engine.js";
 import {
   CompetitorContentGapService,
   RESERVED_PAGE_ANALYSIS_COST_MICROS,
   RESERVED_GAP_ANALYSIS_COST_MICROS,
+  computeSemanticInputDigest,
 } from "../src/competitors/service.js";
 import { CompetitorStore } from "../src/competitors/competitor-store.js";
 import { SearchIntelligenceService } from "../src/search/service.js";
-import { OpenRouterGapAnalyst } from "../src/competitors/gap-analyst.js";
+import {
+  OpenRouterGapAnalyst,
+  buildGapAnalystPrompt,
+  GAP_ANALYST_PROMPT_VERSION,
+  GAP_ANALYST_SYSTEM_PROMPT,
+} from "../src/competitors/gap-analyst.js";
 import { OpenRouterSearchAnalyst } from "../src/search/analyst.js";
-import { contentGapSchema, type ContentGap } from "@factory/contracts";
+import {
+  contentGapSchema,
+  acceptedSearchSemanticsSchema,
+  parseAcceptedContentGapSnapshotData,
+  type ContentGap,
+} from "@factory/contracts";
 import { FactoryError } from "../src/executor/errors.js";
 import { deterministicDigest } from "../src/intelligence/digest.js";
+import {
+  calculateConservativeInvocationCostMicros,
+  calculateInvocationActualCostMicros,
+  getModelPricing,
+} from "../src/models/index.js";
 
 function createValidGap(overrides: Partial<ContentGap> = {}): ContentGap {
   return {
@@ -565,7 +582,7 @@ test("classification overrides: proposeGaps excludes candidates overridden to EX
         id: "intel-1",
         snapshotDigest: "i".repeat(64),
         data: {
-          primaryIntent: "Intent",
+          primaryIntent: "commercial",
           userNeeds: ["Need 1"],
           questions: ["Q1"],
           semanticCoverageRequirements: ["Req 1"],
@@ -2489,6 +2506,454 @@ test("P1-03: evidenceRefs referencing non-INCLUDE (REFERENCE_ONLY) page fails cl
       /only INCLUDE pages may represent competitive coverage/i.test(err.message),
   );
 });
+
+// ---------------------------------------------------------------------------
+// Item 1: Budget Proof & Hard Ceiling Tests
+// ---------------------------------------------------------------------------
+
+test("P1-01 adversarial: spent + reservations + worstCase <= limit hard ceiling enforcement", async () => {
+  const store = new CompetitorStore({} as never);
+  const dailyLimitUsd = 1.0; // $1.00 = 1,000,000 micros
+  const budgetMicros = 1_000_000;
+
+  // Mock sumTodayCompetitorCostMicros
+  let mockSpent = 800_000; // $0.80 already spent
+  store.sumTodayCompetitorCostMicros = async () => mockSpent;
+
+  // Reservation 1: 150_000 micros ($0.15) -> 800k + 0 + 150k = 950k <= 1M -> SUCCEEDS
+  const release1 = await store.reserveBudget(150_000, dailyLimitUsd);
+  assert.equal(store.activeReservations, 150_000);
+
+  // Reservation 2: 60_000 micros ($0.06) -> 800k + 150k + 60k = 1,010,000 > 1M -> FAILS CLOSED
+  await assert.rejects(
+    () => store.reserveBudget(60_000, dailyLimitUsd),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "competitor_budget_blocked" &&
+      /Daily competitor budget reached/i.test(err.message),
+  );
+  // Active reservations remained untouched
+  assert.equal(store.activeReservations, 150_000);
+
+  // Release reservation 1
+  release1();
+  assert.equal(store.activeReservations, 0);
+
+  // Now reservation 2 of 60_000 can succeed: 800k + 0 + 60k = 860k <= 1M
+  const release2 = await store.reserveBudget(60_000, dailyLimitUsd);
+  assert.equal(store.activeReservations, 60_000);
+  release2();
+  assert.equal(store.activeReservations, 0);
+});
+
+test("P1-01: unpriced model fails closed before provider execution", () => {
+  assert.throws(
+    () =>
+      calculateConservativeInvocationCostMicros({
+        model: "google/gemini-unknown-model-xyz",
+        provider: "openrouter",
+        inputChars: 50_000,
+        maxOutputTokens: 8192,
+      }),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "competitor_analyst_not_configured" &&
+      /No trusted pricing configuration found/i.test(err.message),
+  );
+});
+
+test("P1-01: unbounded maxOutputTokens fails closed", () => {
+  assert.throws(
+    () =>
+      calculateConservativeInvocationCostMicros({
+        model: "google/gemini-3.7-flash",
+        provider: "openrouter",
+        inputChars: 50_000,
+        maxOutputTokens: undefined,
+      }),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "competitor_analyst_not_configured" &&
+      /requires an explicit bounded maxOutputTokens/i.test(err.message),
+  );
+});
+
+test("P1-01: calculateInvocationActualCostMicros computes correct cost for Gemini 3.7 Flash", () => {
+  // Rate: $0.25 / 1M prompt ($0.00000025/token), $1.00 / 1M completion ($0.00000100/token)
+  const cost = calculateInvocationActualCostMicros({
+    model: "google/gemini-3.7-flash",
+    provider: "openrouter",
+    promptTokens: 10_000, // 10,000 * 0.00000025 = $0.0025 = 2,500 micros
+    completionTokens: 2_000, // 2,000 * 0.00000100 = $0.0020 = 2,000 micros
+  });
+  assert.equal(cost, 4500); // 4,500 micros
+});
+
+test("P1-01: fixture calls incur zero external cost in pricing calculation", () => {
+  const conservative = calculateConservativeInvocationCostMicros({
+    model: "fixture-competitor-analyst",
+    provider: "fixture",
+    inputChars: 100_000,
+    maxOutputTokens: 8192,
+  });
+  assert.equal(conservative, 0);
+
+  const actual = calculateInvocationActualCostMicros({
+    model: "fixture-competitor-analyst",
+    provider: "fixture",
+    promptTokens: 50_000,
+    completionTokens: 4_000,
+  });
+  assert.equal(actual, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Item 2: Semantic Dedupe Key Tests
+// ---------------------------------------------------------------------------
+
+test("P1-02: semanticInputDigest changes when project offerings change with identical HTML", () => {
+  const baseExtractionDigest = "extraction_hash_12345";
+  const baseSearchContext = {
+    primaryIntent: "commercial",
+    userNeeds: ["roof inspection", "cost estimates"],
+    semanticCoverageRequirements: ["warranty details", "pricing breakdown"],
+    questions: ["how much does it cost?"],
+  };
+
+  const digestA = computeSemanticInputDigest({
+    extractionDigest: baseExtractionDigest,
+    projectInputSnapshotDigest: "input_digest_v1",
+    intelligenceSnapshotDigest: "intel_digest_v1",
+    projectContext: {
+      businessName: "Austin Roofing",
+      offering: ["Residential roof repairs"],
+    },
+    searchContext: baseSearchContext,
+  });
+
+  const digestB = computeSemanticInputDigest({
+    extractionDigest: baseExtractionDigest, // SAME HTML/extraction!
+    projectInputSnapshotDigest: "input_digest_v2",
+    intelligenceSnapshotDigest: "intel_digest_v1",
+    projectContext: {
+      businessName: "Austin Roofing",
+      offering: ["Commercial metal roofing and solar"], // CHANGED offering!
+    },
+    searchContext: baseSearchContext,
+  });
+
+  assert.notEqual(digestA, digestB, "Changing project context MUST produce a different semanticInputDigest");
+});
+
+test("P1-02: semanticInputDigest changes when search intelligence intent/requirements change with identical HTML", () => {
+  const baseExtractionDigest = "extraction_hash_12345";
+  const projectContext = {
+    businessName: "Austin Roofing",
+    offering: ["Residential roof repairs"],
+  };
+
+  const digestA = computeSemanticInputDigest({
+    extractionDigest: baseExtractionDigest,
+    projectInputSnapshotDigest: "input_digest_v1",
+    intelligenceSnapshotDigest: "intel_digest_v1",
+    projectContext,
+    searchContext: {
+      primaryIntent: "commercial",
+      userNeeds: ["roof inspection"],
+      semanticCoverageRequirements: ["warranty details"],
+    },
+  });
+
+  const digestB = computeSemanticInputDigest({
+    extractionDigest: baseExtractionDigest, // SAME HTML/extraction!
+    projectInputSnapshotDigest: "input_digest_v1",
+    intelligenceSnapshotDigest: "intel_digest_v2", // New search intelligence snapshot
+    projectContext,
+    searchContext: {
+      primaryIntent: "informational", // CHANGED intent!
+      userNeeds: ["how to fix a leak yourself"],
+      semanticCoverageRequirements: ["safety precautions", "materials list"],
+    },
+  });
+
+  assert.notEqual(digestA, digestB, "Changing search intelligence context MUST produce a different semanticInputDigest");
+});
+
+test("P1-02: semanticInputDigest matches when HTML and all semantic contexts are identical", () => {
+  const params = {
+    extractionDigest: "extraction_hash_12345",
+    projectInputSnapshotDigest: "input_digest_v1",
+    intelligenceSnapshotDigest: "intel_digest_v1",
+    projectContext: {
+      businessName: "Austin Roofing",
+      offering: ["Residential roof repairs"],
+    },
+    searchContext: {
+      primaryIntent: "commercial",
+      userNeeds: ["roof inspection"],
+      semanticCoverageRequirements: ["warranty details"],
+    },
+  };
+
+  const digest1 = computeSemanticInputDigest(params);
+  const digest2 = computeSemanticInputDigest(params);
+  assert.equal(digest1, digest2, "Identical inputs MUST produce identical semanticInputDigest");
+});
+
+// ---------------------------------------------------------------------------
+// Item 3: Gap Analyst Contract Alignment Tests
+// ---------------------------------------------------------------------------
+
+test("P1-03: prompt version is gap-analyst-v2 and prompt specifies ABSENT vs non-ABSENT schema rules", () => {
+  assert.equal(GAP_ANALYST_PROMPT_VERSION, "gap-analyst-v2");
+
+  assert.ok(GAP_ANALYST_SYSTEM_PROMPT.includes("evidenceRefs MUST be empty []"), "System prompt must specify empty evidenceRefs for ABSENT");
+  assert.ok(GAP_ANALYST_SYSTEM_PROMPT.includes("competitorsCoveringIt MUST be empty []"), "System prompt must specify empty competitorsCoveringIt for ABSENT");
+  assert.ok(GAP_ANALYST_SYSTEM_PROMPT.includes("Every evidenceRef's pageSnapshotId MUST be included in competitorsCoveringIt"), "System prompt must specify cross-binding rule");
+
+  const prompt = buildGapAnalystPrompt({
+    analyses: [],
+    searchIntelligence: {
+      primaryIntent: "commercial",
+      userNeeds: ["need 1"],
+      questions: ["q 1"],
+      topics: ["t 1"],
+    },
+    serpSnapshot: { id: "serp-1", digest: "d1" },
+    intelligenceSnapshot: { id: "intel-1", digest: "d2" },
+    acceptedEvidence: [],
+    projectContext: { businessName: "Test Co", prohibitedClaims: [] },
+    coverageMatrixSummary: [],
+  });
+
+  assert.ok(prompt.includes("If competitorCoverage is ABSENT"), "Task prompt must specify ABSENT rule");
+  assert.ok(prompt.includes("evidenceRefs: [] and competitorsCoveringIt: []"), "Task prompt must specify empty arrays for ABSENT");
+  assert.ok(prompt.includes("Every evidenceRef pageSnapshotId must be in competitorsCoveringIt"), "Task prompt must specify cross-binding rule");
+});
+
+// ---------------------------------------------------------------------------
+// Item 4: Explicit Accepted Search Semantics Tests
+// ---------------------------------------------------------------------------
+
+test("P1-04: finalizeGapReport materializes searchSemantics and accepted snapshot preserves them", () => {
+  const searchSemantics = {
+    intelligenceSnapshotId: "intel-101",
+    intelligenceSnapshotDigest: "intel_digest_abc".repeat(4).slice(0, 64),
+    primaryIntent: "commercial" as const,
+    semanticCoverageRequirements: ["Roof inspection pricing", "Material warranties"],
+    userNeeds: ["Clear breakdown of repair options"],
+  };
+
+  // 1. Schema check
+  assert.doesNotThrow(() => acceptedSearchSemanticsSchema.parse(searchSemantics));
+
+  // 2. finalizeGapReport check
+  const reportData = finalizeGapReport({
+    modelGaps: {
+      gaps: [createValidGap()],
+      differentiationRequirements: { items: [] },
+    },
+    serpSnapshotId: "serp-1",
+    serpSnapshotDigest: "s".repeat(64),
+    intelligenceSnapshotId: "intel-101",
+    intelligenceSnapshotDigest: searchSemantics.intelligenceSnapshotDigest,
+    searchSemantics,
+    pageSnapshotRefs: [{ id: "page-1", digest: "p".repeat(64) }],
+    analysisRefs: [{ id: "analysis-1", digest: "a".repeat(64) }],
+    acceptedInputSnapshotId: "snap-1",
+    acceptedInputSnapshotVersion: 1,
+    acceptedInputDigest: "i".repeat(64),
+    classificationDigest: "c".repeat(64),
+    effectiveClassifications: [{ pageSnapshotId: "page-1", classification: "INCLUDE" }],
+    coverageMatrix: { policyVersion: "matrix-v1", rows: [] },
+    acceptedEvidence: [{ field: "operatorFacts", index: 0, text: "Operator operates since 2019" }],
+    model: "fixture-gap-analyst",
+    provider: "fixture",
+    promptVersion: "gap-analyst-v2",
+  });
+
+  assert.ok(reportData.searchSemantics, "Report data must contain searchSemantics");
+  assert.equal(reportData.searchSemantics?.primaryIntent, "commercial");
+  assert.deepEqual(reportData.searchSemantics?.semanticCoverageRequirements, [
+    "Roof inspection pricing",
+    "Material warranties",
+  ]);
+
+  // 3. Acceptance snapshot preserves searchSemantics
+  const acceptedData = parseAcceptedContentGapSnapshotData({
+    ...reportData,
+    gaps: [
+      {
+        ...createValidGap(),
+        disposition: "REQUIRED",
+        priority: "HIGH",
+        note: "Accepted note",
+        recommendedDisposition: "REQUIRED",
+        recommendedPriority: "HIGH",
+      },
+    ],
+    decisions: [
+      {
+        gapId: "gap-001",
+        disposition: "REQUIRED",
+        priority: "HIGH",
+        note: "Accepted note",
+      },
+    ],
+    reviewState: "accepted",
+  });
+
+  assert.ok(acceptedData.searchSemantics, "Accepted snapshot data must preserve searchSemantics");
+  assert.equal(acceptedData.searchSemantics?.primaryIntent, "commercial");
+  assert.deepEqual(acceptedData.searchSemantics?.semanticCoverageRequirements, [
+    "Roof inspection pricing",
+    "Material warranties",
+  ]);
+});
+
+// ---------------------------------------------------------------------------
+// Item 5: Coverage <-> Evidence Cross-Binding & Coverage Matrix Consistency
+// ---------------------------------------------------------------------------
+
+test("P1-05: evidenceRef pageSnapshotId not present in competitorsCoveringIt fails closed in schema and engine", () => {
+  const gap = createValidGap({
+    competitorCoverage: "STRONG",
+    competitorsCoveringIt: ["page-1"],
+    // page-2 is NOT in competitorsCoveringIt!
+    evidenceRefs: [{ pageSnapshotId: "page-2", segmentId: "seg-201" }],
+  });
+  const ctx = createGroundingContext({
+    pageSnapshots: [
+      { id: "page-1", digest: "p1".repeat(32), classification: "INCLUDE", validSegmentIds: new Set(["seg-101"]) },
+      { id: "page-2", digest: "p2".repeat(32), classification: "INCLUDE", validSegmentIds: new Set(["seg-201"]) },
+    ],
+    analyses: [
+      { id: "analysis-1", digest: "a1".repeat(32), pageSnapshotId: "page-1" },
+      { id: "analysis-2", digest: "a2".repeat(32), pageSnapshotId: "page-2" },
+    ],
+  });
+
+  // Schema refinement failure
+  assert.throws(
+    () => contentGapSchema.parse(gap),
+    (err: unknown) => /not present in competitorsCoveringIt/i.test(String(err)),
+  );
+
+  // Engine validation failure
+  assert.throws(
+    () => validateContentGapGrounding([gap], ctx),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "content_gap_invalid" &&
+      /not present in competitorsCoveringIt/i.test(err.message),
+  );
+});
+
+test("P1-05: competitor in competitorsCoveringIt evaluated as ABSENT in deterministic coverage matrix fails closed", () => {
+  const gap = createValidGap({
+    userNeed: "Understand rental yield calculation",
+    competitorCoverage: "PARTIAL",
+    competitorsCoveringIt: ["page-1"],
+    evidenceRefs: [{ pageSnapshotId: "page-1", segmentId: "seg-101" }],
+  });
+
+  // Deterministic matrix evaluated page-1 as ABSENT for "Understand rental yield calculation"
+  const ctx = createGroundingContext({
+    coverageMatrix: {
+      policyVersion: "matrix-v1",
+      rows: [
+        {
+          requirement: "Understand rental yield calculation",
+          cells: [
+            { pageSnapshotId: "page-1", domain: "example.com", level: "ABSENT" },
+          ],
+        },
+      ],
+    },
+  });
+
+  assert.throws(
+    () => validateContentGapGrounding([gap], ctx),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "content_gap_invalid" &&
+      /evaluated it as ABSENT/i.test(err.message),
+  );
+});
+
+test("P1-05: all-ABSENT coverage matrix with non-ABSENT model coverage fails closed", () => {
+  const gap = createValidGap({
+    userNeed: "Understand rental yield calculation",
+    competitorCoverage: "STRONG",
+    competitorsCoveringIt: ["page-3"],
+    evidenceRefs: [{ pageSnapshotId: "page-3", segmentId: "seg-301" }],
+  });
+
+  const ctx = createGroundingContext({
+    pageSnapshots: [
+      { id: "page-1", digest: "p1".repeat(32), classification: "INCLUDE", validSegmentIds: new Set(["seg-101"]) },
+      { id: "page-2", digest: "p2".repeat(32), classification: "INCLUDE", validSegmentIds: new Set(["seg-201"]) },
+      { id: "page-3", digest: "p3".repeat(32), classification: "INCLUDE", validSegmentIds: new Set(["seg-301"]) },
+    ],
+    analyses: [
+      { id: "analysis-1", digest: "a1".repeat(32), pageSnapshotId: "page-1" },
+      { id: "analysis-2", digest: "a2".repeat(32), pageSnapshotId: "page-2" },
+      { id: "analysis-3", digest: "a3".repeat(32), pageSnapshotId: "page-3" },
+    ],
+    coverageMatrix: {
+      policyVersion: "matrix-v1",
+      rows: [
+        {
+          requirement: "Understand rental yield calculation",
+          cells: [
+            { pageSnapshotId: "page-1", domain: "example.com", level: "ABSENT" },
+            { pageSnapshotId: "page-2", domain: "other.com", level: "ABSENT" },
+          ],
+        },
+      ],
+    },
+  });
+
+  assert.throws(
+    () => validateContentGapGrounding([gap], ctx),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "content_gap_invalid" &&
+      /evaluated all competitors as ABSENT/i.test(err.message),
+  );
+});
+
+test("P1-05: STRONG coverage matrix with ABSENT model coverage fails closed", () => {
+  const gap = createValidGap({
+    userNeed: "Understand rental yield calculation",
+    competitorCoverage: "ABSENT",
+    competitorsCoveringIt: [],
+    evidenceRefs: [],
+  });
+
+  const ctx = createGroundingContext({
+    coverageMatrix: {
+      policyVersion: "matrix-v1",
+      rows: [
+        {
+          requirement: "Understand rental yield calculation",
+          cells: [
+            { pageSnapshotId: "page-1", domain: "example.com", level: "STRONG" },
+          ],
+        },
+      ],
+    },
+  });
+
+  assert.throws(
+    () => validateContentGapGrounding([gap], ctx),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "content_gap_invalid" &&
+      /found STRONG competitor coverage/i.test(err.message),
+  );
+});
+
 
 
 

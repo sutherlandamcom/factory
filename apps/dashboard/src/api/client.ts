@@ -383,6 +383,13 @@ export interface ContentGapReportDetail {
       differentiationRequirements: {
         items: Array<{ requirement: string; basis: string; rationale: string }>;
       };
+      searchSemantics?: {
+        intelligenceSnapshotId: string;
+        intelligenceSnapshotDigest: string;
+        primaryIntent: string;
+        semanticCoverageRequirements: string[];
+        userNeeds?: string[];
+      };
     };
   };
   decisions: GapDecisionView[];

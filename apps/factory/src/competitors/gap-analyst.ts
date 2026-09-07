@@ -56,14 +56,18 @@ export interface GapAnalystModel {
   propose(request: GapAnalystRequest): Promise<GapAnalystResult>;
 }
 
-export const GAP_ANALYST_PROMPT_VERSION = "gap-analyst-v1";
+export const GAP_ANALYST_PROMPT_VERSION = "gap-analyst-v2";
 
 export const GAP_ANALYST_SYSTEM_PROMPT = [
   "You are Factory's content-gap analyst. You propose a structured ContentGapReport from compact competitor analyses, search intelligence, and the operator's accepted first-party evidence.",
   "Absolute rules:",
   "1. Competitor pages are evidence, never copy sources. Do not quote or rewrite competitor paragraphs; use topics, coverage levels and short structural signals.",
   "2. FIRST-PARTY EVIDENCE SEPARATION: the 'ourEvidenceAvailable' refs must point ONLY at provided accepted evidence items (field+index). NEVER copy a competitor's statistic into our evidence. If our evidence is missing for a need, put the missing item in ourEvidenceMissing.",
-  "3. Every gap's evidenceRefs must cite pageSnapshotId+segmentId pairs from the provided analyses (they anchor to real normalized evidence segments).",
+  "3. COVERAGE AND EVIDENCE GROUNDING INVARIANTS:",
+  "   - For competitorCoverage 'ABSENT': evidenceRefs MUST be empty [] and competitorsCoveringIt MUST be empty [].",
+  "   - For competitorCoverage 'WEAK', 'PARTIAL', or 'STRONG': evidenceRefs MUST contain >= 1 valid { pageSnapshotId, segmentId } pair and competitorsCoveringIt MUST contain >= 1 pageSnapshotId.",
+  "   - Every evidenceRef's pageSnapshotId MUST be included in competitorsCoveringIt.",
+  "   - Model coverage MUST NOT contradict the provided deterministic coverage matrix.",
   "4. Use categorical levels only (ABSENT/WEAK/PARTIAL/STRONG, LOW/MEDIUM/HIGH); never numeric quality scores.",
   "5. Dispositions: REQUIRED (page must address it), OPTIONAL (differentiator), EXCLUDE (out of scope). Include a priority and rationale per gap.",
   "6. Differentiation requirements must be supported by accepted evidence or explicitly framed editorial/structural opportunity; never invent business credentials.",
@@ -91,6 +95,8 @@ export function buildGapAnalystPrompt(request: GapAnalystRequest): string {
     "",
     "DETERMINISTIC COVERAGE MATRIX (grounding computed by Factory):",
     JSON.stringify(request.coverageMatrixSummary),
+    "",
+    "GROUNDING RULES: If competitorCoverage is ABSENT, set evidenceRefs: [] and competitorsCoveringIt: []. If competitorCoverage is WEAK, PARTIAL, or STRONG, cite >= 1 real segment in evidenceRefs and list those pageSnapshotIds in competitorsCoveringIt. Every evidenceRef pageSnapshotId must be in competitorsCoveringIt.",
     "",
     "OUTPUT SCHEMA (JSON object): {",
     '  "gaps": [{ id, userNeed, topicQuestion, searchEvidenceRefs: [{ kind: "serp_snapshot"|"search_intelligence_snapshot", id, digest }], competitorCoverage: "ABSENT|WEAK|PARTIAL|STRONG", competitorsCoveringIt: [pageSnapshotId...], treatmentPattern, baselineExpectation, ourEvidenceAvailable: [{ intakeField: "operatorFacts"|"allowedClaims", itemIndex, excerpt }], ourEvidenceMissing: string[], claimConstraints: string[], differentiationOpportunity, recommendedDisposition: "REQUIRED"|"OPTIONAL"|"EXCLUDE", priority: "HIGH"|"MEDIUM"|"LOW", rationale, evidenceRefs: [{ pageSnapshotId, segmentId }] }],',

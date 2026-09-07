@@ -1,5 +1,6 @@
 import {
   parseAcceptedContentGapSnapshotData,
+  type AcceptedSearchSemantics,
   type CompetitorAcquisitionStatus,
   type CompetitorCandidate,
   type CompetitorClassification,
@@ -34,9 +35,13 @@ import {
 import {
   FixtureGapAnalyst,
   OpenRouterGapAnalyst,
+  GAP_ANALYST_SYSTEM_PROMPT,
   type GapAnalystModel,
 } from "./gap-analyst.js";
-import { calculateConservativeInvocationCostMicros } from "../models/index.js";
+import {
+  calculateConservativeInvocationCostMicros,
+  calculateInvocationActualCostMicros,
+} from "../models/index.js";
 
 /**
  * CompetitorContentGapService — the governed application service (P6).
@@ -207,6 +212,48 @@ export interface GapWorkspaceReadModel {
 }
 
 // ---------------------------------------------------------------------------
+// Semantic input digest
+// ---------------------------------------------------------------------------
+
+/**
+ * Deterministic semantic input digest for competitor page analysis.
+ * Binds page extraction identity, accepted project inputs, and search intelligence context.
+ * Guarantees that any change in business context, offerings, or search intent triggers
+ * a fresh model analysis rather than reusing stale outputs.
+ */
+export function computeSemanticInputDigest(input: {
+  extractionDigest: string;
+  projectInputSnapshotDigest?: string | null;
+  intelligenceSnapshotDigest?: string | null;
+  projectContext: {
+    businessName: string;
+    offering: unknown;
+  };
+  searchContext: {
+    primaryIntent: string;
+    userNeeds: unknown;
+    semanticCoverageRequirements: unknown;
+    questions?: unknown;
+  };
+}): string {
+  return deterministicDigest({
+    extractionDigest: input.extractionDigest,
+    projectInputSnapshotDigest: input.projectInputSnapshotDigest ?? null,
+    intelligenceSnapshotDigest: input.intelligenceSnapshotDigest ?? null,
+    projectContext: {
+      businessName: input.projectContext.businessName,
+      offering: input.projectContext.offering,
+    },
+    searchContext: {
+      primaryIntent: input.searchContext.primaryIntent,
+      userNeeds: input.searchContext.userNeeds,
+      semanticCoverageRequirements: input.searchContext.semanticCoverageRequirements,
+      questions: input.searchContext.questions ?? [],
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
 
@@ -248,12 +295,20 @@ export class CompetitorContentGapService {
     return () => {};
   }
 
-  private async reservePageAnalysisBudget(extracted: CompetitorPageExtracted): Promise<() => void> {
+  private async reservePageAnalysisBudget(
+    extracted: CompetitorPageExtracted,
+    projectContext?: Record<string, unknown>,
+    searchContext?: Record<string, unknown>,
+  ): Promise<() => void> {
+    const systemChars = COMPETITOR_ANALYST_SYSTEM_PROMPT.length;
     const packetChars = JSON.stringify(extracted).length + 4000;
+    const projectChars = projectContext ? JSON.stringify(projectContext).length : 2000;
+    const searchChars = searchContext ? JSON.stringify(searchContext).length : 4000;
+    const totalInputChars = systemChars + packetChars + projectChars + searchChars;
     const estimatedCostMicros = calculateConservativeInvocationCostMicros({
       model: this.deps.competitorAnalyst.model,
       provider: this.deps.competitorAnalyst.provider,
-      inputChars: packetChars,
+      inputChars: totalInputChars,
       maxOutputTokens: this.deps.competitorAnalyst.maxTokens,
     });
     const reservationMicros =
@@ -263,11 +318,24 @@ export class CompetitorContentGapService {
     return await this.checkBudget(reservationMicros);
   }
 
-  private async reserveGapAnalysisBudget(estimatedInputChars = 80_000): Promise<() => void> {
+  private async reserveGapAnalysisBudget(
+    contextOrChars: {
+      candidateCount?: number;
+      intelligenceChars?: number;
+      actualChars?: number;
+    } | number = 80_000,
+  ): Promise<() => void> {
+    const inputChars =
+      typeof contextOrChars === "number"
+        ? contextOrChars
+        : contextOrChars.actualChars ??
+          GAP_ANALYST_SYSTEM_PROMPT.length +
+            (contextOrChars.candidateCount ?? 10) * 12_000 +
+            (contextOrChars.intelligenceChars ?? 8_000);
     const estimatedCostMicros = calculateConservativeInvocationCostMicros({
       model: this.deps.gapAnalyst.model,
       provider: this.deps.gapAnalyst.provider,
-      inputChars: estimatedInputChars,
+      inputChars,
       maxOutputTokens: this.deps.gapAnalyst.maxTokens,
     });
     const reservationMicros =
@@ -422,20 +490,52 @@ export class CompetitorContentGapService {
       // Deduped snapshots reuse prior compatible analysis without paid model calls.
       const pageRows = await this.deps.competitorStore.listPageSnapshotsForRun(run.id);
       const intakePayload = accepted.payload as Record<string, unknown>;
+      const projectContext = {
+        businessName: String(((intakePayload.business ?? {}) as Record<string, unknown>).name ?? ""),
+        offering: ((intakePayload.business ?? {}) as Record<string, unknown>).offerings ?? [],
+      };
+      const searchContext = {
+        primaryIntent: intelData.primaryIntent,
+        userNeeds: intelData.userNeeds.slice(0, 10),
+        semanticCoverageRequirements: intelData.semanticCoverageRequirements.slice(0, 10),
+        questions: intelData.questions.slice(0, 10),
+      };
+
       let analyzedCount = 0;
       for (const pageRow of pageRows) {
         if (pageRow.acquisitionStatus !== "SUCCESS" || !pageRow.extracted) continue;
         if (analyzedCount >= maxPages) break;
         if (pageRow.classification !== "INCLUDE") continue;
 
+        const semanticDigest = computeSemanticInputDigest({
+          extractionDigest: pageRow.extractionDigest ?? pageRow.contentDigest ?? pageRow.id,
+          projectInputSnapshotDigest: accepted.digest,
+          intelligenceSnapshotDigest: intelligence.snapshotDigest,
+          projectContext,
+          searchContext,
+        });
+
+        // Check direct analysis reuse
+        const directAnalysis = await this.deps.competitorStore.findAnalysisForPage(
+          pageRow.id,
+          this.deps.competitorAnalyst.model,
+          this.deps.competitorAnalyst.promptVersion,
+          semanticDigest,
+        );
+        if (directAnalysis) {
+          analyzedCount++;
+          continue;
+        }
+
         if (pageRow.dedupedFromSnapshotId) {
           const priorAnalysis = await this.deps.competitorStore.findAnalysisForPage(
             pageRow.dedupedFromSnapshotId,
             this.deps.competitorAnalyst.model,
             this.deps.competitorAnalyst.promptVersion,
+            semanticDigest,
           );
           if (priorAnalysis) {
-            // P1-01: Reuse prior compatible analysis without paid model calls.
+            // P1-01 / P1-02: Reuse prior compatible analysis without paid model calls.
             // Rebind evidenceSegmentRefs to current pageSnapshotId to maintain current run lineage.
             const priorData = priorAnalysis.data as CompetitorPageAnalysisData;
             const reboundData: CompetitorPageAnalysisData = {
@@ -453,6 +553,7 @@ export class CompetitorContentGapService {
               projectId: input.projectId,
               pageSnapshotId: pageRow.id,
               reusedFromAnalysisId: priorAnalysis.id,
+              semanticInputDigest: semanticDigest,
               model: priorAnalysis.model,
               provider: priorAnalysis.provider,
               promptVersion: priorAnalysis.promptVersion,
@@ -468,7 +569,11 @@ export class CompetitorContentGapService {
           }
         }
 
-        const release = await this.reservePageAnalysisBudget(pageRow.extracted as CompetitorPageExtracted);
+        const release = await this.reservePageAnalysisBudget(
+          pageRow.extracted as CompetitorPageExtracted,
+          projectContext,
+          searchContext,
+        );
         try {
           await this.analyzePage({
             runId: run.id,
@@ -479,6 +584,7 @@ export class CompetitorContentGapService {
             observedAt: pageRow.observedAt,
             intelligence: intelData,
             intakePayload,
+            semanticInputDigest: semanticDigest,
           });
         } finally {
           release();
@@ -536,7 +642,7 @@ export class CompetitorContentGapService {
         extractionDigest: deterministicDigest(extracted),
         extracted,
         contentDigest,
-        dedupedFromSnapshotId: dedupeTarget && dedupeTarget.id !== null ? dedupeTarget.id : null,
+        dedupedFromSnapshotId: dedupeTarget?.id ?? null,
         rawTruncated: false,
         provider: this.pageProvider.id,
       });
@@ -575,12 +681,14 @@ export class CompetitorContentGapService {
     observedAt: Date;
     intelligence: SearchIntelligenceData;
     intakePayload: Record<string, unknown>;
+    semanticInputDigest?: string;
   }): Promise<void> {
-    // Analysis dedupe: same page + model + prompt version => reuse.
+    // Analysis dedupe: same page + model + prompt version + semantic digest => reuse.
     const existing = await this.deps.competitorStore.findAnalysisForPage(
       input.pageRowId,
       this.deps.competitorAnalyst.model,
       this.deps.competitorAnalyst.promptVersion,
+      input.semanticInputDigest,
     );
     if (existing) return;
 
@@ -615,6 +723,7 @@ export class CompetitorContentGapService {
       runId: input.runId,
       projectId: input.projectId,
       pageSnapshotId: input.pageRowId,
+      semanticInputDigest: input.semanticInputDigest ?? null,
       model: result.model,
       provider: result.provider,
       promptVersion: result.promptVersion,
@@ -872,6 +981,14 @@ export class CompetitorContentGapService {
         .sort((a, b) => (a.pageSnapshotId < b.pageSnapshotId ? -1 : a.pageSnapshotId > b.pageSnapshotId ? 1 : 0));
       const classificationDigest = deterministicDigest(effectiveClassifications);
 
+      const searchSemantics: AcceptedSearchSemantics = {
+        intelligenceSnapshotId: intelRow.id,
+        intelligenceSnapshotDigest: intelRow.snapshotDigest,
+        primaryIntent: intelData.primaryIntent,
+        semanticCoverageRequirements: intelData.semanticCoverageRequirements,
+        userNeeds: intelData.userNeeds,
+      };
+
       const reportData = finalizeGapReport({
         modelGaps: {
           gaps: gapResult.gaps,
@@ -881,6 +998,7 @@ export class CompetitorContentGapService {
         serpSnapshotDigest: run.serpSnapshotDigest,
         intelligenceSnapshotId: intelRow.id,
         intelligenceSnapshotDigest: intelRow.snapshotDigest,
+        searchSemantics,
         pageSnapshotRefs: pageRows.map((p) => ({ id: p.id, digest: p.snapshotDigest })),
         analysisRefs: analysisRows.map((a) => ({ id: a.id, digest: a.snapshotDigest })),
         acceptedInputSnapshotId: accepted.id,
@@ -1598,13 +1716,28 @@ export function buildCompetitorAnalysts(env: NodeJS.ProcessEnv, invokeModelFn: t
       },
       { loadApiKey: () => apiKey },
     );
+    let costMicros: number | null = null;
+    if (result.costUsd != null && result.costUsd > 0) {
+      costMicros = Math.round(result.costUsd * 1_000_000);
+    } else if (result.promptTokens != null && result.completionTokens != null) {
+      costMicros = calculateInvocationActualCostMicros({
+        model: "google/gemini-3.7-flash",
+        provider: "openrouter",
+        promptTokens: result.promptTokens,
+        completionTokens: result.completionTokens,
+      });
+    }
+    // Fail-closed spend guarantee: paid Gemini calls are never counted as zero spend
+    if (costMicros == null || costMicros === 0) {
+      costMicros = 10_000;
+    }
     return {
       text: result.content,
       usage: {
         inputTokens: result.promptTokens,
         outputTokens: result.completionTokens,
         totalTokens: result.totalTokens,
-        costMicros: result.costUsd != null ? Math.round(result.costUsd * 1_000_000) : null,
+        costMicros,
       },
     };
   };

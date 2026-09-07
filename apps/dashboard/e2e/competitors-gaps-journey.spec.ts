@@ -101,6 +101,11 @@ test.describe("Competitors + Content Gap journey", () => {
     await page.getByRole("button", { name: "Propose gap report", exact: true }).click();
     await expect(page.locator("text=Review gaps (")).toBeVisible({ timeout: 60_000 });
 
+    // Item 4: Explicit Search Semantics visible in Review
+    await expect(page.locator("text=Search intelligence semantics")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("search-primary-intent")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("search-coverage-requirements")).toBeVisible({ timeout: 10_000 });
+
     // Edit every gap decision (disposition + priority + note).
     const gapCards = page.locator("div.rounded-md.border", { hasText: "competitor coverage:" });
     const count = await gapCards.count();
@@ -123,6 +128,10 @@ test.describe("Competitors + Content Gap journey", () => {
     await expect(page.locator("text=REQUIRED (HIGH)").first()).toBeVisible({ timeout: 10_000 });
     await expect(page.locator("text=Note: e2e note 0")).toBeVisible({ timeout: 10_000 });
 
+    // Item 4: Accepted view renders accepted search semantics
+    await expect(page.getByTestId("accepted-primary-intent")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("accepted-coverage-requirements")).toBeVisible({ timeout: 10_000 });
+
     // Accept button is hidden after acceptance
     await expect(page.getByRole("button", { name: /Accept as v/ })).not.toBeVisible();
 
@@ -137,6 +146,8 @@ test.describe("Competitors + Content Gap journey", () => {
     await expect(page.locator("text=Accepted snapshot v1 (immutable)")).toBeVisible({ timeout: 15_000 });
     await expect(page.locator("text=REQUIRED (HIGH)").first()).toBeVisible();
     await expect(page.locator("text=Note: e2e note 0")).toBeVisible();
+    await expect(page.getByTestId("accepted-primary-intent")).toBeVisible();
+    await expect(page.getByTestId("accepted-coverage-requirements")).toBeVisible();
 
     // ---- Real operator restart WITHOUT database reset ----
     await supervisorCall("/restart");
@@ -148,6 +159,8 @@ test.describe("Competitors + Content Gap journey", () => {
     await expect(page.locator("text=Accepted versions")).toBeVisible({ timeout: 15_000 });
     await page.locator("button", { hasText: "v1" }).first().click();
     await expect(page.locator("text=Accepted snapshot v1 (immutable)")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("accepted-primary-intent")).toBeVisible();
+    await expect(page.getByTestId("accepted-coverage-requirements")).toBeVisible();
     // v1 stays inspectable; digest-bound lineage visible.
     await expect(page.locator("text=Report digest:").first()).toBeVisible();
     await expect(page.locator("text=REQUIRED (HIGH)").first()).toBeVisible();

@@ -5,6 +5,7 @@ import {
   type ContentGap,
   type CoverageLevel,
   type CoverageMatrix,
+  type AcceptedSearchSemantics,
 } from "@factory/contracts";
 import { deterministicDigest } from "../intelligence/digest.js";
 import { FactoryError } from "../executor/errors.js";
@@ -204,6 +205,7 @@ export interface GapGroundingContext {
     digest: string;
     pageSnapshotId: string;
   }>;
+  coverageMatrix?: CoverageMatrix;
   acceptedEvidence?: FirstPartyEvidenceItem[];
 }
 
@@ -221,8 +223,9 @@ export interface GapGroundingContext {
  * 3. evidenceRefs:
  *    - pageSnapshotId must resolve to an analyzed INCLUDE page in this run
  *    - segmentId must exist in that exact snapshot's extracted segments
- * 4. pageSnapshotRefs & analysisRefs:
- *    - cross-checks IDs + digests against persisted dependencies; rejects mismatches
+ * 4. coverage <-> evidence cross-binding & matrix consistency:
+ *    - every evidenceRef pageSnapshotId must belong to competitorsCoveringIt
+ *    - model coverage must not contradict the deterministic coverage matrix
  * 5. first-party evidence:
  *    - separate from competitor claims; exact excerpt check
  */
@@ -350,6 +353,70 @@ export function validateContentGapGrounding(
         }
       }
     }
+
+    // 4b. Coverage <-> evidence cross-binding: every evidenceRef pageSnapshotId must belong to competitorsCoveringIt
+    if (gap.competitorCoverage !== "ABSENT") {
+      const coveringSet = new Set(gap.competitorsCoveringIt);
+      for (const evRef of gap.evidenceRefs) {
+        if (!coveringSet.has(evRef.pageSnapshotId)) {
+          throw new FactoryError(
+            "content_gap_invalid",
+            `gap "${gap.id}" has evidenceRef for page "${evRef.pageSnapshotId}" that is not present in competitorsCoveringIt (fail closed)`,
+          );
+        }
+      }
+    }
+
+    // 4c. Deterministic coverage matrix consistency (when matrix is provided)
+    if (context.coverageMatrix) {
+      const reqTokens = (gap.userNeed || "")
+        .toLowerCase()
+        .split(/[^a-zà-ÿ0-9]+/)
+        .filter((t) => t.length >= 4);
+
+      const matchingRow = context.coverageMatrix.rows.find((row) => {
+        const rowTokens = row.requirement
+          .toLowerCase()
+          .split(/[^a-zà-ÿ0-9]+/)
+          .filter((t) => t.length >= 4);
+        return (
+          row.requirement.toLowerCase().trim() === gap.userNeed.toLowerCase().trim() ||
+          (reqTokens.length > 0 &&
+            rowTokens.length > 0 &&
+            reqTokens.every((rt) => rowTokens.some((at) => at.startsWith(rt) || rt.startsWith(at))))
+        );
+      });
+
+      if (matchingRow) {
+        // A competitor in competitorsCoveringIt cannot be evaluated as ABSENT in the deterministic coverage matrix
+        for (const competitorId of gap.competitorsCoveringIt) {
+          const cell = matchingRow.cells.find((c) => c.pageSnapshotId === competitorId);
+          if (cell && cell.level === "ABSENT") {
+            throw new FactoryError(
+              "content_gap_invalid",
+              `gap "${gap.id}" claims competitor "${competitorId}" covers requirement "${matchingRow.requirement}", but deterministic coverage matrix evaluated it as ABSENT (fail closed)`,
+            );
+          }
+        }
+
+        const maxLevel = matchingRow.cells.reduce(
+          (acc, c) => (LEVEL_ORDER[c.level] > LEVEL_ORDER[acc] ? c.level : acc),
+          "ABSENT" as CoverageLevel,
+        );
+        if (maxLevel === "ABSENT" && gap.competitorCoverage !== "ABSENT") {
+          throw new FactoryError(
+            "content_gap_invalid",
+            `gap "${gap.id}" claims ${gap.competitorCoverage} coverage for requirement "${matchingRow.requirement}", but deterministic coverage matrix evaluated all competitors as ABSENT (fail closed)`,
+          );
+        }
+        if (maxLevel === "STRONG" && gap.competitorCoverage === "ABSENT") {
+          throw new FactoryError(
+            "content_gap_invalid",
+            `gap "${gap.id}" claims ABSENT coverage for requirement "${matchingRow.requirement}", but deterministic coverage matrix found STRONG competitor coverage (fail closed)`,
+          );
+        }
+      }
+    }
   }
 
   // 5. First-party evidence separation validation (when provided in context)
@@ -368,6 +435,7 @@ export function finalizeGapReport(input: {
   serpSnapshotDigest: string;
   intelligenceSnapshotId: string;
   intelligenceSnapshotDigest: string;
+  searchSemantics?: AcceptedSearchSemantics;
   pageSnapshotRefs: Array<{ id: string; digest: string }>;
   analysisRefs: Array<{ id: string; digest: string }>;
   acceptedInputSnapshotId: string;
@@ -391,6 +459,7 @@ export function finalizeGapReport(input: {
     serpSnapshotDigest: input.serpSnapshotDigest,
     intelligenceSnapshotId: input.intelligenceSnapshotId,
     intelligenceSnapshotDigest: input.intelligenceSnapshotDigest,
+    searchSemantics: input.searchSemantics,
     pageSnapshotRefs: input.pageSnapshotRefs,
     analysisRefs: input.analysisRefs,
     acceptedInputSnapshotId: input.acceptedInputSnapshotId,
@@ -409,6 +478,7 @@ export function finalizeGapReport(input: {
   const data = parseContentGapReportData(report);
 
   if (input.grounding) {
+    input.grounding.coverageMatrix = input.coverageMatrix;
     const pageMap = new Map(input.grounding.pageSnapshots.map((p) => [p.id, p]));
     for (const ref of input.pageSnapshotRefs) {
       const page = pageMap.get(ref.id);

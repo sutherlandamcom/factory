@@ -22,8 +22,20 @@ export interface ModelTokenPricing {
  */
 export const TRUSTED_MODEL_PRICING: Readonly<Record<string, ModelTokenPricing>> = {
   "google/gemini-3.7-flash": {
-    promptUsdPerToken: 0.00000025, // $0.25 per million tokens
-    completionUsdPerToken: 0.00000100, // $1.00 per million tokens
+    promptUsdPerToken: 0.00000025, // $0.25 per million tokens (catalog: $0.15/1M)
+    completionUsdPerToken: 0.00000100, // $1.00 per million tokens (catalog: $0.60/1M)
+  },
+  "google/gemini-2.5-flash": {
+    promptUsdPerToken: 0.00000025,
+    completionUsdPerToken: 0.00000100,
+  },
+  "google/gemini-2.0-flash-001": {
+    promptUsdPerToken: 0.00000020,
+    completionUsdPerToken: 0.00000080,
+  },
+  "google/gemini-1.5-flash": {
+    promptUsdPerToken: 0.00000020,
+    completionUsdPerToken: 0.00000080,
   },
   "fixture-competitor-analyst": {
     promptUsdPerToken: 0,
@@ -37,6 +49,27 @@ export const TRUSTED_MODEL_PRICING: Readonly<Record<string, ModelTokenPricing>> 
 
 export function getModelPricing(model: string): ModelTokenPricing | null {
   return TRUSTED_MODEL_PRICING[model] ?? null;
+}
+
+/**
+ * Compute actual cost in micros given actual prompt and completion tokens.
+ * Returns null if model is unpriced (fail closed caller).
+ */
+export function calculateInvocationActualCostMicros(params: {
+  model: string;
+  provider: string;
+  promptTokens: number;
+  completionTokens: number;
+}): number | null {
+  if (params.provider === "fixture" || params.model.startsWith("fixture-")) {
+    return 0;
+  }
+  const pricing = getModelPricing(params.model);
+  if (!pricing) return null;
+  const costUsd =
+    params.promptTokens * pricing.promptUsdPerToken +
+    params.completionTokens * pricing.completionUsdPerToken;
+  return Math.max(1, Math.round(costUsd * 1_000_000));
 }
 
 /**

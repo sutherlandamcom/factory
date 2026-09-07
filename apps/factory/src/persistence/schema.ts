@@ -668,6 +668,7 @@ export const competitorPageAnalyses = pgTable(
       .notNull()
       .references(() => competitorPageSnapshots.id, { onDelete: "cascade" }),
     reusedFromAnalysisId: text("reused_from_analysis_id"),
+    semanticInputDigest: text("semantic_input_digest"),
     model: text("model").notNull(),
     provider: text("provider").notNull(),
     promptVersion: text("prompt_version").notNull(),
@@ -688,6 +689,7 @@ export const competitorPageAnalyses = pgTable(
     index("competitor_page_analyses_project_idx").on(table.projectId, table.createdAt),
     index("competitor_page_analyses_page_idx").on(table.pageSnapshotId),
     index("competitor_page_analyses_reused_from_idx").on(table.reusedFromAnalysisId),
+    index("competitor_page_analyses_semantic_digest_idx").on(table.semanticInputDigest),
   ],
 );
 

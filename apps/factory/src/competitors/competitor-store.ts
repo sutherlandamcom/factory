@@ -344,6 +344,7 @@ export class CompetitorStore {
     projectId: string;
     pageSnapshotId: string;
     reusedFromAnalysisId?: string | null;
+    semanticInputDigest?: string | null;
     model: string;
     provider: string;
     promptVersion: string;
@@ -363,6 +364,7 @@ export class CompetitorStore {
       promptVersion: input.promptVersion,
       packetDigest: input.packetDigest,
       reusedFromAnalysisId: input.reusedFromAnalysisId ?? null,
+      semanticInputDigest: input.semanticInputDigest ?? null,
       data,
     });
     const [row] = await this.db
@@ -373,6 +375,7 @@ export class CompetitorStore {
         projectId: input.projectId,
         pageSnapshotId: input.pageSnapshotId,
         reusedFromAnalysisId: input.reusedFromAnalysisId ?? null,
+        semanticInputDigest: input.semanticInputDigest ?? null,
         model: input.model,
         provider: input.provider,
         promptVersion: input.promptVersion,
@@ -404,25 +407,27 @@ export class CompetitorStore {
   }
 
   /**
-   * Analysis reuse: same page snapshot + same model + same prompt version
-   * proves analysis equivalence (no duplicate model spend for identical
-   * content within the same analysis policy).
+   * Analysis reuse: same page snapshot + same model + same prompt version +
+   * matching semantic inputs (when provided) proves analysis equivalence.
    */
   async findAnalysisForPage(
     pageSnapshotId: string,
     model: string,
     promptVersion: string,
+    semanticInputDigest?: string,
   ): Promise<CompetitorPageAnalysisRecord | null> {
+    const conditions = [
+      eq(competitorPageAnalyses.pageSnapshotId, pageSnapshotId),
+      eq(competitorPageAnalyses.model, model),
+      eq(competitorPageAnalyses.promptVersion, promptVersion),
+    ];
+    if (semanticInputDigest) {
+      conditions.push(eq(competitorPageAnalyses.semanticInputDigest, semanticInputDigest));
+    }
     const [row] = await this.db
       .select()
       .from(competitorPageAnalyses)
-      .where(
-        and(
-          eq(competitorPageAnalyses.pageSnapshotId, pageSnapshotId),
-          eq(competitorPageAnalyses.model, model),
-          eq(competitorPageAnalyses.promptVersion, promptVersion),
-        ),
-      )
+      .where(and(...conditions))
       .orderBy(desc(competitorPageAnalyses.createdAt))
       .limit(1);
     return row ?? null;
@@ -899,13 +904,23 @@ export class CompetitorStore {
   /**
    * Budget gate input: recorded model/analysis cost today (UTC) from
    * competitor page analyses AND PASS-2 aggregate content gap proposals.
-   * Null costs (UNKNOWN) are uncounted, never fabricated. SERP acquisition
-   * cost lives in the search domain's own gate.
+   *
+   * Fail-closed guarantee: for paid providers without explicit cost,
+   * unknown spend is bounded by the conservative invocation ceiling
+   * (never counted as zero spend).
    */
   async sumTodayCompetitorCostMicros(): Promise<number> {
     const [pageRow] = await this.db
       .select({
-        total: sql<number>`coalesce(sum((${competitorPageAnalyses.usage} -> 'costMicros')::numeric), 0)`,
+        total: sql<number>`coalesce(sum(
+          case
+            when ${competitorPageAnalyses.provider} = 'fixture' or ${competitorPageAnalyses.reusedFromAnalysisId} is not null
+              then coalesce((${competitorPageAnalyses.usage} -> 'costMicros')::numeric, 0)
+            when coalesce((${competitorPageAnalyses.usage} -> 'costMicros')::numeric, 0) > 0
+              then (${competitorPageAnalyses.usage} -> 'costMicros')::numeric
+            else 10000
+          end
+        ), 0)`,
       })
       .from(competitorPageAnalyses)
       .where(
@@ -913,7 +928,15 @@ export class CompetitorStore {
       );
     const [gapRow] = await this.db
       .select({
-        total: sql<number>`coalesce(sum((${contentGapReports.usage} -> 'costMicros')::numeric), 0)`,
+        total: sql<number>`coalesce(sum(
+          case
+            when ${contentGapReports.provider} = 'fixture'
+              then coalesce((${contentGapReports.usage} -> 'costMicros')::numeric, 0)
+            when coalesce((${contentGapReports.usage} -> 'costMicros')::numeric, 0) > 0
+              then (${contentGapReports.usage} -> 'costMicros')::numeric
+            else 20000
+          end
+        ), 0)`,
       })
       .from(contentGapReports)
       .where(
@@ -926,6 +949,9 @@ export class CompetitorStore {
   }
 
   private activeReservationsMicros = 0;
+  get activeReservations(): number {
+    return this.activeReservationsMicros;
+  }
   private reservationLock = Promise.resolve();
 
   private async withReservationLock<T>(fn: () => Promise<T>): Promise<T> {

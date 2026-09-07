@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { searchIntentSchema } from "./search-intelligence.js";
 
 /**
  * Competitor + Content Gap contracts (Macro Run 3, v0).
@@ -398,6 +399,18 @@ export function refineContentGapGrounding<
         path: ["competitorsCoveringIt"],
       });
     }
+    if (gap.evidenceRefs && gap.competitorsCoveringIt) {
+      const coveringSet = new Set(gap.competitorsCoveringIt);
+      for (const [idx, ref] of gap.evidenceRefs.entries()) {
+        if (!coveringSet.has(ref.pageSnapshotId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `gap "${gap.id}" has evidenceRef for page "${ref.pageSnapshotId}" not present in competitorsCoveringIt`,
+            path: ["evidenceRefs", idx, "pageSnapshotId"],
+          });
+        }
+      }
+    }
   } else {
     // For ABSENT coverage, competitors do not cover this requirement.
     if (gap.competitorsCoveringIt && gap.competitorsCoveringIt.length > 0) {
@@ -446,12 +459,29 @@ export const effectiveClassificationItemSchema = z
   .strict();
 export type EffectiveClassificationItem = z.infer<typeof effectiveClassificationItemSchema>;
 
+/**
+ * Explicit search semantics bound to the gap report and accepted snapshot.
+ * Preserves the exact search intent and semantic coverage requirements from
+ * the authoritative Search Intelligence snapshot without a second SOT.
+ */
+export const acceptedSearchSemanticsSchema = z
+  .object({
+    intelligenceSnapshotId: idSchema,
+    intelligenceSnapshotDigest: digestSchema,
+    primaryIntent: searchIntentSchema,
+    semanticCoverageRequirements: z.array(boundedText(500)).max(30),
+    userNeeds: z.array(boundedText(500)).max(30).optional(),
+  })
+  .strict();
+export type AcceptedSearchSemantics = z.infer<typeof acceptedSearchSemanticsSchema>;
+
 export const contentGapReportDataSchema = z
   .object({
     serpSnapshotId: idSchema,
     serpSnapshotDigest: digestSchema,
     intelligenceSnapshotId: idSchema,
     intelligenceSnapshotDigest: digestSchema,
+    searchSemantics: acceptedSearchSemanticsSchema.optional(),
     pageSnapshotRefs: z
       .array(z.object({ id: idSchema, digest: digestSchema }).strict())
       .max(10),
@@ -549,6 +579,7 @@ export const acceptedContentGapSnapshotDataSchema = z
     serpSnapshotDigest: digestSchema,
     intelligenceSnapshotId: idSchema,
     intelligenceSnapshotDigest: digestSchema,
+    searchSemantics: acceptedSearchSemanticsSchema.optional(),
     pageSnapshotRefs: z
       .array(z.object({ id: idSchema, digest: digestSchema }).strict())
       .max(10),

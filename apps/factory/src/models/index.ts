@@ -32,6 +32,7 @@ export {
   FACTORY_MODEL_PRICING_POLICY_VERSION,
   TRUSTED_MODEL_PRICING,
   calculateConservativeInvocationCostMicros,
+  calculateInvocationActualCostMicros,
   getModelPricing,
   type ModelTokenPricing,
 } from "./pricing.js";

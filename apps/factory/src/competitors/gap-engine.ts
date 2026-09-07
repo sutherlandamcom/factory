@@ -328,6 +328,8 @@ export function finalizeGapReport(input: {
   acceptedInputSnapshotId: string;
   acceptedInputSnapshotVersion: number;
   acceptedInputDigest: string;
+  classificationDigest?: string;
+  effectiveClassifications?: Array<{ pageSnapshotId: string; classification: "INCLUDE" | "EXCLUDE" | "REFERENCE_ONLY"; reason?: string }>;
   coverageMatrix: CoverageMatrix;
   model: string;
   provider: string;
@@ -349,6 +351,8 @@ export function finalizeGapReport(input: {
     acceptedInputSnapshotId: input.acceptedInputSnapshotId,
     acceptedInputSnapshotVersion: input.acceptedInputSnapshotVersion,
     acceptedInputDigest: input.acceptedInputDigest,
+    classificationDigest: input.classificationDigest,
+    effectiveClassifications: input.effectiveClassifications,
     coverageMatrix: input.coverageMatrix,
     gaps,
     differentiationRequirements: { items: Array.isArray(differentiation) ? differentiation : [] },

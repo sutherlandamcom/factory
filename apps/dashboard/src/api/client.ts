@@ -4,7 +4,7 @@
  * and renders the canonical ProjectOperatorWorkspace read-model.
  */
 
-import type { OperatorErrorCode } from "@factory/contracts";
+import { OPERATOR_ERROR_CODES, type OperatorErrorCode } from "@factory/contracts";
 
 export interface ApiErrorBody {
   error?: { code?: string; message?: string };
@@ -73,36 +73,6 @@ export interface ProjectOperatorWorkspace {
   status: IntakeReadiness["status"];
   nextActions: string[];
 }
-
-const OPERATOR_ERROR_CODES: readonly OperatorErrorCode[] = [
-  "invalid_json",
-  "validation_error",
-  "payload_too_large",
-  "unsupported_media_type",
-  "invalid_host",
-  "cross_origin_forbidden",
-  "not_found",
-  "invalid_version",
-  "intake_stale_revision",
-  "intake_blocked",
-  "intake_revision_mismatch",
-  "intake_digest_mismatch",
-  "intake_draft_not_found",
-  "intake_schema_invalid",
-  "search_input_not_accepted",
-  "search_query_invalid",
-  "search_provider_not_configured",
-  "search_provider_unavailable",
-  "search_provider_auth_failed",
-  "search_provider_budget_blocked",
-  "search_provider_rate_limited",
-  "search_response_invalid",
-  "search_normalization_failed",
-  "search_intelligence_invalid",
-  "search_run_not_found",
-  "search_run_failed",
-  "internal_error",
-];
 
 const OPERATOR_ERROR_CODES_SET = new Set<string>(OPERATOR_ERROR_CODES);
 
@@ -254,18 +224,55 @@ export const api = {
   saveGapDecisions: (
     projectId: string,
     reportId: string,
-    decisions: Array<{ gapId: string; disposition: "REQUIRED" | "OPTIONAL" | "EXCLUDE"; priority?: "HIGH" | "MEDIUM" | "LOW"; note?: string }>,
-  ) =>
-    request<{ ok: boolean }>(
+    input:
+      | {
+          expectedReviewRevision?: number;
+          decisions: Array<{
+            gapId: string;
+            disposition: "REQUIRED" | "OPTIONAL" | "EXCLUDE";
+            priority?: "HIGH" | "MEDIUM" | "LOW";
+            note?: string;
+          }>;
+        }
+      | Array<{
+          gapId: string;
+          disposition: "REQUIRED" | "OPTIONAL" | "EXCLUDE";
+          priority?: "HIGH" | "MEDIUM" | "LOW";
+          note?: string;
+        }>,
+  ) => {
+    const body = Array.isArray(input) ? { decisions: input } : input;
+    return request<{ ok: boolean; reviewRevision?: number; decisionsDigest?: string }>(
       `/api/projects/${encodeURIComponent(projectId)}/content-gaps/reports/${encodeURIComponent(reportId)}/decisions`,
-      { method: "PUT", body: JSON.stringify({ decisions }) },
-    ),
+      { method: "PUT", body: JSON.stringify(body) },
+    );
+  },
 
-  acceptContentGaps: (projectId: string, reportId: string, expectedDigest: string) =>
-    request<{ version: number; snapshotId: string }>(
+  acceptContentGaps: (
+    projectId: string,
+    reportId: string,
+    input:
+      | string
+      | {
+          expectedReportDigest?: string;
+          expectedDigest?: string;
+          expectedReviewRevision?: number;
+          expectedDecisionsDigest?: string;
+        },
+  ) => {
+    const body =
+      typeof input === "string"
+        ? { expectedDigest: input }
+        : {
+            expectedReportDigest: input.expectedReportDigest ?? input.expectedDigest,
+            expectedReviewRevision: input.expectedReviewRevision,
+            expectedDecisionsDigest: input.expectedDecisionsDigest,
+          };
+    return request<{ version: number; snapshotId: string }>(
       `/api/projects/${encodeURIComponent(projectId)}/content-gaps/reports/${encodeURIComponent(reportId)}/accept`,
-      { method: "POST", body: JSON.stringify({ expectedDigest }) },
-    ),
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  },
 
   getAcceptedGapDetail: (projectId: string, version: number) =>
     request<AcceptedGapDetail>(
@@ -354,6 +361,8 @@ export interface ContentGapReportDetail {
     id: string;
     snapshotDigest: string;
     reviewState: string;
+    reviewRevision: number;
+    decisionsDigest: string | null;
     createdAt: string;
     model: string;
     provider: string;

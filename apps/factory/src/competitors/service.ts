@@ -772,6 +772,18 @@ export class CompetitorContentGapService {
       }
     }
 
+    const effectiveClassifications = allPageRows
+      .map((r) => {
+        const override = overrides.get(r.id);
+        const classification = (override?.classification ?? r.classification) as CompetitorClassification;
+        return {
+          pageSnapshotId: r.id,
+          classification,
+        };
+      })
+      .sort((a, b) => (a.pageSnapshotId < b.pageSnapshotId ? -1 : a.pageSnapshotId > b.pageSnapshotId ? 1 : 0));
+    const classificationDigest = deterministicDigest(effectiveClassifications);
+
     const reportData = finalizeGapReport({
       modelGaps: {
         gaps: gapResult.gaps,
@@ -786,6 +798,8 @@ export class CompetitorContentGapService {
       acceptedInputSnapshotId: accepted.id,
       acceptedInputSnapshotVersion: accepted.version,
       acceptedInputDigest: accepted.digest,
+      classificationDigest,
+      effectiveClassifications,
       coverageMatrix: matrix,
       model: gapResult.model,
       provider: gapResult.provider,
@@ -812,6 +826,15 @@ export class CompetitorContentGapService {
       },
     });
 
+    const usage = gapResult.usage
+      ? {
+          inputTokens: gapResult.usage.inputTokens ?? null,
+          outputTokens: gapResult.usage.outputTokens ?? null,
+          totalTokens: gapResult.usage.totalTokens ?? null,
+          costMicros: gapResult.usage.costMicros ?? null,
+        }
+      : null;
+
     const report = await this.deps.competitorStore.insertGapReport({
       runId: run.id,
       projectId: input.projectId,
@@ -825,6 +848,7 @@ export class CompetitorContentGapService {
       model: gapResult.model,
       provider: gapResult.provider,
       promptVersion: gapResult.promptVersion,
+      usage,
       data: reportData,
     });
     return { reportId: report.id };
@@ -844,6 +868,8 @@ export class CompetitorContentGapService {
       intelligenceSnapshotDigest: string;
       pageSnapshotRefs: Array<{ id: string; digest: string }>;
       analysisRefs: Array<{ id: string; digest: string }>;
+      classificationDigest?: string;
+      effectiveClassifications?: Array<{ pageSnapshotId: string; classification: CompetitorClassification; reason?: string }>;
       competitorRunId?: string;
     },
   ): Promise<{ stale: boolean; staleReasons: string[] }> {
@@ -978,6 +1004,30 @@ export class CompetitorContentGapService {
       }
     }
 
+    // 6. Bound candidate classification overrides
+    if (bound.classificationDigest && bound.effectiveClassifications && bound.effectiveClassifications.length > 0) {
+      const pageIds = bound.effectiveClassifications.map((c) => c.pageSnapshotId);
+      const overrides = await this.deps.competitorStore.getLatestClassificationOverridesForPages(projectId, pageIds);
+      const pages = await this.deps.competitorStore.pageSnapshotsByIds(projectId, pageIds);
+      const pageMap = new Map(pages.map((p) => [p.id, p]));
+      const currentEffective = bound.effectiveClassifications
+        .map((item) => {
+          const page = pageMap.get(item.pageSnapshotId);
+          const baseClassification = page?.classification ?? item.classification;
+          const override = overrides.get(item.pageSnapshotId);
+          const effective = (override?.classification ?? baseClassification) as CompetitorClassification;
+          return {
+            pageSnapshotId: item.pageSnapshotId,
+            classification: effective,
+          };
+        })
+        .sort((a, b) => (a.pageSnapshotId < b.pageSnapshotId ? -1 : a.pageSnapshotId > b.pageSnapshotId ? 1 : 0));
+      const currentDigest = deterministicDigest(currentEffective);
+      if (currentDigest !== bound.classificationDigest) {
+        reasons.push("Competitor candidate classification changed.");
+      }
+    }
+
     return { stale: reasons.length > 0, staleReasons: reasons };
   }
 
@@ -1005,12 +1055,16 @@ export class CompetitorContentGapService {
         intelligenceSnapshotDigest: report.intelligenceSnapshotDigest,
         pageSnapshotRefs: data.pageSnapshotRefs ?? [],
         analysisRefs: data.analysisRefs ?? [],
+        classificationDigest: data.classificationDigest,
+        effectiveClassifications: data.effectiveClassifications,
         competitorRunId: report.runId,
       });
       reportModels.push({
         id: report.id,
         snapshotDigest: report.snapshotDigest,
         reviewState: report.reviewState,
+        reviewRevision: report.reviewRevision,
+        decisionsDigest: report.decisionsDigest,
         createdAt: report.createdAt.toISOString(),
         gapCounts,
         serpSnapshotId: report.serpSnapshotId,
@@ -1024,6 +1078,8 @@ export class CompetitorContentGapService {
         gaps: Array<{ recommendedDisposition: string; disposition?: string }>;
         pageSnapshotRefs?: Array<{ id: string; digest: string }>;
         analysisRefs?: Array<{ id: string; digest: string }>;
+        classificationDigest?: string;
+        effectiveClassifications?: Array<{ pageSnapshotId: string; classification: CompetitorClassification }>;
       };
       const staleness = await this.evaluateUpstreamStaleness(projectId, {
         acceptedInputSnapshotId: snap.acceptedInputSnapshotId,
@@ -1035,6 +1091,8 @@ export class CompetitorContentGapService {
         intelligenceSnapshotDigest: snap.intelligenceSnapshotDigest,
         pageSnapshotRefs: (snap.pageSnapshotRefs as Array<{ id: string; digest: string }>) ?? [],
         analysisRefs: (snap.analysisRefs as Array<{ id: string; digest: string }>) ?? [],
+        classificationDigest: data.classificationDigest,
+        effectiveClassifications: data.effectiveClassifications,
       });
       acceptedModels.push({
         id: snap.id,
@@ -1090,6 +1148,8 @@ export class CompetitorContentGapService {
       intelligenceSnapshotDigest: report.intelligenceSnapshotDigest,
       pageSnapshotRefs: reportData.pageSnapshotRefs ?? [],
       analysisRefs: reportData.analysisRefs ?? [],
+      classificationDigest: reportData.classificationDigest,
+      effectiveClassifications: reportData.effectiveClassifications,
       competitorRunId: report.runId,
     });
     return {
@@ -1097,6 +1157,8 @@ export class CompetitorContentGapService {
         id: report.id,
         snapshotDigest: report.snapshotDigest,
         reviewState: report.reviewState,
+        reviewRevision: report.reviewRevision,
+        decisionsDigest: report.decisionsDigest,
         createdAt: report.createdAt.toISOString(),
         model: report.model,
         provider: report.provider,
@@ -1115,8 +1177,9 @@ export class CompetitorContentGapService {
   async saveGapDecisions(input: {
     projectId: string;
     reportId: string;
+    expectedReviewRevision?: number;
     decisions: Array<{ gapId: string; disposition: CompetitorClassification | string; priority?: string | null; note?: string | null }>;
-  }): Promise<void> {
+  }): Promise<{ reviewRevision: number; decisionsDigest: string }> {
     const report = await this.deps.competitorStore.getGapReport(input.projectId, input.reportId);
     if (!report) throw new FactoryError("content_gap_report_not_found", "Content gap report not found.");
     if (report.reviewState === "accepted") {
@@ -1149,41 +1212,85 @@ export class CompetitorContentGapService {
         `Every gap requires a decision (${data.gaps.length} gaps, ${input.decisions.length} decisions).`,
       );
     }
+
+    const normalizedDecisions = input.decisions.map((d) => ({
+      gapId: d.gapId,
+      disposition: d.disposition,
+      priority: d.priority ?? null,
+      note: d.note === undefined || d.note === null ? null : String(d.note).slice(0, 500),
+    }));
+
+    if (input.expectedReviewRevision !== undefined) {
+      return await this.deps.competitorStore.saveGapDecisionsWithConcurrency({
+        projectId: input.projectId,
+        reportId: input.reportId,
+        expectedReviewRevision: input.expectedReviewRevision,
+        decisions: normalizedDecisions,
+      });
+    }
+
     await this.deps.competitorStore.replaceDecisions(
       input.projectId,
       input.reportId,
-      input.decisions.map((d) => ({
-        gapId: d.gapId,
-        disposition: d.disposition,
-        priority: d.priority ?? null,
-        note: d.note === undefined || d.note === null ? null : String(d.note).slice(0, 500),
-      })),
+      normalizedDecisions,
     );
-    if (report.reviewState === "model_proposed") {
-      await this.deps.competitorStore.markGapReportReviewed(report.id);
-    }
+    const updated = await this.deps.competitorStore.getGapReport(input.projectId, input.reportId);
+    return {
+      reviewRevision: updated?.reviewRevision ?? report.reviewRevision + 1,
+      decisionsDigest: updated?.decisionsDigest ?? computeDecisionsDigest(report.snapshotDigest, normalizedDecisions),
+    };
   }
 
   async acceptGapReport(input: {
     projectId: string;
     reportId: string;
-    expectedDigest: string;
+    expectedReportDigest?: string;
+    expectedDigest?: string;
+    expectedReviewRevision?: number;
+    expectedDecisionsDigest?: string;
   }): Promise<{ version: number; snapshotId: string }> {
     const report = await this.deps.competitorStore.getGapReport(input.projectId, input.reportId);
     if (!report) throw new FactoryError("content_gap_report_not_found", "Content gap report not found.");
 
+    const expectedReportDigest = input.expectedReportDigest ?? input.expectedDigest;
     // Fail closed: acceptance binds the exact digest the operator reviewed.
-    if (input.expectedDigest !== report.snapshotDigest) {
+    if (!expectedReportDigest || expectedReportDigest !== report.snapshotDigest) {
       throw new FactoryError(
         "content_gap_accept_failed",
         "Report digest mismatch: the report changed since review. Re-review and retry.",
       );
     }
 
+    if (input.expectedReviewRevision !== undefined && report.reviewRevision !== input.expectedReviewRevision) {
+      throw new FactoryError(
+        "content_gap_accept_failed",
+        `Review revision mismatch: review was updated concurrently (expected rev ${input.expectedReviewRevision}, current rev ${report.reviewRevision}). Re-review and retry.`,
+      );
+    }
+
+    if (
+      input.expectedDecisionsDigest !== undefined &&
+      (!report.decisionsDigest || report.decisionsDigest !== input.expectedDecisionsDigest)
+    ) {
+      throw new FactoryError(
+        "content_gap_accept_failed",
+        "Decisions digest mismatch: review decisions changed since review. Re-review and retry.",
+      );
+    }
+
     // Idempotent acceptance check: if already accepted, return existing snapshot without minting v2
     const existingSnapshot = await this.deps.competitorStore.getAcceptedGapSnapshotByReportId(input.reportId);
     if (existingSnapshot) {
-      return { version: existingSnapshot.version, snapshotId: existingSnapshot.id };
+      if (
+        (!input.expectedDecisionsDigest || existingSnapshot.decisionsDigest === input.expectedDecisionsDigest) &&
+        (!expectedReportDigest || existingSnapshot.reportDigest === expectedReportDigest)
+      ) {
+        return { version: existingSnapshot.version, snapshotId: existingSnapshot.id };
+      }
+      throw new FactoryError(
+        "content_gap_accept_failed",
+        "Report was already accepted with different decisions.",
+      );
     }
     const decisions = await this.deps.competitorStore.listDecisions(input.reportId);
     const reportData = report.data as ContentGapReportData;
@@ -1204,6 +1311,8 @@ export class CompetitorContentGapService {
       intelligenceSnapshotDigest: report.intelligenceSnapshotDigest,
       pageSnapshotRefs: reportData.pageSnapshotRefs ?? [],
       analysisRefs: reportData.analysisRefs ?? [],
+      classificationDigest: reportData.classificationDigest,
+      effectiveClassifications: reportData.effectiveClassifications,
       competitorRunId: report.runId,
     });
     if (staleness.stale) {
@@ -1232,6 +1341,8 @@ export class CompetitorContentGapService {
 
     const acceptedData = parseAcceptedContentGapSnapshotData({
       ...reportData,
+      classificationDigest: reportData.classificationDigest,
+      effectiveClassifications: reportData.effectiveClassifications,
       gaps: materializedGaps,
       decisions: decisions.map((d) => ({
         gapId: d.gapId,
@@ -1242,7 +1353,6 @@ export class CompetitorContentGapService {
       reviewState: "accepted",
     });
 
-    const version = (await this.deps.competitorStore.latestAcceptedGapVersion(input.projectId)) + 1;
     const decDigest = computeDecisionsDigest(
       report.snapshotDigest,
       decisions.map((d) => ({
@@ -1252,6 +1362,15 @@ export class CompetitorContentGapService {
         note: d.note,
       })),
     );
+
+    if (input.expectedDecisionsDigest && decDigest !== input.expectedDecisionsDigest) {
+      throw new FactoryError(
+        "content_gap_accept_failed",
+        "Decisions digest mismatch: review decisions changed since review. Re-review and retry.",
+      );
+    }
+
+    const version = (await this.deps.competitorStore.latestAcceptedGapVersion(input.projectId)) + 1;
 
     let snapshot;
     try {
@@ -1275,7 +1394,11 @@ export class CompetitorContentGapService {
     } catch (err: unknown) {
       // Handle unique constraint race condition on reportId
       const raceExisting = await this.deps.competitorStore.getAcceptedGapSnapshotByReportId(input.reportId);
-      if (raceExisting) {
+      if (
+        raceExisting &&
+        raceExisting.decisionsDigest === decDigest &&
+        raceExisting.reportDigest === expectedReportDigest
+      ) {
         return { version: raceExisting.version, snapshotId: raceExisting.id };
       }
       throw err;
@@ -1289,6 +1412,10 @@ export class CompetitorContentGapService {
     const snapshot = await this.deps.competitorStore.getAcceptedGapSnapshot(projectId, version);
     if (!snapshot) throw new FactoryError("content_gap_report_not_found", "Accepted gap snapshot not found.");
     const report = await this.deps.competitorStore.getGapReport(projectId, snapshot.reportId);
+    const snapData = snapshot.data as {
+      classificationDigest?: string;
+      effectiveClassifications?: Array<{ pageSnapshotId: string; classification: CompetitorClassification }>;
+    };
     const staleness = await this.evaluateUpstreamStaleness(projectId, {
       acceptedInputSnapshotId: snapshot.acceptedInputSnapshotId,
       acceptedInputVersion: snapshot.acceptedInputVersion,
@@ -1299,6 +1426,8 @@ export class CompetitorContentGapService {
       intelligenceSnapshotDigest: snapshot.intelligenceSnapshotDigest,
       pageSnapshotRefs: (snapshot.pageSnapshotRefs as Array<{ id: string; digest: string }>) ?? [],
       analysisRefs: (snapshot.analysisRefs as Array<{ id: string; digest: string }>) ?? [],
+      classificationDigest: snapData.classificationDigest,
+      effectiveClassifications: snapData.effectiveClassifications,
       competitorRunId: report?.runId,
     });
     return {

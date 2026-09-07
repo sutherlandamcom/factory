@@ -718,6 +718,9 @@ export const contentGapReports = pgTable(
     snapshotDigest: text("snapshot_digest").notNull(),
     /** 'model_proposed' | 'operator_reviewed' | 'accepted' */
     reviewState: text("review_state").notNull().default("model_proposed"),
+    reviewRevision: integer("review_revision").notNull().default(0),
+    decisionsDigest: text("decisions_digest"),
+    usage: jsonb("usage"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [

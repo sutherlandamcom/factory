@@ -13,6 +13,7 @@ import { OpenRouterGapAnalyst } from "../src/competitors/gap-analyst.js";
 import { OpenRouterSearchAnalyst } from "../src/search/analyst.js";
 import type { ContentGap } from "@factory/contracts";
 import { FactoryError } from "../src/executor/errors.js";
+import { deterministicDigest } from "../src/intelligence/digest.js";
 
 function createValidGap(overrides: Partial<ContentGap> = {}): ContentGap {
   return {
@@ -883,3 +884,802 @@ test("DNS timeout: validateUrlResolved aborts when signal fires", async () => {
     (err: unknown) => err instanceof Error && err.name === "AbortError",
   );
 });
+
+// ---------------------------------------------------------------------------
+// Defect A: Classification Lineage & Overrides Tests (A1–A5)
+// ---------------------------------------------------------------------------
+
+test("A1: evaluateUpstreamStaleness flags report stale when candidate classification override changes", async () => {
+  const effectiveClassifications = [
+    { pageSnapshotId: "page-1", classification: "INCLUDE" as const },
+  ];
+  const boundDigest = deterministicDigest(effectiveClassifications);
+
+  const service = new CompetitorContentGapService({
+    intake: {
+      listSnapshots: async () => [{ id: "in-1", version: 1, digest: "d1" }],
+    } as never,
+    competitorStore: {
+      getSerpSnapshot: async () => ({
+        id: "serp-1",
+        snapshotDigest: "sd-1",
+        query: "q",
+        location: null,
+        language: null,
+        device: "desktop",
+        observedAt: new Date("2026-09-01"),
+      }),
+      getLatestSerpForSearchIdentity: async () => ({ id: "serp-1", observedAt: new Date("2026-09-01") }),
+      getIntelligenceSnapshot: async () => ({
+        id: "intel-1",
+        snapshotDigest: "id-1",
+        createdAt: new Date("2026-09-01"),
+      }),
+      getLatestIntelligenceForSearchIdentity: async () => ({ id: "intel-1", createdAt: new Date("2026-09-01") }),
+      pageSnapshotsByIds: async (_p: string, ids: string[]) =>
+        ids.map((id) => ({ id, snapshotDigest: "pd-" + id, classification: "INCLUDE" })),
+      analysesByIds: async () => [],
+      getLatestClassificationOverridesForPages: async () =>
+        new Map([["page-1", { classification: "EXCLUDE", reason: "Operator excluded post-proposal" }]]),
+    } as never,
+    competitorAnalyst: { provider: "fixture" } as never,
+    gapAnalyst: { provider: "fixture" } as never,
+  });
+
+  const res = await service.evaluateUpstreamStaleness("proj-1", {
+    acceptedInputSnapshotId: "in-1",
+    acceptedInputVersion: 1,
+    acceptedInputDigest: "d1",
+    serpSnapshotId: "serp-1",
+    serpSnapshotDigest: "sd-1",
+    intelligenceSnapshotId: "intel-1",
+    intelligenceSnapshotDigest: "id-1",
+    pageSnapshotRefs: [],
+    analysisRefs: [],
+    classificationDigest: boundDigest,
+    effectiveClassifications,
+  });
+
+  assert.equal(res.stale, true);
+  assert.ok(res.staleReasons.some((r) => r.includes("Competitor candidate classification changed")));
+});
+
+test("A2: acceptGapReport rejects direct acceptance when classification override makes report stale", async () => {
+  const effectiveClassifications = [
+    { pageSnapshotId: "page-1", classification: "INCLUDE" as const },
+  ];
+  const boundDigest = deterministicDigest(effectiveClassifications);
+
+  const reportData = {
+    serpSnapshotId: "serp-1",
+    serpSnapshotDigest: "sd-1",
+    intelligenceSnapshotId: "intel-1",
+    intelligenceSnapshotDigest: "id-1",
+    acceptedInputSnapshotId: "in-1",
+    acceptedInputSnapshotVersion: 1,
+    acceptedInputDigest: "d1",
+    classificationDigest: boundDigest,
+    effectiveClassifications,
+    coverageMatrix: { policyVersion: "coverage-matrix-v1", rows: [] },
+    gaps: [createValidGap({ id: "gap-1" })],
+    differentiationRequirements: { items: [] },
+    pageSnapshotRefs: [],
+    analysisRefs: [],
+  };
+
+  const service = new CompetitorContentGapService({
+    intake: {
+      listSnapshots: async () => [{ id: "in-1", version: 1, digest: "d1" }],
+    } as never,
+    competitorStore: {
+      getGapReport: async () => ({
+        id: "rep-1",
+        snapshotDigest: "rd-1",
+        reviewState: "operator_reviewed",
+        reviewRevision: 1,
+        decisionsDigest: "dec-digest-1",
+        acceptedInputSnapshotId: "in-1",
+        acceptedInputVersion: 1,
+        acceptedInputDigest: "d1",
+        serpSnapshotId: "serp-1",
+        serpSnapshotDigest: "sd-1",
+        intelligenceSnapshotId: "intel-1",
+        intelligenceSnapshotDigest: "id-1",
+        data: reportData,
+      }),
+      getAcceptedGapSnapshotByReportId: async () => null,
+      listDecisions: async () => [{ gapId: "gap-1", disposition: "REQUIRED", priority: "HIGH", note: null }],
+      getSerpSnapshot: async () => ({
+        id: "serp-1",
+        snapshotDigest: "sd-1",
+        query: "q",
+        location: null,
+        language: null,
+        device: "desktop",
+        observedAt: new Date("2026-09-01"),
+      }),
+      getLatestSerpForSearchIdentity: async () => ({ id: "serp-1", observedAt: new Date("2026-09-01") }),
+      getIntelligenceSnapshot: async () => ({
+        id: "intel-1",
+        snapshotDigest: "id-1",
+        createdAt: new Date("2026-09-01"),
+      }),
+      getLatestIntelligenceForSearchIdentity: async () => ({ id: "intel-1", createdAt: new Date("2026-09-01") }),
+      pageSnapshotsByIds: async (_p: string, ids: string[]) =>
+        ids.map((id) => ({ id, snapshotDigest: "pd-" + id, classification: "INCLUDE" })),
+      analysesByIds: async () => [],
+      getLatestClassificationOverridesForPages: async () =>
+        new Map([["page-1", { classification: "EXCLUDE", reason: "Operator excluded post-proposal" }]]),
+    } as never,
+    competitorAnalyst: { provider: "fixture" } as never,
+    gapAnalyst: { provider: "fixture" } as never,
+  });
+
+  await assert.rejects(
+    service.acceptGapReport({
+      projectId: "proj-1",
+      reportId: "rep-1",
+      expectedReportDigest: "rd-1",
+      expectedReviewRevision: 1,
+      expectedDecisionsDigest: "dec-digest-1",
+    }),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "content_gap_stale" &&
+      err.message.includes("Competitor candidate classification changed"),
+  );
+});
+
+test("A3: proposeGaps binds classificationDigest and changing overrides produces new digest", async () => {
+  let insertedData: any = null;
+  const buildMockService = (overrideClassification: "INCLUDE" | "EXCLUDE") =>
+    new CompetitorContentGapService({
+      intake: {
+        listSnapshots: async () => [
+          { id: "in-1", version: 1, digest: "d1", payload: { business: { name: "B" }, evidence: {} } },
+        ],
+      } as never,
+      competitorStore: {
+        sumTodayCompetitorCostMicros: async () => 0,
+        latestSucceededRun: async () => ({
+          id: "run-1",
+          status: "succeeded",
+          acceptedInputDigest: "d1",
+          serpSnapshotId: "serp-1",
+          serpSnapshotDigest: "s".repeat(64),
+        }),
+        getSerpSnapshot: async () => ({
+          id: "serp-1",
+          acceptedInputDigest: "d1",
+        }),
+        listPageSnapshotsForRun: async () => [
+          {
+            id: "p-1",
+            domain: "guide.example",
+            acquisitionStatus: "SUCCESS",
+            classification: "INCLUDE",
+            snapshotDigest: "pd-1",
+            extracted: { segments: [{ id: "seg-101" }] },
+          },
+          {
+            id: "p-2",
+            domain: "other.example",
+            acquisitionStatus: "SUCCESS",
+            classification: "INCLUDE",
+            snapshotDigest: "pd-2",
+            extracted: { segments: [{ id: "seg-201" }] },
+          },
+        ],
+        getLatestClassificationOverridesForPages: async () =>
+          new Map([["p-2", { classification: overrideClassification, reason: "test" }]]),
+        listAnalysesForRun: async () => [
+          { id: "a-1", pageSnapshotId: "p-1", snapshotDigest: "ad-1", data: { topics: [], questions: [], coverageAreas: [] } },
+          { id: "a-2", pageSnapshotId: "p-2", snapshotDigest: "ad-2", data: { topics: [], questions: [], coverageAreas: [] } },
+        ],
+        getIntelligenceForSerpSnapshot: async () => ({
+          id: "intel-1",
+          snapshotDigest: "i".repeat(64),
+          data: { primaryIntent: "commercial", userNeeds: ["need1"], semanticCoverageRequirements: [], questions: [], topics: [] },
+        }),
+        insertGapReport: async (input: any) => {
+          insertedData = input.data;
+          return { id: "rep-new", snapshotDigest: "rep-d" } as never;
+        },
+      } as never,
+      competitorAnalyst: { provider: "fixture" } as never,
+      gapAnalyst: {
+        provider: "fixture",
+        propose: async () => ({
+          model: "m",
+          provider: "fixture",
+          promptVersion: "v1",
+          gaps: [createValidGap({ id: "gap-1", competitorsCoveringIt: ["p-1"], evidenceRefs: [{ pageSnapshotId: "p-1", segmentId: "seg-101" }], ourEvidenceAvailable: [] })],
+          differentiationRequirements: { items: [] },
+          usage: { costMicros: 1000 },
+        }),
+      } as never,
+    });
+
+  const service1 = buildMockService("INCLUDE");
+  await service1.proposeGaps({ projectId: "proj-1" });
+  assert.ok(insertedData.classificationDigest);
+  assert.equal(insertedData.effectiveClassifications.length, 2);
+  const digest1 = insertedData.classificationDigest;
+
+  const service2 = buildMockService("EXCLUDE");
+  await service2.proposeGaps({ projectId: "proj-1" });
+  assert.ok(insertedData.classificationDigest);
+  const digest2 = insertedData.classificationDigest;
+
+  assert.notEqual(digest1, digest2, "classificationDigest must change when candidate classification override changes");
+});
+
+test("A4: evaluateUpstreamStaleness ignores classification overrides for unrelated pages", async () => {
+  const effectiveClassifications = [
+    { pageSnapshotId: "page-1", classification: "INCLUDE" as const },
+  ];
+  const boundDigest = deterministicDigest(effectiveClassifications);
+
+  const service = new CompetitorContentGapService({
+    intake: {
+      listSnapshots: async () => [{ id: "in-1", version: 1, digest: "d1" }],
+    } as never,
+    competitorStore: {
+      getSerpSnapshot: async () => ({
+        id: "serp-1",
+        snapshotDigest: "sd-1",
+        query: "q",
+        location: null,
+        language: null,
+        device: "desktop",
+        observedAt: new Date("2026-09-01"),
+      }),
+      getLatestSerpForSearchIdentity: async () => ({ id: "serp-1", observedAt: new Date("2026-09-01") }),
+      getIntelligenceSnapshot: async () => ({
+        id: "intel-1",
+        snapshotDigest: "id-1",
+        createdAt: new Date("2026-09-01"),
+      }),
+      getLatestIntelligenceForSearchIdentity: async () => ({ id: "intel-1", createdAt: new Date("2026-09-01") }),
+      pageSnapshotsByIds: async (_p: string, ids: string[]) =>
+        ids.map((id) => ({ id, snapshotDigest: "pd-" + id, classification: "INCLUDE" })),
+      analysesByIds: async () => [],
+      getLatestClassificationOverridesForPages: async () => new Map(),
+    } as never,
+    competitorAnalyst: { provider: "fixture" } as never,
+    gapAnalyst: { provider: "fixture" } as never,
+  });
+
+  const res = await service.evaluateUpstreamStaleness("proj-1", {
+    acceptedInputSnapshotId: "in-1",
+    acceptedInputVersion: 1,
+    acceptedInputDigest: "d1",
+    serpSnapshotId: "serp-1",
+    serpSnapshotDigest: "sd-1",
+    intelligenceSnapshotId: "intel-1",
+    intelligenceSnapshotDigest: "id-1",
+    pageSnapshotRefs: [],
+    analysisRefs: [],
+    classificationDigest: boundDigest,
+    effectiveClassifications,
+  });
+
+  assert.equal(res.stale, false);
+});
+
+test("A5: acceptGapReport preserves classification lineage into AcceptedContentGapSnapshot", async () => {
+  const effectiveClassifications = [
+    { pageSnapshotId: "p-1", classification: "INCLUDE" as const },
+  ];
+  const boundDigest = deterministicDigest(effectiveClassifications);
+
+  const reportData = {
+    model: "gap-model",
+    provider: "fixture",
+    promptVersion: "v1",
+    serpSnapshotId: "serp-1",
+    serpSnapshotDigest: "sd-1",
+    intelligenceSnapshotId: "intel-1",
+    intelligenceSnapshotDigest: "id-1",
+    acceptedInputSnapshotId: "in-1",
+    acceptedInputSnapshotVersion: 1,
+    acceptedInputDigest: "d1",
+    classificationDigest: boundDigest,
+    effectiveClassifications,
+    coverageMatrix: { policyVersion: "coverage-matrix-v1", rows: [] },
+    gaps: [createValidGap({ id: "gap-1" })],
+    differentiationRequirements: { items: [] },
+    pageSnapshotRefs: [],
+    analysisRefs: [],
+  };
+
+  const decs = [{ gapId: "gap-1", disposition: "REQUIRED", priority: "HIGH", note: null }];
+  const decDigest = decisionsDigest("rd-1", decs);
+  let capturedSnapshotInsert: any = null;
+
+  const service = new CompetitorContentGapService({
+    intake: {
+      listSnapshots: async () => [{ id: "in-1", version: 1, digest: "d1" }],
+    } as never,
+    competitorStore: {
+      getGapReport: async () => ({
+        id: "rep-1",
+        snapshotDigest: "rd-1",
+        reviewState: "operator_reviewed",
+        reviewRevision: 1,
+        decisionsDigest: decDigest,
+        acceptedInputSnapshotId: "in-1",
+        acceptedInputVersion: 1,
+        acceptedInputDigest: "d1",
+        serpSnapshotId: "serp-1",
+        serpSnapshotDigest: "sd-1",
+        intelligenceSnapshotId: "intel-1",
+        intelligenceSnapshotDigest: "id-1",
+        data: reportData,
+      }),
+      getAcceptedGapSnapshotByReportId: async () => null,
+      listDecisions: async () => decs,
+      getSerpSnapshot: async () => ({
+        id: "serp-1",
+        snapshotDigest: "sd-1",
+        query: "q",
+        location: null,
+        language: null,
+        device: "desktop",
+        observedAt: new Date("2026-09-01"),
+      }),
+      getLatestSerpForSearchIdentity: async () => ({ id: "serp-1", observedAt: new Date("2026-09-01") }),
+      getIntelligenceSnapshot: async () => ({
+        id: "intel-1",
+        snapshotDigest: "id-1",
+        createdAt: new Date("2026-09-01"),
+      }),
+      getLatestIntelligenceForSearchIdentity: async () => ({ id: "intel-1", createdAt: new Date("2026-09-01") }),
+      pageSnapshotsByIds: async (_p: string, ids: string[]) =>
+        ids.map((id) => ({ id, snapshotDigest: "pd-" + id, classification: "INCLUDE" })),
+      analysesByIds: async () => [],
+      getLatestClassificationOverridesForPages: async () => new Map(),
+      latestAcceptedGapVersion: async () => 0,
+      markGapReportAccepted: async () => {},
+      insertAcceptedGapSnapshot: async (input: any) => {
+        capturedSnapshotInsert = input;
+        return { id: "acc-1", version: 1 };
+      },
+    } as never,
+    competitorAnalyst: { provider: "fixture" } as never,
+    gapAnalyst: { provider: "fixture" } as never,
+  });
+
+  const res = await service.acceptGapReport({
+    projectId: "proj-1",
+    reportId: "rep-1",
+    expectedReportDigest: "rd-1",
+    expectedReviewRevision: 1,
+    expectedDecisionsDigest: decDigest,
+  });
+
+  assert.equal(res.version, 1);
+  assert.ok(capturedSnapshotInsert);
+  assert.equal(capturedSnapshotInsert.data.classificationDigest, boundDigest);
+  assert.deepEqual(capturedSnapshotInsert.data.effectiveClassifications, effectiveClassifications);
+});
+
+// ---------------------------------------------------------------------------
+// Defect B: Gap Model Usage & Budget Governance (B1–B4)
+// ---------------------------------------------------------------------------
+
+test("B1: proposeGaps persists usage with costMicros into content_gap_reports", async () => {
+  let capturedReportUsage: any = null;
+  const service = new CompetitorContentGapService({
+    intake: {
+      listSnapshots: async () => [
+        { id: "in-1", version: 1, digest: "d1", payload: { business: { name: "B" }, evidence: {} } },
+      ],
+    } as never,
+    competitorStore: {
+      sumTodayCompetitorCostMicros: async () => 0,
+      latestSucceededRun: async () => ({
+        id: "run-1",
+        status: "succeeded",
+        acceptedInputDigest: "d1",
+        serpSnapshotId: "serp-1",
+        serpSnapshotDigest: "s".repeat(64),
+      }),
+      getSerpSnapshot: async () => ({ id: "serp-1", acceptedInputDigest: "d1" }),
+      listPageSnapshotsForRun: async () => [
+        {
+          id: "p-1",
+          domain: "guide.example",
+          acquisitionStatus: "SUCCESS",
+          classification: "INCLUDE",
+          snapshotDigest: "pd-1",
+          extracted: { segments: [{ id: "seg-101" }] },
+        },
+      ],
+      getLatestClassificationOverridesForPages: async () => new Map(),
+      listAnalysesForRun: async () => [
+        { id: "a-1", pageSnapshotId: "p-1", snapshotDigest: "ad-1", data: { topics: [], questions: [], coverageAreas: [] } },
+      ],
+      getIntelligenceForSerpSnapshot: async () => ({
+        id: "intel-1",
+        snapshotDigest: "i".repeat(64),
+        data: { primaryIntent: "commercial", userNeeds: ["need1"], semanticCoverageRequirements: [], questions: [], topics: [] },
+      }),
+      insertGapReport: async (input: any) => {
+        capturedReportUsage = input.usage;
+        return { id: "rep-new", snapshotDigest: "rep-d" } as never;
+      },
+    } as never,
+    competitorAnalyst: { provider: "fixture" } as never,
+    gapAnalyst: {
+      provider: "fixture",
+      propose: async () => ({
+        model: "gap-model",
+        provider: "fixture",
+        promptVersion: "v1",
+        gaps: [createValidGap({ id: "gap-1", competitorsCoveringIt: ["p-1"], evidenceRefs: [{ pageSnapshotId: "p-1", segmentId: "seg-101" }], ourEvidenceAvailable: [] })],
+        differentiationRequirements: { items: [] },
+        usage: {
+          costMicros: 3500,
+          inputTokens: 200,
+          outputTokens: 100,
+          totalTokens: 300,
+        },
+      }),
+    } as never,
+  });
+
+  await service.proposeGaps({ projectId: "proj-1" });
+  assert.deepEqual(capturedReportUsage, {
+    costMicros: 3500,
+    inputTokens: 200,
+    outputTokens: 100,
+    totalTokens: 300,
+  });
+});
+
+test("B2: proposeGaps blocks when sumTodayCompetitorCostMicros exceeds budget", async () => {
+  const service = new CompetitorContentGapService({
+    intake: {
+      listSnapshots: async () => [{ id: "in-1", version: 1, digest: "d1", payload: {} }],
+    } as never,
+    competitorStore: {
+      // Default limit is 10.00 USD = 10,000,000 micros
+      sumTodayCompetitorCostMicros: async () => 10_000_000,
+    } as never,
+    competitorAnalyst: { provider: "fixture" } as never,
+    gapAnalyst: { provider: "fixture" } as never,
+  });
+
+  await assert.rejects(
+    service.proposeGaps({ projectId: "proj-1" }),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "competitor_budget_blocked" &&
+      err.message.includes("Daily competitor budget reached"),
+  );
+});
+
+test("B3: proposeGaps budget block makes 0 model calls (spy verification)", async () => {
+  let modelCallCount = 0;
+  const service = new CompetitorContentGapService({
+    intake: {
+      listSnapshots: async () => [{ id: "in-1", version: 1, digest: "d1", payload: {} }],
+    } as never,
+    competitorStore: {
+      sumTodayCompetitorCostMicros: async () => 15_000_000,
+    } as never,
+    competitorAnalyst: { provider: "fixture" } as never,
+    gapAnalyst: {
+      provider: "fixture",
+      propose: async () => {
+        modelCallCount++;
+        return {} as never;
+      },
+    } as never,
+  });
+
+  await assert.rejects(
+    service.proposeGaps({ projectId: "proj-1" }),
+    (err: unknown) => err instanceof FactoryError && err.code === "competitor_budget_blocked",
+  );
+
+  assert.equal(modelCallCount, 0, "No model calls should be made when pre-spend budget check fails");
+});
+
+test("B4: null costMicros in proposal usage is handled gracefully without NaN", async () => {
+  let capturedReportUsage: any = null;
+  const service = new CompetitorContentGapService({
+    intake: {
+      listSnapshots: async () => [
+        { id: "in-1", version: 1, digest: "d1", payload: { business: { name: "B" }, evidence: {} } },
+      ],
+    } as never,
+    competitorStore: {
+      sumTodayCompetitorCostMicros: async () => 0,
+      latestSucceededRun: async () => ({
+        id: "run-1",
+        status: "succeeded",
+        acceptedInputDigest: "d1",
+        serpSnapshotId: "serp-1",
+        serpSnapshotDigest: "s".repeat(64),
+      }),
+      getSerpSnapshot: async () => ({ id: "serp-1", acceptedInputDigest: "d1" }),
+      listPageSnapshotsForRun: async () => [
+        {
+          id: "p-1",
+          domain: "guide.example",
+          acquisitionStatus: "SUCCESS",
+          classification: "INCLUDE",
+          snapshotDigest: "pd-1",
+          extracted: { segments: [{ id: "seg-101" }] },
+        },
+      ],
+      getLatestClassificationOverridesForPages: async () => new Map(),
+      listAnalysesForRun: async () => [
+        { id: "a-1", pageSnapshotId: "p-1", snapshotDigest: "ad-1", data: { topics: [], questions: [], coverageAreas: [] } },
+      ],
+      getIntelligenceForSerpSnapshot: async () => ({
+        id: "intel-1",
+        snapshotDigest: "i".repeat(64),
+        data: { primaryIntent: "commercial", userNeeds: ["need1"], semanticCoverageRequirements: [], questions: [], topics: [] },
+      }),
+      insertGapReport: async (input: any) => {
+        capturedReportUsage = input.usage;
+        return { id: "rep-new", snapshotDigest: "rep-d" } as never;
+      },
+    } as never,
+    competitorAnalyst: { provider: "fixture" } as never,
+    gapAnalyst: {
+      provider: "fixture",
+      propose: async () => ({
+        model: "gap-model",
+        provider: "fixture",
+        promptVersion: "v1",
+        gaps: [createValidGap({ id: "gap-1", competitorsCoveringIt: ["p-1"], evidenceRefs: [{ pageSnapshotId: "p-1", segmentId: "seg-101" }], ourEvidenceAvailable: [] })],
+        differentiationRequirements: { items: [] },
+        usage: {
+          costMicros: null,
+          inputTokens: 100,
+          outputTokens: 50,
+          totalTokens: 150,
+        },
+      }),
+    } as never,
+  });
+
+  await service.proposeGaps({ projectId: "proj-1" });
+  assert.equal(capturedReportUsage.costMicros, null);
+});
+
+// ---------------------------------------------------------------------------
+// Defect C: Review Concurrency & Triple-Bound Acceptance (C1–C7)
+// ---------------------------------------------------------------------------
+
+test("C1: saveGapDecisions fails closed when expectedReviewRevision does not match", async () => {
+  const service = new CompetitorContentGapService({
+    intake: {} as never,
+    competitorStore: {
+      getAcceptedGapSnapshotByReportId: async () => null,
+      getGapReport: async () => ({
+        id: "rep-1",
+        reviewRevision: 2,
+        reviewState: "operator_reviewed",
+        data: { gaps: [{ id: "gap-1" }] },
+      }),
+      saveGapDecisionsWithConcurrency: async () => {
+        throw new FactoryError(
+          "content_gap_stale",
+          "Review revision mismatch: review was updated concurrently (expected rev 0, current rev 2).",
+        );
+      },
+    } as never,
+    competitorAnalyst: { provider: "fixture" } as never,
+    gapAnalyst: { provider: "fixture" } as never,
+  });
+
+  await assert.rejects(
+    service.saveGapDecisions({
+      projectId: "proj-1",
+      reportId: "rep-1",
+      expectedReviewRevision: 0,
+      decisions: [{ gapId: "gap-1", disposition: "REQUIRED" }],
+    }),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "content_gap_stale" &&
+      err.message.includes("Review revision mismatch"),
+  );
+});
+
+test("C2: saveGapDecisions with matching revision returns incremented revision and decisionsDigest", async () => {
+  const service = new CompetitorContentGapService({
+    intake: {} as never,
+    competitorStore: {
+      getAcceptedGapSnapshotByReportId: async () => null,
+      getGapReport: async () => ({
+        id: "rep-1",
+        reviewRevision: 0,
+        snapshotDigest: "rd-1",
+        reviewState: "model_proposed",
+        data: { gaps: [{ id: "gap-1" }] },
+      }),
+      saveGapDecisionsWithConcurrency: async (input: any) => ({
+        reviewRevision: input.expectedReviewRevision + 1,
+        decisionsDigest: decisionsDigest("rd-1", input.decisions),
+      }),
+    } as never,
+    competitorAnalyst: { provider: "fixture" } as never,
+    gapAnalyst: { provider: "fixture" } as never,
+  });
+
+  const res = await service.saveGapDecisions({
+    projectId: "proj-1",
+    reportId: "rep-1",
+    expectedReviewRevision: 0,
+    decisions: [{ gapId: "gap-1", disposition: "REQUIRED", priority: "HIGH", note: "approved" }],
+  });
+
+  assert.equal(res.reviewRevision, 1);
+  assert.ok(res.decisionsDigest);
+});
+
+test("C3: acceptGapReport fails when expectedReviewRevision does not match current report", async () => {
+  const service = new CompetitorContentGapService({
+    intake: {} as never,
+    competitorStore: {
+      getGapReport: async () => ({
+        id: "rep-1",
+        snapshotDigest: "rd-1",
+        reviewRevision: 2, // Concurrent save incremented this
+        decisionsDigest: "dec-2",
+      }),
+    } as never,
+    competitorAnalyst: { provider: "fixture" } as never,
+    gapAnalyst: { provider: "fixture" } as never,
+  });
+
+  await assert.rejects(
+    service.acceptGapReport({
+      projectId: "proj-1",
+      reportId: "rep-1",
+      expectedReportDigest: "rd-1",
+      expectedReviewRevision: 1, // Stale tab at rev 1
+      expectedDecisionsDigest: "dec-1",
+    }),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "content_gap_accept_failed" &&
+      err.message.includes("Review revision mismatch"),
+  );
+});
+
+test("C4: acceptGapReport fails when expectedDecisionsDigest does not match", async () => {
+  const service = new CompetitorContentGapService({
+    intake: {} as never,
+    competitorStore: {
+      getGapReport: async () => ({
+        id: "rep-1",
+        snapshotDigest: "rd-1",
+        reviewRevision: 1,
+        decisionsDigest: "actual-decisions-digest",
+      }),
+    } as never,
+    competitorAnalyst: { provider: "fixture" } as never,
+    gapAnalyst: { provider: "fixture" } as never,
+  });
+
+  await assert.rejects(
+    service.acceptGapReport({
+      projectId: "proj-1",
+      reportId: "rep-1",
+      expectedReportDigest: "rd-1",
+      expectedReviewRevision: 1,
+      expectedDecisionsDigest: "different-decisions-digest",
+    }),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "content_gap_accept_failed" &&
+      err.message.includes("Decisions digest mismatch"),
+  );
+});
+
+test("C5: acceptGapReport fails when expectedReportDigest does not match", async () => {
+  const service = new CompetitorContentGapService({
+    intake: {} as never,
+    competitorStore: {
+      getGapReport: async () => ({
+        id: "rep-1",
+        snapshotDigest: "actual-report-digest",
+        reviewRevision: 1,
+        decisionsDigest: "actual-decisions-digest",
+      }),
+    } as never,
+    competitorAnalyst: { provider: "fixture" } as never,
+    gapAnalyst: { provider: "fixture" } as never,
+  });
+
+  await assert.rejects(
+    service.acceptGapReport({
+      projectId: "proj-1",
+      reportId: "rep-1",
+      expectedReportDigest: "stale-report-digest",
+      expectedReviewRevision: 1,
+      expectedDecisionsDigest: "actual-decisions-digest",
+    }),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "content_gap_accept_failed" &&
+      err.message.includes("Report digest mismatch"),
+  );
+});
+
+test("C6: acceptGapReport idempotent duplicate call with matching digests succeeds", async () => {
+  const service = new CompetitorContentGapService({
+    intake: {} as never,
+    competitorStore: {
+      getGapReport: async () => ({
+        id: "rep-1",
+        snapshotDigest: "rd-1",
+        reviewRevision: 1,
+        decisionsDigest: "dd-1",
+      }),
+      getAcceptedGapSnapshotByReportId: async () => ({
+        id: "acc-1",
+        version: 1,
+        reportDigest: "rd-1",
+        decisionsDigest: "dd-1",
+      }),
+    } as never,
+    competitorAnalyst: { provider: "fixture" } as never,
+    gapAnalyst: { provider: "fixture" } as never,
+  });
+
+  const res = await service.acceptGapReport({
+    projectId: "proj-1",
+    reportId: "rep-1",
+    expectedReportDigest: "rd-1",
+    expectedReviewRevision: 1,
+    expectedDecisionsDigest: "dd-1",
+  });
+
+  assert.equal(res.version, 1);
+  assert.equal(res.snapshotId, "acc-1");
+});
+
+test("C7: acceptGapReport idempotent duplicate call with conflicting decisionsDigest fails closed", async () => {
+  const service = new CompetitorContentGapService({
+    intake: {} as never,
+    competitorStore: {
+      getGapReport: async () => ({
+        id: "rep-1",
+        snapshotDigest: "rd-1",
+        reviewRevision: 1,
+        decisionsDigest: "dd-different",
+      }),
+      getAcceptedGapSnapshotByReportId: async () => ({
+        id: "acc-1",
+        version: 1,
+        reportDigest: "rd-1",
+        decisionsDigest: "dd-original",
+      }),
+    } as never,
+    competitorAnalyst: { provider: "fixture" } as never,
+    gapAnalyst: { provider: "fixture" } as never,
+  });
+
+  await assert.rejects(
+    service.acceptGapReport({
+      projectId: "proj-1",
+      reportId: "rep-1",
+      expectedReportDigest: "rd-1",
+      expectedReviewRevision: 1,
+      expectedDecisionsDigest: "dd-different",
+    }),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "content_gap_accept_failed" &&
+      err.message.includes("Report was already accepted with different decisions"),
+  );
+});
+

@@ -153,5 +153,87 @@ test.describe("Competitors + Content Gap journey", () => {
     await expect(page.locator("text=REQUIRED (HIGH)").first()).toBeVisible();
     await expect(page.locator("text=Note: e2e note 0")).toBeVisible();
   });
+
+  test("two browser tabs: tab A stale accept is rejected after tab B saves decisions", async ({ browser }) => {
+    test.setTimeout(300_000);
+    const contextA = await browser.newContext();
+    const contextB = await browser.newContext();
+    const pageA = await contextA.newPage();
+    const pageB = await contextB.newPage();
+
+    const uniqueKey = `e2e-stale-${Date.now()}`;
+    const project = { key: uniqueKey, name: `Stale Tab ${uniqueKey}` };
+
+    // Set up project and search on pageA
+    await pageA.goto("/");
+    await pageA.getByRole("button", { name: "New Project" }).click();
+    await pageA.locator('input[placeholder="e.g. summit-roofing"]').fill(project.key);
+    await pageA.locator('input[placeholder="e.g. Summit Roofing"]').fill(project.name);
+    await pageA.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(pageA.locator("h1", { hasText: project.name })).toBeVisible({ timeout: 10_000 });
+
+    const set = async (tab: string, label: string, value: string) => {
+      await pageA.getByRole("button", { name: tab, exact: true }).click();
+      await pageA.getByLabel(label, { exact: false }).first().fill(value);
+    };
+    await set("Business", "Business Name", "Stale Roofing Co");
+    await set("Business", "Description", "Testing concurrency in content gap reviews.");
+    await set("Audience", "Segments", "Residential Homeowners");
+    await set("Site Identity", "Language", "en");
+    await set("Conversion", "CTA Destination", "tel:+15550100100");
+    await set("Search Seeds", "Seed Queries", "roof repair austin");
+    await set("Evidence & Claims", "Operator Facts", "Serving Austin roofs since 2009 with 12-person crew");
+    await pageA.getByRole("button", { name: "Save Draft" }).click();
+    await pageA.getByRole("button", { name: "Review", exact: true }).click();
+    await pageA.getByRole("button", { name: "ACCEPT INPUTS" }).click();
+    await expect(pageA.locator("span", { hasText: /^APPROVED$/i }).first()).toBeVisible({ timeout: 10_000 });
+
+    // Search
+    await pageA.getByRole("button", { name: "Search", exact: true }).click();
+    await pageA.getByLabel("Query", { exact: false }).first().fill("roof repair austin");
+    await pageA.getByRole("button", { name: "Run Search", exact: false }).click();
+    await expect(pageA.locator("text=SERP", { hasText: "SERP" }).first()).toBeVisible({ timeout: 30_000 });
+
+    // Competitors
+    await pageA.getByRole("button", { name: "Competitors Research", exact: true }).click();
+    await expect(pageA.locator("text=Competitor evidence run")).toBeVisible({ timeout: 10_000 });
+    await pageA.locator("select").first().selectOption({ index: 0 });
+    await pageA.getByRole("button", { name: "Acquire competitors" }).click();
+    await expect(pageA.locator("text=Candidates (")).toBeVisible({ timeout: 60_000 });
+
+    // Content Gaps proposal on pageA
+    await pageA.getByRole("button", { name: "Content Gaps", exact: true }).click();
+    await pageA.getByRole("button", { name: "Propose gap report", exact: true }).click();
+    await expect(pageA.locator("text=Review gaps (")).toBeVisible({ timeout: 60_000 });
+
+    // Open pageB to the same project and Content Gaps report
+    await pageB.goto("/");
+    await pageB.getByRole("button", { name: new RegExp(project.name) }).first().click();
+    await expect(pageB.locator("h1", { hasText: project.name })).toBeVisible({ timeout: 15_000 });
+    await pageB.getByRole("button", { name: "Content Gaps", exact: true }).click();
+    await pageB.locator("div.space-y-2 button").first().click();
+    await expect(pageB.locator("text=Review gaps (")).toBeVisible({ timeout: 15_000 });
+
+    // Tab B modifies decisions and saves (increments revision N -> N+1)
+    const gapCardsB = pageB.locator("div.rounded-md.border", { hasText: "competitor coverage:" });
+    const countB = await gapCardsB.count();
+    expect(countB).toBeGreaterThan(0);
+    for (let i = 0; i < countB; i++) {
+      const card = gapCardsB.nth(i);
+      await card.locator("select").nth(0).selectOption("REQUIRED");
+      await card.locator("input").first().fill(`Tab B update ${i}`);
+    }
+    await pageB.getByRole("button", { name: "Save review" }).click();
+    await expect(pageB.locator("text=Decisions saved.")).toBeVisible({ timeout: 15_000 });
+
+    // Tab A (still at old revision) tries to save decisions -> rejected as stale
+    await pageA.getByRole("button", { name: "Save review" }).click();
+    const errorBannerA = pageA.locator("div.bg-red-50");
+    await expect(errorBannerA).toBeVisible({ timeout: 15_000 });
+    await expect(errorBannerA).toContainText("Review revision mismatch");
+
+    await contextA.close();
+    await contextB.close();
+  });
 });
 

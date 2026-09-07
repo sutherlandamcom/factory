@@ -130,6 +130,9 @@ CREATE TABLE "content_gap_reports" (
 	"data" jsonb NOT NULL,
 	"snapshot_digest" text NOT NULL,
 	"review_state" text DEFAULT 'model_proposed' NOT NULL,
+	"review_revision" integer DEFAULT 0 NOT NULL,
+	"decisions_digest" text,
+	"usage" jsonb,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "content_gap_reports_review_state_valid" CHECK ("content_gap_reports"."review_state" IN ('model_proposed', 'operator_reviewed', 'accepted'))
 );

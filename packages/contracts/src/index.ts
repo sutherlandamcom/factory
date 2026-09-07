@@ -394,6 +394,7 @@ export {
   analysisEvidenceRefSchema,
   firstPartyEvidenceRefSchema,
   evidenceSegmentSchema,
+  effectiveClassificationItemSchema,
 } from "./competitor-content-gap.js";
 export type {
   CompetitorErrorCode,
@@ -418,6 +419,7 @@ export type {
   ContentGapDecisionsData,
   AcceptedContentGapItem,
   AcceptedContentGapSnapshotData,
+  EffectiveClassificationItem,
   AnalysisEvidenceRef,
   FirstPartyEvidenceRef,
   EvidenceSegment,

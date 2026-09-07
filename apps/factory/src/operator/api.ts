@@ -81,6 +81,7 @@ const gapProposalSchema = z
 
 const gapDecisionsSchema = z
   .object({
+    expectedReviewRevision: z.number().int().min(0).optional(),
     decisions: z
       .array(
         z
@@ -99,9 +100,15 @@ const gapDecisionsSchema = z
 
 const gapAcceptSchema = z
   .object({
-    expectedDigest: z.string().trim().min(1).max(128),
+    expectedReportDigest: z.string().trim().min(1).max(128).optional(),
+    expectedDigest: z.string().trim().min(1).max(128).optional(),
+    expectedReviewRevision: z.number().int().min(0).optional(),
+    expectedDecisionsDigest: z.string().trim().min(1).max(128).optional(),
   })
-  .strict();
+  .strict()
+  .refine((data) => Boolean(data.expectedReportDigest || data.expectedDigest), {
+    message: "expectedReportDigest (or expectedDigest) is required",
+  });
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
@@ -333,12 +340,13 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         if (!deps.competitors) return sendError(res, "not_found", "Content gaps are not available.");
         const parsed = parseJsonBody(body);
         const input = parseOr400(gapDecisionsSchema, parsed);
-        await deps.competitors.saveGapDecisions({
+        const result = await deps.competitors.saveGapDecisions({
           projectId: project.id,
           reportId: segments[4]!,
+          expectedReviewRevision: input.expectedReviewRevision,
           decisions: input.decisions,
         });
-        return sendJson(res, 200, { ok: true });
+        return sendJson(res, 200, { ok: true, reviewRevision: result.reviewRevision, decisionsDigest: result.decisionsDigest });
       }
 
       if (req.method === "POST" && segments.length === 6 && segments[0] === "projects" && segments[2] === "content-gaps" && segments[3] === "reports" && segments[5] === "accept") {
@@ -350,7 +358,9 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         const result = await deps.competitors.acceptGapReport({
           projectId: project.id,
           reportId: segments[4]!,
-          expectedDigest: input.expectedDigest,
+          expectedReportDigest: input.expectedReportDigest ?? input.expectedDigest,
+          expectedReviewRevision: input.expectedReviewRevision,
+          expectedDecisionsDigest: input.expectedDecisionsDigest,
         });
         return sendJson(res, 200, result);
       }

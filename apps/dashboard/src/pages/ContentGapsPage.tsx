@@ -109,20 +109,47 @@ export function ContentGapsPage({ projectId }: { projectId: string }) {
     setBusy(true);
     setError(null);
     try {
-      await api.saveGapDecisions(
+      const res = await api.saveGapDecisions(
         projectId,
         detail.report.id,
-        Object.values(drafts).map((d) => ({
-          gapId: d.gapId,
-          disposition: d.disposition,
-          ...(d.priority ? { priority: d.priority } : {}),
-          ...(d.note?.trim() ? { note: d.note.trim() } : {}),
-        })),
+        {
+          expectedReviewRevision: detail.report.reviewRevision,
+          decisions: Object.values(drafts).map((d) => ({
+            gapId: d.gapId,
+            disposition: d.disposition,
+            ...(d.priority ? { priority: d.priority } : {}),
+            ...(d.note?.trim() ? { note: d.note.trim() } : {}),
+          })),
+        },
       );
-      await openReport(detail.report.id);
+      if (res.reviewRevision !== undefined && res.decisionsDigest !== undefined) {
+        setDetail((prev) =>
+          prev
+            ? {
+                ...prev,
+                report: {
+                  ...prev.report,
+                  reviewRevision: res.reviewRevision!,
+                  decisionsDigest: res.decisionsDigest!,
+                  reviewState: "operator_reviewed",
+                },
+                decisions: Object.values(drafts).map((d) => ({
+                  gapId: d.gapId,
+                  disposition: d.disposition,
+                  priority: d.priority,
+                  note: d.note?.trim() || null,
+                })),
+              }
+            : null,
+        );
+      } else {
+        await openReport(detail.report.id);
+      }
       setNotice("Decisions saved.");
     } catch (e) {
-      setError(errorMessage(e, "Saving decisions failed."));
+      const msg = errorMessage(e, "Saving decisions failed.");
+      await openReport(detail.report.id);
+      setError(msg);
     } finally {
       setBusy(false);
     }
@@ -133,13 +160,19 @@ export function ContentGapsPage({ projectId }: { projectId: string }) {
     setBusy(true);
     setError(null);
     try {
-      const result = await api.acceptContentGaps(projectId, detail.report.id, detail.report.snapshotDigest);
+      const result = await api.acceptContentGaps(projectId, detail.report.id, {
+        expectedReportDigest: detail.report.snapshotDigest,
+        expectedReviewRevision: detail.report.reviewRevision,
+        expectedDecisionsDigest: detail.report.decisionsDigest ?? "",
+      });
       setNotice(`Content gaps accepted as version ${result.version}.`);
       setDetail(null);
       await loadWorkspace();
       await openAccepted(result.version);
     } catch (e) {
-      setError(errorMessage(e, "Acceptance failed."));
+      const msg = errorMessage(e, "Acceptance failed.");
+      await openReport(detail.report.id);
+      setError(msg);
     } finally {
       setBusy(false);
     }
@@ -223,6 +256,13 @@ export function ContentGapsPage({ projectId }: { projectId: string }) {
             </div>
           )}
           <Section title={`Review gaps (${detail.report.data.gaps.length})`}>
+            <div className="mb-2 flex flex-wrap gap-4 text-xs text-gray-500">
+              <span>Report digest: <code className="font-mono">{detail.report.snapshotDigest.slice(0, 16)}…</code></span>
+              <span>Review revision: <code className="font-mono">{detail.report.reviewRevision}</code></span>
+              {detail.report.decisionsDigest && (
+                <span>Decisions digest: <code className="font-mono">{detail.report.decisionsDigest.slice(0, 16)}…</code></span>
+              )}
+            </div>
             <div className="space-y-4">
               {detail.report.data.gaps.map((gap) => {
                 const draft = drafts[gap.id];
@@ -314,7 +354,13 @@ export function ContentGapsPage({ projectId }: { projectId: string }) {
                 </button>
                 <button
                   className="rounded-md bg-green-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-500 disabled:opacity-50"
-                  disabled={busy || !allDecided || detail.decisions.length !== detail.report.data.gaps.length}
+                  disabled={
+                    busy ||
+                    !allDecided ||
+                    detail.decisions.length !== detail.report.data.gaps.length ||
+                    !detail.report.decisionsDigest ||
+                    detail.stale
+                  }
                   onClick={accept}
                 >
                   Accept as v{ws?.accepted[0] ? ws.accepted[0].version + 1 : 1}

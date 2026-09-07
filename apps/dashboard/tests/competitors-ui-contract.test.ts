@@ -116,6 +116,8 @@ const REPORT_DETAIL: ContentGapReportDetail = {
     id: "report-1",
     snapshotDigest: "r".repeat(64),
     reviewState: "operator_reviewed",
+    reviewRevision: 1,
+    decisionsDigest: "d".repeat(64),
     createdAt: "2026-09-06T10:05:00.000Z",
     model: "fixture-gap-analyst",
     provider: "fixture",
@@ -240,6 +242,8 @@ test("gap report detail pins fields consumed by review UI", () => {
   assertFieldsPresent(REPORT_DETAIL, [
     ["report.snapshotDigest", "r".repeat(64)],
     ["report.reviewState", "operator_reviewed"],
+    ["report.reviewRevision", 1],
+    ["report.decisionsDigest", "d".repeat(64)],
     ["report.data.coverageMatrix.rows.0.requirement", "Understand expected rental yield"],
     ["report.data.coverageMatrix.rows.0.cells.0.level", "PARTIAL"],
     ["report.data.gaps.0.userNeed", "Understand expected rental yield"],
@@ -284,8 +288,15 @@ test("UI produces exactly the semantic competitor/gap endpoints", async () => {
     void api.getContentGapsWorkspace("p1");
     void api.proposeContentGaps("p1");
     void api.getContentGapReport("p1", "report-1");
-    void api.saveGapDecisions("p1", "report-1", [{ gapId: "gap-001", disposition: "REQUIRED" }]);
-    void api.acceptContentGaps("p1", "report-1", "r".repeat(64));
+    void api.saveGapDecisions("p1", "report-1", {
+      expectedReviewRevision: 0,
+      decisions: [{ gapId: "gap-001", disposition: "REQUIRED" }],
+    });
+    void api.acceptContentGaps("p1", "report-1", {
+      expectedReportDigest: "r".repeat(64),
+      expectedReviewRevision: 1,
+      expectedDecisionsDigest: "d".repeat(64),
+    });
     void api.getAcceptedGapDetail("p1", 1);
     await new Promise((r) => setTimeout(r, 10));
     const paths = calls.map((c) => c.path);
@@ -303,6 +314,18 @@ test("UI produces exactly the semantic competitor/gap endpoints", async () => {
     ]) {
       assert.ok(paths.includes(expected), `missing endpoint: ${expected}`);
     }
+    const saveCall = calls.find((c) => c.path === "/api/projects/p1/content-gaps/reports/report-1/decisions");
+    assert.ok(saveCall?.init?.body);
+    const saveBody = JSON.parse(String(saveCall.init.body));
+    assert.equal(saveBody.expectedReviewRevision, 0);
+    assert.equal(saveBody.decisions[0].gapId, "gap-001");
+
+    const acceptCall = calls.find((c) => c.path === "/api/projects/p1/content-gaps/reports/report-1/accept");
+    assert.ok(acceptCall?.init?.body);
+    const acceptBody = JSON.parse(String(acceptCall.init.body));
+    assert.equal(acceptBody.expectedReportDigest, "r".repeat(64));
+    assert.equal(acceptBody.expectedReviewRevision, 1);
+    assert.equal(acceptBody.expectedDecisionsDigest, "d".repeat(64));
   } finally {
     globalThis.fetch = originalFetch;
   }

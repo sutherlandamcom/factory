@@ -380,6 +380,15 @@ export const differentiationRequirementsSchema = z
   .strict();
 export type DifferentiationRequirements = z.infer<typeof differentiationRequirementsSchema>;
 
+export const effectiveClassificationItemSchema = z
+  .object({
+    pageSnapshotId: idSchema,
+    classification: competitorClassificationSchema,
+    reason: boundedText(500).optional(),
+  })
+  .strict();
+export type EffectiveClassificationItem = z.infer<typeof effectiveClassificationItemSchema>;
+
 export const contentGapReportDataSchema = z
   .object({
     serpSnapshotId: idSchema,
@@ -395,6 +404,8 @@ export const contentGapReportDataSchema = z
     acceptedInputSnapshotId: idSchema,
     acceptedInputSnapshotVersion: z.number().int().min(1),
     acceptedInputDigest: digestSchema,
+    classificationDigest: digestSchema.optional(),
+    effectiveClassifications: z.array(effectiveClassificationItemSchema).max(30).optional(),
     coverageMatrix: coverageMatrixSchema,
     gaps: z.array(contentGapSchema).max(30),
     differentiationRequirements: differentiationRequirementsSchema,
@@ -489,6 +500,8 @@ export const acceptedContentGapSnapshotDataSchema = z
     acceptedInputSnapshotId: idSchema,
     acceptedInputSnapshotVersion: z.number().int().min(1),
     acceptedInputDigest: digestSchema,
+    classificationDigest: digestSchema.optional(),
+    effectiveClassifications: z.array(effectiveClassificationItemSchema).max(30).optional(),
     coverageMatrix: coverageMatrixSchema,
     /** Gaps with human-reviewed decisions materialized as authoritative. */
     gaps: z.array(acceptedContentGapItemSchema).max(30),

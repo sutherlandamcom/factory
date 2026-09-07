@@ -25,6 +25,8 @@ import {
   type ContentGapReportRecord,
 } from "../persistence/schema.js";
 import { deterministicDigest } from "../intelligence/digest.js";
+import { decisionsDigest } from "./gap-engine.js";
+import { FactoryError } from "../executor/errors.js";
 
 /**
  * CompetitorStore — owns persistence for Competitors + Content Gap v0.
@@ -449,6 +451,12 @@ export class CompetitorStore {
     model: string;
     provider: string;
     promptVersion: string;
+    usage?: {
+      inputTokens?: number | null;
+      outputTokens?: number | null;
+      totalTokens?: number | null;
+      costMicros?: number | null;
+    } | null;
     data: unknown;
   }): Promise<ContentGapReportRecord> {
     const data = parseContentGapReportData(input.data);
@@ -464,6 +472,9 @@ export class CompetitorStore {
         id: randomUUID(),
         snapshotDigest,
         reviewState: "model_proposed",
+        reviewRevision: 0,
+        decisionsDigest: null,
+        usage: input.usage ?? null,
         ...input,
         data,
       })
@@ -507,6 +518,76 @@ export class CompetitorStore {
   }
 
   // ---- Decisions -------------------------------------------------------------
+
+  async saveGapDecisionsWithConcurrency(input: {
+    projectId: string;
+    reportId: string;
+    expectedReviewRevision: number;
+    decisions: Array<{
+      gapId: string;
+      disposition: string;
+      priority: string | null;
+      note: string | null;
+    }>;
+  }): Promise<{ reviewRevision: number; decisionsDigest: string }> {
+    return await this.db.transaction(async (tx) => {
+      const [report] = await tx
+        .select()
+        .from(contentGapReports)
+        .where(
+          and(
+            eq(contentGapReports.projectId, input.projectId),
+            eq(contentGapReports.id, input.reportId),
+          ),
+        )
+        .for("update");
+      if (!report) {
+        throw new FactoryError("content_gap_report_not_found", "Content gap report not found.");
+      }
+      if (report.reviewState === "accepted") {
+        throw new FactoryError(
+          "content_gap_decision_invalid",
+          "Cannot modify decisions for an already accepted content gap report.",
+        );
+      }
+      if (report.reviewRevision !== input.expectedReviewRevision) {
+        throw new FactoryError(
+          "content_gap_stale",
+          `Review revision mismatch: review was updated concurrently (expected rev ${input.expectedReviewRevision}, current rev ${report.reviewRevision}).`,
+        );
+      }
+      await tx
+        .delete(contentGapDecisions)
+        .where(
+          and(
+            eq(contentGapDecisions.projectId, input.projectId),
+            eq(contentGapDecisions.reportId, input.reportId),
+          ),
+        );
+      if (input.decisions.length > 0) {
+        await tx.insert(contentGapDecisions).values(
+          input.decisions.map((d) => ({
+            id: randomUUID(),
+            projectId: input.projectId,
+            reportId: input.reportId,
+            ...d,
+          })),
+        );
+      }
+      const newDigest = decisionsDigest(report.snapshotDigest, input.decisions);
+      const newRevision = report.reviewRevision + 1;
+      await tx
+        .update(contentGapReports)
+        .set({
+          reviewRevision: newRevision,
+          decisionsDigest: newDigest,
+          reviewState: "operator_reviewed",
+        })
+        .where(eq(contentGapReports.id, input.reportId));
+
+      return { reviewRevision: newRevision, decisionsDigest: newDigest };
+    });
+  }
 
   async replaceDecisions(
     projectId: string,
@@ -625,11 +706,12 @@ export class CompetitorStore {
 
   /**
    * Budget gate input: recorded model/analysis cost today (UTC) from
-   * competitor page analyses. Null costs (UNKNOWN) are uncounted, never
-   * fabricated. SERP acquisition cost lives in the search domain's own gate.
+   * competitor page analyses AND PASS-2 aggregate content gap proposals.
+   * Null costs (UNKNOWN) are uncounted, never fabricated. SERP acquisition
+   * cost lives in the search domain's own gate.
    */
   async sumTodayCompetitorCostMicros(): Promise<number> {
-    const [row] = await this.db
+    const [pageRow] = await this.db
       .select({
         total: sql<number>`coalesce(sum((${competitorPageAnalyses.usage} -> 'costMicros')::numeric), 0)`,
       })
@@ -637,8 +719,18 @@ export class CompetitorStore {
       .where(
         sql`${competitorPageAnalyses.createdAt} >= date_trunc('day', now() at time zone 'utc')`,
       );
-    const total = Number(row?.total ?? 0);
-    return Number.isFinite(total) && total > 0 ? Math.round(total) : 0;
+    const [gapRow] = await this.db
+      .select({
+        total: sql<number>`coalesce(sum((${contentGapReports.usage} -> 'costMicros')::numeric), 0)`,
+      })
+      .from(contentGapReports)
+      .where(
+        sql`${contentGapReports.createdAt} >= date_trunc('day', now() at time zone 'utc')`,
+      );
+    const pageTotal = Number(pageRow?.total ?? 0);
+    const gapTotal = Number(gapRow?.total ?? 0);
+    const total = (Number.isFinite(pageTotal) ? pageTotal : 0) + (Number.isFinite(gapTotal) ? gapTotal : 0);
+    return total > 0 ? Math.round(total) : 0;
   }
 
   // ---- Batch helpers -------------------------------------------------------

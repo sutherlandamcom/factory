@@ -12,6 +12,7 @@ import { FixtureGapAnalyst } from "../../src/competitors/gap-analyst.js";
 import type { CompetitorPageProvider, PageAcquisitionOutcome } from "../../src/competitors/direct-http.js";
 import { setupMigratedTestDatabase } from "./helpers.js";
 import { projects } from "../../src/persistence/schema.js";
+import { FactoryError } from "../../src/executor/errors.js";
 
 /**
  * Governed service tests (real PostgreSQL, injected page provider +
@@ -199,14 +200,21 @@ test("gap proposal: coverage matrix, first-party refs, review, accept v1/v2, sta
 
   // Accept without decisions fails closed.
   await assert.rejects(
-    service.acceptGapReport({ projectId: "proj-1", reportId, expectedDigest: detail.report.snapshotDigest }),
-    /decision for every gap/,
+    service.acceptGapReport({
+      projectId: "proj-1",
+      reportId,
+      expectedDigest: detail.report.snapshotDigest,
+      expectedReviewRevision: detail.report.reviewRevision,
+      expectedDecisionsDigest: detail.report.decisionsDigest ?? "0".repeat(64),
+    }),
+    /decision/,
   );
 
   // Wrong digest fails closed.
-  await service.saveGapDecisions({
+  const saved = await service.saveGapDecisions({
     projectId: "proj-1",
     reportId,
+    expectedReviewRevision: detail.report.reviewRevision,
     decisions: reportData.gaps.map((g) => ({
       gapId: g.id,
       disposition: "REQUIRED" as const,
@@ -215,12 +223,24 @@ test("gap proposal: coverage matrix, first-party refs, review, accept v1/v2, sta
     })),
   });
   await assert.rejects(
-    service.acceptGapReport({ projectId: "proj-1", reportId, expectedDigest: "0".repeat(64) }),
+    service.acceptGapReport({
+      projectId: "proj-1",
+      reportId,
+      expectedDigest: "0".repeat(64),
+      expectedReviewRevision: saved.reviewRevision,
+      expectedDecisionsDigest: saved.decisionsDigest,
+    }),
     /digest mismatch/,
   );
 
   // Correct acceptance => v1.
-  const v1 = await service.acceptGapReport({ projectId: "proj-1", reportId, expectedDigest: detail.report.snapshotDigest });
+  const v1 = await service.acceptGapReport({
+    projectId: "proj-1",
+    reportId,
+    expectedDigest: detail.report.snapshotDigest,
+    expectedReviewRevision: saved.reviewRevision,
+    expectedDecisionsDigest: saved.decisionsDigest,
+  });
   assert.equal(v1.version, 1);
 
   // Verify v1 detail and materialized human truth
@@ -251,7 +271,13 @@ test("gap proposal: coverage matrix, first-party refs, review, accept v1/v2, sta
   assert.equal(acceptedDecisions.length, acceptedGaps.length);
 
   // Double acceptance of the same report does NOT mint v2: returns existing snapshot (idempotent)
-  const v2 = await service.acceptGapReport({ projectId: "proj-1", reportId, expectedDigest: detail.report.snapshotDigest });
+  const v2 = await service.acceptGapReport({
+    projectId: "proj-1",
+    reportId,
+    expectedDigest: detail.report.snapshotDigest,
+    expectedReviewRevision: saved.reviewRevision,
+    expectedDecisionsDigest: saved.decisionsDigest,
+  });
   assert.equal(v2.version, 1);
   assert.equal(v2.snapshotId, v1.snapshotId);
   const latestVer = await store.latestAcceptedGapVersion("proj-1");
@@ -262,6 +288,7 @@ test("gap proposal: coverage matrix, first-party refs, review, accept v1/v2, sta
     service.saveGapDecisions({
       projectId: "proj-1",
       reportId,
+      expectedReviewRevision: saved.reviewRevision,
       decisions: reportData.gaps.map((g) => ({ gapId: g.id, disposition: "OPTIONAL" as const })),
     }),
     /already accepted/,
@@ -269,7 +296,13 @@ test("gap proposal: coverage matrix, first-party refs, review, accept v1/v2, sta
 
   // Accepting a nonexistent report fails.
   await assert.rejects(
-    service.acceptGapReport({ projectId: "proj-1", reportId: "missing", expectedDigest: "x" }),
+    service.acceptGapReport({
+      projectId: "proj-1",
+      reportId: "missing",
+      expectedDigest: "x",
+      expectedReviewRevision: 0,
+      expectedDecisionsDigest: "0".repeat(64),
+    }),
     /not found/,
   );
 });
@@ -290,6 +323,7 @@ test("gap decisions: unknown gap and incomplete coverage fail closed", async (t)
     service.saveGapDecisions({
       projectId: "proj-1",
       reportId,
+      expectedReviewRevision: detail.report.reviewRevision,
       decisions: [{ gapId: "gap-999", disposition: "REQUIRED" }],
     }),
     /Unknown gap/,
@@ -299,6 +333,7 @@ test("gap decisions: unknown gap and incomplete coverage fail closed", async (t)
       service.saveGapDecisions({
         projectId: "proj-1",
         reportId,
+        expectedReviewRevision: detail.report.reviewRevision,
         decisions: [{ gapId: reportData.gaps[0]!.id, disposition: "REQUIRED" }],
       }),
       /Every gap requires a decision/,
@@ -311,3 +346,77 @@ test("classification policy version is stable and defaults are bounded", () => {
   assert.equal(DEFAULT_COMPETITOR_CONFIG.maxPages, 10);
   assert.equal(DEFAULT_COMPETITOR_CONFIG.dailyLimitUsd, 5);
 });
+
+test("concurrency race: accept revision N vs concurrent save revision N+1 on PostgreSQL", async (t) => {
+  const inst = await seedEnvironment();
+  t.after(() => inst.close());
+  const outcomes = new Map<string, PageAcquisitionOutcome>([
+    ["https://guide-a.example/chamonix", successOutcome("https://guide-a.example/chamonix", PAGE_HTML_1)],
+  ]);
+  const service = buildService(inst, outcomes);
+  const run = await service.runCompetitors({ projectId: "proj-1", serpSnapshotId: "serp-1" });
+  const { reportId } = await service.proposeGaps({ projectId: "proj-1", competitorRunId: run.run.id });
+  const detail = await service.getGapReportDetail("proj-1", reportId);
+  const reportData = detail.report.data as { gaps: Array<{ id: string }> };
+
+  // Save initial decisions at revision 0 -> produces revision 1
+  const initialSave = await service.saveGapDecisions({
+    projectId: "proj-1",
+    reportId,
+    expectedReviewRevision: detail.report.reviewRevision,
+    decisions: reportData.gaps.map((g) => ({
+      gapId: g.id,
+      disposition: "REQUIRED" as const,
+      priority: "HIGH" as const,
+      note: "rev1 note",
+    })),
+  });
+  assert.equal(initialSave.reviewRevision, 1);
+
+  // Now race: accept rev 1 vs save rev 2
+  const acceptPromise = service.acceptGapReport({
+    projectId: "proj-1",
+    reportId,
+    expectedReportDigest: detail.report.snapshotDigest,
+    expectedReviewRevision: initialSave.reviewRevision,
+    expectedDecisionsDigest: initialSave.decisionsDigest,
+  });
+
+  const saveRev2Promise = service.saveGapDecisions({
+    projectId: "proj-1",
+    reportId,
+    expectedReviewRevision: initialSave.reviewRevision,
+    decisions: reportData.gaps.map((g) => ({
+      gapId: g.id,
+      disposition: "OPTIONAL" as const,
+      priority: "LOW" as const,
+      note: "rev2 note",
+    })),
+  });
+
+  const [acceptResult, saveResult] = await Promise.allSettled([acceptPromise, saveRev2Promise]);
+
+  // One must succeed and one must fail closed due to row lock and concurrency checks
+  if (acceptResult.status === "fulfilled") {
+    // Accept acquired lock first: save rev 2 must fail because report is already accepted
+    assert.equal(saveResult.status, "rejected");
+    assert.ok(saveResult.reason instanceof FactoryError);
+    assert.equal((saveResult.reason as FactoryError).code, "content_gap_decision_invalid");
+
+    // Verified: accepted snapshot exists at version 1 with rev 1 decisions
+    const v1Detail = await service.acceptedGapDetail("proj-1", acceptResult.value.version);
+    assert.equal(v1Detail.snapshot.decisionsDigest, initialSave.decisionsDigest);
+  } else {
+    // Save acquired lock first: accept rev 1 must fail due to stale revision or decisions digest
+    assert.equal(saveResult.status, "fulfilled");
+    assert.equal(saveResult.value.reviewRevision, 2);
+    assert.equal(acceptResult.status, "rejected");
+    assert.ok(acceptResult.reason instanceof FactoryError);
+    assert.ok(
+      ["content_gap_stale", "content_gap_accept_failed"].includes(
+        (acceptResult.reason as FactoryError).code,
+      ),
+    );
+  }
+});
+

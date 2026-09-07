@@ -224,53 +224,42 @@ export const api = {
   saveGapDecisions: (
     projectId: string,
     reportId: string,
-    input:
-      | {
-          expectedReviewRevision?: number;
-          decisions: Array<{
-            gapId: string;
-            disposition: "REQUIRED" | "OPTIONAL" | "EXCLUDE";
-            priority?: "HIGH" | "MEDIUM" | "LOW";
-            note?: string;
-          }>;
-        }
-      | Array<{
-          gapId: string;
-          disposition: "REQUIRED" | "OPTIONAL" | "EXCLUDE";
-          priority?: "HIGH" | "MEDIUM" | "LOW";
-          note?: string;
-        }>,
+    input: {
+      expectedReviewRevision: number;
+      decisions: Array<{
+        gapId: string;
+        disposition: "REQUIRED" | "OPTIONAL" | "EXCLUDE";
+        priority?: "HIGH" | "MEDIUM" | "LOW";
+        note?: string;
+      }>;
+    },
   ) => {
-    const body = Array.isArray(input) ? { decisions: input } : input;
-    return request<{ ok: boolean; reviewRevision?: number; decisionsDigest?: string }>(
+    return request<{ ok: boolean; reviewRevision: number; decisionsDigest: string }>(
       `/api/projects/${encodeURIComponent(projectId)}/content-gaps/reports/${encodeURIComponent(reportId)}/decisions`,
-      { method: "PUT", body: JSON.stringify(body) },
+      { method: "PUT", body: JSON.stringify(input) },
     );
   },
 
   acceptContentGaps: (
     projectId: string,
     reportId: string,
-    input:
-      | string
-      | {
-          expectedReportDigest?: string;
-          expectedDigest?: string;
-          expectedReviewRevision?: number;
-          expectedDecisionsDigest?: string;
-        },
+    input: {
+      expectedReportDigest?: string;
+      expectedDigest?: string;
+      expectedReviewRevision: number;
+      expectedDecisionsDigest: string;
+    },
   ) => {
-    const body =
-      typeof input === "string"
-        ? { expectedDigest: input }
-        : {
-            expectedReportDigest: input.expectedReportDigest ?? input.expectedDigest,
-            expectedReviewRevision: input.expectedReviewRevision,
-            expectedDecisionsDigest: input.expectedDecisionsDigest,
-          };
     return request<{ version: number; snapshotId: string }>(
       `/api/projects/${encodeURIComponent(projectId)}/content-gaps/reports/${encodeURIComponent(reportId)}/accept`,
-      { method: "POST", body: JSON.stringify(body) },
+      {
+        method: "POST",
+        body: JSON.stringify({
+          expectedReportDigest: input.expectedReportDigest ?? input.expectedDigest,
+          expectedReviewRevision: input.expectedReviewRevision,
+          expectedDecisionsDigest: input.expectedDecisionsDigest,
+        }),
+      },
     );
   },
 

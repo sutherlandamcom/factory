@@ -186,12 +186,11 @@
             "version"
           ]
         },
-        "accepted_content_gap_snapshots_report_decisions_unique": {
-          "name": "accepted_content_gap_snapshots_report_decisions_unique",
+        "accepted_content_gap_snapshots_report_id_unique": {
+          "name": "accepted_content_gap_snapshots_report_id_unique",
           "nullsNotDistinct": false,
           "columns": [
-            "report_id",
-            "decisions_digest"
+            "report_id"
           ]
         }
       },

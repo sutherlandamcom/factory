@@ -81,7 +81,7 @@ const gapProposalSchema = z
 
 const gapDecisionsSchema = z
   .object({
-    expectedReviewRevision: z.number().int().min(0).optional(),
+    expectedReviewRevision: z.number().int().min(0),
     decisions: z
       .array(
         z
@@ -102,8 +102,8 @@ const gapAcceptSchema = z
   .object({
     expectedReportDigest: z.string().trim().min(1).max(128).optional(),
     expectedDigest: z.string().trim().min(1).max(128).optional(),
-    expectedReviewRevision: z.number().int().min(0).optional(),
-    expectedDecisionsDigest: z.string().trim().min(1).max(128).optional(),
+    expectedReviewRevision: z.number().int().min(0),
+    expectedDecisionsDigest: z.string().trim().min(1).max(128),
   })
   .strict()
   .refine((data) => Boolean(data.expectedReportDigest || data.expectedDigest), {

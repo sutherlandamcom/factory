@@ -551,3 +551,36 @@ export function parseContentGapDecisionsData(input: unknown): ContentGapDecision
 export function parseAcceptedContentGapSnapshotData(input: unknown): AcceptedContentGapSnapshotData {
   return acceptedContentGapSnapshotDataSchema.parse(input);
 }
+
+/**
+ * Public operator mutation contracts.
+ * Concurrency fields are strictly required: direct API callers cannot bypass optimistic locking.
+ */
+export const gapDecisionsInputSchema = z
+  .object({
+    expectedReviewRevision: z.number().int().min(0),
+    decisions: z.array(gapDecisionSchema).min(1).max(30),
+  })
+  .strict();
+export type GapDecisionsInput = z.infer<typeof gapDecisionsInputSchema>;
+
+export const gapAcceptInputSchema = z
+  .object({
+    expectedReportDigest: digestSchema.optional(),
+    expectedDigest: digestSchema.optional(),
+    expectedReviewRevision: z.number().int().min(0),
+    expectedDecisionsDigest: digestSchema,
+  })
+  .strict()
+  .refine((data) => Boolean(data.expectedReportDigest || data.expectedDigest), {
+    message: "expectedReportDigest (or expectedDigest) is required",
+  });
+export type GapAcceptInput = z.infer<typeof gapAcceptInputSchema>;
+
+export function parseGapDecisionsInput(input: unknown): GapDecisionsInput {
+  return gapDecisionsInputSchema.parse(input);
+}
+
+export function parseGapAcceptInput(input: unknown): GapAcceptInput {
+  return gapAcceptInputSchema.parse(input);
+}

@@ -16,8 +16,9 @@ At the 2026-09-06 inspection, main was
 [PR #18](https://github.com/sutherlandamcom/factory/pull/18) and instruction
 alignment [PR #19](https://github.com/sutherlandamcom/factory/pull/19) are merged.
 The Operator section below describes code present on that base. Search
-Intelligence [PR #21](https://github.com/sutherlandamcom/factory/pull/21) is an
-open candidate, not functionality on this main. Merge and CI are not independent
+Intelligence [PR #21](https://github.com/sutherlandamcom/factory/pull/21) is
+merged on main (commit `3bf9652e89f213c9ffd3b2fae2007d8ed155c68f`). Competitors + Content Gap
+(PR #24) is the current open candidate. Merge and CI are not independent
 GO evidence; see the roadmap status index and recheck Git before starting work.
 
 ## What exists today (execution trust hardening)

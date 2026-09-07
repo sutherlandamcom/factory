@@ -7,7 +7,12 @@ import {
   decisionsDigest,
   type GapGroundingContext,
 } from "../src/competitors/gap-engine.js";
-import { CompetitorContentGapService } from "../src/competitors/service.js";
+import {
+  CompetitorContentGapService,
+  RESERVED_PAGE_ANALYSIS_COST_MICROS,
+  RESERVED_GAP_ANALYSIS_COST_MICROS,
+} from "../src/competitors/service.js";
+import { CompetitorStore } from "../src/competitors/competitor-store.js";
 import { SearchIntelligenceService } from "../src/search/service.js";
 import { OpenRouterGapAnalyst } from "../src/competitors/gap-analyst.js";
 import { OpenRouterSearchAnalyst } from "../src/search/analyst.js";
@@ -857,6 +862,8 @@ test("acceptGapReport: rejects wrong expectedDigest even if already accepted", a
       projectId: "proj-1",
       reportId: "report-1",
       expectedDigest: "wrong-digest".padEnd(64, "0"),
+      expectedReviewRevision: 0,
+      expectedDecisionsDigest: "decisions-digest-1".padEnd(64, "0"),
     }),
     (err: unknown) =>
       err instanceof FactoryError &&
@@ -1549,7 +1556,7 @@ test("C3: acceptGapReport fails when expectedReviewRevision does not match curre
     }),
     (err: unknown) =>
       err instanceof FactoryError &&
-      err.code === "content_gap_accept_failed" &&
+      err.code === "content_gap_stale" &&
       err.message.includes("Review revision mismatch"),
   );
 });
@@ -1682,4 +1689,225 @@ test("C7: acceptGapReport idempotent duplicate call with conflicting decisionsDi
       err.message.includes("Report was already accepted with different decisions"),
   );
 });
+
+test("C8: near-budget boundary blocks execution before spend", async () => {
+  const store = new CompetitorStore({} as never);
+  // Daily budget = $5.00 = 5,000,000 micros.
+  // Spent today = 4,995,000 micros.
+  // Remaining budget is 5,000 micros.
+  store.sumTodayCompetitorCostMicros = async () => 4_995_000;
+
+  // Attempting to reserve RESERVED_PAGE_ANALYSIS_COST_MICROS (10,000) exceeds budget
+  await assert.rejects(
+    store.reserveBudget(RESERVED_PAGE_ANALYSIS_COST_MICROS, 5),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "competitor_budget_blocked" &&
+      err.message.includes("Daily competitor budget reached"),
+  );
+
+  // Attempting to reserve RESERVED_GAP_ANALYSIS_COST_MICROS (20,000) also exceeds budget
+  await assert.rejects(
+    store.reserveBudget(RESERVED_GAP_ANALYSIS_COST_MICROS, 5),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "competitor_budget_blocked",
+  );
+});
+
+test("C9: concurrent budget reservation racing: mutex serializes reservations and releases allow subsequent", async () => {
+  const store = new CompetitorStore({} as never);
+  // Daily budget = $5.00 = 5,000,000 micros.
+  // Spent today = 4,985,000 micros.
+  // Remaining budget is 15,000 micros.
+  store.sumTodayCompetitorCostMicros = async () => 4_985_000;
+
+  // Two parallel attempts to reserve 10,000 each.
+  // Total needed = 20,000, but only 15,000 available.
+  // Mutex ensures exactly one succeeds and one is blocked.
+  const results = await Promise.allSettled([
+    store.reserveBudget(10_000, 5),
+    store.reserveBudget(10_000, 5),
+  ]);
+
+  const fulfilled = results.filter((r): r is PromiseFulfilledResult<() => void> => r.status === "fulfilled");
+  const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+
+  assert.equal(fulfilled.length, 1, "Exactly one concurrent reservation should succeed");
+  assert.equal(rejected.length, 1, "Exactly one concurrent reservation should be blocked");
+  const firstFulfilled = fulfilled[0];
+  const firstRejected = rejected[0];
+  assert.ok(firstFulfilled);
+  assert.ok(firstRejected);
+  assert.ok(firstRejected.reason instanceof FactoryError);
+  assert.equal((firstRejected.reason as FactoryError).code, "competitor_budget_blocked");
+
+  // While first is active, another attempt to reserve 10,000 also fails
+  await assert.rejects(
+    store.reserveBudget(10_000, 5),
+    (err: unknown) => err instanceof FactoryError && err.code === "competitor_budget_blocked",
+  );
+
+  // Release the first reservation
+  firstFulfilled.value();
+
+  // After release, remaining budget is once again 15,000, so a subsequent 10,000 reservation succeeds
+  const release2 = await store.reserveBudget(10_000, 5);
+  assert.equal(typeof release2, "function");
+  release2();
+});
+
+test("C10: staleness parity: gapWorkspace and acceptedGapDetail return identical staleness when newer competitor run exists", async () => {
+  const acceptedSnapshot = {
+    id: "acc-1",
+    version: 1,
+    reportId: "rep-1",
+    snapshotDigest: "acc-digest-1",
+    reportDigest: "rep-digest-1",
+    decisionsDigest: "dec-digest-1",
+    acceptedInputSnapshotId: "input-snap-1",
+    acceptedInputVersion: 1,
+    acceptedInputDigest: "input-digest-1",
+    serpSnapshotId: "serp-1",
+    serpSnapshotDigest: "serp-digest-1",
+    intelligenceSnapshotId: "intel-1",
+    intelligenceSnapshotDigest: "intel-digest-1",
+    pageSnapshotRefs: [],
+    analysisRefs: [],
+    acceptedAt: new Date(1000),
+    data: {
+      gaps: [{ id: "gap-1", recommendedDisposition: "REQUIRED", disposition: "REQUIRED" }],
+      classificationDigest: "class-digest-1",
+      effectiveClassifications: [],
+    },
+  };
+
+  const boundRun = {
+    id: "run-1",
+    projectId: "proj-1",
+    serpSnapshotId: "serp-1",
+    status: "succeeded",
+    createdAt: new Date(1000),
+  };
+
+  const newerRun = {
+    id: "run-2",
+    projectId: "proj-1",
+    serpSnapshotId: "serp-1",
+    status: "succeeded",
+    createdAt: new Date(2000), // Newer run supersedes run-1
+  };
+
+  const service = new CompetitorContentGapService({
+    intake: {
+      listSnapshots: async () => [
+        { id: "input-snap-1", version: 1, digest: "input-digest-1" },
+      ],
+    } as never,
+    competitorStore: {
+      listGapReports: async () => [],
+      listAcceptedGapSnapshots: async () => [acceptedSnapshot],
+      getAcceptedGapSnapshot: async () => acceptedSnapshot,
+      getGapReport: async () => ({
+        id: "rep-1",
+        runId: "run-1",
+      }),
+      getSerpSnapshot: async () => ({
+        id: "serp-1",
+        query: "chamonix property",
+        acceptedInputDigest: "input-digest-1",
+      }),
+      getIntelligenceForSerpSnapshot: async () => ({
+        id: "intel-1",
+        createdAt: new Date(1000),
+      }),
+      getIntelligenceSnapshot: async () => ({
+        id: "intel-1",
+        createdAt: new Date(1000),
+      }),
+      getRun: async (_proj: string, runId: string) => {
+        if (runId === "run-1") return boundRun;
+        if (runId === "run-2") return newerRun;
+        return null;
+      },
+      latestSucceededRunForSerp: async () => newerRun,
+      latestSucceededRun: async () => newerRun,
+      pageSnapshotsByIds: async () => [],
+      analysesByIds: async () => [],
+      getLatestClassificationOverridesForPages: async () => new Map(),
+    } as never,
+    competitorAnalyst: { provider: "fixture" } as never,
+    gapAnalyst: { provider: "fixture" } as never,
+  });
+
+  const workspace = await service.gapWorkspace("proj-1");
+  const detail = await service.acceptedGapDetail("proj-1", 1);
+
+  assert.equal(workspace.accepted.length, 1);
+  const acceptedWorkspaceEntry = workspace.accepted[0];
+  assert.ok(acceptedWorkspaceEntry);
+  assert.equal(acceptedWorkspaceEntry.stale, true, "workspace.accepted should be stale due to newer run");
+  assert.equal(detail.stale, true, "detail should be stale due to newer run");
+
+  assert.deepEqual(
+    acceptedWorkspaceEntry.staleReasons,
+    detail.staleReasons,
+    "workspace and detail must return IDENTICAL staleness reasons",
+  );
+  assert.ok(
+    detail.staleReasons.some((r) => r.includes("A newer competitor run was executed")),
+    "staleReasons should explain that a newer competitor run exists",
+  );
+});
+
+test("C11: snapshot uniqueness: report can have at most one accepted gap snapshot", async () => {
+  let currentReportDecisionsDigest = "dd-original";
+  const service = new CompetitorContentGapService({
+    intake: {} as never,
+    competitorStore: {
+      getGapReport: async () => ({
+        id: "rep-1",
+        snapshotDigest: "rd-1",
+        reviewRevision: 1,
+        decisionsDigest: currentReportDecisionsDigest,
+      }),
+      getAcceptedGapSnapshotByReportId: async () => ({
+        id: "acc-1",
+        version: 1,
+        reportDigest: "rd-1",
+        decisionsDigest: "dd-original",
+      }),
+    } as never,
+    competitorAnalyst: { provider: "fixture" } as never,
+    gapAnalyst: { provider: "fixture" } as never,
+  });
+
+  // Idempotent duplicate call with matching digests succeeds and returns existing snapshot
+  const res = await service.acceptGapReport({
+    projectId: "proj-1",
+    reportId: "rep-1",
+    expectedReportDigest: "rd-1",
+    expectedReviewRevision: 1,
+    expectedDecisionsDigest: "dd-original",
+  });
+  assert.equal(res.version, 1);
+  assert.equal(res.snapshotId, "acc-1");
+
+  // Duplicate call with conflicting decisions digest fails closed
+  currentReportDecisionsDigest = "dd-conflicting";
+  await assert.rejects(
+    service.acceptGapReport({
+      projectId: "proj-1",
+      reportId: "rep-1",
+      expectedReportDigest: "rd-1",
+      expectedReviewRevision: 1,
+      expectedDecisionsDigest: "dd-conflicting",
+    }),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "content_gap_accept_failed" &&
+      err.message.includes("Report was already accepted with different decisions"),
+  );
+});
+
 

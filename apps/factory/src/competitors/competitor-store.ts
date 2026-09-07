@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import {
+  parseAcceptedContentGapSnapshotData,
   parseCompetitorPageAnalysisData,
   parseCompetitorPageSnapshotData,
   parseContentGapReportData,
+  type ContentGapReportData,
   type SearchUsage,
 } from "@factory/contracts";
 import type { FactoryDb } from "../persistence/db.js";
@@ -667,6 +669,193 @@ export class CompetitorStore {
     return row!;
   }
 
+  /**
+   * Atomic acceptance of a content gap report:
+   * 1. Acquires row lock on contentGapReports (for update).
+   * 2. Validates expectedReportDigest, expectedReviewRevision, expectedDecisionsDigest inside tx.
+   * 3. Handles idempotent re-acceptance if already accepted with identical digests.
+   * 4. Reads decisions inside tx and validates count and decisions digest.
+   * 5. Runs validateStaleness inside tx (or callback).
+   * 6. Materializes decisions into accepted gap snapshot data.
+   * 7. Determines next version and inserts acceptedContentGapSnapshots row.
+   * 8. Marks contentGapReports as reviewState='accepted'.
+   * 9. Commits atomically.
+   */
+  async acceptGapReportAtomic(input: {
+    projectId: string;
+    reportId: string;
+    expectedReportDigest: string;
+    expectedReviewRevision: number;
+    expectedDecisionsDigest: string;
+    validateStaleness: (report: ContentGapReportRecord, reportData: ContentGapReportData) => Promise<void>;
+  }): Promise<{ version: number; snapshotId: string }> {
+    return await this.db.transaction(async (tx) => {
+      const [report] = await tx
+        .select()
+        .from(contentGapReports)
+        .where(
+          and(
+            eq(contentGapReports.projectId, input.projectId),
+            eq(contentGapReports.id, input.reportId),
+          ),
+        )
+        .for("update");
+      if (!report) {
+        throw new FactoryError("content_gap_report_not_found", "Content gap report not found.");
+      }
+
+      if (input.expectedReportDigest !== report.snapshotDigest) {
+        throw new FactoryError(
+          "content_gap_accept_failed",
+          "Report digest mismatch: the report changed since review. Re-review and retry.",
+        );
+      }
+
+      if (report.reviewRevision !== input.expectedReviewRevision) {
+        throw new FactoryError(
+          "content_gap_stale",
+          `Review revision mismatch: review was updated concurrently (expected rev ${input.expectedReviewRevision}, current rev ${report.reviewRevision}). Re-review and retry.`,
+        );
+      }
+
+      if (!report.decisionsDigest || report.decisionsDigest !== input.expectedDecisionsDigest) {
+        throw new FactoryError(
+          "content_gap_accept_failed",
+          "Decisions digest mismatch: review decisions changed since review. Re-review and retry.",
+        );
+      }
+
+      const [existingSnapshot] = await tx
+        .select()
+        .from(acceptedContentGapSnapshots)
+        .where(eq(acceptedContentGapSnapshots.reportId, input.reportId))
+        .limit(1);
+
+      if (existingSnapshot) {
+        if (
+          existingSnapshot.decisionsDigest === input.expectedDecisionsDigest &&
+          existingSnapshot.reportDigest === input.expectedReportDigest
+        ) {
+          return { version: existingSnapshot.version, snapshotId: existingSnapshot.id };
+        }
+        throw new FactoryError(
+          "content_gap_accept_failed",
+          "Report was already accepted with different decisions.",
+        );
+      }
+
+      const decisions = await tx
+        .select()
+        .from(contentGapDecisions)
+        .where(eq(contentGapDecisions.reportId, input.reportId))
+        .orderBy(contentGapDecisions.gapId);
+
+      const reportData = report.data as ContentGapReportData;
+      if (decisions.length !== reportData.gaps.length) {
+        throw new FactoryError(
+          "content_gap_accept_failed",
+          "Acceptance requires a recorded decision for every gap.",
+        );
+      }
+
+      const currentDecDigest = decisionsDigest(
+        report.snapshotDigest,
+        decisions.map((d) => ({
+          gapId: d.gapId,
+          disposition: d.disposition,
+          priority: d.priority,
+          note: d.note,
+        })),
+      );
+
+      if (currentDecDigest !== input.expectedDecisionsDigest) {
+        throw new FactoryError(
+          "content_gap_accept_failed",
+          "Decisions digest mismatch: review decisions changed since review. Re-review and retry.",
+        );
+      }
+
+      await input.validateStaleness(report, reportData);
+
+      const decisionByGapId = new Map(decisions.map((d) => [d.gapId, d]));
+      const materializedGaps = reportData.gaps.map((g) => {
+        const d = decisionByGapId.get(g.id);
+        if (!d) {
+          throw new FactoryError("content_gap_accept_failed", `Missing decision for gap "${g.id}".`);
+        }
+        return {
+          ...g,
+          recommendedDisposition: g.recommendedDisposition,
+          recommendedPriority: g.priority ?? null,
+          disposition: d.disposition as "REQUIRED" | "OPTIONAL" | "EXCLUDE",
+          priority: (d.priority as "HIGH" | "MEDIUM" | "LOW" | null) ?? g.priority ?? null,
+          note: d.note ?? null,
+        };
+      });
+
+      const acceptedData = parseAcceptedContentGapSnapshotData({
+        ...reportData,
+        classificationDigest: reportData.classificationDigest,
+        effectiveClassifications: reportData.effectiveClassifications,
+        gaps: materializedGaps,
+        decisions: decisions.map((d) => ({
+          gapId: d.gapId,
+          disposition: d.disposition,
+          priority: d.priority ?? null,
+          note: d.note ?? null,
+        })),
+        reviewState: "accepted",
+      });
+
+      const [latestRow] = await tx
+        .select({ version: acceptedContentGapSnapshots.version })
+        .from(acceptedContentGapSnapshots)
+        .where(eq(acceptedContentGapSnapshots.projectId, input.projectId))
+        .orderBy(desc(acceptedContentGapSnapshots.version))
+        .limit(1);
+
+      const version = (latestRow?.version ?? 0) + 1;
+      const snapshotDigest = deterministicDigest({
+        projectId: input.projectId,
+        version,
+        reportId: report.id,
+        reportDigest: report.snapshotDigest,
+        decisionsDigest: currentDecDigest,
+        data: acceptedData,
+      });
+
+      const [snapshot] = await tx
+        .insert(acceptedContentGapSnapshots)
+        .values({
+          id: randomUUID(),
+          projectId: input.projectId,
+          version,
+          reportId: report.id,
+          reportDigest: report.snapshotDigest,
+          decisionsDigest: currentDecDigest,
+          acceptedInputSnapshotId: report.acceptedInputSnapshotId,
+          acceptedInputVersion: report.acceptedInputVersion,
+          acceptedInputDigest: report.acceptedInputDigest,
+          serpSnapshotId: report.serpSnapshotId,
+          serpSnapshotDigest: report.serpSnapshotDigest,
+          intelligenceSnapshotId: report.intelligenceSnapshotId,
+          intelligenceSnapshotDigest: report.intelligenceSnapshotDigest,
+          pageSnapshotRefs: reportData.pageSnapshotRefs ?? [],
+          analysisRefs: reportData.analysisRefs ?? [],
+          data: acceptedData,
+          snapshotDigest,
+        })
+        .returning();
+
+      await tx
+        .update(contentGapReports)
+        .set({ reviewState: "accepted" })
+        .where(eq(contentGapReports.id, report.id));
+
+      return { version: snapshot!.version, snapshotId: snapshot!.id };
+    });
+  }
+
   async getAcceptedGapSnapshot(
     projectId: string,
     version: number,
@@ -731,6 +920,53 @@ export class CompetitorStore {
     const gapTotal = Number(gapRow?.total ?? 0);
     const total = (Number.isFinite(pageTotal) ? pageTotal : 0) + (Number.isFinite(gapTotal) ? gapTotal : 0);
     return total > 0 ? Math.round(total) : 0;
+  }
+
+  private activeReservationsMicros = 0;
+  private reservationLock = Promise.resolve();
+
+  private async withReservationLock<T>(fn: () => Promise<T>): Promise<T> {
+    const prevLock = this.reservationLock;
+    let release: () => void;
+    this.reservationLock = new Promise((resolve) => {
+      release = resolve;
+    });
+    await prevLock;
+    try {
+      return await fn();
+    } finally {
+      release!();
+    }
+  }
+
+  /**
+   * Concurrency-safe budget reservation.
+   *
+   * Enforces fail-closed hard ceiling:
+   *   spentToday + activeReservations + estimatedCostMicros <= dailyBudgetMicros
+   *
+   * Blocks execution before external spend occurs. Returns a release callback
+   * that decrements activeReservations in finally blocks.
+   */
+  async reserveBudget(estimatedCostMicros: number, dailyLimitUsd: number): Promise<() => void> {
+    return await this.withReservationLock(async () => {
+      const budgetMicros = Math.round(dailyLimitUsd * 1_000_000);
+      const spentToday = await this.sumTodayCompetitorCostMicros();
+      if (spentToday + this.activeReservationsMicros + estimatedCostMicros > budgetMicros) {
+        throw new FactoryError(
+          "competitor_budget_blocked",
+          `Daily competitor budget reached (${dailyLimitUsd} USD).`,
+        );
+      }
+      this.activeReservationsMicros += estimatedCostMicros;
+      let released = false;
+      return () => {
+        if (!released) {
+          released = true;
+          this.activeReservationsMicros = Math.max(0, this.activeReservationsMicros - estimatedCostMicros);
+        }
+      };
+    });
   }
 
   // ---- Batch helpers -------------------------------------------------------

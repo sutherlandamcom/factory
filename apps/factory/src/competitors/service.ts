@@ -15,6 +15,7 @@ import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
 import type { ProjectIntakeStore } from "../operator/intake-store.js";
 import type { CompetitorStore } from "./competitor-store.js";
+import type { AcceptedContentGapSnapshotRecord } from "../persistence/schema.js";
 import { DirectHttpPageProvider, type CompetitorPageProvider, type PageAcquisitionOutcome } from "./direct-http.js";
 import { extractCompetitorPage } from "./extract.js";
 import { buildEvidencePacket } from "./packet.js";
@@ -69,6 +70,13 @@ export const DEFAULT_COMPETITOR_CONFIG: CompetitorServiceConfig = {
   maxConcurrency: 3,
   dailyLimitUsd: 5,
 };
+
+/**
+ * Conservative bounded cost reservations for pre-invocation budget checks.
+ * Fail-closed before provider execution: spent + reserved <= dailyLimit.
+ */
+export const RESERVED_PAGE_ANALYSIS_COST_MICROS = 10_000; // $0.01
+export const RESERVED_GAP_ANALYSIS_COST_MICROS = 20_000; // $0.02
 
 export interface CompetitorServiceDeps {
   intake: ProjectIntakeStore;
@@ -224,15 +232,19 @@ export class CompetitorContentGapService {
     return { accepted, snapshots };
   }
 
-  private async checkBudget(): Promise<void> {
+  private async checkBudget(reservedCostMicros = 0): Promise<() => void> {
+    if (typeof this.deps.competitorStore.reserveBudget === "function") {
+      return await this.deps.competitorStore.reserveBudget(reservedCostMicros, this.config.dailyLimitUsd);
+    }
     const budgetMicros = this.config.dailyLimitUsd * 1_000_000;
     const spent = await this.deps.competitorStore.sumTodayCompetitorCostMicros();
-    if (spent >= budgetMicros) {
+    if (spent + reservedCostMicros > budgetMicros || spent >= budgetMicros) {
       throw new FactoryError(
         "competitor_budget_blocked",
         `Daily competitor budget reached (${this.config.dailyLimitUsd} USD).`,
       );
     }
+    return () => {};
   }
 
   // ---- Workspace ----------------------------------------------------------
@@ -385,16 +397,21 @@ export class CompetitorContentGapService {
         if (pageRow.dedupedFromSnapshotId) continue;
         if (analyzedCount >= maxPages) break;
         if (pageRow.classification !== "INCLUDE") continue;
-        await this.analyzePage({
-          runId: run.id,
-          projectId: input.projectId,
-          pageRowId: pageRow.id,
-          requestedUrl: pageRow.requestedUrl,
-          extracted: pageRow.extracted as CompetitorPageExtracted,
-          observedAt: pageRow.observedAt,
-          intelligence: intelData,
-          intakePayload,
-        });
+        const release = await this.checkBudget(RESERVED_PAGE_ANALYSIS_COST_MICROS);
+        try {
+          await this.analyzePage({
+            runId: run.id,
+            projectId: input.projectId,
+            pageRowId: pageRow.id,
+            requestedUrl: pageRow.requestedUrl,
+            extracted: pageRow.extracted as CompetitorPageExtracted,
+            observedAt: pageRow.observedAt,
+            intelligence: intelData,
+            intakePayload,
+          });
+        } finally {
+          release();
+        }
         analyzedCount++;
       }
 
@@ -645,213 +662,216 @@ export class CompetitorContentGapService {
       );
     }
     const { accepted } = await this.resolveAcceptedInputs(input.projectId);
-    await this.checkBudget();
+    const releaseBudget = await this.checkBudget(RESERVED_GAP_ANALYSIS_COST_MICROS);
+    try {
+      const run = input.competitorRunId
+        ? await this.deps.competitorStore.getRun(input.projectId, input.competitorRunId)
+        : await this.deps.competitorStore.latestSucceededRun(input.projectId);
+      if (!run || run.status !== "succeeded") {
+        throw new FactoryError("competitor_run_not_found", "No succeeded competitor run to propose gaps from.");
+      }
+      if (run.acceptedInputDigest !== accepted.digest) {
+        throw new FactoryError(
+          "content_gap_stale",
+          `Competitor run was generated for ProjectInput digest "${run.acceptedInputDigest}", but current accepted ProjectInput digest is "${accepted.digest}". Run competitor analysis for current inputs first.`,
+        );
+      }
+      const serp = await this.deps.competitorStore.getSerpSnapshot(input.projectId, run.serpSnapshotId);
+      if (!serp || serp.acceptedInputDigest !== accepted.digest) {
+        throw new FactoryError(
+          "content_gap_stale",
+          "The SERP evidence underlying this competitor run was generated for an older ProjectInput version. Run Search first.",
+        );
+      }
 
-    const run = input.competitorRunId
-      ? await this.deps.competitorStore.getRun(input.projectId, input.competitorRunId)
-      : await this.deps.competitorStore.latestSucceededRun(input.projectId);
-    if (!run || run.status !== "succeeded") {
-      throw new FactoryError("competitor_run_not_found", "No succeeded competitor run to propose gaps from.");
-    }
-    if (run.acceptedInputDigest !== accepted.digest) {
-      throw new FactoryError(
-        "content_gap_stale",
-        `Competitor run was generated for ProjectInput digest "${run.acceptedInputDigest}", but current accepted ProjectInput digest is "${accepted.digest}". Run competitor analysis for current inputs first.`,
+      const allPageRows = await this.deps.competitorStore.listPageSnapshotsForRun(run.id);
+      const overrides = await this.deps.competitorStore.getLatestClassificationOverridesForPages(
+        input.projectId,
+        allPageRows.map((r) => r.id),
       );
-    }
-    const serp = await this.deps.competitorStore.getSerpSnapshot(input.projectId, run.serpSnapshotId);
-    if (!serp || serp.acceptedInputDigest !== accepted.digest) {
-      throw new FactoryError(
-        "content_gap_stale",
-        "The SERP evidence underlying this competitor run was generated for an older ProjectInput version. Run Search first.",
+      const pageRows = allPageRows.filter((r) => {
+        if (r.acquisitionStatus !== "SUCCESS") return false;
+        const effectiveClassification = overrides.get(r.id)?.classification ?? r.classification;
+        return effectiveClassification === "INCLUDE";
+      });
+      if (pageRows.length === 0) {
+        throw new FactoryError(
+          "competitor_no_candidates",
+          "No includable competitor candidates remain after operator overrides.",
+        );
+      }
+      const includedPageIds = new Set(pageRows.map((p) => p.id));
+      const analysisRows = (await this.deps.competitorStore.listAnalysesForRun(run.id)).filter((a) =>
+        includedPageIds.has(a.pageSnapshotId),
       );
-    }
+      if (analysisRows.length === 0) {
+        throw new FactoryError(
+          "competitor_no_candidates",
+          "No analyses remain for included competitor candidates.",
+        );
+      }
 
-    const allPageRows = await this.deps.competitorStore.listPageSnapshotsForRun(run.id);
-    const overrides = await this.deps.competitorStore.getLatestClassificationOverridesForPages(
-      input.projectId,
-      allPageRows.map((r) => r.id),
-    );
-    const pageRows = allPageRows.filter((r) => {
-      if (r.acquisitionStatus !== "SUCCESS") return false;
-      const effectiveClassification = overrides.get(r.id)?.classification ?? r.classification;
-      return effectiveClassification === "INCLUDE";
-    });
-    if (pageRows.length === 0) {
-      throw new FactoryError(
-        "competitor_no_candidates",
-        "No includable competitor candidates remain after operator overrides.",
+      const intelRow = await this.deps.competitorStore.getIntelligenceForSerpSnapshot(
+        input.projectId,
+        run.serpSnapshotId,
       );
-    }
-    const includedPageIds = new Set(pageRows.map((p) => p.id));
-    const analysisRows = (await this.deps.competitorStore.listAnalysesForRun(run.id)).filter((a) =>
-      includedPageIds.has(a.pageSnapshotId),
-    );
-    if (analysisRows.length === 0) {
-      throw new FactoryError(
-        "competitor_no_candidates",
-        "No analyses remain for included competitor candidates.",
-      );
-    }
+      if (!intelRow) {
+        throw new FactoryError("competitor_serp_not_found", "Bound search intelligence not found.");
+      }
+      const intelData = intelRow.data as unknown as SearchIntelligenceData;
+      const intakePayload = accepted.payload as Record<string, unknown>;
+      const acceptedEvidence = collectFirstPartyEvidence(intakePayload);
 
-    const intelRow = await this.deps.competitorStore.getIntelligenceForSerpSnapshot(
-      input.projectId,
-      run.serpSnapshotId,
-    );
-    if (!intelRow) {
-      throw new FactoryError("competitor_serp_not_found", "Bound search intelligence not found.");
-    }
-    const intelData = intelRow.data as unknown as SearchIntelligenceData;
-    const intakePayload = accepted.payload as Record<string, unknown>;
-    const acceptedEvidence = collectFirstPartyEvidence(intakePayload);
+      // Deterministic matrix from stored analyses.
+      const pageDomainById = new Map(pageRows.map((p) => [p.id, p.domain]));
+      const matrix = buildCoverageMatrix({
+        requirements: [
+          ...intelData.userNeeds.slice(0, 20).map((need) => ({ requirement: need })),
+          ...intelData.semanticCoverageRequirements.slice(0, 20).map((req) => ({ requirement: req })),
+        ],
+        pages: analysisRows
+          .filter((a) => pageDomainById.has(a.pageSnapshotId))
+          .map((a) => ({
+            pageSnapshotId: a.pageSnapshotId,
+            domain: pageDomainById.get(a.pageSnapshotId)!,
+            analysis: a.data as never,
+          })),
+      });
 
-    // Deterministic matrix from stored analyses.
-    const pageDomainById = new Map(pageRows.map((p) => [p.id, p.domain]));
-    const matrix = buildCoverageMatrix({
-      requirements: [
-        ...intelData.userNeeds.slice(0, 20).map((need) => ({ requirement: need })),
-        ...intelData.semanticCoverageRequirements.slice(0, 20).map((req) => ({ requirement: req })),
-      ],
-      pages: analysisRows
-        .filter((a) => pageDomainById.has(a.pageSnapshotId))
-        .map((a) => ({
-          pageSnapshotId: a.pageSnapshotId,
-          domain: pageDomainById.get(a.pageSnapshotId)!,
-          analysis: a.data as never,
+      // PASS 2: compact analyses only.
+      const analyses = analysisRows.slice(0, 10).map((a) => ({
+        analysisId: a.id,
+        pageSnapshotId: a.pageSnapshotId,
+        domain: pageDomainById.get(a.pageSnapshotId) ?? "",
+        data: a.data as Record<string, unknown>,
+      }));
+      const gapResult = await this.deps.gapAnalyst.propose({
+        analyses,
+        searchIntelligence: {
+          primaryIntent: intelData.primaryIntent,
+          userNeeds: intelData.userNeeds.slice(0, 15),
+          questions: intelData.questions.slice(0, 15),
+          topics: intelData.topics.slice(0, 10),
+        },
+        serpSnapshot: { id: run.serpSnapshotId, digest: run.serpSnapshotDigest },
+        intelligenceSnapshot: { id: intelRow.id, digest: intelRow.snapshotDigest },
+        acceptedEvidence: acceptedEvidence.map((e) => ({ field: e.field, index: e.index, text: e.text })),
+        projectContext: {
+          businessName: ((intakePayload.business ?? {}) as Record<string, unknown>).name ?? "",
+          prohibitedClaims: (((intakePayload.evidence ?? {}) as Record<string, unknown>).prohibitedClaims ?? []) as string[],
+        },
+        coverageMatrixSummary: matrix.rows.map((row) => ({
+          requirement: row.requirement,
+          coverage: Object.fromEntries(row.cells.map((c) => [c.pageSnapshotId, c.level])),
         })),
-    });
+      });
 
-    // PASS 2: compact analyses only.
-    const analyses = analysisRows.slice(0, 10).map((a) => ({
-      analysisId: a.id,
-      pageSnapshotId: a.pageSnapshotId,
-      domain: pageDomainById.get(a.pageSnapshotId) ?? "",
-      data: a.data as Record<string, unknown>,
-    }));
-    const gapResult = await this.deps.gapAnalyst.propose({
-      analyses,
-      searchIntelligence: {
-        primaryIntent: intelData.primaryIntent,
-        userNeeds: intelData.userNeeds.slice(0, 15),
-        questions: intelData.questions.slice(0, 15),
-        topics: intelData.topics.slice(0, 10),
-      },
-      serpSnapshot: { id: run.serpSnapshotId, digest: run.serpSnapshotDigest },
-      intelligenceSnapshot: { id: intelRow.id, digest: intelRow.snapshotDigest },
-      acceptedEvidence: acceptedEvidence.map((e) => ({ field: e.field, index: e.index, text: e.text })),
-      projectContext: {
-        businessName: ((intakePayload.business ?? {}) as Record<string, unknown>).name ?? "",
-        prohibitedClaims: (((intakePayload.evidence ?? {}) as Record<string, unknown>).prohibitedClaims ?? []) as string[],
-      },
-      coverageMatrixSummary: matrix.rows.map((row) => ({
-        requirement: row.requirement,
-        coverage: Object.fromEntries(row.cells.map((c) => [c.pageSnapshotId, c.level])),
-      })),
-    });
-
-    // Segment-ref anchoring: every gap evidenceRef must resolve to a real
-    // segment of a real analyzed page in this run.
-    const segmentsByPage = new Map<string, Set<string>>();
-    for (const a of analysisRows) {
-      const page = pageRows.find((p) => p.id === a.pageSnapshotId);
-      const extracted = page?.extracted as CompetitorPageExtracted | undefined;
-      segmentsByPage.set(
-        a.pageSnapshotId,
-        new Set((extracted?.segments ?? extracted?.headings ?? []).map((s) => s.id)),
-      );
-    }
-    for (const gap of gapResult.gaps as Array<{ evidenceRefs?: Array<{ pageSnapshotId: string; segmentId: string }> }>) {
-      for (const ref of gap.evidenceRefs ?? []) {
-        const segs = segmentsByPage.get(ref.pageSnapshotId);
-        if (!segs || !segs.has(ref.segmentId)) {
-          throw new FactoryError(
-            "content_gap_invalid",
-            "Gap proposal references page evidence that does not exist in this run (fail closed).",
-          );
+      // Segment-ref anchoring: every gap evidenceRef must resolve to a real
+      // segment of a real analyzed page in this run.
+      const segmentsByPage = new Map<string, Set<string>>();
+      for (const a of analysisRows) {
+        const page = pageRows.find((p) => p.id === a.pageSnapshotId);
+        const extracted = page?.extracted as CompetitorPageExtracted | undefined;
+        segmentsByPage.set(
+          a.pageSnapshotId,
+          new Set((extracted?.segments ?? extracted?.headings ?? []).map((s) => s.id)),
+        );
+      }
+      for (const gap of gapResult.gaps as Array<{ evidenceRefs?: Array<{ pageSnapshotId: string; segmentId: string }> }>) {
+        for (const ref of gap.evidenceRefs ?? []) {
+          const segs = segmentsByPage.get(ref.pageSnapshotId);
+          if (!segs || !segs.has(ref.segmentId)) {
+            throw new FactoryError(
+              "content_gap_invalid",
+              "Gap proposal references page evidence that does not exist in this run (fail closed).",
+            );
+          }
         }
       }
-    }
 
-    const effectiveClassifications = allPageRows
-      .map((r) => {
-        const override = overrides.get(r.id);
-        const classification = (override?.classification ?? r.classification) as CompetitorClassification;
-        return {
-          pageSnapshotId: r.id,
-          classification,
-        };
-      })
-      .sort((a, b) => (a.pageSnapshotId < b.pageSnapshotId ? -1 : a.pageSnapshotId > b.pageSnapshotId ? 1 : 0));
-    const classificationDigest = deterministicDigest(effectiveClassifications);
+      const effectiveClassifications = allPageRows
+        .map((r) => {
+          const override = overrides.get(r.id);
+          const classification = (override?.classification ?? r.classification) as CompetitorClassification;
+          return {
+            pageSnapshotId: r.id,
+            classification,
+          };
+        })
+        .sort((a, b) => (a.pageSnapshotId < b.pageSnapshotId ? -1 : a.pageSnapshotId > b.pageSnapshotId ? 1 : 0));
+      const classificationDigest = deterministicDigest(effectiveClassifications);
 
-    const reportData = finalizeGapReport({
-      modelGaps: {
-        gaps: gapResult.gaps,
-        differentiationRequirements: gapResult.differentiationRequirements,
-      },
-      serpSnapshotId: run.serpSnapshotId,
-      serpSnapshotDigest: run.serpSnapshotDigest,
-      intelligenceSnapshotId: intelRow.id,
-      intelligenceSnapshotDigest: intelRow.snapshotDigest,
-      pageSnapshotRefs: pageRows.map((p) => ({ id: p.id, digest: p.snapshotDigest })),
-      analysisRefs: analysisRows.map((a) => ({ id: a.id, digest: a.snapshotDigest })),
-      acceptedInputSnapshotId: accepted.id,
-      acceptedInputSnapshotVersion: accepted.version,
-      acceptedInputDigest: accepted.digest,
-      classificationDigest,
-      effectiveClassifications,
-      coverageMatrix: matrix,
-      model: gapResult.model,
-      provider: gapResult.provider,
-      promptVersion: gapResult.promptVersion,
-      acceptedEvidence,
-      grounding: {
+      const reportData = finalizeGapReport({
+        modelGaps: {
+          gaps: gapResult.gaps,
+          differentiationRequirements: gapResult.differentiationRequirements,
+        },
         serpSnapshotId: run.serpSnapshotId,
         serpSnapshotDigest: run.serpSnapshotDigest,
         intelligenceSnapshotId: intelRow.id,
         intelligenceSnapshotDigest: intelRow.snapshotDigest,
-        pageSnapshots: pageRows.map((p) => ({
-          id: p.id,
-          digest: p.snapshotDigest,
-          classification: p.classification as CompetitorClassification,
-          validSegmentIds: new Set(
-            ((p.extracted as CompetitorPageExtracted | undefined)?.segments ?? []).map((s) => s.id),
-          ),
-        })),
-        analyses: analysisRows.map((a) => ({
-          id: a.id,
-          pageSnapshotId: a.pageSnapshotId,
-          digest: a.snapshotDigest,
-        })),
-      },
-    });
+        pageSnapshotRefs: pageRows.map((p) => ({ id: p.id, digest: p.snapshotDigest })),
+        analysisRefs: analysisRows.map((a) => ({ id: a.id, digest: a.snapshotDigest })),
+        acceptedInputSnapshotId: accepted.id,
+        acceptedInputSnapshotVersion: accepted.version,
+        acceptedInputDigest: accepted.digest,
+        classificationDigest,
+        effectiveClassifications,
+        coverageMatrix: matrix,
+        model: gapResult.model,
+        provider: gapResult.provider,
+        promptVersion: gapResult.promptVersion,
+        acceptedEvidence,
+        grounding: {
+          serpSnapshotId: run.serpSnapshotId,
+          serpSnapshotDigest: run.serpSnapshotDigest,
+          intelligenceSnapshotId: intelRow.id,
+          intelligenceSnapshotDigest: intelRow.snapshotDigest,
+          pageSnapshots: pageRows.map((p) => ({
+            id: p.id,
+            digest: p.snapshotDigest,
+            classification: p.classification as CompetitorClassification,
+            validSegmentIds: new Set(
+              ((p.extracted as CompetitorPageExtracted | undefined)?.segments ?? []).map((s) => s.id),
+            ),
+          })),
+          analyses: analysisRows.map((a) => ({
+            id: a.id,
+            pageSnapshotId: a.pageSnapshotId,
+            digest: a.snapshotDigest,
+          })),
+        },
+      });
 
-    const usage = gapResult.usage
-      ? {
-          inputTokens: gapResult.usage.inputTokens ?? null,
-          outputTokens: gapResult.usage.outputTokens ?? null,
-          totalTokens: gapResult.usage.totalTokens ?? null,
-          costMicros: gapResult.usage.costMicros ?? null,
-        }
-      : null;
+      const usage = gapResult.usage
+        ? {
+            inputTokens: gapResult.usage.inputTokens ?? null,
+            outputTokens: gapResult.usage.outputTokens ?? null,
+            totalTokens: gapResult.usage.totalTokens ?? null,
+            costMicros: gapResult.usage.costMicros ?? null,
+          }
+        : null;
 
-    const report = await this.deps.competitorStore.insertGapReport({
-      runId: run.id,
-      projectId: input.projectId,
-      acceptedInputSnapshotId: accepted.id,
-      acceptedInputVersion: accepted.version,
-      acceptedInputDigest: accepted.digest,
-      serpSnapshotId: run.serpSnapshotId,
-      serpSnapshotDigest: run.serpSnapshotDigest,
-      intelligenceSnapshotId: intelRow.id,
-      intelligenceSnapshotDigest: intelRow.snapshotDigest,
-      model: gapResult.model,
-      provider: gapResult.provider,
-      promptVersion: gapResult.promptVersion,
-      usage,
-      data: reportData,
-    });
-    return { reportId: report.id };
+      const report = await this.deps.competitorStore.insertGapReport({
+        runId: run.id,
+        projectId: input.projectId,
+        acceptedInputSnapshotId: accepted.id,
+        acceptedInputVersion: accepted.version,
+        acceptedInputDigest: accepted.digest,
+        serpSnapshotId: run.serpSnapshotId,
+        serpSnapshotDigest: run.serpSnapshotDigest,
+        intelligenceSnapshotId: intelRow.id,
+        intelligenceSnapshotDigest: intelRow.snapshotDigest,
+        model: gapResult.model,
+        provider: gapResult.provider,
+        promptVersion: gapResult.promptVersion,
+        usage,
+        data: reportData,
+      });
+      return { reportId: report.id };
+    } finally {
+      releaseBudget();
+    }
   }
 
   // ---- Review + acceptance ----------------------------------------------------
@@ -1031,6 +1051,31 @@ export class CompetitorContentGapService {
     return { stale: reasons.length > 0, staleReasons: reasons };
   }
 
+  private async evaluateAcceptedSnapshotStaleness(
+    projectId: string,
+    snapshot: AcceptedContentGapSnapshotRecord,
+  ): Promise<{ stale: boolean; staleReasons: string[] }> {
+    const report = await this.deps.competitorStore.getGapReport(projectId, snapshot.reportId);
+    const snapData = snapshot.data as {
+      classificationDigest?: string;
+      effectiveClassifications?: Array<{ pageSnapshotId: string; classification: CompetitorClassification }>;
+    };
+    return await this.evaluateUpstreamStaleness(projectId, {
+      acceptedInputSnapshotId: snapshot.acceptedInputSnapshotId,
+      acceptedInputVersion: snapshot.acceptedInputVersion,
+      acceptedInputDigest: snapshot.acceptedInputDigest,
+      serpSnapshotId: snapshot.serpSnapshotId,
+      serpSnapshotDigest: snapshot.serpSnapshotDigest,
+      intelligenceSnapshotId: snapshot.intelligenceSnapshotId,
+      intelligenceSnapshotDigest: snapshot.intelligenceSnapshotDigest,
+      pageSnapshotRefs: (snapshot.pageSnapshotRefs as Array<{ id: string; digest: string }>) ?? [],
+      analysisRefs: (snapshot.analysisRefs as Array<{ id: string; digest: string }>) ?? [],
+      classificationDigest: snapData.classificationDigest,
+      effectiveClassifications: snapData.effectiveClassifications,
+      competitorRunId: report?.runId,
+    });
+  }
+
   async gapWorkspace(projectId: string): Promise<GapWorkspaceReadModel> {
     const reports = await this.deps.competitorStore.listGapReports(projectId, 20);
     const accepted = await this.deps.competitorStore.listAcceptedGapSnapshots(projectId);
@@ -1076,24 +1121,8 @@ export class CompetitorContentGapService {
     for (const snap of accepted) {
       const data = snap.data as {
         gaps: Array<{ recommendedDisposition: string; disposition?: string }>;
-        pageSnapshotRefs?: Array<{ id: string; digest: string }>;
-        analysisRefs?: Array<{ id: string; digest: string }>;
-        classificationDigest?: string;
-        effectiveClassifications?: Array<{ pageSnapshotId: string; classification: CompetitorClassification }>;
       };
-      const staleness = await this.evaluateUpstreamStaleness(projectId, {
-        acceptedInputSnapshotId: snap.acceptedInputSnapshotId,
-        acceptedInputVersion: snap.acceptedInputVersion,
-        acceptedInputDigest: snap.acceptedInputDigest,
-        serpSnapshotId: snap.serpSnapshotId,
-        serpSnapshotDigest: snap.serpSnapshotDigest,
-        intelligenceSnapshotId: snap.intelligenceSnapshotId,
-        intelligenceSnapshotDigest: snap.intelligenceSnapshotDigest,
-        pageSnapshotRefs: (snap.pageSnapshotRefs as Array<{ id: string; digest: string }>) ?? [],
-        analysisRefs: (snap.analysisRefs as Array<{ id: string; digest: string }>) ?? [],
-        classificationDigest: data.classificationDigest,
-        effectiveClassifications: data.effectiveClassifications,
-      });
+      const staleness = await this.evaluateAcceptedSnapshotStaleness(projectId, snap);
       acceptedModels.push({
         id: snap.id,
         version: snap.version,
@@ -1177,7 +1206,7 @@ export class CompetitorContentGapService {
   async saveGapDecisions(input: {
     projectId: string;
     reportId: string;
-    expectedReviewRevision?: number;
+    expectedReviewRevision: number;
     decisions: Array<{ gapId: string; disposition: CompetitorClassification | string; priority?: string | null; note?: string | null }>;
   }): Promise<{ reviewRevision: number; decisionsDigest: string }> {
     const report = await this.deps.competitorStore.getGapReport(input.projectId, input.reportId);
@@ -1220,13 +1249,20 @@ export class CompetitorContentGapService {
       note: d.note === undefined || d.note === null ? null : String(d.note).slice(0, 500),
     }));
 
-    if (input.expectedReviewRevision !== undefined) {
+    if (typeof this.deps.competitorStore.saveGapDecisionsWithConcurrency === "function") {
       return await this.deps.competitorStore.saveGapDecisionsWithConcurrency({
         projectId: input.projectId,
         reportId: input.reportId,
         expectedReviewRevision: input.expectedReviewRevision,
         decisions: normalizedDecisions,
       });
+    }
+
+    if (report.reviewRevision !== input.expectedReviewRevision) {
+      throw new FactoryError(
+        "content_gap_stale",
+        `Review revision mismatch: review was updated concurrently (expected rev ${input.expectedReviewRevision}, current rev ${report.reviewRevision}).`,
+      );
     }
 
     await this.deps.competitorStore.replaceDecisions(
@@ -1246,32 +1282,67 @@ export class CompetitorContentGapService {
     reportId: string;
     expectedReportDigest?: string;
     expectedDigest?: string;
-    expectedReviewRevision?: number;
-    expectedDecisionsDigest?: string;
+    expectedReviewRevision: number;
+    expectedDecisionsDigest: string;
   }): Promise<{ version: number; snapshotId: string }> {
+    const expectedReportDigest = input.expectedReportDigest ?? input.expectedDigest;
+    if (!expectedReportDigest) {
+      throw new FactoryError(
+        "content_gap_accept_failed",
+        "Report digest is required for acceptance.",
+      );
+    }
+
+    if (typeof this.deps.competitorStore.acceptGapReportAtomic === "function") {
+      return await this.deps.competitorStore.acceptGapReportAtomic({
+        projectId: input.projectId,
+        reportId: input.reportId,
+        expectedReportDigest,
+        expectedReviewRevision: input.expectedReviewRevision,
+        expectedDecisionsDigest: input.expectedDecisionsDigest,
+        validateStaleness: async (report, reportData) => {
+          const staleness = await this.evaluateUpstreamStaleness(input.projectId, {
+            acceptedInputSnapshotId: report.acceptedInputSnapshotId,
+            acceptedInputVersion: report.acceptedInputVersion,
+            acceptedInputDigest: report.acceptedInputDigest,
+            serpSnapshotId: report.serpSnapshotId,
+            serpSnapshotDigest: report.serpSnapshotDigest,
+            intelligenceSnapshotId: report.intelligenceSnapshotId,
+            intelligenceSnapshotDigest: report.intelligenceSnapshotDigest,
+            pageSnapshotRefs: reportData.pageSnapshotRefs ?? [],
+            analysisRefs: reportData.analysisRefs ?? [],
+            classificationDigest: reportData.classificationDigest,
+            effectiveClassifications: reportData.effectiveClassifications,
+            competitorRunId: report.runId,
+          });
+          if (staleness.stale) {
+            throw new FactoryError(
+              "content_gap_stale",
+              `Upstream evidence changed since review: ${staleness.staleReasons.join(" ")}`,
+            );
+          }
+        },
+      });
+    }
+
     const report = await this.deps.competitorStore.getGapReport(input.projectId, input.reportId);
     if (!report) throw new FactoryError("content_gap_report_not_found", "Content gap report not found.");
 
-    const expectedReportDigest = input.expectedReportDigest ?? input.expectedDigest;
-    // Fail closed: acceptance binds the exact digest the operator reviewed.
-    if (!expectedReportDigest || expectedReportDigest !== report.snapshotDigest) {
+    if (expectedReportDigest !== report.snapshotDigest) {
       throw new FactoryError(
         "content_gap_accept_failed",
         "Report digest mismatch: the report changed since review. Re-review and retry.",
       );
     }
 
-    if (input.expectedReviewRevision !== undefined && report.reviewRevision !== input.expectedReviewRevision) {
+    if (report.reviewRevision !== input.expectedReviewRevision) {
       throw new FactoryError(
-        "content_gap_accept_failed",
+        "content_gap_stale",
         `Review revision mismatch: review was updated concurrently (expected rev ${input.expectedReviewRevision}, current rev ${report.reviewRevision}). Re-review and retry.`,
       );
     }
 
-    if (
-      input.expectedDecisionsDigest !== undefined &&
-      (!report.decisionsDigest || report.decisionsDigest !== input.expectedDecisionsDigest)
-    ) {
+    if (!report.decisionsDigest || report.decisionsDigest !== input.expectedDecisionsDigest) {
       throw new FactoryError(
         "content_gap_accept_failed",
         "Decisions digest mismatch: review decisions changed since review. Re-review and retry.",
@@ -1282,8 +1353,8 @@ export class CompetitorContentGapService {
     const existingSnapshot = await this.deps.competitorStore.getAcceptedGapSnapshotByReportId(input.reportId);
     if (existingSnapshot) {
       if (
-        (!input.expectedDecisionsDigest || existingSnapshot.decisionsDigest === input.expectedDecisionsDigest) &&
-        (!expectedReportDigest || existingSnapshot.reportDigest === expectedReportDigest)
+        existingSnapshot.decisionsDigest === input.expectedDecisionsDigest &&
+        existingSnapshot.reportDigest === expectedReportDigest
       ) {
         return { version: existingSnapshot.version, snapshotId: existingSnapshot.id };
       }
@@ -1363,7 +1434,7 @@ export class CompetitorContentGapService {
       })),
     );
 
-    if (input.expectedDecisionsDigest && decDigest !== input.expectedDecisionsDigest) {
+    if (decDigest !== input.expectedDecisionsDigest) {
       throw new FactoryError(
         "content_gap_accept_failed",
         "Decisions digest mismatch: review decisions changed since review. Re-review and retry.",
@@ -1411,25 +1482,7 @@ export class CompetitorContentGapService {
   async acceptedGapDetail(projectId: string, version: number) {
     const snapshot = await this.deps.competitorStore.getAcceptedGapSnapshot(projectId, version);
     if (!snapshot) throw new FactoryError("content_gap_report_not_found", "Accepted gap snapshot not found.");
-    const report = await this.deps.competitorStore.getGapReport(projectId, snapshot.reportId);
-    const snapData = snapshot.data as {
-      classificationDigest?: string;
-      effectiveClassifications?: Array<{ pageSnapshotId: string; classification: CompetitorClassification }>;
-    };
-    const staleness = await this.evaluateUpstreamStaleness(projectId, {
-      acceptedInputSnapshotId: snapshot.acceptedInputSnapshotId,
-      acceptedInputVersion: snapshot.acceptedInputVersion,
-      acceptedInputDigest: snapshot.acceptedInputDigest,
-      serpSnapshotId: snapshot.serpSnapshotId,
-      serpSnapshotDigest: snapshot.serpSnapshotDigest,
-      intelligenceSnapshotId: snapshot.intelligenceSnapshotId,
-      intelligenceSnapshotDigest: snapshot.intelligenceSnapshotDigest,
-      pageSnapshotRefs: (snapshot.pageSnapshotRefs as Array<{ id: string; digest: string }>) ?? [],
-      analysisRefs: (snapshot.analysisRefs as Array<{ id: string; digest: string }>) ?? [],
-      classificationDigest: snapData.classificationDigest,
-      effectiveClassifications: snapData.effectiveClassifications,
-      competitorRunId: report?.runId,
-    });
+    const staleness = await this.evaluateAcceptedSnapshotStaleness(projectId, snapshot);
     return {
       snapshot: {
         id: snapshot.id,

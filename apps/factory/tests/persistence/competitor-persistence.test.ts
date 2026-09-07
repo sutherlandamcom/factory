@@ -292,11 +292,51 @@ test("competitor persistence: lineage, isolation, dedupe, accepted immutability"
     }),
     /accepted_content_gap_snapshots_project_version_unique|duplicate key|Failed query/,
   );
+
+  // Second gap report for project 1 to verify version 2 and report_id uniqueness
+  const report2 = await store.insertGapReport({
+    runId: run.id,
+    projectId: p1.id,
+    acceptedInputSnapshotId: "in-1",
+    acceptedInputVersion: 1,
+    acceptedInputDigest: "d1",
+    serpSnapshotId: "serp-1",
+    serpSnapshotDigest: "sd-1",
+    intelligenceSnapshotId: "intel-1",
+    intelligenceSnapshotDigest: "id-1",
+    model: "fixture-gap-analyst",
+    provider: "fixture",
+    promptVersion: "gap-analyst-v1",
+    data: report.data,
+  });
+
+  // Re-accepting the same reportId fails closed under report_id unique constraint
+  await assert.rejects(
+    store.insertAcceptedGapSnapshot({
+      projectId: p1.id,
+      version: 2,
+      reportId: report.id,
+      reportDigest: report.snapshotDigest,
+      decisionsDigest: "dd-2",
+      acceptedInputSnapshotId: "in-1",
+      acceptedInputVersion: 1,
+      acceptedInputDigest: "d1",
+      serpSnapshotId: "serp-1",
+      serpSnapshotDigest: "sd-1",
+      intelligenceSnapshotId: "intel-1",
+      intelligenceSnapshotDigest: "id-1",
+      pageSnapshotRefs: [],
+      analysisRefs: [],
+      data: report.data,
+    }),
+    /accepted_content_gap_snapshots_report_id_unique|duplicate key|Failed query/,
+  );
+
   const v2 = await store.insertAcceptedGapSnapshot({
     projectId: p1.id,
     version: 2,
-    reportId: report.id,
-    reportDigest: report.snapshotDigest,
+    reportId: report2.id,
+    reportDigest: report2.snapshotDigest,
     decisionsDigest: "dd-2",
     acceptedInputSnapshotId: "in-1",
     acceptedInputVersion: 1,
@@ -307,7 +347,7 @@ test("competitor persistence: lineage, isolation, dedupe, accepted immutability"
     intelligenceSnapshotDigest: "id-1",
     pageSnapshotRefs: [],
     analysisRefs: [],
-    data: report.data,
+    data: report2.data,
   });
   const all = await store.listAcceptedGapSnapshots(p1.id);
   assert.equal(all.length, 2);

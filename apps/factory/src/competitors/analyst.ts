@@ -51,6 +51,7 @@ export interface CompetitorAnalystModel {
   readonly provider: string;
   readonly promptVersion: string;
   readonly promptDigest: string;
+  readonly maxTokens?: number;
   analyze(request: CompetitorAnalystRequest): Promise<CompetitorAnalystResult>;
 }
 
@@ -132,6 +133,7 @@ export type CompetitorAnalystModelDeps = {
   callModel: (prompt: string) => Promise<{ text: string; usage?: CompetitorAnalystResult["usage"] }>;
   model?: string;
   provider?: string;
+  maxTokens?: number;
 };
 
 /**
@@ -144,6 +146,7 @@ export class OpenRouterCompetitorAnalyst implements CompetitorAnalystModel {
   readonly provider: string;
   readonly promptVersion = COMPETITOR_ANALYST_PROMPT_VERSION;
   readonly promptDigest: string;
+  readonly maxTokens: number;
 
   private readonly callModel: (prompt: string) => Promise<{ text: string; usage?: CompetitorAnalystResult["usage"] }>;
 
@@ -151,6 +154,7 @@ export class OpenRouterCompetitorAnalyst implements CompetitorAnalystModel {
     this.callModel = deps.callModel;
     this.model = deps.model ?? "google/gemini-3.7-flash";
     this.provider = deps.provider ?? "openrouter";
+    this.maxTokens = deps.maxTokens ?? 8192;
     this.promptDigest = deterministicDigest({
       version: this.promptVersion,
       system: COMPETITOR_ANALYST_SYSTEM_PROMPT,
@@ -301,6 +305,7 @@ export class FixtureCompetitorAnalyst implements CompetitorAnalystModel {
   readonly provider = "fixture";
   readonly promptVersion = COMPETITOR_ANALYST_PROMPT_VERSION;
   readonly promptDigest = "f".repeat(64);
+  readonly maxTokens = 8192;
 
   async analyze(request: CompetitorAnalystRequest): Promise<CompetitorAnalystResult> {
     const { extracted } = request.packet;

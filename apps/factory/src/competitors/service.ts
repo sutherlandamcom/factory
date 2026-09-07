@@ -36,6 +36,7 @@ import {
   OpenRouterGapAnalyst,
   type GapAnalystModel,
 } from "./gap-analyst.js";
+import { calculateConservativeInvocationCostMicros } from "../models/index.js";
 
 /**
  * CompetitorContentGapService — the governed application service (P6).
@@ -247,6 +248,35 @@ export class CompetitorContentGapService {
     return () => {};
   }
 
+  private async reservePageAnalysisBudget(extracted: CompetitorPageExtracted): Promise<() => void> {
+    const packetChars = JSON.stringify(extracted).length + 4000;
+    const estimatedCostMicros = calculateConservativeInvocationCostMicros({
+      model: this.deps.competitorAnalyst.model,
+      provider: this.deps.competitorAnalyst.provider,
+      inputChars: packetChars,
+      maxOutputTokens: this.deps.competitorAnalyst.maxTokens,
+    });
+    const reservationMicros =
+      this.deps.competitorAnalyst.provider === "fixture"
+        ? 0
+        : Math.max(RESERVED_PAGE_ANALYSIS_COST_MICROS, estimatedCostMicros);
+    return await this.checkBudget(reservationMicros);
+  }
+
+  private async reserveGapAnalysisBudget(estimatedInputChars = 80_000): Promise<() => void> {
+    const estimatedCostMicros = calculateConservativeInvocationCostMicros({
+      model: this.deps.gapAnalyst.model,
+      provider: this.deps.gapAnalyst.provider,
+      inputChars: estimatedInputChars,
+      maxOutputTokens: this.deps.gapAnalyst.maxTokens,
+    });
+    const reservationMicros =
+      this.deps.gapAnalyst.provider === "fixture"
+        ? 0
+        : Math.max(RESERVED_GAP_ANALYSIS_COST_MICROS, estimatedCostMicros);
+    return await this.checkBudget(reservationMicros);
+  }
+
   // ---- Workspace ----------------------------------------------------------
 
   async workspace(projectId: string): Promise<CompetitorWorkspaceReadModel> {
@@ -388,16 +418,57 @@ export class CompetitorContentGapService {
         });
       }
 
-      // Analyze successful, non-deduped snapshots (bounded by budget gate).
+      // Analyze successful snapshots (bounded by budget gate).
+      // Deduped snapshots reuse prior compatible analysis without paid model calls.
       const pageRows = await this.deps.competitorStore.listPageSnapshotsForRun(run.id);
       const intakePayload = accepted.payload as Record<string, unknown>;
       let analyzedCount = 0;
       for (const pageRow of pageRows) {
         if (pageRow.acquisitionStatus !== "SUCCESS" || !pageRow.extracted) continue;
-        if (pageRow.dedupedFromSnapshotId) continue;
         if (analyzedCount >= maxPages) break;
         if (pageRow.classification !== "INCLUDE") continue;
-        const release = await this.checkBudget(RESERVED_PAGE_ANALYSIS_COST_MICROS);
+
+        if (pageRow.dedupedFromSnapshotId) {
+          const priorAnalysis = await this.deps.competitorStore.findAnalysisForPage(
+            pageRow.dedupedFromSnapshotId,
+            this.deps.competitorAnalyst.model,
+            this.deps.competitorAnalyst.promptVersion,
+          );
+          if (priorAnalysis) {
+            // P1-01: Reuse prior compatible analysis without paid model calls.
+            // Rebind evidenceSegmentRefs to current pageSnapshotId to maintain current run lineage.
+            const priorData = priorAnalysis.data as CompetitorPageAnalysisData;
+            const reboundData: CompetitorPageAnalysisData = {
+              ...priorData,
+              evidenceSegmentRefs: priorData.evidenceSegmentRefs.map((ref) => ({
+                ...ref,
+                pageSnapshotId: pageRow.id,
+              })),
+            };
+            const validSegmentIds = new Set(
+              (pageRow.extracted as CompetitorPageExtracted).segments.map((s) => s.id),
+            );
+            await this.deps.competitorStore.insertPageAnalysis({
+              runId: run.id,
+              projectId: input.projectId,
+              pageSnapshotId: pageRow.id,
+              reusedFromAnalysisId: priorAnalysis.id,
+              model: priorAnalysis.model,
+              provider: priorAnalysis.provider,
+              promptVersion: priorAnalysis.promptVersion,
+              promptDigest: priorAnalysis.promptDigest,
+              packetDigest: priorAnalysis.packetDigest,
+              data: reboundData,
+              validSegmentIds,
+              usage: null,
+              observedAt: this.now(),
+            });
+            analyzedCount++;
+            continue;
+          }
+        }
+
+        const release = await this.reservePageAnalysisBudget(pageRow.extracted as CompetitorPageExtracted);
         try {
           await this.analyzePage({
             runId: run.id,
@@ -662,7 +733,7 @@ export class CompetitorContentGapService {
       );
     }
     const { accepted } = await this.resolveAcceptedInputs(input.projectId);
-    const releaseBudget = await this.checkBudget(RESERVED_GAP_ANALYSIS_COST_MICROS);
+    const releaseBudget = await this.reserveGapAnalysisBudget();
     try {
       const run = input.competitorRunId
         ? await this.deps.competitorStore.getRun(input.projectId, input.competitorRunId)

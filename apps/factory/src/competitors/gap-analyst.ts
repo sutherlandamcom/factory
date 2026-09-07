@@ -52,6 +52,7 @@ export interface GapAnalystModel {
   readonly provider: string;
   readonly promptVersion: string;
   readonly promptDigest: string;
+  readonly maxTokens?: number;
   propose(request: GapAnalystRequest): Promise<GapAnalystResult>;
 }
 
@@ -112,6 +113,7 @@ export type GapAnalystModelDeps = {
   callModel: (prompt: string) => Promise<{ text: string; usage?: GapAnalystResult["usage"] }>;
   model?: string;
   provider?: string;
+  maxTokens?: number;
 };
 
 export class OpenRouterGapAnalyst implements GapAnalystModel {
@@ -119,6 +121,7 @@ export class OpenRouterGapAnalyst implements GapAnalystModel {
   readonly provider: string;
   readonly promptVersion = GAP_ANALYST_PROMPT_VERSION;
   readonly promptDigest: string;
+  readonly maxTokens: number;
 
   private readonly callModel: (prompt: string) => Promise<{ text: string; usage?: GapAnalystResult["usage"] }>;
 
@@ -126,6 +129,7 @@ export class OpenRouterGapAnalyst implements GapAnalystModel {
     this.callModel = deps.callModel;
     this.model = deps.model ?? "google/gemini-3.7-flash";
     this.provider = deps.provider ?? "openrouter";
+    this.maxTokens = deps.maxTokens ?? 8192;
     this.promptDigest = deterministicDigest({
       version: this.promptVersion,
       system: GAP_ANALYST_SYSTEM_PROMPT,
@@ -167,6 +171,7 @@ export class FixtureGapAnalyst implements GapAnalystModel {
   readonly provider = "fixture";
   readonly promptVersion = GAP_ANALYST_PROMPT_VERSION;
   readonly promptDigest = "f".repeat(64);
+  readonly maxTokens = 8192;
 
   async propose(request: GapAnalystRequest): Promise<GapAnalystResult> {
     const analyzedPageIds = new Set(request.analyses.map((a) => a.pageSnapshotId));
@@ -199,19 +204,24 @@ export class FixtureGapAnalyst implements GapAnalystModel {
       }
 
       const evidenceRefs: Array<{ pageSnapshotId: string; segmentId: string }> = [];
-      for (const covId of covering) {
-        const matching = request.analyses.find((a) => a.pageSnapshotId === covId);
-        const segRefs = (matching?.data?.evidenceSegmentRefs as Array<{ segmentId: string }> | undefined) ?? [];
-        if (segRefs[0]?.segmentId) {
-          evidenceRefs.push({ pageSnapshotId: covId, segmentId: segRefs[0].segmentId });
-          break;
+      if (coverage !== "ABSENT") {
+        for (const covId of covering) {
+          const matching = request.analyses.find((a) => a.pageSnapshotId === covId);
+          const segRefs = (matching?.data?.evidenceSegmentRefs as Array<{ segmentId: string }> | undefined) ?? [];
+          if (segRefs[0]?.segmentId) {
+            evidenceRefs.push({ pageSnapshotId: covId, segmentId: segRefs[0].segmentId });
+            break;
+          }
         }
-      }
-      if (evidenceRefs.length === 0 && request.analyses[0]) {
-        const a = request.analyses[0];
-        const segRefs = (a.data?.evidenceSegmentRefs as Array<{ segmentId: string }> | undefined) ?? [];
-        if (segRefs[0]?.segmentId) {
-          evidenceRefs.push({ pageSnapshotId: a.pageSnapshotId, segmentId: segRefs[0].segmentId });
+        if (evidenceRefs.length === 0 && request.analyses[0]) {
+          const a = request.analyses[0];
+          const segRefs = (a.data?.evidenceSegmentRefs as Array<{ segmentId: string }> | undefined) ?? [];
+          if (segRefs[0]?.segmentId) {
+            evidenceRefs.push({ pageSnapshotId: a.pageSnapshotId, segmentId: segRefs[0].segmentId });
+            if (!covering.includes(a.pageSnapshotId)) {
+              covering.push(a.pageSnapshotId);
+            }
+          }
         }
       }
 

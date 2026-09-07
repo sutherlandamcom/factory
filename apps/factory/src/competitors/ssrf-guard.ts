@@ -1,4 +1,5 @@
 import { lookup } from "node:dns/promises";
+import { isIPv4, isIPv6 } from "node:net";
 import { FactoryError } from "../executor/errors.js";
 
 /**
@@ -61,39 +62,124 @@ function ipv4ToBigInt(ip: string): bigint | null {
   return value;
 }
 
-function isBlockedIpv4(ip: string): boolean {
-  const value = ipv4ToBigInt(ip);
-  if (value === null) return true; // unparsable => treat as hostile
+function isBlockedIpv4Value(value: bigint): boolean {
   return BLOCKED_IPV4_RANGES.some(([start, end]) => value >= start && value <= end);
 }
 
-/** IPv6 blocks: (lowercase prefix hex of expanded form, prefix bits). */
-function isBlockedIpv6(ip: string): boolean {
-  const lower = ip.toLowerCase();
-  // Fast path on compressed/expanded textual checks for well-known ranges.
-  if (lower === "::" || lower === "::1") return true;
-  if (lower.startsWith("fe80:") || lower.startsWith("fec0:")) return true; // link-local / site-local (deprecated)
-  if (lower.startsWith("fc") || lower.startsWith("fd")) return true; // unique local fc00::/7
-  if (lower.startsWith("ff")) return true; // multicast
-  // IPv4-mapped / IPv4-compatible (::ffff:0:0/96 and ::/96) — check embedded v4.
-  const v4Match = /^::(?:ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/.exec(lower);
-  if (v4Match) return isBlockedIpv4(v4Match[1]!);
-  // Metadata/reserved: 100::/64 discard-only, 2001:db8::/32 documentation,
-  // 2002::/16 6to4 embedding v4 in bits 16-48.
-  if (lower.startsWith("100:")) return true;
-  if (lower.startsWith("2001:db8:")) return true;
-  const sixToFour = /^2002:([0-9a-f]{2})([0-9a-f]{2}):([0-9a-f]{2})([0-9a-f]{2})/.exec(lower);
-  if (sixToFour) {
-    const v4 = [
-      parseInt(sixToFour[1]!, 16),
-      parseInt(sixToFour[2]!, 16),
-      parseInt(sixToFour[3]!, 16),
-      parseInt(sixToFour[4]!, 16),
-    ].join(".");
-    return isBlockedIpv4(v4);
+function isBlockedIpv4(ip: string): boolean {
+  const value = ipv4ToBigInt(ip);
+  if (value === null) return true; // unparsable => treat as hostile
+  return isBlockedIpv4Value(value);
+}
+
+/**
+ * Robust IPv6 parser converting any valid IPv6 textual representation
+ * (including compressed :: and embedded IPv4) into a 128-bit unsigned BigInt.
+ * Returns null if the representation is invalid.
+ */
+export function parseIpv6ToBigInt(ip: string): bigint | null {
+  // Strip optional zone index e.g. %eth0
+  const zoneIndex = ip.indexOf("%");
+  const cleanIp = zoneIndex >= 0 ? ip.slice(0, zoneIndex) : ip;
+  if (!isIPv6(cleanIp)) return null;
+
+  let normalized = cleanIp.toLowerCase();
+  // Handle dotted-quad IPv4 suffix if present (e.g. ::ffff:192.168.0.1 or ::127.0.0.1)
+  const lastColon = normalized.lastIndexOf(":");
+  if (lastColon === -1) return null;
+  const potentialV4 = normalized.slice(lastColon + 1);
+  if (potentialV4.includes(".")) {
+    const parts = potentialV4.split(".").map(Number);
+    if (parts.length !== 4 || parts.some((n) => Number.isNaN(n) || n < 0 || n > 255)) {
+      return null;
+    }
+    const g1 = (((parts[0]! << 8) | parts[1]!) >>> 0).toString(16);
+    const g2 = (((parts[2]! << 8) | parts[3]!) >>> 0).toString(16);
+    normalized = `${normalized.slice(0, lastColon)}:${g1}:${g2}`;
   }
-  // Teredo 2001::/32 embeds obfuscated v4; treat whole range as blocked for v0 conservatism.
-  if (lower.startsWith("2001:0000:") || lower.startsWith("2001:0:")) return true;
+
+  let groups: string[];
+  if (normalized.includes("::")) {
+    const halves = normalized.split("::");
+    if (halves.length !== 2) return null;
+    const left = halves[0] ? halves[0].split(":") : [];
+    const right = halves[1] ? halves[1].split(":") : [];
+    const missing = 8 - (left.length + right.length);
+    if (missing < 1) return null;
+    groups = [...left, ...Array(missing).fill("0"), ...right];
+  } else {
+    groups = normalized.split(":");
+  }
+  if (groups.length !== 8) return null;
+
+  let val = 0n;
+  for (const g of groups) {
+    if (!/^[0-9a-f]{1,4}$/.test(g)) return null;
+    val = (val << 16n) | BigInt(parseInt(g, 16));
+  }
+  return val;
+}
+
+/**
+ * Bounded CIDR classification for IPv6 addresses.
+ * Rejects loopback, link-local (fe80::/10), unique-local (fc00::/7), multicast,
+ * documentation/discard ranges, 6to4/Teredo with private embedded v4,
+ * and IPv4-mapped/compatible addresses with forbidden IPv4 targets.
+ */
+export function isBlockedIpv6(ip: string): boolean {
+  const val = parseIpv6ToBigInt(ip);
+  if (val === null) return true; // unparsable => fail closed
+
+  // ::/128 (unspecified) and ::1/128 (loopback)
+  if (val === 0n || val === 1n) return true;
+
+  // IPv4-mapped (::ffff:0:0/96)
+  if ((val >> 32n) === 0xffffn) {
+    return isBlockedIpv4Value(val & 0xffffffffn);
+  }
+
+  // IPv4-compatible (::/96)
+  if ((val >> 32n) === 0n) {
+    return isBlockedIpv4Value(val & 0xffffffffn);
+  }
+
+  // 6to4 (2002::/16) embeds IPv4 in bits 16..47
+  if ((val >> 112n) === 0x2002n) {
+    return isBlockedIpv4Value((val >> 80n) & 0xffffffffn);
+  }
+
+  // IPv4/IPv6 translation (64:ff9b::/96)
+  if ((val >> 32n) === 0x0064ff9b0000000000000000n) {
+    return isBlockedIpv4Value(val & 0xffffffffn);
+  }
+
+  // fe80::/10 (link-local unicast: fe80:: to febf:ffff:...)
+  if ((val >> 118n) === 0x3fan) return true;
+
+  // fec0::/10 (deprecated site-local unicast: fec0:: to feff:ffff:...)
+  if ((val >> 118n) === 0x3fbn) return true;
+
+  // fc00::/7 (unique local address: fc00:: to fdff:ffff:...)
+  if ((val >> 121n) === 0x7en) return true;
+
+  // ff00::/8 (multicast)
+  if ((val >> 120n) === 0xffn) return true;
+
+  // 2001:db8::/32 (documentation)
+  if ((val >> 96n) === 0x20010db8n) return true;
+
+  // 2001::/32 (Teredo prefix - conservative block)
+  if ((val >> 96n) === 0x20010000n) return true;
+
+  // 100::/64 (discard-only RFC 6666)
+  if ((val >> 64n) === (0x0100n << 48n)) return true;
+
+  // 2001:10::/28 (ORCHID)
+  if ((val >> 100n) === 0x2001001n) return true;
+
+  // 2001:20::/28 (ORCHIDv2)
+  if ((val >> 100n) === 0x2001002n) return true;
+
   return false;
 }
 

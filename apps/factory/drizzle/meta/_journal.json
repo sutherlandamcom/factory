@@ -50,6 +50,13 @@
       "when": 1788686164402,
       "tag": "0006_competitor_content_gap_v0",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788750000000,
+      "tag": "0007_reused_from_analysis_id",
+      "breakpoints": true
     }
   ]
 }

@@ -10,6 +10,7 @@ import {
   unique,
   check,
   index,
+  foreignKey,
 } from "drizzle-orm/pg-core";
 
 export const projects = pgTable("projects", {
@@ -666,6 +667,7 @@ export const competitorPageAnalyses = pgTable(
     pageSnapshotId: text("page_snapshot_id")
       .notNull()
       .references(() => competitorPageSnapshots.id, { onDelete: "cascade" }),
+    reusedFromAnalysisId: text("reused_from_analysis_id"),
     model: text("model").notNull(),
     provider: text("provider").notNull(),
     promptVersion: text("prompt_version").notNull(),
@@ -678,8 +680,14 @@ export const competitorPageAnalyses = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
+    foreignKey({
+      columns: [table.reusedFromAnalysisId],
+      foreignColumns: [table.id],
+      name: "competitor_page_analyses_reused_from_analysis_id_competitor_page_analyses_id_fk",
+    }).onDelete("set null"),
     index("competitor_page_analyses_project_idx").on(table.projectId, table.createdAt),
     index("competitor_page_analyses_page_idx").on(table.pageSnapshotId),
+    index("competitor_page_analyses_reused_from_idx").on(table.reusedFromAnalysisId),
   ],
 );
 

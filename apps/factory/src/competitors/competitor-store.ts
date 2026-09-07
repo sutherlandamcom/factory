@@ -343,6 +343,7 @@ export class CompetitorStore {
     runId: string;
     projectId: string;
     pageSnapshotId: string;
+    reusedFromAnalysisId?: string | null;
     model: string;
     provider: string;
     promptVersion: string;
@@ -361,6 +362,7 @@ export class CompetitorStore {
       model: input.model,
       promptVersion: input.promptVersion,
       packetDigest: input.packetDigest,
+      reusedFromAnalysisId: input.reusedFromAnalysisId ?? null,
       data,
     });
     const [row] = await this.db
@@ -370,6 +372,7 @@ export class CompetitorStore {
         runId: input.runId,
         projectId: input.projectId,
         pageSnapshotId: input.pageSnapshotId,
+        reusedFromAnalysisId: input.reusedFromAnalysisId ?? null,
         model: input.model,
         provider: input.provider,
         promptVersion: input.promptVersion,

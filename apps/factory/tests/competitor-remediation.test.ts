@@ -16,7 +16,7 @@ import { CompetitorStore } from "../src/competitors/competitor-store.js";
 import { SearchIntelligenceService } from "../src/search/service.js";
 import { OpenRouterGapAnalyst } from "../src/competitors/gap-analyst.js";
 import { OpenRouterSearchAnalyst } from "../src/search/analyst.js";
-import type { ContentGap } from "@factory/contracts";
+import { contentGapSchema, type ContentGap } from "@factory/contracts";
 import { FactoryError } from "../src/executor/errors.js";
 import { deterministicDigest } from "../src/intelligence/digest.js";
 
@@ -1909,5 +1909,586 @@ test("C11: snapshot uniqueness: report can have at most one accepted gap snapsho
       err.message.includes("Report was already accepted with different decisions"),
   );
 });
+
+// ---------------------------------------------------------------------------
+// P1-01: Dedupe Analysis Reuse & Lineage Preservation
+// ---------------------------------------------------------------------------
+
+test("P1-01: runCompetitors reuses prior compatible analysis with 0 model calls, sets reusedFromAnalysisId, rebinds evidenceSegmentRefs, and marks page analyzed", async () => {
+  let modelCallCount = 0;
+  let insertedAnalysis: any = null;
+
+  const priorSnapshotId = "prior-snap-1";
+  const currentSnapshotId = "current-snap-1";
+  const priorAnalysisId = "prior-analysis-1";
+
+  const priorExtracted = {
+    pageTitle: "Chamonix Chalets",
+    headings: [{ id: "seg-001", kind: "heading" as const, text: "Chamonix Chalets" }],
+    segments: [
+      { id: "seg-001", kind: "heading" as const, text: "Chamonix Chalets" },
+      { id: "seg-101", kind: "paragraph" as const, text: "Rental yields in Chamonix average 6%." },
+    ],
+    questions: [],
+    jsonLdTypes: [],
+    hasFaqSchema: false,
+    outboundLinks: [],
+    ctaSignals: [],
+    wordCount: 150,
+    extractionVersion: "extract-v1",
+  };
+
+  const priorAnalysisData = {
+    pageType: "guide",
+    primaryIntent: "informational",
+    topics: ["Rental Yield"],
+    subtopics: [],
+    entities: [],
+    questionsAnswered: ["What rental yield can investors expect?"],
+    questionsUnanswered: [],
+    coverageAreas: [{ area: "Rental Yield", level: "STRONG" as const, rationale: "Detailed stats" }],
+    dataFactsUsed: [],
+    sourceSignals: [],
+    trustSignals: [],
+    experienceSignals: [],
+    commercialPositioning: "Neutral",
+    ctaTreatment: "None",
+    freshnessAssessment: "Current",
+    strengths: [],
+    weaknesses: [],
+    uniqueTreatment: [],
+    missingTreatment: [],
+    evidenceSegmentRefs: [{ pageSnapshotId: priorSnapshotId, segmentId: "seg-101" }],
+    confidence: "HIGH" as const,
+  };
+
+  const service = new CompetitorContentGapService({
+    intake: {
+      listSnapshots: async () => [
+        { id: "in-1", version: 1, digest: "d1", payload: { business: { name: "TestCo" } } },
+      ],
+    } as never,
+    competitorStore: {
+      sumTodayCompetitorCostMicros: async () => 0,
+      createRun: async (input: any) => ({
+        id: "run-new",
+        projectId: input.projectId,
+        status: "running",
+        acceptedInputDigest: "d1",
+      }),
+      finishRun: async () => {},
+      findContentDedupeTarget: async () => null,
+      insertPageSnapshot: async (input: any) => ({ id: "snap-1", ...input }),
+      getSerpSnapshot: async () => ({
+        id: "serp-1",
+        acceptedInputDigest: "d1",
+        organic: [{ url: "https://competitor.com/page", domain: "competitor.com", position: 1 }],
+      }),
+      getIntelligenceForSerpSnapshot: async () => ({
+        id: "intel-1",
+        acceptedInputDigest: "d1",
+        data: {
+          primaryIntent: "informational",
+          userNeeds: ["Rental yield info"],
+          semanticCoverageRequirements: ["Rental yield info"],
+          questions: ["What yield?"],
+          topics: ["yield"],
+        },
+      }),
+      listPageSnapshotsForRun: async () => [
+        {
+          id: currentSnapshotId,
+          runId: "run-new",
+          projectId: "proj-1",
+          requestedUrl: "https://competitor.com/page",
+          domain: "competitor.com",
+          classification: "INCLUDE",
+          acquisitionStatus: "SUCCESS",
+          dedupedFromSnapshotId: priorSnapshotId,
+          extracted: priorExtracted,
+          observedAt: new Date(),
+        },
+      ],
+      getPageSnapshot: async (_proj: string, id: string) => ({
+        id,
+        finalUrl: "https://competitor.com/page",
+        domain: "competitor.com",
+        snapshotDigest: "sd-current",
+      }),
+      findAnalysisForPage: async (snapId: string) => {
+        if (snapId === priorSnapshotId) {
+          return {
+            id: priorAnalysisId,
+            pageSnapshotId: priorSnapshotId,
+            model: "fixture-competitor-analyst",
+            provider: "fixture",
+            promptVersion: "competitor-analyst-v1",
+            promptDigest: "pd-1",
+            packetDigest: "pkd-1",
+            data: priorAnalysisData,
+          } as never;
+        }
+        return null;
+      },
+      insertPageAnalysis: async (input: any) => {
+        insertedAnalysis = input;
+        return { id: "analysis-reused", ...input };
+      },
+      getRun: async () => ({ id: "run-new", status: "succeeded", startedAt: new Date() }),
+      getLatestClassificationOverridesForPages: async () => new Map(),
+      listAnalysesForRun: async () => (insertedAnalysis ? [{ ...insertedAnalysis, id: "analysis-reused" }] : []),
+    } as never,
+    pageProvider: {
+      id: "fixture_page" as const,
+      acquire: async () => ({
+        status: "SUCCESS" as const,
+        finalUrl: "https://competitor.com/page",
+        httpStatus: 200,
+        contentType: "text/html",
+        rawBytes: Buffer.from("<html><body>Chamonix Chalets</body></html>"),
+        rawDigest: "rd-1",
+        truncated: false,
+        observedAt: new Date(),
+      }),
+    },
+    competitorAnalyst: {
+      provider: "fixture",
+      model: "fixture-competitor-analyst",
+      promptVersion: "competitor-analyst-v1",
+      maxTokens: 8192,
+      analyze: async () => {
+        modelCallCount++;
+        return {} as never;
+      },
+    } as never,
+    gapAnalyst: { provider: "fixture", maxTokens: 8192 } as never,
+  });
+
+  const readModel = await service.runCompetitors({
+    projectId: "proj-1",
+    serpSnapshotId: "serp-1",
+  });
+
+  // 1. Model was NOT called because identical content deduped to existing analysis
+  assert.equal(modelCallCount, 0, "Zero model calls must be made on dedupe analysis reuse");
+
+  // 2. Analysis row was inserted with current run lineage and reusedFromAnalysisId
+  assert.ok(insertedAnalysis, "An analysis row must be persisted for the current run");
+  assert.equal(insertedAnalysis.runId, "run-new");
+  assert.equal(insertedAnalysis.pageSnapshotId, currentSnapshotId);
+  assert.equal(insertedAnalysis.reusedFromAnalysisId, priorAnalysisId);
+  assert.equal(insertedAnalysis.usage, null, "Reused analysis must record null usage / 0 cost");
+
+  // 3. Evidence segment refs were rebound to CURRENT pageSnapshotId
+  assert.equal(insertedAnalysis.data.evidenceSegmentRefs.length, 1);
+  assert.equal(insertedAnalysis.data.evidenceSegmentRefs[0].pageSnapshotId, currentSnapshotId);
+  assert.equal(insertedAnalysis.data.evidenceSegmentRefs[0].segmentId, "seg-101");
+
+  // 4. Read model reflects analyzed: true for current run
+  const candidateRead = readModel.candidates.find((c) => c.pageSnapshotId === currentSnapshotId);
+  assert.ok(candidateRead);
+  assert.equal(candidateRead.analyzed, true, "Read model must report page as analyzed in current run");
+});
+
+test("P1-01: mixed run with 1 deduped page and 1 fresh page invokes model exactly once", async () => {
+  let modelCallCount = 0;
+  const insertedAnalyses: any[] = [];
+
+  const priorSnapshotId = "prior-snap-1";
+  const priorAnalysisId = "prior-analysis-1";
+
+  const extracted = {
+    pageTitle: "Guide",
+    headings: [{ id: "seg-001", kind: "heading" as const, text: "Heading" }],
+    segments: [{ id: "seg-001", kind: "heading" as const, text: "Heading" }],
+    questions: [],
+    jsonLdTypes: [],
+    hasFaqSchema: false,
+    outboundLinks: [],
+    ctaSignals: [],
+    wordCount: 100,
+    extractionVersion: "extract-v1",
+  };
+
+  const priorAnalysisData = {
+    pageType: "guide",
+    primaryIntent: "informational",
+    topics: ["T"],
+    subtopics: [],
+    entities: [],
+    questionsAnswered: [],
+    questionsUnanswered: [],
+    coverageAreas: [{ area: "T", level: "STRONG" as const, rationale: "R" }],
+    dataFactsUsed: [],
+    sourceSignals: [],
+    trustSignals: [],
+    experienceSignals: [],
+    commercialPositioning: "N",
+    ctaTreatment: "N",
+    freshnessAssessment: "C",
+    strengths: [],
+    weaknesses: [],
+    uniqueTreatment: [],
+    missingTreatment: [],
+    evidenceSegmentRefs: [{ pageSnapshotId: priorSnapshotId, segmentId: "seg-001" }],
+    confidence: "HIGH" as const,
+  };
+
+  const service = new CompetitorContentGapService({
+    intake: {
+      listSnapshots: async () => [
+        { id: "in-1", version: 1, digest: "d1", payload: { business: { name: "TestCo" } } },
+      ],
+    } as never,
+    competitorStore: {
+      sumTodayCompetitorCostMicros: async () => 0,
+      createRun: async (input: any) => ({
+        id: "run-mixed",
+        projectId: input.projectId,
+        status: "running",
+        acceptedInputDigest: "d1",
+      }),
+      finishRun: async () => {},
+      findContentDedupeTarget: async () => null,
+      insertPageSnapshot: async (input: any) => ({ id: "snap-1", ...input }),
+      getSerpSnapshot: async () => ({
+        id: "serp-1",
+        acceptedInputDigest: "d1",
+        organic: [
+          { url: "https://competitor.com/deduped", domain: "competitor.com", position: 1 },
+          { url: "https://competitor.com/fresh", domain: "competitor.com", position: 2 },
+        ],
+      }),
+      getIntelligenceForSerpSnapshot: async () => ({
+        id: "intel-1",
+        acceptedInputDigest: "d1",
+        data: {
+          primaryIntent: "informational",
+          userNeeds: [],
+          semanticCoverageRequirements: [],
+          questions: [],
+          topics: [],
+        },
+      }),
+      listPageSnapshotsForRun: async () => [
+        {
+          id: "snap-deduped",
+          runId: "run-mixed",
+          projectId: "proj-1",
+          requestedUrl: "https://competitor.com/deduped",
+          domain: "competitor.com",
+          classification: "INCLUDE",
+          acquisitionStatus: "SUCCESS",
+          dedupedFromSnapshotId: priorSnapshotId,
+          extracted,
+          observedAt: new Date(),
+        },
+        {
+          id: "snap-fresh",
+          runId: "run-mixed",
+          projectId: "proj-1",
+          requestedUrl: "https://competitor.com/fresh",
+          domain: "competitor.com",
+          classification: "INCLUDE",
+          acquisitionStatus: "SUCCESS",
+          dedupedFromSnapshotId: null,
+          extracted,
+          observedAt: new Date(),
+        },
+      ],
+      getPageSnapshot: async (_proj: string, id: string) => ({
+        id,
+        finalUrl: `https://competitor.com/${id}`,
+        domain: "competitor.com",
+        snapshotDigest: `digest-${id}`,
+      }),
+      findAnalysisForPage: async (snapId: string) => {
+        if (snapId === priorSnapshotId) {
+          return {
+            id: priorAnalysisId,
+            pageSnapshotId: priorSnapshotId,
+            model: "fixture-competitor-analyst",
+            provider: "fixture",
+            promptVersion: "competitor-analyst-v1",
+            promptDigest: "pd-1",
+            packetDigest: "pkd-1",
+            data: priorAnalysisData,
+          } as never;
+        }
+        return null;
+      },
+      insertPageAnalysis: async (input: any) => {
+        insertedAnalyses.push(input);
+        return { id: `analysis-${insertedAnalyses.length}`, ...input };
+      },
+      getRun: async () => ({ id: "run-mixed", status: "succeeded", startedAt: new Date() }),
+      getLatestClassificationOverridesForPages: async () => new Map(),
+      listAnalysesForRun: async () => insertedAnalyses,
+    } as never,
+    pageProvider: {
+      id: "fixture_page" as const,
+      acquire: async ({ url }: { url: string }) => ({
+        status: "SUCCESS" as const,
+        finalUrl: url,
+        httpStatus: 200,
+        contentType: "text/html",
+        rawBytes: Buffer.from("<html><body>Content</body></html>"),
+        rawDigest: "rd-1",
+        truncated: false,
+        observedAt: new Date(),
+      }),
+    },
+    competitorAnalyst: {
+      provider: "fixture",
+      model: "fixture-competitor-analyst",
+      promptVersion: "competitor-analyst-v1",
+      maxTokens: 8192,
+      analyze: async () => {
+        modelCallCount++;
+        return {
+          model: "fixture-competitor-analyst",
+          provider: "fixture",
+          promptVersion: "competitor-analyst-v1",
+          promptDigest: "pd-fresh",
+          packetDigest: "pkd-fresh",
+          data: {
+            ...priorAnalysisData,
+            evidenceSegmentRefs: [{ pageSnapshotId: "snap-fresh", segmentId: "seg-001" }],
+          },
+          usage: { inputTokens: 50, outputTokens: 50, totalTokens: 100, costMicros: 10 },
+        };
+      },
+    } as never,
+    gapAnalyst: { provider: "fixture", maxTokens: 8192 } as never,
+  });
+
+  await service.runCompetitors({ projectId: "proj-1", serpSnapshotId: "serp-1" });
+
+  assert.equal(modelCallCount, 1, "Model must be called exactly once for the fresh page");
+  assert.equal(insertedAnalyses.length, 2, "Both pages must have analyses recorded in current run");
+  const dedupedAnalysis = insertedAnalyses.find((a) => a.pageSnapshotId === "snap-deduped");
+  const freshAnalysis = insertedAnalyses.find((a) => a.pageSnapshotId === "snap-fresh");
+  assert.equal(dedupedAnalysis.reusedFromAnalysisId, priorAnalysisId);
+  assert.equal(dedupedAnalysis.usage, null);
+  assert.ok(!freshAnalysis.reusedFromAnalysisId, "Fresh analysis must not have reusedFromAnalysisId");
+  assert.ok(freshAnalysis.usage);
+});
+
+// ---------------------------------------------------------------------------
+// P1-02: Conservative Budget Authorization & Fail-Closed Boundaries
+// ---------------------------------------------------------------------------
+
+test("P1-02: unpriceable model fails closed with competitor_analyst_not_configured before any model call", async () => {
+  let modelInvoked = false;
+  const service = new CompetitorContentGapService({
+    intake: {
+      listSnapshots: async () => [
+        { id: "in-1", version: 1, digest: "d1", payload: { business: { name: "TestCo" } } },
+      ],
+    } as never,
+    competitorStore: {
+      sumTodayCompetitorCostMicros: async () => 0,
+    } as never,
+    competitorAnalyst: { provider: "fixture", maxTokens: 8192 } as never,
+    gapAnalyst: {
+      provider: "openrouter",
+      model: "untrusted/unknown-model-without-pricing",
+      promptVersion: "v1",
+      maxTokens: 8192,
+      propose: async () => {
+        modelInvoked = true;
+        return {} as never;
+      },
+    } as never,
+  });
+
+  const origKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = "test-key";
+  try {
+    await assert.rejects(
+      service.proposeGaps({ projectId: "proj-1" }),
+      (err: unknown) =>
+        err instanceof FactoryError &&
+        err.code === "competitor_analyst_not_configured" &&
+        err.message.includes("No trusted pricing configuration found"),
+    );
+    assert.equal(modelInvoked, false, "Provider must not be invoked when model is unpriceable");
+  } finally {
+    process.env.OPENROUTER_API_KEY = origKey;
+  }
+});
+
+test("P1-02: unbounded model (missing maxTokens) fails closed before provider invocation", async () => {
+  let modelInvoked = false;
+  const service = new CompetitorContentGapService({
+    intake: {
+      listSnapshots: async () => [
+        { id: "in-1", version: 1, digest: "d1", payload: { business: { name: "TestCo" } } },
+      ],
+    } as never,
+    competitorStore: {
+      sumTodayCompetitorCostMicros: async () => 0,
+    } as never,
+    competitorAnalyst: { provider: "fixture", maxTokens: 8192 } as never,
+    gapAnalyst: {
+      provider: "openrouter",
+      model: "google/gemini-3.7-flash",
+      promptVersion: "v1",
+      maxTokens: undefined, // Unbounded!
+      propose: async () => {
+        modelInvoked = true;
+        return {} as never;
+      },
+    } as never,
+  });
+
+  const origKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = "test-key";
+  try {
+    await assert.rejects(
+      service.proposeGaps({ projectId: "proj-1" }),
+      (err: unknown) =>
+        err instanceof FactoryError &&
+        err.code === "competitor_analyst_not_configured" &&
+        err.message.includes("maxOutputTokens to prove budget ceiling"),
+    );
+    assert.equal(modelInvoked, false, "Provider must not be invoked when model is unbounded");
+  } finally {
+    process.env.OPENROUTER_API_KEY = origKey;
+  }
+});
+
+test("P1-02: exact limit boundary: spent + active + worst-case <= budget authorized, +1 micro blocked", async () => {
+  const store = new CompetitorStore({} as never);
+  // dailyLimitUsd = 5 -> 5,000,000 micros.
+  // Reservation = 35,000 micros.
+  // When spent = 4,965,000 micros: 4,965,000 + 35,000 = 5,000,000 <= 5,000,000 -> succeeds.
+  store.sumTodayCompetitorCostMicros = async () => 4_965_000;
+  const release = await store.reserveBudget(35_000, 5);
+  assert.equal(typeof release, "function");
+  release();
+
+  // When spent = 4,965,001 micros: 4,965,001 + 35,000 = 5,000,001 > 5,000,000 -> throws competitor_budget_blocked.
+  store.sumTodayCompetitorCostMicros = async () => 4_965_001;
+  await assert.rejects(
+    store.reserveBudget(35_000, 5),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "competitor_budget_blocked" &&
+      err.message.includes("Daily competitor budget reached"),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// P1-03: Content Gap Grounding & First-Party Invariants
+// ---------------------------------------------------------------------------
+
+test("P1-03: non-ABSENT coverage with empty evidenceRefs rejected by schema and validateContentGapGrounding", () => {
+  const gap = createValidGap({
+    competitorCoverage: "STRONG",
+    competitorsCoveringIt: ["page-1"],
+    evidenceRefs: [],
+  });
+  const ctx = createGroundingContext();
+
+  // 1. Zod schema rejection
+  assert.throws(
+    () => contentGapSchema.parse(gap),
+    (err: unknown) => /competitor coverage but empty evidenceRefs/i.test(String(err)),
+  );
+
+  // 2. Engine validateContentGapGrounding rejection
+  assert.throws(
+    () => validateContentGapGrounding([gap], ctx),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "content_gap_invalid" &&
+      /competitor coverage but empty evidenceRefs/i.test(err.message),
+  );
+});
+
+test("P1-03: non-ABSENT coverage with empty competitorsCoveringIt rejected by schema and validateContentGapGrounding", () => {
+  const gap = createValidGap({
+    competitorCoverage: "PARTIAL",
+    competitorsCoveringIt: [],
+    evidenceRefs: [{ pageSnapshotId: "page-1", segmentId: "seg-101" }],
+  });
+  const ctx = createGroundingContext();
+
+  assert.throws(
+    () => contentGapSchema.parse(gap),
+    (err: unknown) => /competitor coverage but empty competitorsCoveringIt/i.test(String(err)),
+  );
+
+  assert.throws(
+    () => validateContentGapGrounding([gap], ctx),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "content_gap_invalid" &&
+      /competitor coverage but empty competitorsCoveringIt/i.test(err.message),
+  );
+});
+
+test("P1-03: ABSENT coverage with non-empty evidenceRefs rejected by schema and validateContentGapGrounding", () => {
+  const gap = createValidGap({
+    competitorCoverage: "ABSENT",
+    competitorsCoveringIt: [],
+    evidenceRefs: [{ pageSnapshotId: "page-1", segmentId: "seg-101" }],
+  });
+  const ctx = createGroundingContext();
+
+  assert.throws(
+    () => contentGapSchema.parse(gap),
+    (err: unknown) => /ABSENT competitor coverage but non-empty evidenceRefs/i.test(String(err)),
+  );
+
+  assert.throws(
+    () => validateContentGapGrounding([gap], ctx),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "content_gap_invalid" &&
+      /ABSENT competitor coverage but non-empty evidenceRefs/i.test(err.message),
+  );
+});
+
+test("P1-03: ABSENT coverage with non-empty competitorsCoveringIt rejected by schema and validateContentGapGrounding", () => {
+  const gap = createValidGap({
+    competitorCoverage: "ABSENT",
+    competitorsCoveringIt: ["page-1"],
+    evidenceRefs: [],
+  });
+  const ctx = createGroundingContext();
+
+  assert.throws(
+    () => contentGapSchema.parse(gap),
+    (err: unknown) => /ABSENT competitor coverage but non-empty competitorsCoveringIt/i.test(String(err)),
+  );
+
+  assert.throws(
+    () => validateContentGapGrounding([gap], ctx),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "content_gap_invalid" &&
+      /ABSENT competitor coverage but non-empty competitorsCoveringIt/i.test(err.message),
+  );
+});
+
+test("P1-03: evidenceRefs referencing non-INCLUDE (REFERENCE_ONLY) page fails closed", () => {
+  const gap = createValidGap({
+    competitorCoverage: "STRONG",
+    competitorsCoveringIt: ["page-1"],
+    evidenceRefs: [{ pageSnapshotId: "page-2", segmentId: "seg-201" }], // page-2 is REFERENCE_ONLY
+  });
+  const ctx = createGroundingContext();
+
+  assert.throws(
+    () => validateContentGapGrounding([gap], ctx),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      err.code === "content_gap_invalid" &&
+      /only INCLUDE pages may represent competitive coverage/i.test(err.message),
+  );
+});
+
 
 

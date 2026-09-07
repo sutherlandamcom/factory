@@ -40,21 +40,82 @@ test("SSRF guard: structure rejects non-http, credentials and forbidden IP liter
   assert.equal(validateUrlStructure("https://example.com/page").ok, true);
 });
 
-test("SSRF guard: DNS resolution of private A records fails closed", async () => {
+test("SSRF guard: adversarial IPv4 and IPv6 literal blocking and public allowing", () => {
+  const blockedCases = [
+    "http://127.0.0.1/",
+    "http://10.0.0.1/",
+    "http://169.254.169.254/",
+    "http://[::1]/",
+    "http://[::ffff:127.0.0.1]/",
+    "http://[::ffff:7f00:1]/",
+    "http://[fe80::1]/",
+    "http://[fe90::1]/",
+    "http://[febf::1]/",
+    "http://[fc00::1]/",
+    "http://[fd00::1]/",
+    "http://[ff02::1]/",
+    "http://[2001:db8::1]/",
+    "http://[2002:7f00:0001::]/", // 6to4 embedding 127.0.0.1
+    "http://[2001:0000:4136:e378:8000:63bf:3fff:fdd2]/", // Teredo
+  ];
+
+  for (const url of blockedCases) {
+    const res = validateUrlStructure(url);
+    assert.equal(res.ok, false, `Expected blocked for ${url}, got ok: true`);
+  }
+
+  const allowedCases = [
+    "http://8.8.8.8/",
+    "http://1.1.1.1/",
+    "http://[2606:4700:4700::1111]/",
+    "https://example.com/",
+  ];
+
+  for (const url of allowedCases) {
+    const res = validateUrlStructure(url);
+    assert.equal(res.ok, true, `Expected allowed for ${url}, got ok: false (${res.reason})`);
+  }
+});
+
+test("SSRF guard: DNS resolution of private A/AAAA records and error paths fail closed", async () => {
   const { validateUrlResolved } = await import("../src/competitors/ssrf-guard.js");
   const lookup = fakeLookup({
     "evil.example.com": [{ address: "10.0.0.5", family: 4 }],
+    "evil-ipv6.example.com": [{ address: "fe90::1", family: 6 }],
+    "mapped-ipv6.example.com": [{ address: "::ffff:7f00:1", family: 6 }],
     "mixed.example.com": [
       { address: "93.184.216.34", family: 4 },
       { address: "127.0.0.1", family: 4 }, // one bad record poisons the host
     ],
+    "mixed-v6.example.com": [
+      { address: "2606:4700:4700::1111", family: 6 },
+      { address: "fe80::1", family: 6 }, // one bad v6 poisons the host
+    ],
     "good.example.com": [{ address: "93.184.216.34", family: 4 }],
+    "good-v6.example.com": [{ address: "2606:4700:4700::1111", family: 6 }],
     "meta.example.com": [{ address: "169.254.169.254", family: 4 }],
+    "empty-dns.example.com": [],
   });
-  assert.equal((await validateUrlResolved("https://evil.example.com/", lookup)).ok, false);
-  assert.equal((await validateUrlResolved("https://mixed.example.com/", lookup)).ok, false);
-  assert.equal((await validateUrlResolved("https://meta.example.com/", lookup)).ok, false);
+
+  // Allowed public
   assert.equal((await validateUrlResolved("https://good.example.com/", lookup)).ok, true);
+  assert.equal((await validateUrlResolved("https://good-v6.example.com/", lookup)).ok, true);
+
+  // Blocked private / link-local / mapped
+  assert.equal((await validateUrlResolved("https://evil.example.com/", lookup)).ok, false);
+  assert.equal((await validateUrlResolved("https://evil-ipv6.example.com/", lookup)).ok, false);
+  assert.equal((await validateUrlResolved("https://mapped-ipv6.example.com/", lookup)).ok, false);
+  assert.equal((await validateUrlResolved("https://meta.example.com/", lookup)).ok, false);
+
+  // One public + one private => BLOCKED
+  assert.equal((await validateUrlResolved("https://mixed.example.com/", lookup)).ok, false);
+  assert.equal((await validateUrlResolved("https://mixed-v6.example.com/", lookup)).ok, false);
+
+  // DNS returns no addresses => blocked
+  assert.equal((await validateUrlResolved("https://empty-dns.example.com/", lookup)).ok, false);
+
+  // DNS fails (nonexistent domain) => blocked
+  assert.equal((await validateUrlResolved("https://nonexistent.example.com/", lookup)).ok, false);
 });
 
 test("acquisition: successful HTML page captures final URL, status, digest", async () => {

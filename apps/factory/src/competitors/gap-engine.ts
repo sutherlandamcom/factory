@@ -114,13 +114,15 @@ export function validateGapFirstPartyRefs(
         (item) => item.field === ref.intakeField && item.index === ref.itemIndex,
       );
       if (!match) {
-        throw new Error(
+        throw new FactoryError(
+          "content_gap_invalid",
           `gap "${gap.id}" references first-party evidence that does not exist in accepted inputs`,
         );
       }
       const excerpt = ref.excerpt.trim();
       if (excerpt && !match.text.startsWith(excerpt.slice(0, Math.min(excerpt.length, 80)))) {
-        throw new Error(
+        throw new FactoryError(
+          "content_gap_invalid",
           `gap "${gap.id}" misquotes first-party evidence (model cannot invent operator facts)`,
         );
       }
@@ -202,6 +204,7 @@ export interface GapGroundingContext {
     digest: string;
     pageSnapshotId: string;
   }>;
+  acceptedEvidence?: FirstPartyEvidenceItem[];
 }
 
 /**
@@ -210,11 +213,13 @@ export interface GapGroundingContext {
  *    - must be non-empty (at least one valid ref required)
  *    - every referenced ID + digest must match either the bound SERP snapshot or bound Search Intelligence snapshot
  *    - fabricated/foreign/mismatched refs throw
- * 2. competitorsCoveringIt:
+ * 2. competitorsCoveringIt & coverage invariants:
  *    - every ID must resolve to an included analyzed competitor page snapshot in this exact run lineage
  *    - unknown IDs or pages classified EXCLUDE / REFERENCE_ONLY throw
+ *    - non-ABSENT coverage must have >= 1 evidenceRef and >= 1 competitorCoveringIt
+ *    - ABSENT coverage must have 0 evidenceRefs and 0 competitorsCoveringIt
  * 3. evidenceRefs:
- *    - pageSnapshotId must resolve to an analyzed page in this run
+ *    - pageSnapshotId must resolve to an analyzed INCLUDE page in this run
  *    - segmentId must exist in that exact snapshot's extracted segments
  * 4. pageSnapshotRefs & analysisRefs:
  *    - cross-checks IDs + digests against persisted dependencies; rejects mismatches
@@ -259,7 +264,36 @@ export function validateContentGapGrounding(
       }
     }
 
-    // 2. competitorsCoveringIt: must resolve to included analyzed competitor page snapshots
+    // 2. Coverage grounding invariants (P1-03)
+    if (gap.competitorCoverage !== "ABSENT") {
+      if (!gap.evidenceRefs || gap.evidenceRefs.length === 0) {
+        throw new FactoryError(
+          "content_gap_invalid",
+          `gap "${gap.id}" has ${gap.competitorCoverage} competitor coverage but empty evidenceRefs; competitor-derived coverage must cite real competitor evidence`,
+        );
+      }
+      if (!gap.competitorsCoveringIt || gap.competitorsCoveringIt.length === 0) {
+        throw new FactoryError(
+          "content_gap_invalid",
+          `gap "${gap.id}" has ${gap.competitorCoverage} competitor coverage but empty competitorsCoveringIt`,
+        );
+      }
+    } else {
+      if (gap.competitorsCoveringIt && gap.competitorsCoveringIt.length > 0) {
+        throw new FactoryError(
+          "content_gap_invalid",
+          `gap "${gap.id}" has ABSENT competitor coverage but non-empty competitorsCoveringIt`,
+        );
+      }
+      if (gap.evidenceRefs && gap.evidenceRefs.length > 0) {
+        throw new FactoryError(
+          "content_gap_invalid",
+          `gap "${gap.id}" has ABSENT competitor coverage but non-empty evidenceRefs; ABSENT coverage cannot cite competitor evidence`,
+        );
+      }
+    }
+
+    // 3. competitorsCoveringIt: must resolve to included analyzed competitor page snapshots
     for (const competitorId of gap.competitorsCoveringIt) {
       const page = pageMap.get(competitorId);
       if (!page) {
@@ -282,13 +316,19 @@ export function validateContentGapGrounding(
       }
     }
 
-    // 3. evidenceRefs: pageSnapshotId and segmentId must exist in the exact extracted snapshot
+    // 4. evidenceRefs: pageSnapshotId and segmentId must exist in the exact extracted snapshot
     for (const evRef of gap.evidenceRefs) {
       const page = pageMap.get(evRef.pageSnapshotId);
       if (!page) {
         throw new FactoryError(
           "content_gap_invalid",
           `gap "${gap.id}" references unknown page snapshot "${evRef.pageSnapshotId}" in evidenceRefs`,
+        );
+      }
+      if (page.classification !== "INCLUDE") {
+        throw new FactoryError(
+          "content_gap_invalid",
+          `gap "${gap.id}" references page "${evRef.pageSnapshotId}" with classification ${page.classification}; only INCLUDE pages may represent competitive coverage`,
         );
       }
       if (!analysisPageIds.has(evRef.pageSnapshotId)) {
@@ -310,6 +350,11 @@ export function validateContentGapGrounding(
         }
       }
     }
+  }
+
+  // 5. First-party evidence separation validation (when provided in context)
+  if (context.acceptedEvidence) {
+    validateGapFirstPartyRefs(gaps, context.acceptedEvidence);
   }
 }
 

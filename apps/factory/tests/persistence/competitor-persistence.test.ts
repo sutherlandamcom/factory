@@ -177,6 +177,22 @@ test("competitor persistence: lineage, isolation, dedupe, accepted immutability"
   const reuse = await store.findAnalysisForPage(snap1.id, "fixture-analyst", "competitor-analyst-v1");
   assert.equal(reuse?.id, analysis.id);
 
+  // Dedupe analysis reuse: sets reusedFromAnalysisId, preserves lineage, usage is null
+  const reusedAnalysis = await store.insertPageAnalysis({
+    ...analysisInput,
+    pageSnapshotId: snap2.id,
+    reusedFromAnalysisId: analysis.id,
+    data: {
+      ...analysisInput.data,
+      evidenceSegmentRefs: [{ pageSnapshotId: snap2.id, segmentId: "seg-001" }],
+    },
+    usage: null,
+  });
+  assert.ok(reusedAnalysis.id);
+  assert.equal(reusedAnalysis.reusedFromAnalysisId, analysis.id);
+  assert.equal(reusedAnalysis.pageSnapshotId, snap2.id);
+  assert.equal(reusedAnalysis.usage, null);
+
   // Gap report persistence + contract re-parse on read
   const report = await store.insertGapReport({
     runId: run.id,

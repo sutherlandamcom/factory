@@ -331,7 +331,7 @@ export const firstPartyEvidenceRefSchema = z
   .strict();
 export type FirstPartyEvidenceRef = z.infer<typeof firstPartyEvidenceRefSchema>;
 
-export const contentGapSchema = z
+export const contentGapBaseSchema = z
   .object({
     id: z.string().min(1).max(64),
     userNeed: boundedText(500),
@@ -346,6 +346,7 @@ export const contentGapSchema = z
           })
           .strict(),
       )
+      .min(1)
       .max(10),
     competitorCoverage: coverageLevelSchema,
     competitorsCoveringIt: z.array(idSchema).max(20),
@@ -361,6 +362,62 @@ export const contentGapSchema = z
     evidenceRefs: z.array(analysisEvidenceRefSchema).max(60),
   })
   .strict();
+
+export function refineContentGapGrounding<
+  T extends {
+    id: string;
+    competitorCoverage: CoverageLevel;
+    evidenceRefs?: Array<{ pageSnapshotId: string; segmentId: string }>;
+    competitorsCoveringIt?: string[];
+    searchEvidenceRefs?: Array<{ kind: string; id: string; digest: string }>;
+  },
+>(gap: T, ctx: z.RefinementCtx): void {
+  // Search evidence is strictly required for every gap.
+  if (!gap.searchEvidenceRefs || gap.searchEvidenceRefs.length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `gap "${gap.id}" requires searchEvidenceRefs; empty array is not grounded`,
+      path: ["searchEvidenceRefs"],
+    });
+  }
+
+  // When competitor coverage is claimed (STRONG, PARTIAL, WEAK), competitor-derived
+  // evidence references and covering competitors are mandatory (fail closed).
+  if (gap.competitorCoverage !== "ABSENT") {
+    if (!gap.evidenceRefs || gap.evidenceRefs.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `gap "${gap.id}" has ${gap.competitorCoverage} competitor coverage but empty evidenceRefs; competitor-derived coverage must cite real competitor evidence`,
+        path: ["evidenceRefs"],
+      });
+    }
+    if (!gap.competitorsCoveringIt || gap.competitorsCoveringIt.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `gap "${gap.id}" has ${gap.competitorCoverage} competitor coverage but empty competitorsCoveringIt`,
+        path: ["competitorsCoveringIt"],
+      });
+    }
+  } else {
+    // For ABSENT coverage, competitors do not cover this requirement.
+    if (gap.competitorsCoveringIt && gap.competitorsCoveringIt.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `gap "${gap.id}" has ABSENT competitor coverage but non-empty competitorsCoveringIt`,
+        path: ["competitorsCoveringIt"],
+      });
+    }
+    if (gap.evidenceRefs && gap.evidenceRefs.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `gap "${gap.id}" has ABSENT competitor coverage but non-empty evidenceRefs; ABSENT coverage cannot cite competitor evidence`,
+        path: ["evidenceRefs"],
+      });
+    }
+  }
+}
+
+export const contentGapSchema = contentGapBaseSchema.superRefine(refineContentGapGrounding);
 export type ContentGap = z.infer<typeof contentGapSchema>;
 
 export const differentiationRequirementsSchema = z
@@ -469,7 +526,7 @@ export type ContentGapDecisionsData = z.infer<typeof contentGapDecisionsDataSche
 // Accepted Content Gap Snapshot data (immutable human-accepted truth)
 // ---------------------------------------------------------------------------
 
-export const acceptedContentGapItemSchema = contentGapSchema
+export const acceptedContentGapItemBaseSchema = contentGapBaseSchema
   .extend({
     /** Human-reviewed disposition is authoritative after acceptance. */
     disposition: gapDispositionSchema,
@@ -483,6 +540,7 @@ export const acceptedContentGapItemSchema = contentGapSchema
     recommendedPriority: gapPrioritySchema,
   })
   .strict();
+export const acceptedContentGapItemSchema = acceptedContentGapItemBaseSchema.superRefine(refineContentGapGrounding);
 export type AcceptedContentGapItem = z.infer<typeof acceptedContentGapItemSchema>;
 
 export const acceptedContentGapSnapshotDataSchema = z

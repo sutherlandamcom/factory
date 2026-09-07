@@ -157,9 +157,11 @@ test("gap report finalization: binds provenance, review state is Factory-owned",
         id: "gap-001",
         userNeed: "Understand yield",
         topicQuestion: "What yield?",
-        searchEvidenceRefs: [],
+        searchEvidenceRefs: [
+          { kind: "serp_snapshot", id: "serp-1", digest: "s".repeat(64) },
+        ],
         competitorCoverage: "WEAK",
-        competitorsCoveringIt: [],
+        competitorsCoveringIt: ["snap-1"],
         treatmentPattern: "",
         baselineExpectation: "",
         ourEvidenceAvailable: [
@@ -171,7 +173,9 @@ test("gap report finalization: binds provenance, review state is Factory-owned",
         recommendedDisposition: "REQUIRED",
         priority: "HIGH",
         rationale: "",
-        evidenceRefs: [],
+        evidenceRefs: [
+          { pageSnapshotId: "snap-1", segmentId: "seg-001" },
+        ],
       },
     ],
     differentiationRequirements: {
@@ -211,9 +215,11 @@ test("gap analyst (injected): unsupported first-party claim fails closed at fina
           {
             id: "gap-1",
             userNeed: "n", topicQuestion: "q",
-            searchEvidenceRefs: [],
+            searchEvidenceRefs: [
+              { kind: "serp_snapshot", id: "serp", digest: "s".repeat(64) },
+            ],
             competitorCoverage: "PARTIAL",
-            competitorsCoveringIt: [],
+            competitorsCoveringIt: ["snap-1"],
             treatmentPattern: "", baselineExpectation: "",
             ourEvidenceAvailable: [
               // Competitor claim smuggled as our evidence:
@@ -224,7 +230,9 @@ test("gap analyst (injected): unsupported first-party claim fails closed at fina
             recommendedDisposition: "REQUIRED",
             priority: "HIGH",
             rationale: "",
-            evidenceRefs: [],
+            evidenceRefs: [
+              { pageSnapshotId: "snap-1", segmentId: "seg-001" },
+            ],
           },
         ],
         differentiationRequirements: { items: [] },

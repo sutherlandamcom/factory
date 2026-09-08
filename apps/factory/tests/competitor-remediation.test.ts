@@ -2947,7 +2947,7 @@ test("P1-05: all-ABSENT coverage matrix with non-ABSENT model coverage fails clo
     (err: unknown) =>
       err instanceof FactoryError &&
       err.code === "content_gap_invalid" &&
-      /evaluated all competitors as ABSENT/i.test(err.message),
+      /aggregates to ABSENT/i.test(err.message),
   );
 });
 
@@ -2979,7 +2979,7 @@ test("P1-05: STRONG coverage matrix with ABSENT model coverage fails closed", ()
     (err: unknown) =>
       err instanceof FactoryError &&
       err.code === "content_gap_invalid" &&
-      /found STRONG competitor coverage/i.test(err.message),
+      /aggregates to STRONG/i.test(err.message),
   );
 });
 

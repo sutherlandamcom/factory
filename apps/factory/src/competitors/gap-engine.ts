@@ -424,23 +424,36 @@ export function validateContentGapGrounding(
         }
       }
 
-      // 4c-2. Claimed non-ABSENT coverage must be consistent with the exact bound row
-      const maxLevel = boundRow.cells.reduce(
+      // 4c-2. DETERMINISTIC AGGREGATION IS THE SOLE AUTHORITY.
+      // aggregateCoverage = maximum categorical level across the exact bound
+      // row's cells (ABSENT < WEAK < PARTIAL < STRONG; empty row -> ABSENT).
+      // The model may explain meaning; it may NOT override deterministic
+      // coverage. Any categorical mismatch fails closed.
+      const aggregateLevel = boundRow.cells.reduce(
         (acc, c) => (LEVEL_ORDER[c.level] > LEVEL_ORDER[acc] ? c.level : acc),
         "ABSENT" as CoverageLevel,
       );
-      if (maxLevel === "ABSENT" && gap.competitorCoverage !== "ABSENT") {
+      if (gap.competitorCoverage !== aggregateLevel) {
         throw new FactoryError(
           "content_gap_invalid",
-          `gap "${gap.id}" claims ${gap.competitorCoverage} coverage for requirement "${boundRow.requirement}" (id "${boundRow.requirementId}"), but deterministic coverage matrix evaluated all competitors as ABSENT (fail closed)`,
+          `gap "${gap.id}" claims ${gap.competitorCoverage} coverage for requirement "${boundRow.requirement}" (id "${boundRow.requirementId}"), but the deterministic coverage matrix aggregates to ${aggregateLevel} (fail closed; model output cannot override deterministic coverage)`,
         );
       }
 
-      // 4c-3. Claimed ABSENT coverage must be consistent with the exact bound row
-      if (maxLevel === "STRONG" && gap.competitorCoverage === "ABSENT") {
+      // 4c-3. competitorsCoveringIt must equal the authoritative deterministic
+      // covering set: every analyzed INCLUDE cell whose level != ABSENT.
+      const expectedCovering = boundRow.cells
+        .filter((c) => c.level !== "ABSENT")
+        .map((c) => c.pageSnapshotId)
+        .sort();
+      const actualCovering = [...gap.competitorsCoveringIt].sort();
+      if (
+        expectedCovering.length !== actualCovering.length ||
+        expectedCovering.some((id, i) => id !== actualCovering[i])
+      ) {
         throw new FactoryError(
           "content_gap_invalid",
-          `gap "${gap.id}" claims ABSENT coverage for requirement "${boundRow.requirement}" (id "${boundRow.requirementId}"), but deterministic coverage matrix found STRONG competitor coverage (fail closed)`,
+          `gap "${gap.id}" competitorsCoveringIt does not match the deterministic covering set for requirement "${boundRow.requirement}" (id "${boundRow.requirementId}"): expected [${expectedCovering.join(", ")}], got [${actualCovering.join(", ")}] (fail closed)`,
         );
       }
     }

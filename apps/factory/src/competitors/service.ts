@@ -51,6 +51,8 @@ import {
   calculateConservativeInvocationCostMicros,
   calculateInvocationActualCostMicros,
 } from "../models/index.js";
+import type { BudgetReservationHandle } from "./competitor-store.js";
+import type { ModelCallError } from "../models/gateway.js";
 
 /**
  * CompetitorContentGapService — the governed application service (P6).
@@ -266,6 +268,77 @@ export function computeSemanticInputDigest(input: {
 // Service
 // ---------------------------------------------------------------------------
 
+/** Digest binding the exact compiled invocation to its budget reservation. */
+function compiledInvocationDigest(compiled: {
+  model: string;
+  provider: string;
+  systemPrompt: string;
+  userPrompt: string;
+  maxTokens: number;
+}): string {
+  return deterministicDigest({
+    model: compiled.model,
+    provider: compiled.provider,
+    systemPrompt: compiled.systemPrompt,
+    userPrompt: compiled.userPrompt,
+    maxTokens: compiled.maxTokens,
+  });
+}
+
+/** Reservation handle for test-stub stores without reserveBudget. */
+function makeNoopReservationHandle(reservation: {
+  authorizedMicros: number;
+}): BudgetReservationHandle {
+  let settled = false;
+  return {
+    id: "noop",
+    invocationDigest: "noop",
+    async account(actualTrustedMicros: number | null): Promise<void> {
+      settled = true;
+      void actualTrustedMicros;
+      void reservation;
+    },
+    async releaseUnexecuted(): Promise<void> {
+      settled = true;
+    },
+  };
+}
+
+/**
+ * Classify the outcome of a paid invocation and settle its reservation:
+ * - trusted actual cost available -> account it (capped at authorization);
+ * - invocation completed but cost unknown -> account the authorized
+ *   conservative amount (never a smaller fixed fallback);
+ * - provable pre-submission failure (credentials/policy, thrown before any
+ *   network request) -> release without inventing spend;
+ * - any other failure (timeout, HTTP error, post-submission unknown) ->
+ *   fail closed: account the authorized conservative amount, because the
+ *   provider may have executed the request.
+ */
+export async function settleReservationAfterInvocation(
+  handle: BudgetReservationHandle,
+  outcome:
+    | { kind: "completed"; trustedCostMicros: number | null }
+    | { kind: "failed"; error: unknown },
+): Promise<void> {
+  if (outcome.kind === "completed") {
+    await handle.account(outcome.trustedCostMicros);
+    return;
+  }
+  const error = outcome.error;
+  const isPreSubmission =
+    error instanceof Error &&
+    "code" in error &&
+    ((error as { code?: string }).code === "credentials_unavailable" ||
+      (error as { code?: string }).code === "policy_violation");
+  if (isPreSubmission) {
+    await handle.releaseUnexecuted();
+    return;
+  }
+  // Timeout / HTTP failure / unknown: the provider may have executed.
+  await handle.account(null);
+}
+
 export class CompetitorContentGapService {
   private readonly config: CompetitorServiceConfig;
   private readonly now: () => Date;
@@ -289,26 +362,35 @@ export class CompetitorContentGapService {
     return { accepted, snapshots };
   }
 
-  private async checkBudget(reservedCostMicros = 0): Promise<() => void> {
+  private async checkBudget(
+    reservation: {
+      provider: string;
+      model: string;
+      authorizedMicros: number;
+      invocationDigest: string;
+      lineage?: Record<string, unknown>;
+    },
+  ): Promise<BudgetReservationHandle> {
     if (typeof this.deps.competitorStore.reserveBudget === "function") {
-      return await this.deps.competitorStore.reserveBudget(reservedCostMicros, this.config.dailyLimitUsd);
+      return await this.deps.competitorStore.reserveBudget(reservation, this.config.dailyLimitUsd);
     }
+    // Store without reserveBudget (test stub): conservative in-place gate.
     const budgetMicros = this.config.dailyLimitUsd * 1_000_000;
     const spent = await this.deps.competitorStore.sumTodayCompetitorCostMicros();
-    if (spent + reservedCostMicros > budgetMicros || spent >= budgetMicros) {
+    if (spent + reservation.authorizedMicros > budgetMicros || spent >= budgetMicros) {
       throw new FactoryError(
         "competitor_budget_blocked",
         `Daily competitor budget reached (${this.config.dailyLimitUsd} USD).`,
       );
     }
-    return () => {};
+    return makeNoopReservationHandle(reservation);
   }
 
   private async reservePageAnalysisBudget(
     compiledOrExtracted: CompiledCompetitorInvocation | CompetitorPageExtracted,
     projectContext?: Record<string, unknown>,
     searchContext?: Record<string, unknown>,
-  ): Promise<() => void> {
+  ): Promise<BudgetReservationHandle> {
     if (
       typeof compiledOrExtracted === "object" &&
       "systemPrompt" in compiledOrExtracted &&
@@ -326,7 +408,13 @@ export class CompetitorContentGapService {
         compiled.provider === "fixture"
           ? 0
           : Math.max(RESERVED_PAGE_ANALYSIS_COST_MICROS, estimatedCostMicros);
-      return await this.checkBudget(reservationMicros);
+      return await this.checkBudget({
+        provider: compiled.provider,
+        model: compiled.model,
+        authorizedMicros: reservationMicros,
+        invocationDigest: compiledInvocationDigest(compiled),
+        lineage: { kind: "page_analysis" },
+      });
     }
     const systemChars = COMPETITOR_ANALYST_SYSTEM_PROMPT.length;
     const packetChars = JSON.stringify(compiledOrExtracted).length + 4000;
@@ -343,7 +431,13 @@ export class CompetitorContentGapService {
       this.deps.competitorAnalyst.provider === "fixture"
         ? 0
         : Math.max(RESERVED_PAGE_ANALYSIS_COST_MICROS, estimatedCostMicros);
-    return await this.checkBudget(reservationMicros);
+    return await this.checkBudget({
+      provider: this.deps.competitorAnalyst.provider,
+      model: this.deps.competitorAnalyst.model,
+      authorizedMicros: reservationMicros,
+      invocationDigest: "legacy-uncompiled",
+      lineage: { kind: "page_analysis" },
+    });
   }
 
   private async reserveGapAnalysisBudget(
@@ -352,7 +446,7 @@ export class CompetitorContentGapService {
       intelligenceChars?: number;
       actualChars?: number;
     } | number,
-  ): Promise<() => void> {
+  ): Promise<BudgetReservationHandle> {
     if (
       compiledOrContext &&
       typeof compiledOrContext === "object" &&
@@ -371,7 +465,13 @@ export class CompetitorContentGapService {
         compiled.provider === "fixture"
           ? 0
           : Math.max(RESERVED_GAP_ANALYSIS_COST_MICROS, estimatedCostMicros);
-      return await this.checkBudget(reservationMicros);
+      return await this.checkBudget({
+        provider: compiled.provider,
+        model: compiled.model,
+        authorizedMicros: reservationMicros,
+        invocationDigest: compiledInvocationDigest(compiled),
+        lineage: { kind: "gap_analysis" },
+      });
     }
     const inputChars =
       typeof compiledOrContext === "number"
@@ -387,7 +487,13 @@ export class CompetitorContentGapService {
       this.deps.gapAnalyst.provider === "fixture"
         ? 0
         : Math.max(RESERVED_GAP_ANALYSIS_COST_MICROS, estimatedCostMicros);
-    return await this.checkBudget(reservationMicros);
+    return await this.checkBudget({
+      provider: this.deps.gapAnalyst.provider,
+      model: this.deps.gapAnalyst.model,
+      authorizedMicros: reservationMicros,
+      invocationDigest: "legacy-uncompiled",
+      lineage: { kind: "gap_analysis" },
+    });
   }
 
   // ---- Workspace ----------------------------------------------------------
@@ -447,7 +553,13 @@ export class CompetitorContentGapService {
       );
     }
     const { accepted, snapshots } = await this.resolveAcceptedInputs(input.projectId);
-    await this.checkBudget();
+    await this.checkBudget({
+      provider: this.deps.competitorAnalyst.provider,
+      model: this.deps.competitorAnalyst.model,
+      authorizedMicros: 0,
+      invocationDigest: "run-preflight",
+      lineage: { kind: "run_preflight" },
+    });
 
     const serp = await this.deps.competitorStore.getSerpSnapshot(input.projectId, input.serpSnapshotId);
     if (!serp) {
@@ -636,7 +748,7 @@ export class CompetitorContentGapService {
           },
         };
         const compiled = compileCompetitorInvocation(analystRequest, this.deps.competitorAnalyst);
-        const release = await this.reservePageAnalysisBudget(compiled);
+        const reservation = await this.reservePageAnalysisBudget(compiled);
         try {
           await this.analyzePage({
             runId: run.id,
@@ -651,9 +763,11 @@ export class CompetitorContentGapService {
             packet,
             analystRequest,
             compiled,
+            reservation,
           });
-        } finally {
-          release();
+        } catch (error) {
+          await settleReservationAfterInvocation(reservation, { kind: "failed", error });
+          throw error;
         }
         analyzedCount++;
       }
@@ -751,6 +865,7 @@ export class CompetitorContentGapService {
     packet?: CompetitorEvidencePacket;
     analystRequest?: CompetitorAnalystRequest;
     compiled?: CompiledCompetitorInvocation;
+    reservation?: BudgetReservationHandle;
   }): Promise<void> {
     // Analysis dedupe: same page + model + prompt version + semantic digest => reuse.
     const existing = await this.deps.competitorStore.findAnalysisForPage(
@@ -791,7 +906,24 @@ export class CompetitorContentGapService {
       };
 
     const compiled = input.compiled ?? compileCompetitorInvocation(analystRequest, this.deps.competitorAnalyst);
-    const result = await this.deps.competitorAnalyst.analyze(analystRequest, compiled);
+    let result: Awaited<ReturnType<CompetitorAnalystModel["analyze"]>>;
+    try {
+      result = await this.deps.competitorAnalyst.analyze(analystRequest, compiled);
+    } catch (error) {
+      if (input.reservation) {
+        await settleReservationAfterInvocation(input.reservation, { kind: "failed", error });
+      }
+      throw error;
+    }
+    // Invocation completed: account trusted actual cost when available, else
+    // the authorized conservative amount — BEFORE the caller may proceed, so
+    // the reservation is never released while spend is unaccounted.
+    if (input.reservation) {
+      await settleReservationAfterInvocation(input.reservation, {
+        kind: "completed",
+        trustedCostMicros: result.usage?.costMicros ?? null,
+      });
+    }
 
     const validSegmentIds: ReadonlySet<string> = new Set<string>(
       (packet.extracted.segments as Array<{ id: string }>).map((s: { id: string }) => s.id),
@@ -927,7 +1059,13 @@ export class CompetitorContentGapService {
       });
     }
     const { accepted } = await this.resolveAcceptedInputs(input.projectId);
-    await this.checkBudget(0);
+    await this.checkBudget({
+      provider: this.deps.gapAnalyst.provider,
+      model: this.deps.gapAnalyst.model,
+      authorizedMicros: 0,
+      invocationDigest: "gap-preflight",
+      lineage: { kind: "gap_preflight" },
+    });
     const run = input.competitorRunId
         ? await this.deps.competitorStore.getRun(input.projectId, input.competitorRunId)
         : await this.deps.competitorStore.latestSucceededRun(input.projectId);
@@ -1032,13 +1170,21 @@ export class CompetitorContentGapService {
       };
 
       const compiledGap = compileGapInvocation(gapRequest, this.deps.gapAnalyst);
-      const releaseBudget = await this.reserveGapAnalysisBudget(compiledGap);
+      const gapReservation = await this.reserveGapAnalysisBudget(compiledGap);
       let gapResult: GapAnalystResult;
       try {
         gapResult = await this.deps.gapAnalyst.propose(gapRequest, compiledGap);
-      } finally {
-        releaseBudget();
+      } catch (error) {
+        await settleReservationAfterInvocation(gapReservation, { kind: "failed", error });
+        throw error;
       }
+      // Invocation completed: account trusted actual cost when the provider
+      // reported it; otherwise account the authorized conservative amount.
+      // The reservation stays represented until this accounting commits.
+      await settleReservationAfterInvocation(gapReservation, {
+        kind: "completed",
+        trustedCostMicros: gapResult.usage?.costMicros ?? null,
+      });
 
       // Segment-ref anchoring: every gap evidenceRef must resolve to a real
       // segment of a real analyzed page in this run.
@@ -1818,10 +1964,9 @@ export function buildCompetitorAnalysts(env: NodeJS.ProcessEnv, invokeModelFn: t
         completionTokens: result.completionTokens,
       });
     }
-    // Fail-closed spend guarantee: paid Gemini calls are never counted as zero spend
-    if (costMicros == null || costMicros === 0) {
-      costMicros = 10_000;
-    }
+    // Fail-closed spend guarantee: when the provider reports no trusted cost,
+    // costMicros stays null and the budget reservation lifecycle accounts the
+    // full authorized conservative amount (never a smaller fixed fallback).
     return {
       text: result.content,
       usage: {

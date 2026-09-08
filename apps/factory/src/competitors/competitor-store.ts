@@ -11,6 +11,7 @@ import {
 import type { FactoryDb } from "../persistence/db.js";
 import {
   acceptedContentGapSnapshots,
+  competitorBudgetReservations,
   competitorClassificationOverrides,
   competitorPageAnalyses,
   competitorPageSnapshots,
@@ -29,6 +30,33 @@ import {
 import { deterministicDigest } from "../intelligence/digest.js";
 import { decisionsDigest } from "./gap-engine.js";
 import { FactoryError } from "../executor/errors.js";
+import { FACTORY_BUDGET_RESERVATION_LOCK_KEY } from "../persistence/lock.js";
+
+/** Default daily limit when a caller does not pass one (matches service config). */
+const DEFAULT_DAILY_LIMIT_USD = 10;
+
+/** Authoritative reservation lifecycle handle. */
+export interface BudgetReservationHandle {
+  readonly id: string;
+  readonly invocationDigest: string;
+  /**
+   * Durably account this invocation's spend. When trusted actual cost is
+   * unavailable, pass null: the authorized conservative amount is accounted
+   * instead (never downgraded to an arbitrary fixed value). A trusted actual
+   * cost is capped at the authorized amount for accounting.
+   */
+  account(actualTrustedMicros: number | null): Promise<void>;
+  /**
+   * Release WITHOUT accounting spend — only valid when the invocation
+   * provably never reached the provider (pre-submission failure such as
+   * missing credentials or policy violation).
+   */
+  releaseUnexecuted(): Promise<void>;
+}
+
+function estimatedCostOrInputGuard(value: unknown): unknown {
+  return value;
+}
 
 /**
  * CompetitorStore — owns persistence for Competitors + Content Gap v0.
@@ -908,56 +936,384 @@ export class CompetitorStore {
   // ---- Budget ------------------------------------------------------------
 
   /**
-   * Budget gate input: recorded model/analysis cost today (UTC) from
-   * competitor page analyses AND PASS-2 aggregate content gap proposals.
+   * Budget gate input: durably accounted model/analysis cost today (UTC).
    *
-   * Fail-closed guarantee: for paid providers without explicit cost,
-   * unknown spend is bounded by the conservative invocation ceiling
-   * (never counted as zero spend).
+   * Authoritative source: competitor_budget_reservations rows in state
+   * 'ACCOUNTED' whose accounting happened today. Unknown-cost invocations are
+   * accounted at their authorized conservative amount (never downgraded to an
+   * arbitrary fixed fallback), so this sum can only over-state spend
+   * conservatively, never under-state it.
+   *
+   * Legacy JSONB usage columns on analyses/reports are NOT summed here: every
+   * paid invocation now flows through the reservation ledger, and double
+   * counting would permanently over-reserve the budget.
    */
   async sumTodayCompetitorCostMicros(): Promise<number> {
-    const [pageRow] = await this.db
-      .select({
-        total: sql<number>`coalesce(sum(
-          case
-            when ${competitorPageAnalyses.provider} = 'fixture' or ${competitorPageAnalyses.reusedFromAnalysisId} is not null
-              then coalesce((${competitorPageAnalyses.usage} -> 'costMicros')::numeric, 0)
-            when coalesce((${competitorPageAnalyses.usage} -> 'costMicros')::numeric, 0) > 0
-              then (${competitorPageAnalyses.usage} -> 'costMicros')::numeric
-            else 10000
-          end
-        ), 0)`,
-      })
-      .from(competitorPageAnalyses)
-      .where(
-        sql`${competitorPageAnalyses.createdAt} >= date_trunc('day', now() at time zone 'utc')`,
-      );
-    const [gapRow] = await this.db
-      .select({
-        total: sql<number>`coalesce(sum(
-          case
-            when ${contentGapReports.provider} = 'fixture'
-              then coalesce((${contentGapReports.usage} -> 'costMicros')::numeric, 0)
-            when coalesce((${contentGapReports.usage} -> 'costMicros')::numeric, 0) > 0
-              then (${contentGapReports.usage} -> 'costMicros')::numeric
-            else 20000
-          end
-        ), 0)`,
-      })
-      .from(contentGapReports)
-      .where(
-        sql`${contentGapReports.createdAt} >= date_trunc('day', now() at time zone 'utc')`,
-      );
-    const pageTotal = Number(pageRow?.total ?? 0);
-    const gapTotal = Number(gapRow?.total ?? 0);
-    const total = (Number.isFinite(pageTotal) ? pageTotal : 0) + (Number.isFinite(gapTotal) ? gapTotal : 0);
-    return total > 0 ? Math.round(total) : 0;
+    const hasDb = (this.db as { dialect?: unknown }).dialect !== undefined;
+    if (!hasDb) {
+      // In-memory seam: sum ACCOUNTED rows from the in-memory ledger.
+      let accounted = 0;
+      for (const row of this.inMemoryLedger.values()) {
+        if (row.state === "ACCOUNTED") {
+          accounted += row.accountedMicros ?? row.authorizedMicros;
+        }
+      }
+      return accounted;
+    }
+    return await this.sumAccountedTodayFromDb();
   }
 
-  private activeReservationsMicros = 0;
-  get activeReservations(): number {
-    return this.activeReservationsMicros;
+  private async sumAccountedTodayFromDb(): Promise<number> {
+    const rows = await this.db
+      .select({
+        authorizedMicros: competitorBudgetReservations.authorizedMicros,
+        accountedMicros: competitorBudgetReservations.accountedMicros,
+      })
+      .from(competitorBudgetReservations)
+      .where(
+        sql`(${competitorBudgetReservations.state} = 'ACCOUNTED'
+             AND ${competitorBudgetReservations.accountedAt} >= date_trunc('day', now() at time zone 'utc'))`,
+      );
+    let total = 0;
+    for (const row of rows) {
+      total += row.accountedMicros ?? row.authorizedMicros;
+    }
+    return total;
   }
+
+  /**
+   * Budget accounting snapshot: accounted-spend-today + active reservations.
+   * Unit tests may override this seam; the production implementation reads the
+   * durable reservation ledger inside a budget-locked transaction.
+   */
+  async getBudgetSummary(): Promise<{ accountedTodayMicros: number; activeReservationMicros: number }> {
+    const hasDb = (this.db as { dialect?: unknown }).dialect !== undefined;
+    if (!hasDb) {
+      // In-memory seam: authoritative state is the in-memory ledger.
+      let accountedToday = 0;
+      let active = 0;
+      for (const row of this.inMemoryLedger.values()) {
+        if (row.state === "ACTIVE") {
+          active += row.authorizedMicros;
+        } else if (row.state === "ACCOUNTED") {
+          accountedToday += row.accountedMicros ?? row.authorizedMicros;
+        }
+      }
+      return { accountedTodayMicros: accountedToday, activeReservationMicros: active };
+    }
+    const rows = await this.db
+      .select({
+        state: competitorBudgetReservations.state,
+        authorizedMicros: competitorBudgetReservations.authorizedMicros,
+        accountedMicros: competitorBudgetReservations.accountedMicros,
+      })
+      .from(competitorBudgetReservations)
+      .where(
+        sql`(${competitorBudgetReservations.state} = 'ACTIVE'
+             OR (${competitorBudgetReservations.state} = 'ACCOUNTED'
+                 AND ${competitorBudgetReservations.accountedAt} >= date_trunc('day', now() at time zone 'utc')))`,
+      );
+    let accountedToday = 0;
+    let active = 0;
+    for (const row of rows) {
+      if (row.state === "ACTIVE") {
+        active += row.authorizedMicros;
+      } else if (row.state === "ACCOUNTED") {
+        accountedToday += row.accountedMicros ?? row.authorizedMicros;
+      }
+    }
+    return { accountedTodayMicros: accountedToday, activeReservationMicros: active };
+  }
+
+  /**
+   * Reconcile stale ACTIVE reservations: a reservation left ACTIVE beyond the
+   * staleness window means the owning process died mid-invocation. The remote
+   * provider may or may not have executed, so fail closed: account the full
+   * authorized conservative amount (never invent zero spend).
+   */
+  private static readonly STALE_RESERVATION_MS = 24 * 60 * 60 * 1000;
+
+  private async reconcileStaleReservations(tx: FactoryDb): Promise<void> {
+    await tx.execute(sql`
+      UPDATE competitor_budget_reservations
+      SET state = 'ACCOUNTED',
+          accounted_micros = authorized_micros,
+          accounted_at = now()
+      WHERE state = 'ACTIVE'
+        AND created_at < now() - (${CompetitorStore.STALE_RESERVATION_MS} || ' milliseconds')::interval
+    `);
+  }
+
+  /**
+   * Concurrency-safe, DURABLE budget reservation.
+   *
+   * Hard ceiling invariant (fail closed before spend):
+   *   accountedToday + activeReservations + authorizedMicros <= dailyBudget
+   *
+   * The check + insert run inside ONE transaction holding a transaction-scoped
+   * advisory lock, so concurrent processes cannot interleave between the
+   * accounting read and the reservation insert. The ACTIVE row itself is the
+   * representation of possible spend: it stays in the authorization sum until
+   * the invocation's cost is durably accounted (account()) or the failure is
+   * provably pre-submission (releaseUnexecuted()).
+   *
+   * Unit tests construct CompetitorStore without a database; in that mode a
+   * transactional fallback path with an in-process mutex preserves the same
+   * authorization invariant within the single process.
+   */
+  async reserveBudget(
+    estimatedCostMicrosOrInput: number | {
+      provider: string;
+      model: string;
+      authorizedMicros: number;
+      invocationDigest: string;
+      lineage?: Record<string, unknown>;
+    },
+    dailyLimitUsd?: number,
+  ): Promise<BudgetReservationHandle> {
+    const input =
+      typeof estimatedCostOrInputGuard(estimatedCostMicrosOrInput) === "object"
+        ? (estimatedCostMicrosOrInput as {
+            provider: string;
+            model: string;
+            authorizedMicros: number;
+            invocationDigest: string;
+            lineage?: Record<string, unknown>;
+          })
+        : {
+            provider: "unknown",
+            model: "unknown",
+            authorizedMicros: estimatedCostMicrosOrInput as number,
+            invocationDigest: "legacy",
+            lineage: undefined as Record<string, unknown> | undefined,
+          };
+    const limitUsd = dailyLimitUsd ?? DEFAULT_DAILY_LIMIT_USD;
+    return await this.withReservationLock(async () => {
+      const budgetMicros = Math.round(limitUsd * 1_000_000);
+      let authorized = false;
+      let handle: BudgetReservationHandle | null = null;
+      try {
+        handle = await this.reserveBudgetDurable(input, budgetMicros);
+        authorized = true;
+        return handle;
+      } finally {
+        if (!authorized) {
+          // reserveBudgetDurable rolled back its own transaction; nothing to clean up.
+        }
+      }
+    });
+  }
+
+  private async reserveBudgetDurable(
+    input: {
+      provider: string;
+      model: string;
+      authorizedMicros: number;
+      invocationDigest: string;
+      lineage?: Record<string, unknown>;
+    },
+    budgetMicros: number,
+  ): Promise<BudgetReservationHandle> {
+    const canUseTransactions = this.db.transaction !== undefined && (this.db as { dialect?: unknown }).dialect !== undefined;
+    if (!canUseTransactions) {
+      // In-memory seam (unit tests): { } as never db has no transaction.
+      // The patched sumTodayCompetitorCostMicros seam simulates persisted spend
+      // and MUST participate in the authorization decision.
+      const summary = await this.getBudgetSummary();
+      const persistedSpend = await this.sumTodayCompetitorCostMicros();
+      if (
+        Math.max(summary.accountedTodayMicros, persistedSpend) +
+          summary.activeReservationMicros +
+          input.authorizedMicros >
+        budgetMicros
+      ) {
+        throw new FactoryError(
+          "competitor_budget_blocked",
+          `Daily competitor budget reached (${(budgetMicros / 1_000_000).toFixed(2)} USD).`,
+        );
+      }
+      return this.makeInMemoryHandle(input, budgetMicros);
+    }
+    const id = `res-${randomUUID()}`;
+    return await this.db.transaction(async (tx) => {
+      // Serialize budget decisions across processes for the whole transaction.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${Number(FACTORY_BUDGET_RESERVATION_LOCK_KEY)})`);
+      await this.reconcileStaleReservations(tx as unknown as FactoryDb);
+      const rows = await tx
+        .select({
+          state: competitorBudgetReservations.state,
+          authorizedMicros: competitorBudgetReservations.authorizedMicros,
+          accountedMicros: competitorBudgetReservations.accountedMicros,
+        })
+        .from(competitorBudgetReservations)
+        .where(
+          sql`(${competitorBudgetReservations.state} = 'ACTIVE'
+               OR (${competitorBudgetReservations.state} = 'ACCOUNTED'
+                   AND ${competitorBudgetReservations.accountedAt} >= date_trunc('day', now() at time zone 'utc')))`,
+        );
+      let total = 0;
+      for (const row of rows) {
+        total += row.state === "ACTIVE" ? row.authorizedMicros : (row.accountedMicros ?? row.authorizedMicros);
+      }
+      if (total + input.authorizedMicros > budgetMicros) {
+        throw new FactoryError(
+          "competitor_budget_blocked",
+          `Daily competitor budget reached (${(budgetMicros / 1_000_000).toFixed(2)} USD).`,
+        );
+      }
+      await tx.insert(competitorBudgetReservations).values({
+        id,
+        provider: input.provider,
+        model: input.model,
+        authorizedMicros: input.authorizedMicros,
+        state: "ACTIVE",
+        invocationDigest: input.invocationDigest,
+        lineage: input.lineage ?? null,
+      });
+      return this.makeHandle(id, input, budgetMicros);
+    });
+  }
+
+  private makeInMemoryHandle(
+    input: {
+      provider: string;
+      model: string;
+      authorizedMicros: number;
+      invocationDigest: string;
+      lineage?: Record<string, unknown>;
+    },
+    budgetMicros: number,
+  ): BudgetReservationHandle {
+    const id = `res-${randomUUID()}`;
+    return this.makeHandle(id, input, budgetMicros);
+  }
+
+  /**
+   * Build the lifecycle handle. With a real database every transition runs in
+   * its own transaction (again under the budget advisory lock). Without a
+   * database (unit-test seam), transitions mutate an in-memory ledger that
+   * getBudgetSummary reads through the overridable seam.
+   */
+  private makeHandle(
+    id: string,
+    input: {
+      provider: string;
+      model: string;
+      authorizedMicros: number;
+      invocationDigest: string;
+      lineage?: Record<string, unknown>;
+    },
+    budgetMicros: number,
+  ): BudgetReservationHandle {
+    const hasDb = (this.db as { dialect?: unknown }).dialect !== undefined;
+    const inMemoryRows = !hasDb ? this.inMemoryLedger : null;
+    if (inMemoryRows) {
+      inMemoryRows.set(id, {
+        state: "ACTIVE",
+        authorizedMicros: input.authorizedMicros,
+        accountedMicros: null,
+      });
+    }
+    let settled = false;
+    const accountRow = async (accountedMicros: number): Promise<void> => {
+      if (hasDb) {
+        await this.db.transaction(async (tx) => {
+          await tx.execute(sql`SELECT pg_advisory_xact_lock(${Number(FACTORY_BUDGET_RESERVATION_LOCK_KEY)})`);
+          await tx
+            .update(competitorBudgetReservations)
+            .set({ state: "ACCOUNTED", accountedMicros, accountedAt: new Date() })
+            .where(
+              and(
+                eq(competitorBudgetReservations.id, id),
+                eq(competitorBudgetReservations.state, "ACTIVE"),
+              ),
+            );
+        });
+      } else if (inMemoryRows) {
+        const row = inMemoryRows.get(id);
+        if (row && row.state === "ACTIVE") {
+          row.state = "ACCOUNTED";
+          row.accountedMicros = accountedMicros;
+        }
+      }
+    };
+    const releaseRow = async (): Promise<void> => {
+      if (hasDb) {
+        await this.db.transaction(async (tx) => {
+          await tx.execute(sql`SELECT pg_advisory_xact_lock(${Number(FACTORY_BUDGET_RESERVATION_LOCK_KEY)})`);
+          await tx
+            .update(competitorBudgetReservations)
+            .set({ state: "RELEASED", accountedAt: new Date() })
+            .where(
+              and(
+                eq(competitorBudgetReservations.id, id),
+                eq(competitorBudgetReservations.state, "ACTIVE"),
+              ),
+            );
+        });
+      } else if (inMemoryRows) {
+        const row = inMemoryRows.get(id);
+        if (row && row.state === "ACTIVE") {
+          row.state = "RELEASED";
+        }
+      }
+    };
+    const self = this;
+    return {
+      id,
+      invocationDigest: input.invocationDigest,
+      async account(actualTrustedMicros: number | null): Promise<void> {
+        if (settled) return;
+        settled = true;
+        // Fail-closed accounting: unknown/untrusted cost accounts at the
+        // authorized conservative amount — never a smaller fixed fallback.
+        const accounted =
+          actualTrustedMicros != null &&
+          Number.isFinite(actualTrustedMicros) &&
+          actualTrustedMicros >= 0
+            ? Math.min(Math.round(actualTrustedMicros), input.authorizedMicros)
+            : input.authorizedMicros;
+        await accountRow(accounted);
+        if (inMemoryRows) {
+          // Keep legacy counter coherent for existing assertions.
+          self.activeReservationsMicros = Math.max(
+            0,
+            self.activeReservationsMicros - input.authorizedMicros,
+          );
+        }
+      },
+      async releaseUnexecuted(): Promise<void> {
+        if (settled) return;
+        settled = true;
+        await releaseRow();
+        if (inMemoryRows) {
+          self.activeReservationsMicros = Math.max(
+            0,
+            self.activeReservationsMicros - input.authorizedMicros,
+          );
+        }
+      },
+    };
+  }
+
+  private inMemoryLedger = new Map<
+    string,
+    { state: "ACTIVE" | "ACCOUNTED" | "RELEASED"; authorizedMicros: number; accountedMicros: number | null }
+  >();
+
+  /**
+   * Backward-compatible getter used by existing unit tests: reflects ACTIVE
+   * reservations in the in-memory ledger (unit seam) or returns 0 when the
+   * durable ledger is authoritative (read via getBudgetSummary).
+   */
+  get activeReservations(): number {
+    let total = 0;
+    for (const row of this.inMemoryLedger.values()) {
+      if (row.state === "ACTIVE") total += row.authorizedMicros;
+    }
+    return total;
+  }
+  private activeReservationsMicros = 0;
   private reservationLock = Promise.resolve();
 
   private async withReservationLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -972,36 +1328,6 @@ export class CompetitorStore {
     } finally {
       release!();
     }
-  }
-
-  /**
-   * Concurrency-safe budget reservation.
-   *
-   * Enforces fail-closed hard ceiling:
-   *   spentToday + activeReservations + estimatedCostMicros <= dailyBudgetMicros
-   *
-   * Blocks execution before external spend occurs. Returns a release callback
-   * that decrements activeReservations in finally blocks.
-   */
-  async reserveBudget(estimatedCostMicros: number, dailyLimitUsd: number): Promise<() => void> {
-    return await this.withReservationLock(async () => {
-      const budgetMicros = Math.round(dailyLimitUsd * 1_000_000);
-      const spentToday = await this.sumTodayCompetitorCostMicros();
-      if (spentToday + this.activeReservationsMicros + estimatedCostMicros > budgetMicros) {
-        throw new FactoryError(
-          "competitor_budget_blocked",
-          `Daily competitor budget reached (${dailyLimitUsd} USD).`,
-        );
-      }
-      this.activeReservationsMicros += estimatedCostMicros;
-      let released = false;
-      return () => {
-        if (!released) {
-          released = true;
-          this.activeReservationsMicros = Math.max(0, this.activeReservationsMicros - estimatedCostMicros);
-        }
-      };
-    });
   }
 
   // ---- Batch helpers -------------------------------------------------------

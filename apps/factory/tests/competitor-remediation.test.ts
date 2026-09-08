@@ -16,7 +16,7 @@ import {
   RESERVED_GAP_ANALYSIS_COST_MICROS,
   computeSemanticInputDigest,
 } from "../src/competitors/service.js";
-import { CompetitorStore } from "../src/competitors/competitor-store.js";
+import { CompetitorStore, type BudgetReservationHandle } from "../src/competitors/competitor-store.js";
 import { SearchIntelligenceService } from "../src/search/service.js";
 import {
   OpenRouterGapAnalyst,
@@ -1775,7 +1775,7 @@ test("C9: concurrent budget reservation racing: mutex serializes reservations an
     store.reserveBudget(10_000, 5),
   ]);
 
-  const fulfilled = results.filter((r): r is PromiseFulfilledResult<() => void> => r.status === "fulfilled");
+  const fulfilled = results.filter((r): r is PromiseFulfilledResult<BudgetReservationHandle> => r.status === "fulfilled");
   const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
 
   assert.equal(fulfilled.length, 1, "Exactly one concurrent reservation should succeed");
@@ -1794,12 +1794,11 @@ test("C9: concurrent budget reservation racing: mutex serializes reservations an
   );
 
   // Release the first reservation
-  firstFulfilled.value();
+  await firstFulfilled.value.releaseUnexecuted();
 
   // After release, remaining budget is once again 15,000, so a subsequent 10,000 reservation succeeds
-  const release2 = await store.reserveBudget(10_000, 5);
-  assert.equal(typeof release2, "function");
-  release2();
+  const handle2 = await store.reserveBudget(10_000, 5);
+  await handle2.releaseUnexecuted();
 });
 
 test("C10: staleness parity: gapWorkspace and acceptedGapDetail return identical staleness when newer competitor run exists", async () => {
@@ -2409,9 +2408,8 @@ test("P1-02: exact limit boundary: spent + active + worst-case <= budget authori
   // Reservation = 35,000 micros.
   // When spent = 4,965,000 micros: 4,965,000 + 35,000 = 5,000,000 <= 5,000,000 -> succeeds.
   store.sumTodayCompetitorCostMicros = async () => 4_965_000;
-  const release = await store.reserveBudget(35_000, 5);
-  assert.equal(typeof release, "function");
-  release();
+  const handle = await store.reserveBudget(35_000, 5);
+  await handle.releaseUnexecuted();
 
   // When spent = 4,965,001 micros: 4,965,001 + 35,000 = 5,000,001 > 5,000,000 -> throws competitor_budget_blocked.
   store.sumTodayCompetitorCostMicros = async () => 4_965_001;
@@ -2563,14 +2561,14 @@ test("P1-01 adversarial: spent + reservations + worstCase <= limit hard ceiling 
   // Active reservations remained untouched
   assert.equal(store.activeReservations, 150_000);
 
-  // Release reservation 1
-  release1();
+  // Release reservation 1 (pre-submission release: no spend invented)
+  await release1.releaseUnexecuted();
   assert.equal(store.activeReservations, 0);
 
   // Now reservation 2 of 60_000 can succeed: 800k + 0 + 60k = 860k <= 1M
-  const release2 = await store.reserveBudget(60_000, dailyLimitUsd);
+  const handle2 = await store.reserveBudget(60_000, dailyLimitUsd);
   assert.equal(store.activeReservations, 60_000);
-  release2();
+  await handle2.releaseUnexecuted();
   assert.equal(store.activeReservations, 0);
 });
 

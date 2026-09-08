@@ -812,6 +812,43 @@ export const acceptedContentGapSnapshots = pgTable(
   ],
 );
 
+/**
+ * Durable budget reservation ledger for paid model invocations.
+ *
+ * A row in state 'ACTIVE' represents authorized-but-not-yet-accounted spend:
+ * money that MAY already have been spent. Budget authorization always sums
+ * accounted spend + active reservations before permitting a new reservation,
+ * so there is never a window where possible spend is invisible to the gate.
+ */
+export const competitorBudgetReservations = pgTable(
+  "competitor_budget_reservations",
+  {
+    id: text("id").primaryKey(),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    /** Conservative worst-case cost authorized for this invocation (micros). */
+    authorizedMicros: integer("authorized_micros").notNull(),
+    /** Durably accounted spend once terminal; NULL while ACTIVE/RELEASED. */
+    accountedMicros: integer("accounted_micros"),
+    /** 'ACTIVE' | 'ACCOUNTED' | 'RELEASED' */
+    state: text("state").notNull(),
+    /** Digest of the exact compiled invocation this reservation authorizes. */
+    invocationDigest: text("invocation_digest").notNull(),
+    /** Invocation lineage (kind, runId, projectId) for audit. */
+    lineage: jsonb("lineage"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    accountedAt: timestamp("accounted_at", { withTimezone: true }),
+  },
+  (table) => [
+    check(
+      "competitor_budget_reservations_state_valid",
+      sql`${table.state} IN ('ACTIVE', 'ACCOUNTED', 'RELEASED')`,
+    ),
+    index("competitor_budget_reservations_state_created_idx").on(table.state, table.createdAt),
+    index("competitor_budget_reservations_created_idx").on(table.createdAt),
+  ],
+);
+
 export type CompetitorRunRecord = typeof competitorRuns.$inferSelect;
 export type InsertCompetitorRun = typeof competitorRuns.$inferInsert;
 
@@ -829,3 +866,6 @@ export type InsertContentGapDecision = typeof contentGapDecisions.$inferInsert;
 
 export type AcceptedContentGapSnapshotRecord = typeof acceptedContentGapSnapshots.$inferSelect;
 export type InsertAcceptedContentGapSnapshot = typeof acceptedContentGapSnapshots.$inferInsert;
+
+export type CompetitorBudgetReservationRecord = typeof competitorBudgetReservations.$inferSelect;
+export type InsertCompetitorBudgetReservation = typeof competitorBudgetReservations.$inferInsert;

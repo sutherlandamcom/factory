@@ -6,6 +6,13 @@ import { FactoryError } from "../executor/errors.js";
  */
 export const FACTORY_CONTROL_PLANE_LOCK_KEY = "1428570001";
 
+/**
+ * Stable 64-bit lock key serializing budget reservation decisions
+ * (authorization, accounting, release) across processes. Distinct from the
+ * control-plane lock so budget accounting never blocks general execution.
+ */
+export const FACTORY_BUDGET_RESERVATION_LOCK_KEY = "1428570002";
+
 export interface ControlPlaneLockHandle {
   release: () => Promise<void>;
 }

@@ -42,21 +42,21 @@ test("P1-A REPRO: reservation must remain represented until spend is durably acc
     "Run B must be blocked while Run A's spend is reserved but unaccounted",
   );
 
-  // Cleanup for test isolation: release A's reservation (accounted flow in real impl).
-  releaseA();
+  // Cleanup for test isolation: release A's reservation (pre-submission semantics).
+  await releaseA.releaseUnexecuted();
 });
 
 test("P1-A REPRO: unknown actual provider cost must account at least the authorized conservative amount (>= 70,000, not 10k/20k)", async () => {
   const store = makeBudgetStore();
   store.sumTodayCompetitorCostMicros = async () => 0;
 
-  const release = await store.reserveBudget(70_000, 5);
+  const handle = await store.reserveBudget(70_000, 5);
   // Simulate: invocation completed, provider usage/cost missing -> accounting
   // must retain the authorized conservative amount, NOT downgrade to 10k/20k.
-  release();
+  await handle.account(null);
 
   // After the lifecycle completes, the ledger must reflect >= 70,000 accounted.
-  const accounted = await store.sumTodayCompetitorCostMicros();
+  const accounted = (await store.getBudgetSummary()).accountedTodayMicros;
   assert.ok(
     accounted >= 70_000,
     `Unknown-cost accounting must be >= authorized 70,000 micros, got ${accounted}`,
@@ -69,19 +69,19 @@ test("P1-A REPRO: trusted actual cost lower than reservation accounts actual, no
 
   const handle = await store.reserveBudget(70_000, 5);
   // Trusted actual cost from provider usage: 12,345 micros.
-  handle.account(12_345);
-  const accounted = await store.sumTodayCompetitorCostMicros();
+  await handle.account(12_345);
+  const accounted = (await store.getBudgetSummary()).accountedTodayMicros;
   assert.equal(accounted, 12_345, "Trusted actual cost must be accounted exactly");
 });
 
 test("P1-A REPRO: provable pre-submission failure releases reservation without inventing spend", async () => {
   const store = makeBudgetStore();
-  store.sumTodayCompetitorCostMicros = async () => 4_995_000;
+  store.sumTodayCompetitorCostMicros = async () => 4_990_000;
 
   const handle = await store.reserveBudget(10_000, 5);
   // Call provably never reached the provider (e.g. missing credentials).
-  handle.releaseUnexecuted();
-  const accounted = await store.sumTodayCompetitorCostMicros();
+  await handle.releaseUnexecuted();
+  const accounted = (await store.getBudgetSummary()).accountedTodayMicros;
   assert.equal(accounted, 0, "Pre-submission failure must not invent spend");
 });
 

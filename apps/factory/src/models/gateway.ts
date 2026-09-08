@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { FactoryError } from "../executor/errors.js";
+import { getModelPricing } from "./pricing.js";
 
 /**
  * Factory Model Gateway v0 — OpenRouter adapter.
@@ -143,6 +144,29 @@ interface OpenRouterChatResponse {
 }
 
 /**
+ * Provider-side price ceiling for a request, derived from Factory's trusted
+ * pricing policy (USD per MILLION tokens, the unit OpenRouter expects).
+ *
+ * The ceiling is exactly the trusted conservative per-token rate for the
+ * requested model, so a route is only eligible when its price stays within
+ * what Factory budget authorization assumed possible. If no upstream route
+ * satisfies the ceiling, OpenRouter refuses the request (fail closed at the
+ * provider, before spend). Models without trusted pricing get no ceiling
+ * here; paid production paths fail closed earlier at reservation time, which
+ * requires trusted pricing for the exact model.
+ */
+function trustedProviderMaxPrice(
+  model: string,
+): { prompt: number; completion: number } | null {
+  const pricing = getModelPricing(model);
+  if (!pricing) return null;
+  return {
+    prompt: Number((pricing.promptUsdPerToken * 1_000_000).toFixed(6)),
+    completion: Number((pricing.completionUsdPerToken * 1_000_000).toFixed(6)),
+  };
+}
+
+/**
  * Invoke one model through OpenRouter with an explicit exact model id.
  * Throws ModelCallError on failure; never returns partial content.
  */
@@ -179,6 +203,7 @@ export async function invokeModel(
   const fetchImpl = deps.fetchImpl ?? ((input, init) => fetch(input, init));
   const now = deps.now ?? (() => Date.now());
   const startedAt = now();
+  const maxPrice = trustedProviderMaxPrice(request.model);
 
   let response: Response;
   try {
@@ -197,6 +222,11 @@ export async function invokeModel(
         max_tokens: request.maxTokens ?? 16_000,
         // Deterministic-friendly default applied uniformly to every family.
         temperature: 0,
+        // Provider-side price ceiling: only routes at or below Factory's
+        // trusted conservative rate for this exact model are eligible. When
+        // no route satisfies the ceiling OpenRouter refuses the request, so
+        // spend can never exceed the trusted pricing ceiling provider-side.
+        ...(maxPrice ? { provider: { max_price: maxPrice } } : {}),
         // Deliberately absent: `models` fallback arrays, `route`, and any
         // model-identity auto-selection (Auto Router). Factory's role policy
         // owns champion/challenger choice. OpenRouter may route the pinned

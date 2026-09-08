@@ -43,7 +43,10 @@ export interface BudgetReservationHandle {
    * Durably account this invocation's spend. When trusted actual cost is
    * unavailable, pass null: the authorized conservative amount is accounted
    * instead (never downgraded to an arbitrary fixed value). A trusted actual
-   * cost is capped at the authorized amount for accounting.
+   * cost is accounted in FULL — never capped at the authorized amount. If it
+   * exceeds the authorized amount, the real amount is persisted and a typed
+   * `budget_invariant_violation` error is raised after durable accounting, so
+   * the overrun can never be hidden and subsequent paid execution fails closed.
    */
   account(actualTrustedMicros: number | null): Promise<void>;
   /**
@@ -1104,6 +1107,30 @@ export class CompetitorStore {
     });
   }
 
+  /**
+   * Fail-closed invariant scan: any ledger row whose durably accounted spend
+   * exceeds its authorized reservation proves trusted pricing under-estimated
+   * reality. Such a row permanently blocks new paid reservations until the
+   * pricing policy is corrected — the overrun is never silently absorbed.
+   */
+  private static assertNoBudgetInvariantViolation(
+    rows: ReadonlyArray<{ state: string; authorizedMicros: number; accountedMicros: number | null }>,
+  ): void {
+    for (const row of rows) {
+      if (
+        row.state === "ACCOUNTED" &&
+        row.accountedMicros != null &&
+        row.accountedMicros > row.authorizedMicros
+      ) {
+        throw new FactoryError(
+          "budget_invariant_violation",
+          `Budget ledger records accounted spend (${row.accountedMicros} micros) exceeding its authorized reservation (${row.authorizedMicros} micros). ` +
+            "Trusted pricing no longer covers reality; paid execution fails closed until pricing is corrected.",
+        );
+      }
+    }
+  }
+
   private async reserveBudgetDurable(
     input: {
       provider: string;
@@ -1119,6 +1146,7 @@ export class CompetitorStore {
       // In-memory seam (unit tests): { } as never db has no transaction.
       // The patched sumTodayCompetitorCostMicros seam simulates persisted spend
       // and MUST participate in the authorization decision.
+      CompetitorStore.assertNoBudgetInvariantViolation([...this.inMemoryLedger.values()]);
       const summary = await this.getBudgetSummary();
       const persistedSpend = await this.sumTodayCompetitorCostMicros();
       if (
@@ -1149,8 +1177,12 @@ export class CompetitorStore {
         .where(
           sql`(${competitorBudgetReservations.state} = 'ACTIVE'
                OR (${competitorBudgetReservations.state} = 'ACCOUNTED'
-                   AND ${competitorBudgetReservations.accountedAt} >= date_trunc('day', now() at time zone 'utc')))`,
+                   AND (${competitorBudgetReservations.accountedAt} >= date_trunc('day', now() at time zone 'utc')
+                        OR ${competitorBudgetReservations.accountedMicros} > ${competitorBudgetReservations.authorizedMicros})))`,
         );
+      // A recorded overrun (accounted > authorized) proves trusted pricing
+      // under-estimated reality; fail closed on all new reservations.
+      CompetitorStore.assertNoBudgetInvariantViolation(rows);
       let total = 0;
       for (const row of rows) {
         total += row.state === "ACTIVE" ? row.authorizedMicros : (row.accountedMicros ?? row.authorizedMicros);
@@ -1267,11 +1299,14 @@ export class CompetitorStore {
         settled = true;
         // Fail-closed accounting: unknown/untrusted cost accounts at the
         // authorized conservative amount — never a smaller fixed fallback.
+        // A trusted actual cost is accounted in FULL: capping it down would
+        // hide a real overrun, so actual > authorized is persisted as-is and
+        // surfaced as a typed budget invariant violation below.
         const accounted =
           actualTrustedMicros != null &&
           Number.isFinite(actualTrustedMicros) &&
           actualTrustedMicros >= 0
-            ? Math.min(Math.round(actualTrustedMicros), input.authorizedMicros)
+            ? Math.round(actualTrustedMicros)
             : input.authorizedMicros;
         await accountRow(accounted);
         if (inMemoryRows) {
@@ -1279,6 +1314,13 @@ export class CompetitorStore {
           self.activeReservationsMicros = Math.max(
             0,
             self.activeReservationsMicros - input.authorizedMicros,
+          );
+        }
+        if (accounted > input.authorizedMicros) {
+          throw new FactoryError(
+            "budget_invariant_violation",
+            `Trusted actual cost (${accounted} micros) exceeded the authorized reservation (${input.authorizedMicros} micros) for reservation ${id}. ` +
+              "The real amount is durably accounted; subsequent paid execution fails closed until trusted pricing is corrected.",
           );
         }
       },

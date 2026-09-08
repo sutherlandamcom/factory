@@ -49,10 +49,10 @@ import {
 } from "./gap-analyst.js";
 import {
   calculateConservativeInvocationCostMicros,
-  calculateInvocationActualCostMicros,
 } from "../models/index.js";
 import type { BudgetReservationHandle } from "./competitor-store.js";
-import type { ModelCallError } from "../models/gateway.js";
+import { ModelCallError } from "../models/gateway.js";
+import { InvocationFailure } from "../models/invocation-failure.js";
 
 /**
  * CompetitorContentGapService — the governed application service (P6).
@@ -306,7 +306,7 @@ function makeNoopReservationHandle(reservation: {
 
 /**
  * Classify the outcome of a paid invocation and settle its reservation:
- * - trusted actual cost available -> account it (capped at authorization);
+ * - trusted actual cost available -> account it in full, including on failure;
  * - invocation completed but cost unknown -> account the authorized
  *   conservative amount (never a smaller fixed fallback);
  * - provable pre-submission failure (credentials/policy, thrown before any
@@ -326,16 +326,15 @@ export async function settleReservationAfterInvocation(
     return;
   }
   const error = outcome.error;
-  const isPreSubmission =
-    error instanceof Error &&
-    "code" in error &&
-    ((error as { code?: string }).code === "credentials_unavailable" ||
-      (error as { code?: string }).code === "policy_violation");
-  if (isPreSubmission) {
+  if (error instanceof InvocationFailure && error.trustedCostMicros != null) {
+    await handle.account(error.trustedCostMicros);
+    return;
+  }
+  if (error instanceof InvocationFailure && !error.requestSubmitted) {
     await handle.releaseUnexecuted();
     return;
   }
-  // Timeout / HTTP failure / unknown: the provider may have executed.
+  // An HTTP status/error code alone is not proof the request was never sent.
   await handle.account(null);
 }
 
@@ -547,9 +546,10 @@ export class CompetitorContentGapService {
     maxPages?: number;
   }): Promise<CompetitorRunReadModel> {
     if (this.deps.competitorAnalyst.provider === "openrouter" && !process.env.OPENROUTER_API_KEY?.trim()) {
-      throw new FactoryError(
-        "competitor_analyst_not_configured",
+      throw new ModelCallError(
+        "credentials_unavailable",
         "OpenRouter API key is required for competitor analysis in production mode (fail closed).",
+        null, { requestSubmitted: false },
       );
     }
     const { accepted, snapshots } = await this.resolveAcceptedInputs(input.projectId);
@@ -1937,9 +1937,10 @@ export function buildCompetitorAnalysts(env: NodeJS.ProcessEnv, invokeModelFn: t
   const callGemini = async (systemPrompt: string, prompt: string) => {
     const apiKey = env.OPENROUTER_API_KEY?.trim();
     if (!apiKey) {
-      throw new FactoryError(
-        "competitor_analyst_not_configured",
+      throw new ModelCallError(
+        "credentials_unavailable",
         "OpenRouter API key is required for competitor analysis in production mode (fail closed).",
+        null, { requestSubmitted: false },
       );
     }
     const result = await invokeModelFn(
@@ -1953,17 +1954,7 @@ export function buildCompetitorAnalysts(env: NodeJS.ProcessEnv, invokeModelFn: t
       },
       { loadApiKey: () => apiKey },
     );
-    let costMicros: number | null = null;
-    if (result.costUsd != null && result.costUsd > 0) {
-      costMicros = Math.round(result.costUsd * 1_000_000);
-    } else if (result.promptTokens != null && result.completionTokens != null) {
-      costMicros = calculateInvocationActualCostMicros({
-        model: "google/gemini-3.7-flash",
-        provider: "openrouter",
-        promptTokens: result.promptTokens,
-        completionTokens: result.completionTokens,
-      });
-    }
+    const costMicros = result.costUsd != null ? Math.round(result.costUsd * 1_000_000) : null;
     // Fail-closed spend guarantee: when the provider reports no trusted cost,
     // costMicros stays null and the budget reservation lifecycle accounts the
     // full authorized conservative amount (never a smaller fixed fallback).

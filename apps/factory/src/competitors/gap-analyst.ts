@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { preserveInvocationCost } from "../models/invocation-failure.js";
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
 import { extractJsonObject } from "./analyst.js";
@@ -176,11 +177,11 @@ export class OpenRouterGapAnalyst implements GapAnalystModel {
     try {
       parsed = JSON.parse(extractJsonObject(text));
     } catch {
-      throw new FactoryError("content_gap_invalid", "Gap analyst output was not parseable JSON (fail closed).");
+      throw preserveInvocationCost(new FactoryError("content_gap_invalid", "Gap analyst output was not parseable JSON (fail closed)."), usage?.costMicros ?? null);
     }
     const shape = gapProposalShapeSchema.safeParse(parsed);
     if (!shape.success) {
-      throw new FactoryError("content_gap_invalid", "Gap analyst output failed the shape contract (fail closed).");
+      throw preserveInvocationCost(new FactoryError("content_gap_invalid", "Gap analyst output failed the shape contract (fail closed)."), usage?.costMicros ?? null);
     }
     return {
       gaps: shape.data.gaps,

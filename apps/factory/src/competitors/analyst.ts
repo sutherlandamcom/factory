@@ -4,6 +4,7 @@ import {
   type CompetitorPageAnalysisData,
   type CompetitorEvidencePacket,
 } from "@factory/contracts";
+import { preserveInvocationCost } from "../models/invocation-failure.js";
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
 import { renderPacketForPrompt } from "./packet.js";
@@ -193,7 +194,12 @@ export class OpenRouterCompetitorAnalyst implements CompetitorAnalystModel {
     const promptDigest = deterministicDigest(prompt);
     const packetDigest = deterministicDigest(request.packet);
     const { text, usage } = await this.callModel(prompt);
-    const data = finalizeCompetitorAnalysis(text, request);
+    let data: CompetitorPageAnalysisData;
+    try {
+      data = finalizeCompetitorAnalysis(text, request);
+    } catch (error) {
+      throw preserveInvocationCost(error, usage?.costMicros ?? null);
+    }
     return {
       data,
       model: this.model,

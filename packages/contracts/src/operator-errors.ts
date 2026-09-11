@@ -45,8 +45,10 @@ export const OPERATOR_ERROR_CODES = [
   "search_input_not_accepted",
   /** Search query failed deterministic validation/normalization. */
   "search_query_invalid",
-  /** No structured SERP provider is configured in trusted backend config. */
+  /** Search provider credentials or settings are missing. */
   "search_provider_not_configured",
+  /** Search analyst credentials (e.g. OpenRouter API key) are missing in production mode. */
+  "search_analyst_not_configured",
   /** Provider endpoint unreachable/failed before or during acquisition. */
   "search_provider_unavailable",
   /** Provider rejected authentication (credentials configured but invalid). */
@@ -65,6 +67,36 @@ export const OPERATOR_ERROR_CODES = [
   "search_run_not_found",
   /** Search run failed for an internal reason (sanitized diagnostics). */
   "search_run_failed",
+  /** No accepted ProjectInputSnapshot exists for this project (competitors). */
+  "competitor_input_not_accepted",
+  /** Referenced SERP snapshot does not exist for this project. */
+  "competitor_serp_not_found",
+  /** SERP evidence yielded no includable competitor candidates. */
+  "competitor_no_candidates",
+  /** Competitor run does not exist for this project. */
+  "competitor_run_not_found",
+  /** Competitor page acquisition/analysis failed (categorical; sanitized). */
+  "competitor_page_failed",
+  /** Competitor analyst output failed strict contract/evidence validation. */
+  "competitor_analysis_invalid",
+  /** Trusted competitor/analysis budget policy blocks this execution. */
+  "competitor_budget_blocked",
+  /** Competitor or gap analyst credentials (e.g. OpenRouter API key) are missing in production mode. */
+  "competitor_analyst_not_configured",
+  /** Competitor run failed for an internal reason (sanitized diagnostics). */
+  "competitor_run_failed",
+  /** Competitor run or underlying SERP is stale versus current accepted ProjectInput. */
+  "competitor_upstream_stale",
+  /** Content gap report does not exist for this project. */
+  "content_gap_report_not_found",
+  /** Content gap proposal failed strict contract validation. */
+  "content_gap_invalid",
+  /** Accepted/being-accepted gap set is stale versus upstream artifacts. */
+  "content_gap_stale",
+  /** Operator decisions invalid (unknown gap, missing decision, bad shape). */
+  "content_gap_decision_invalid",
+  /** Acceptance rejected (digest mismatch, stale, or invalid state). */
+  "content_gap_accept_failed",
   /** Unexpected server fault (message is always the sanitized fixed string). */
   "internal_error",
 ] as const;
@@ -90,6 +122,7 @@ export const OPERATOR_ERROR_STATUS: Readonly<Record<OperatorErrorCode, number>> 
   search_input_not_accepted: 409,
   search_query_invalid: 400,
   search_provider_not_configured: 409,
+  search_analyst_not_configured: 409,
   search_provider_unavailable: 502,
   search_provider_auth_failed: 502,
   search_provider_budget_blocked: 402,
@@ -99,6 +132,21 @@ export const OPERATOR_ERROR_STATUS: Readonly<Record<OperatorErrorCode, number>> 
   search_intelligence_invalid: 502,
   search_run_not_found: 404,
   search_run_failed: 500,
+  competitor_input_not_accepted: 409,
+  competitor_serp_not_found: 404,
+  competitor_no_candidates: 422,
+  competitor_run_not_found: 404,
+  competitor_page_failed: 502,
+  competitor_analysis_invalid: 502,
+  competitor_budget_blocked: 402,
+  competitor_analyst_not_configured: 409,
+  competitor_run_failed: 500,
+  competitor_upstream_stale: 409,
+  content_gap_report_not_found: 404,
+  content_gap_invalid: 502,
+  content_gap_stale: 409,
+  content_gap_decision_invalid: 422,
+  content_gap_accept_failed: 409,
   internal_error: 500,
 };
 

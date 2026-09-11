@@ -34,11 +34,12 @@ const FACTORY_ROOT = path.resolve(__dirname, "../../factory");
 const CHILD_ENV = {
   ...process.env,
   FACTORY_OPERATOR_PORT: String(OPERATOR_PORT),
-  FACTORY_DATABASE_URL: process.env.FACTORY_DATABASE_URL || process.env.FACTORY_TEST_DATABASE_URL,
+  FACTORY_DATABASE_URL: process.env.FACTORY_TEST_DATABASE_URL || process.env.FACTORY_DATABASE_URL,
   // E2E runs Search with the deterministic fixture provider/analyst so the
   // full journey never touches a paid provider or the network. This env is
   // read only by the trusted backend (never by the browser).
   FACTORY_SEARCH_MODE: process.env.FACTORY_SEARCH_MODE || "fixture",
+  FACTORY_COMPETITOR_MODE: process.env.FACTORY_COMPETITOR_MODE || "fixture",
 };
 
 /** @type {import('node:child_process').ChildProcess | null} */

@@ -657,3 +657,104 @@ test("mutations and versions on unknown project return 404 not_found", async () 
     await h.close();
   }
 });
+
+test("PATCH candidate classification route dispatches with 6 segments", async () => {
+  let calledWith: unknown = null;
+  const deps = makeDeps({
+    competitors: {
+      setClassification: async (input: unknown) => {
+        calledWith = input;
+      },
+    } as never,
+  });
+  const h = await listen(deps);
+  try {
+    const res = await apiRequest(h.port, {
+      method: "PATCH",
+      path: `/api/projects/${PROJECT.id}/competitors/candidates/page-123/classification`,
+      body: JSON.stringify({
+        classification: "EXCLUDE",
+        reason: "Irrelevant directory site",
+      }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(calledWith, {
+      projectId: PROJECT.id,
+      pageSnapshotId: "page-123",
+      classification: "EXCLUDE",
+      reason: "Irrelevant directory site",
+    });
+  } finally {
+    await h.close();
+  }
+});
+
+test("PUT content-gaps decisions requires expectedReviewRevision (fails closed with 400 validation_error)", async () => {
+  const h = await listen(makeDeps({
+    competitors: {
+      saveGapDecisions: async () => ({ reviewRevision: 1, decisionsDigest: "d" }),
+    } as never,
+  }));
+  try {
+    const res = await apiRequest(h.port, {
+      method: "PUT",
+      path: `/api/projects/${PROJECT.id}/content-gaps/reports/rep-1/decisions`,
+      body: JSON.stringify({
+        // expectedReviewRevision omitted
+        decisions: [{ gapId: "gap-1", disposition: "REQUIRED" }],
+      }),
+    });
+    assert.equal(res.status, 400);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error.code, "validation_error");
+  } finally {
+    await h.close();
+  }
+});
+
+test("POST content-gaps accept requires expectedReportDigest, expectedReviewRevision, and expectedDecisionsDigest (fails closed with 400 validation_error)", async () => {
+  const h = await listen(makeDeps({
+    competitors: {
+      acceptGapReport: async () => ({ version: 1, snapshotId: "s-1" }),
+    } as never,
+  }));
+  try {
+    // Missing expectedReviewRevision & expectedDecisionsDigest
+    const res1 = await apiRequest(h.port, {
+      method: "POST",
+      path: `/api/projects/${PROJECT.id}/content-gaps/reports/rep-1/accept`,
+      body: JSON.stringify({
+        expectedReportDigest: "rep-digest",
+      }),
+    });
+    assert.equal(res1.status, 400);
+    assert.equal(JSON.parse(res1.body).error.code, "validation_error");
+
+    // Missing expectedReportDigest
+    const res2 = await apiRequest(h.port, {
+      method: "POST",
+      path: `/api/projects/${PROJECT.id}/content-gaps/reports/rep-1/accept`,
+      body: JSON.stringify({
+        expectedReviewRevision: 1,
+        expectedDecisionsDigest: "dec-digest",
+      }),
+    });
+    assert.equal(res2.status, 400);
+    assert.equal(JSON.parse(res2.body).error.code, "validation_error");
+
+    // Missing expectedDecisionsDigest
+    const res3 = await apiRequest(h.port, {
+      method: "POST",
+      path: `/api/projects/${PROJECT.id}/content-gaps/reports/rep-1/accept`,
+      body: JSON.stringify({
+        expectedReportDigest: "rep-digest",
+        expectedReviewRevision: 1,
+      }),
+    });
+    assert.equal(res3.status, 400);
+    assert.equal(JSON.parse(res3.body).error.code, "validation_error");
+  } finally {
+    await h.close();
+  }
+});
+

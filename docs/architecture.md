@@ -16,8 +16,9 @@ At the 2026-09-06 inspection, main was
 [PR #18](https://github.com/sutherlandamcom/factory/pull/18) and instruction
 alignment [PR #19](https://github.com/sutherlandamcom/factory/pull/19) are merged.
 The Operator section below describes code present on that base. Search
-Intelligence [PR #21](https://github.com/sutherlandamcom/factory/pull/21) is an
-open candidate, not functionality on this main. Merge and CI are not independent
+Intelligence [PR #21](https://github.com/sutherlandamcom/factory/pull/21) is
+merged on main (commit `3bf9652e89f213c9ffd3b2fae2007d8ed155c68f`). Competitors + Content Gap
+(PR #24) is the current open candidate. Merge and CI are not independent
 GO evidence; see the roadmap status index and recheck Git before starting work.
 
 ## What exists today (execution trust hardening)
@@ -704,6 +705,91 @@ describes what exists today; vNext roadmap sequencing lives in
   `pnpm --filter @factory/dashboard run test:e2e`) runs against the built
   dashboard + the actual Operator service + the dedicated real PostgreSQL
   test database, including a real service restart WITHOUT DB reset.
+
+## Live Search Intelligence v0 (Macro Run 2) and Competitors + Content Gap v0 (Macro Run 3)
+
+**Implemented state on the current branch** (Run 2 merged via PR #21; Run 3 is the
+open candidate — independent GO is not asserted here). Detailed Run 2 design:
+`docs/search-intelligence-v0.md`.
+
+### Search Intelligence (Run 2, summary)
+
+`SerpProvider` boundary with Bright Data as production default
+(`BRIGHTDATA_API_KEY`, configured `BRIGHTDATA_ZONE`, DataForSEO fallback),
+fixture provider for CI; immutable `SerpSnapshot`/`GroundedSearchSnapshot`/
+`SearchIntelligenceSnapshot` rows (migration `0005`); governed
+`SearchIntelligenceService` (preflight → accepted inputs → budget gate →
+freshness cache → acquisition → analyst); `search_analyst` model role through
+the OpenRouter gateway; Dashboard Search workspace. Raw SERP payload ceiling is
+2 MiB (`MAX_SERP_RAW_BYTES`, raised from 256 KB on Run 3 live evidence).
+
+### Competitors + Content Gap (Run 3, `apps/factory/src/competitors/`, `packages/contracts/src/competitor-content-gap.ts`)
+
+Pipeline: accepted inputs + `SerpSnapshot` + `SearchIntelligenceSnapshot` →
+deterministic candidate classification (INCLUDE/EXCLUDE/REFERENCE_ONLY with
+reasons, `classification-v1`) → SSRF-guarded bounded direct-HTTP acquisition
+(`direct-http-v1`: per-hop DNS revalidation of all A/AAAA against
+loopback/private/link-local/metadata ranges, manual redirects ≤5, 15s timeout,
+2 MiB streamed cap, HTML-only, `SUCCESS|BLOCKED|NON_HTML|UNSUPPORTED|FAILED`,
+no captcha/anti-bot circumvention) → deterministic structural extraction
+(`node-html-parser`; title/meta/canonical/H1-H3, stable `seg-NNN` segments,
+questions, tables/lists, JSON-LD/FAQ/dates, citations, CTA, word count;
+script/style/nav/footer/cookie noise stripped) → bounded evidence packet
+(`selection-policy-v1`, ~25k chars, explicit `sourceChars`/`selectedChars`/
+`selectionTruncated`) → per-page analyst (`competitor-analyst-v1`, Gemini Flash
+via the existing `search_analyst` gateway path; untrusted page text delimited
+as inert DATA; categorical levels only; fabricated evidence refs normalized
+away, zero resolvable refs fail closed) → PASS 2 gap analyst (compact analyses
++ search intelligence + accepted first-party evidence only; no page HTML) →
+`ContentGapReport` with Factory-computed coverage matrix (`coverage-matrix-v1`)
+and provenance digests → operator per-gap decisions (disposition/priority/bounded
+note; every gap decided required) → immutable `accepted_content_gap_snapshots`
+(unique per project+version and unique per reportId; report+decisions digest bound;
+human decisions `disposition`, `priority`, `note` are materialized directly into
+accepted gaps while preserving `recommendedDisposition` and `recommendedPriority`;
+double acceptance is idempotent and returns the existing snapshot without minting
+new versions; decision modification is locked post-acceptance).
+
+Centralized staleness evaluation checks all upstream dependencies: latest accepted
+ProjectInput version/digest, authoritative SERP snapshot (verifying digest and
+ensuring no newer SERP was observed for the query), authoritative Search
+Intelligence snapshot (verifying digest and ensuring no newer intelligence was
+created for the query), and bound competitor page snapshots and analyses.
+
+Trust boundaries: candidate URLs come only from persisted SERP evidence (no
+browser-supplied fetch URLs, providers, or prompts); first-party evidence
+separation is enforced (`ourEvidenceAvailable` must resolve to accepted intake
+evidence items with excerpt checks — competitor claims can never become our
+claims; `validateContentGapGrounding` fails closed on empty or forged search
+evidence, non-INCLUDE competitor coverage, ungrounded segment anchors, or
+smuggled claims); provider mode is trusted backend config
+(`FACTORY_COMPETITOR_MODE=fixture|production`, fixture page provider for CI/E2E
+zero-spend journeys; missing credentials fail closed with typed 409 errors rather
+than silently falling back to fixture mode); budget gate on recorded analysis cost
+(`FACTORY_COMPETITOR_DAILY_LIMIT_USD`, default 5 USD; UNKNOWN costs uncounted).
+Direct HTTP acquisition uses a single global timeout covering all redirects, DNS,
+and chunked body streaming, canceling response body streams immediately on
+403/429/non-HTML without buffering unneeded content.
+
+Persistence (migration `0006_competitor_content_gap_v0`): `competitor_runs`,
+`competitor_page_snapshots` (content-digest dedupe, acquisition lineage),
+`competitor_classification_overrides`, `competitor_page_analyses`,
+`content_gap_reports`, `content_gap_decisions` (unique per report+gap),
+`accepted_content_gap_snapshots` (unique per project+version). JSONB payloads
+re-parsed through contracts on read; project isolation on every read.
+
+Operator API additions under `/api/projects/:id/`:
+`competitors/workspace`, `competitors/runs` (POST/GET), `competitors/candidates/:pageSnapshotId/classification`
+(PATCH), `content-gaps/workspace`, `content-gaps/proposals` (POST),
+`content-gaps/reports/:id` (GET), `content-gaps/reports/:id/decisions` (PUT),
+`content-gaps/reports/:id/accept` (POST), `content-gaps/accepted/:version/detail`
+(GET). New closed error codes: `competitor_*` / `content_gap_*`.
+
+Dashboard: `Competitors Research` and `Content Gaps` tabs (intake seed tab
+renamed `Competitor Seeds`) — evidence picker, acquisition/analysis summaries,
+gap review with per-gap disposition/priority/note, digest-bound acceptance,
+immutable version inspector with staleness banners; no raw JSON editing, no
+competitor page text dumps. UI↔contract shape tests pin every consumed field.
 
 ### Explicitly still roadmap-only
 

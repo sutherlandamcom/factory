@@ -6,12 +6,14 @@ import { Section } from "../components/Section";
 import { Field } from "../components/Field";
 import { usePolling } from "../hooks/usePolling";
 import { SearchPage } from "./SearchPage";
+import { CompetitorsPage } from "./CompetitorsPage";
+import { ContentGapsPage } from "./ContentGapsPage";
 
 const TABS = [
   "Overview", "Business", "Offering", "Audience", "Markets", "Site Identity",
-  "Conversion", "Evidence & Claims", "Search Seeds", "Competitors", "Brand",
+  "Conversion", "Evidence & Claims", "Search Seeds", "Competitor Seeds", "Brand",
   "References", "Assets", "Constraints", "Content Constitution", "Review",
-  "Versions", "Search",
+  "Versions", "Search", "Competitors Research", "Content Gaps",
 ] as const;
 
 type Tab = (typeof TABS)[number];
@@ -152,6 +154,8 @@ export function ProjectDetailPage({ projectId, onBack }: { projectId: string; on
         {tab === "Review" && <Review ws={ws} onAccept={acceptInputs} busy={busy} />}
         {tab === "Versions" && <History history={history} currentAccepted={currentAcceptedSnapshot} />}
         {tab === "Search" && <SearchPage projectId={projectId} />}
+        {tab === "Competitors Research" && <CompetitorsPage projectId={projectId} />}
+        {tab === "Content Gaps" && <ContentGapsPage projectId={projectId} />}
         {tab === "Content Constitution" && <Constitution form={form} setForm={setForm} />}
         {["Business","Offering","Audience","Markets","Site Identity","Conversion","Evidence & Claims","Search Seeds","Competitors","Brand","References","Assets","Constraints"].includes(tab) && (
           <GenericForm tab={tab} form={form} setForm={setForm} />
@@ -238,7 +242,7 @@ function Review({ ws, onAccept, busy }: { ws: ProjectOperatorWorkspace; onAccept
       <Section title="Search Seeds">
         <Field label="Topics" value={(p.searchSeeds?.topics ?? []).join(", ")} />
         <Field label="Queries" value={(p.searchSeeds?.queries ?? []).join(", ")} />
-        <Field label="Competitors" value={(p.searchSeeds?.competitors ?? []).join(", ")} />
+        <Field label="Competitor seeds" value={(p.searchSeeds?.competitors ?? []).join(", ")} />
         <Field label="Market Hints" value={(p.searchSeeds?.marketHints ?? []).join(", ")} />
       </Section>
       <Section title="Brand">
@@ -376,7 +380,7 @@ function GenericForm({ tab, form, setForm }: { tab: string; form: any; setForm: 
   const keyMap: Record<string, string> = {
     "Business": "business", "Offering": "business", "Audience": "audience",
     "Markets": "markets", "Site Identity": "siteIdentity", "Conversion": "conversion",
-    "Evidence & Claims": "evidence", "Search Seeds": "searchSeeds", "Competitors": "searchSeeds",
+    "Evidence & Claims": "evidence", "Search Seeds": "searchSeeds", "Competitor Seeds": "searchSeeds",
     "Brand": "brand", "References": "designReferences", "Assets": "assetAvailability",
     "Constraints": "constraints",
   };
@@ -486,7 +490,7 @@ function GenericForm({ tab, form, setForm }: { tab: string; form: any; setForm: 
         {listField("Seed Queries", "queries")}
         {listField("Market / Topic Hints", "marketHints")}
       </div>);
-    case "Competitors":
+    case "Competitor Seeds":
       return (<div className="space-y-4">
         {listField("Known Competitors", "competitors")}
       </div>);

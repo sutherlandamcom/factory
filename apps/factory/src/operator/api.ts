@@ -10,12 +10,15 @@ import { ProjectIntakeStore } from "./intake-store.js";
 import { FactoryStore } from "../persistence/store.js";
 import { getProjectOperatorWorkspace } from "./workspace.js";
 import type { SearchIntelligenceService } from "../search/service.js";
+import type { CompetitorContentGapService } from "../competitors/service.js";
 
 export interface OperatorApiDeps {
   readonly store: FactoryStore;
   readonly intake: ProjectIntakeStore;
   /** Search Intelligence v0; optional for backward-compatible construction. */
   readonly search?: SearchIntelligenceService;
+  /** Competitors + Content Gap v0; optional for backward compatibility. */
+  readonly competitors?: CompetitorContentGapService;
 }
 
 const projectKeySchema = z
@@ -55,6 +58,57 @@ const searchRunSchema = z
     refresh: z.boolean().default(false),
   })
   .strict();
+
+const competitorRunSchema = z
+  .object({
+    serpSnapshotId: z.string().trim().min(1).max(128),
+    maxPages: z.number().int().min(1).max(10).optional(),
+  })
+  .strict();
+
+const classificationSchema = z
+  .object({
+    classification: z.enum(["INCLUDE", "EXCLUDE", "REFERENCE_ONLY"]),
+    reason: z.string().trim().min(1).max(500),
+  })
+  .strict();
+
+const gapProposalSchema = z
+  .object({
+    competitorRunId: z.string().trim().min(1).max(128).optional(),
+  })
+  .strict();
+
+const gapDecisionsSchema = z
+  .object({
+    expectedReviewRevision: z.number().int().min(0),
+    decisions: z
+      .array(
+        z
+          .object({
+            gapId: z.string().trim().min(1).max(64),
+            disposition: z.enum(["REQUIRED", "OPTIONAL", "EXCLUDE"]),
+            priority: z.enum(["HIGH", "MEDIUM", "LOW"]).optional(),
+            note: z.string().trim().max(500).optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(30),
+  })
+  .strict();
+
+const gapAcceptSchema = z
+  .object({
+    expectedReportDigest: z.string().trim().min(1).max(128).optional(),
+    expectedDigest: z.string().trim().min(1).max(128).optional(),
+    expectedReviewRevision: z.number().int().min(0),
+    expectedDecisionsDigest: z.string().trim().min(1).max(128),
+  })
+  .strict()
+  .refine((data) => Boolean(data.expectedReportDigest || data.expectedDigest), {
+    message: "expectedReportDigest (or expectedDigest) is required",
+  });
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
@@ -210,6 +264,116 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         if (!deps.search) return sendError(res, "not_found", "Search is not available.");
         const detail = await deps.search.runDetail(project.id, segments[4]!);
         if (!detail) return sendError(res, "search_run_not_found", "Search run not found.");
+        return sendJson(res, 200, detail);
+      }
+
+      // ---- Competitors + Content Gap (Macro Run 3) --------------------------
+
+      if (req.method === "GET" && segments.length === 4 && segments[0] === "projects" && segments[2] === "competitors" && segments[3] === "workspace") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.competitors) return sendError(res, "not_found", "Competitors are not available.");
+        return sendJson(res, 200, await deps.competitors.workspace(project.id));
+      }
+
+      if (req.method === "POST" && segments.length === 4 && segments[0] === "projects" && segments[2] === "competitors" && segments[3] === "runs") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.competitors) return sendError(res, "not_found", "Competitors are not available.");
+        const parsed = parseJsonBody(body);
+        const input = parseOr400(competitorRunSchema, parsed);
+        const result = await deps.competitors.runCompetitors({ projectId: project.id, ...input });
+        return sendJson(res, 200, result);
+      }
+
+      if (req.method === "GET" && segments.length === 5 && segments[0] === "projects" && segments[2] === "competitors" && segments[3] === "runs") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.competitors) return sendError(res, "not_found", "Competitors are not available.");
+        const detail = await deps.competitors.runReadModel(project.id, segments[4]!);
+        return sendJson(res, 200, detail);
+      }
+
+      if (req.method === "PATCH" && segments.length === 6 && segments[0] === "projects" && segments[2] === "competitors" && segments[3] === "candidates" && segments[5] === "classification") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.competitors) return sendError(res, "not_found", "Competitors are not available.");
+        const parsed = parseJsonBody(body);
+        const input = parseOr400(classificationSchema, parsed);
+        await deps.competitors.setClassification({
+          projectId: project.id,
+          pageSnapshotId: segments[4]!,
+          classification: input.classification,
+          reason: input.reason,
+        });
+        return sendJson(res, 200, { ok: true });
+      }
+
+      if (req.method === "GET" && segments.length === 4 && segments[0] === "projects" && segments[2] === "content-gaps" && segments[3] === "workspace") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.competitors) return sendError(res, "not_found", "Content gaps are not available.");
+        return sendJson(res, 200, await deps.competitors.gapWorkspace(project.id));
+      }
+
+      if (req.method === "POST" && segments.length === 4 && segments[0] === "projects" && segments[2] === "content-gaps" && segments[3] === "proposals") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.competitors) return sendError(res, "not_found", "Content gaps are not available.");
+        const parsed = body.trim() ? parseJsonBody(body) : {};
+        const input = parseOr400(gapProposalSchema, parsed);
+        const result = await deps.competitors.proposeGaps({ projectId: project.id, competitorRunId: input.competitorRunId });
+        return sendJson(res, 200, result);
+      }
+
+      if (req.method === "GET" && segments.length === 5 && segments[0] === "projects" && segments[2] === "content-gaps" && segments[3] === "reports") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.competitors) return sendError(res, "not_found", "Content gaps are not available.");
+        const detail = await deps.competitors.getGapReportDetail(project.id, segments[4]!);
+        return sendJson(res, 200, detail);
+      }
+
+      if (req.method === "PUT" && segments.length === 6 && segments[0] === "projects" && segments[2] === "content-gaps" && segments[3] === "reports" && segments[5] === "decisions") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.competitors) return sendError(res, "not_found", "Content gaps are not available.");
+        const parsed = parseJsonBody(body);
+        const input = parseOr400(gapDecisionsSchema, parsed);
+        const result = await deps.competitors.saveGapDecisions({
+          projectId: project.id,
+          reportId: segments[4]!,
+          expectedReviewRevision: input.expectedReviewRevision,
+          decisions: input.decisions,
+        });
+        return sendJson(res, 200, { ok: true, reviewRevision: result.reviewRevision, decisionsDigest: result.decisionsDigest });
+      }
+
+      if (req.method === "POST" && segments.length === 6 && segments[0] === "projects" && segments[2] === "content-gaps" && segments[3] === "reports" && segments[5] === "accept") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.competitors) return sendError(res, "not_found", "Content gaps are not available.");
+        const parsed = parseJsonBody(body);
+        const input = parseOr400(gapAcceptSchema, parsed);
+        const result = await deps.competitors.acceptGapReport({
+          projectId: project.id,
+          reportId: segments[4]!,
+          expectedReportDigest: input.expectedReportDigest ?? input.expectedDigest,
+          expectedReviewRevision: input.expectedReviewRevision,
+          expectedDecisionsDigest: input.expectedDecisionsDigest,
+        });
+        return sendJson(res, 200, result);
+      }
+
+      if (req.method === "GET" && segments.length === 6 && segments[0] === "projects" && segments[2] === "content-gaps" && segments[3] === "accepted" && segments[5] === "detail") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.competitors) return sendError(res, "not_found", "Content gaps are not available.");
+        const version = Number.parseInt(segments[4]!, 10);
+        if (!Number.isFinite(version) || version < 1) {
+          return sendError(res, "invalid_version", "Version must be a positive integer.");
+        }
+        const detail = await deps.competitors.acceptedGapDetail(project.id, version);
         return sendJson(res, 200, detail);
       }
 

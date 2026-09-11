@@ -37,7 +37,11 @@ export const SEARCH_ERROR_CODES = [
 export type SearchErrorCode = (typeof SEARCH_ERROR_CODES)[number];
 
 /** Payload ceilings (bytes) for persisted search artifacts. */
-export const MAX_SERP_RAW_BYTES = 256 * 1024;
+// Raw SERP payloads from real providers measured up to ~1 MiB for
+// competitive queries (Run 3 live proof evidence); 2 MiB bounds them the
+// same way as raw page acquisition while staying well-under PostgreSQL
+// JSONB ergonomics.
+export const MAX_SERP_RAW_BYTES = 2 * 1024 * 1024;
 export const MAX_GROUNDED_RAW_BYTES = 256 * 1024;
 export const MAX_SEARCH_INTELLIGENCE_BYTES = 256 * 1024;
 

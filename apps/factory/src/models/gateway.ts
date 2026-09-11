@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { FactoryError } from "../executor/errors.js";
+import { InvocationFailure } from "./invocation-failure.js";
+import { getModelPricing } from "./pricing.js";
 
 /**
  * Factory Model Gateway v0 — OpenRouter adapter.
@@ -72,11 +73,16 @@ export type ModelCallFailureCode =
   | "model_timeout"
   | "model_failed";
 
-export class ModelCallError extends FactoryError {
+export class ModelCallError extends InvocationFailure {
   readonly httpStatus: number | null;
 
-  constructor(code: ModelCallFailureCode, message: string, httpStatus: number | null = null) {
-    super(code, message);
+  constructor(
+    code: ModelCallFailureCode,
+    message: string,
+    httpStatus: number | null = null,
+    evidence: { requestSubmitted?: boolean; trustedCostMicros?: number | null } = {},
+  ) {
+    super(code, message, evidence);
     this.httpStatus = httpStatus;
   }
 }
@@ -143,6 +149,29 @@ interface OpenRouterChatResponse {
 }
 
 /**
+ * Provider-side price ceiling for a request, derived from Factory's trusted
+ * pricing policy (USD per MILLION tokens, the unit OpenRouter expects).
+ *
+ * The ceiling is exactly the trusted conservative per-token rate for the
+ * requested model, so a route is only eligible when its price stays within
+ * what Factory budget authorization assumed possible. If no upstream route
+ * satisfies the ceiling, OpenRouter refuses the request (fail closed at the
+ * provider, before spend). Models without trusted pricing get no ceiling
+ * here; paid production paths fail closed earlier at reservation time, which
+ * requires trusted pricing for the exact model.
+ */
+function trustedProviderMaxPrice(
+  model: string,
+): { prompt: number; completion: number } | null {
+  const pricing = getModelPricing(model);
+  if (!pricing) return null;
+  return {
+    prompt: Number((pricing.promptUsdPerToken * 1_000_000).toFixed(6)),
+    completion: Number((pricing.completionUsdPerToken * 1_000_000).toFixed(6)),
+  };
+}
+
+/**
  * Invoke one model through OpenRouter with an explicit exact model id.
  * Throws ModelCallError on failure; never returns partial content.
  */
@@ -154,6 +183,7 @@ export async function invokeModel(
     throw new ModelCallError(
       "policy_violation",
       `model id is not a valid explicit model identifier: "${request.model.slice(0, 50)}"`,
+      null, { requestSubmitted: false },
     );
   }
   // OpenRouter Auto Router is never acceptable for Factory calls: role
@@ -162,10 +192,11 @@ export async function invokeModel(
     throw new ModelCallError(
       "policy_violation",
       "OpenRouter Auto Router is forbidden for Factory model calls; policy must name an exact model",
+      null, { requestSubmitted: false },
     );
   }
   if (!request.systemPrompt.trim() || !request.prompt.trim()) {
-    throw new ModelCallError("policy_violation", "model call requires non-empty system and user prompts");
+    throw new ModelCallError("policy_violation", "model call requires non-empty system and user prompts", null, { requestSubmitted: false });
   }
 
   const apiKey = (deps.loadApiKey ?? loadOpenRouterApiKey)();
@@ -173,12 +204,14 @@ export async function invokeModel(
     throw new ModelCallError(
       "credentials_unavailable",
       `${OPENROUTER_API_KEY_ENV} is not configured; the gateway fails closed without credentials`,
+      null, { requestSubmitted: false },
     );
   }
 
   const fetchImpl = deps.fetchImpl ?? ((input, init) => fetch(input, init));
   const now = deps.now ?? (() => Date.now());
   const startedAt = now();
+  const maxPrice = trustedProviderMaxPrice(request.model);
 
   let response: Response;
   try {
@@ -197,6 +230,11 @@ export async function invokeModel(
         max_tokens: request.maxTokens ?? 16_000,
         // Deterministic-friendly default applied uniformly to every family.
         temperature: 0,
+        // Provider-side price ceiling: only routes at or below Factory's
+        // trusted conservative rate for this exact model are eligible. When
+        // no route satisfies the ceiling OpenRouter refuses the request, so
+        // spend can never exceed the trusted pricing ceiling provider-side.
+        ...(maxPrice ? { provider: { max_price: maxPrice } } : {}),
         // Deliberately absent: `models` fallback arrays, `route`, and any
         // model-identity auto-selection (Auto Router). Factory's role policy
         // owns champion/challenger choice. OpenRouter may route the pinned
@@ -217,6 +255,16 @@ export async function invokeModel(
   const durationMs = Math.max(0, now() - startedAt);
   const rawBody = await response.text().catch(() => "");
 
+  // Usage belongs to the invocation even if content or the HTTP outcome fails.
+  let trustedCostMicros: number | null = null;
+  try {
+    const cost = boundedNumber((JSON.parse(rawBody) as OpenRouterChatResponse).usage?.cost);
+    if (cost != null) trustedCostMicros = Math.round(cost * 1_000_000);
+  } catch {
+    // No trustworthy usage: preserve conservative accounting.
+  }
+  const evidence = { trustedCostMicros };
+
   if (!response.ok) {
     let detail = rawBody.slice(0, 300);
     try {
@@ -232,15 +280,17 @@ export async function invokeModel(
         "credentials_unavailable",
         `gateway rejected credentials (HTTP ${response.status}): ${scrubCredentials(detail, apiKey)}`,
         response.status,
+        evidence,
       );
     }
     if (response.status === 408) {
-      throw new ModelCallError("model_timeout", `gateway timeout (HTTP 408): ${scrubCredentials(detail, apiKey)}`, 408);
+      throw new ModelCallError("model_timeout", `gateway timeout (HTTP 408): ${scrubCredentials(detail, apiKey)}`, 408, evidence);
     }
     throw new ModelCallError(
       "model_failed",
       `gateway call failed (HTTP ${response.status}): ${scrubCredentials(detail, apiKey)}`,
       response.status,
+      evidence,
     );
   }
 
@@ -253,7 +303,7 @@ export async function invokeModel(
 
   const content = parsed.choices?.[0]?.message?.content;
   if (typeof content !== "string" || content.trim().length === 0) {
-    throw new ModelCallError("model_failed", "gateway response contained no completion content");
+    throw new ModelCallError("model_failed", "gateway response contained no completion content", null, evidence);
   }
 
   return {
@@ -288,6 +338,7 @@ export async function listOpenRouterModels(deps: ModelGatewayDeps = {}): Promise
     throw new ModelCallError(
       "credentials_unavailable",
       `${OPENROUTER_API_KEY_ENV} is not configured; the gateway fails closed without credentials`,
+      null, { requestSubmitted: false },
     );
   }
   const fetchImpl = deps.fetchImpl ?? ((input, init) => fetch(input, init));

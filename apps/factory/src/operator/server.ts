@@ -17,6 +17,11 @@ import { FixtureSerpProvider } from "../search/serp-fixture.js";
 import { FixtureGroundedSearchProvider } from "../search/grounded-types.js";
 import { FixtureSearchAnalyst, OpenRouterSearchAnalyst } from "../search/analyst.js";
 import { invokeModel } from "../models/gateway.js";
+import { CompetitorStore } from "../competitors/competitor-store.js";
+import { CompetitorContentGapService, buildCompetitorAnalysts } from "../competitors/service.js";
+import { FixturePageProvider } from "../competitors/fixture-page-provider.js";
+import { DirectHttpPageProvider } from "../competitors/direct-http.js";
+import { FactoryError } from "../executor/errors.js";
 
 /**
  * Trusted backend provider selection for Search Intelligence.
@@ -49,11 +54,18 @@ export function buildSearchIntelligenceService(
   const grounded = mode === "fixture" ? new FixtureGroundedSearchProvider() : null;
 
   const analyst =
-    mode === "fixture" || !env.OPENROUTER_API_KEY
+    mode === "fixture"
       ? new FixtureSearchAnalyst()
       : new OpenRouterSearchAnalyst({
           model: "google/gemini-3.7-flash",
           callModel: async (prompt) => {
+            const apiKey = env.OPENROUTER_API_KEY?.trim();
+            if (!apiKey) {
+              throw new FactoryError(
+                "search_analyst_not_configured",
+                "OpenRouter API key is required for search analyst in production mode (fail closed).",
+              );
+            }
             const result = await invokeModel(
               {
                 roleId: "search_analyst",
@@ -64,7 +76,7 @@ export function buildSearchIntelligenceService(
                 maxTokens: 4096,
                 timeoutMs: 120_000,
               },
-              { loadApiKey: () => env.OPENROUTER_API_KEY ?? null },
+              { loadApiKey: () => apiKey },
             );
             return {
               text: result.content,
@@ -277,7 +289,29 @@ export async function startOperatorServer(): Promise<http.Server> {
   const intake = new ProjectIntakeStore(dbInstance.db);
   const searchStore = new SearchStore(dbInstance.db);
   const search = buildSearchIntelligenceService({ intake, searchStore });
-  const deps: OperatorApiDeps = { store, intake, search };
+  const competitorStore = new CompetitorStore(dbInstance.db);
+  const { competitorAnalyst, gapAnalyst } = buildCompetitorAnalysts(process.env, invokeModel);
+  const competitorMode = process.env.FACTORY_COMPETITOR_MODE === "fixture" ? "fixture" : "production";
+  const competitors = new CompetitorContentGapService({
+    intake,
+    competitorStore,
+    competitorAnalyst,
+    gapAnalyst,
+    pageProvider:
+      competitorMode === "fixture"
+        ? new FixturePageProvider()
+        : new DirectHttpPageProvider(),
+    config: {
+      mode: competitorMode,
+      ...(process.env.FACTORY_COMPETITOR_MAX_PAGES
+        ? { maxPages: Math.max(1, Math.min(10, Number(process.env.FACTORY_COMPETITOR_MAX_PAGES))) }
+        : {}),
+      ...(process.env.FACTORY_COMPETITOR_DAILY_LIMIT_USD
+        ? { dailyLimitUsd: Number(process.env.FACTORY_COMPETITOR_DAILY_LIMIT_USD) }
+        : {}),
+    },
+  });
+  const deps: OperatorApiDeps = { store, intake, search, competitors };
   const server = createOperatorServer(deps);
   const host = process.env.FACTORY_OPERATOR_HOST ?? "127.0.0.1";
   const port = Number(process.env.FACTORY_OPERATOR_PORT ?? 3000);

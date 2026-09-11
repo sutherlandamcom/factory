@@ -4,7 +4,7 @@
  * and renders the canonical ProjectOperatorWorkspace read-model.
  */
 
-import type { OperatorErrorCode } from "@factory/contracts";
+import { OPERATOR_ERROR_CODES, type OperatorErrorCode } from "@factory/contracts";
 
 export interface ApiErrorBody {
   error?: { code?: string; message?: string };
@@ -73,36 +73,6 @@ export interface ProjectOperatorWorkspace {
   status: IntakeReadiness["status"];
   nextActions: string[];
 }
-
-const OPERATOR_ERROR_CODES: readonly OperatorErrorCode[] = [
-  "invalid_json",
-  "validation_error",
-  "payload_too_large",
-  "unsupported_media_type",
-  "invalid_host",
-  "cross_origin_forbidden",
-  "not_found",
-  "invalid_version",
-  "intake_stale_revision",
-  "intake_blocked",
-  "intake_revision_mismatch",
-  "intake_digest_mismatch",
-  "intake_draft_not_found",
-  "intake_schema_invalid",
-  "search_input_not_accepted",
-  "search_query_invalid",
-  "search_provider_not_configured",
-  "search_provider_unavailable",
-  "search_provider_auth_failed",
-  "search_provider_budget_blocked",
-  "search_provider_rate_limited",
-  "search_response_invalid",
-  "search_normalization_failed",
-  "search_intelligence_invalid",
-  "search_run_not_found",
-  "search_run_failed",
-  "internal_error",
-];
 
 const OPERATOR_ERROR_CODES_SET = new Set<string>(OPERATOR_ERROR_CODES);
 
@@ -203,7 +173,259 @@ export const api = {
     request<SearchRunReadModel>(
       `/api/projects/${encodeURIComponent(projectId)}/search/runs/${encodeURIComponent(runId)}`,
     ),
+
+  // ---- Competitors + Content Gap (Macro Run 3) ----------------------------
+
+  getCompetitorsWorkspace: (projectId: string) =>
+    request<CompetitorsWorkspaceReadModel>(
+      `/api/projects/${encodeURIComponent(projectId)}/competitors/workspace`,
+    ),
+
+  runCompetitors: (
+    projectId: string,
+    input: { serpSnapshotId: string; maxPages?: number },
+  ) =>
+    request<CompetitorRunReadModel>(
+      `/api/projects/${encodeURIComponent(projectId)}/competitors/runs`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+
+  getCompetitorRun: (projectId: string, runId: string) =>
+    request<CompetitorRunReadModel>(
+      `/api/projects/${encodeURIComponent(projectId)}/competitors/runs/${encodeURIComponent(runId)}`,
+    ),
+
+  setCandidateClassification: (
+    projectId: string,
+    pageSnapshotId: string,
+    input: { classification: "INCLUDE" | "EXCLUDE" | "REFERENCE_ONLY"; reason: string },
+  ) =>
+    request<{ ok: boolean }>(
+      `/api/projects/${encodeURIComponent(projectId)}/competitors/candidates/${encodeURIComponent(pageSnapshotId)}/classification`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    ),
+
+  getContentGapsWorkspace: (projectId: string) =>
+    request<ContentGapsWorkspaceReadModel>(
+      `/api/projects/${encodeURIComponent(projectId)}/content-gaps/workspace`,
+    ),
+
+  proposeContentGaps: (projectId: string, competitorRunId?: string) =>
+    request<{ reportId: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/content-gaps/proposals`,
+      { method: "POST", body: JSON.stringify(competitorRunId ? { competitorRunId } : {}) },
+    ),
+
+  getContentGapReport: (projectId: string, reportId: string) =>
+    request<ContentGapReportDetail>(
+      `/api/projects/${encodeURIComponent(projectId)}/content-gaps/reports/${encodeURIComponent(reportId)}`,
+    ),
+
+  saveGapDecisions: (
+    projectId: string,
+    reportId: string,
+    input: {
+      expectedReviewRevision: number;
+      decisions: Array<{
+        gapId: string;
+        disposition: "REQUIRED" | "OPTIONAL" | "EXCLUDE";
+        priority?: "HIGH" | "MEDIUM" | "LOW";
+        note?: string;
+      }>;
+    },
+  ) => {
+    return request<{ ok: boolean; reviewRevision: number; decisionsDigest: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/content-gaps/reports/${encodeURIComponent(reportId)}/decisions`,
+      { method: "PUT", body: JSON.stringify(input) },
+    );
+  },
+
+  acceptContentGaps: (
+    projectId: string,
+    reportId: string,
+    input: {
+      expectedReportDigest?: string;
+      expectedDigest?: string;
+      expectedReviewRevision: number;
+      expectedDecisionsDigest: string;
+    },
+  ) => {
+    return request<{ version: number; snapshotId: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/content-gaps/reports/${encodeURIComponent(reportId)}/accept`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          expectedReportDigest: input.expectedReportDigest ?? input.expectedDigest,
+          expectedReviewRevision: input.expectedReviewRevision,
+          expectedDecisionsDigest: input.expectedDecisionsDigest,
+        }),
+      },
+    );
+  },
+
+  getAcceptedGapDetail: (projectId: string, version: number) =>
+    request<AcceptedGapDetail>(
+      `/api/projects/${encodeURIComponent(projectId)}/content-gaps/accepted/${version}/detail`,
+    ),
 };
+
+// ---- Competitors + Content Gap read-model shapes (mirror the API exactly) --
+
+export interface CompetitorsWorkspaceReadModel {
+  acceptedInput: { snapshotId: string; version: number; digest: string } | null;
+  readiness: { canRun: boolean; blockers: string[]; mode: "production" | "fixture" };
+  serpRuns: Array<{ serpSnapshotId: string; query: string; observedAt: string; hasIntelligence: boolean; stale?: boolean }>;
+  recentRuns: Array<{ id: string; status: string; startedAt: string; errorCode: string | null }>;
+}
+
+export interface CompetitorCandidateView {
+  pageSnapshotId: string;
+  serpPosition: number;
+  requestedUrl: string;
+  domain: string;
+  classification: "INCLUDE" | "EXCLUDE" | "REFERENCE_ONLY";
+  classificationReason: string;
+  acquisitionStatus: "SUCCESS" | "BLOCKED" | "NON_HTML" | "UNSUPPORTED" | "FAILED";
+  httpStatus: number | null;
+  observedAt: string;
+  analyzed: boolean;
+  dedupedFromSnapshotId: string | null;
+  pageType: string | null;
+  topics: string[];
+  questions: string[];
+  freshness: string | null;
+  commercialPositioning: string | null;
+  evidenceSegmentCount: number;
+}
+
+export interface CompetitorRunReadModel {
+  run: {
+    id: string;
+    status: "succeeded" | "failed";
+    serpSnapshotId: string;
+    pipelineVersion: string;
+    startedAt: string;
+    finishedAt: string | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+  };
+  acceptedInput: { snapshotId: string; version: number; digest: string; stale: boolean };
+  candidates: CompetitorCandidateView[];
+  usage: { competitorPagesFetched: number; analyzedCount: number; blockedCount: number; failedCount: number };
+}
+
+export interface ContentGapsWorkspaceReadModel {
+  reports: Array<{
+    id: string;
+    snapshotDigest: string;
+    reviewState: string;
+    createdAt: string;
+    gapCounts: { total: number; required: number; optional: number; excluded: number };
+    serpSnapshotId: string;
+    stale: boolean;
+    staleReasons: string[];
+  }>;
+  accepted: Array<{
+    id: string;
+    version: number;
+    snapshotDigest: string;
+    acceptedAt: string;
+    reportId: string;
+    stale: boolean;
+    staleReasons: string[];
+    gapCounts: { total: number; required: number; optional: number; excluded: number };
+  }>;
+  readiness: { canPropose: boolean; blockers: string[] };
+}
+
+export interface GapDecisionView {
+  gapId: string;
+  disposition: "REQUIRED" | "OPTIONAL" | "EXCLUDE";
+  priority: "HIGH" | "MEDIUM" | "LOW" | null;
+  note: string | null;
+}
+
+export interface ContentGapReportDetail {
+  report: {
+    id: string;
+    snapshotDigest: string;
+    reviewState: string;
+    reviewRevision: number;
+    decisionsDigest: string | null;
+    createdAt: string;
+    model: string;
+    provider: string;
+    data: {
+      coverageMatrix: {
+        policyVersion: string;
+        rows: Array<{
+          requirementId: string;
+          requirement: string;
+          cells: Array<{ pageSnapshotId: string; domain: string; level: string }>;
+        }>;
+      };
+      gaps: Array<{
+        id: string;
+        coverageRequirementId: string;
+        userNeed: string;
+        topicQuestion: string;
+        competitorCoverage: string;
+        competitorsCoveringIt: string[];
+        treatmentPattern: string;
+        baselineExpectation: string;
+        ourEvidenceAvailable: Array<{ intakeField: string; itemIndex: number; excerpt: string }>;
+        ourEvidenceMissing: string[];
+        claimConstraints: string[];
+        differentiationOpportunity: string;
+        recommendedDisposition: string;
+        priority: string | null;
+        rationale: string;
+        evidenceRefs: Array<{ pageSnapshotId: string; segmentId: string }>;
+      }>;
+      differentiationRequirements: {
+        items: Array<{ requirement: string; basis: string; rationale: string }>;
+      };
+      searchSemantics: {
+        intelligenceSnapshotId: string;
+        intelligenceSnapshotDigest: string;
+        primaryIntent: string;
+        semanticCoverageRequirements: string[];
+        userNeeds: string[];
+      };
+    };
+  };
+  decisions: GapDecisionView[];
+  stale: boolean;
+  staleReasons: string[];
+}
+
+export type ContentGapItemView = ContentGapReportDetail["report"]["data"]["gaps"][number];
+
+export interface AcceptedGapItem extends Omit<ContentGapItemView, "priority"> {
+  disposition: "REQUIRED" | "OPTIONAL" | "EXCLUDE";
+  priority: "HIGH" | "MEDIUM" | "LOW" | null;
+  note: string | null;
+  recommendedDisposition: "REQUIRED" | "OPTIONAL" | "EXCLUDE";
+  recommendedPriority: "HIGH" | "MEDIUM" | "LOW" | null;
+}
+
+export interface AcceptedGapDetail {
+  snapshot: {
+    id: string;
+    version: number;
+    snapshotDigest: string;
+    acceptedAt: string;
+    reportId: string;
+    reportDigest: string;
+    decisionsDigest: string;
+    data: Omit<ContentGapReportDetail["report"]["data"], "gaps"> & {
+      gaps: AcceptedGapItem[];
+      decisions?: GapDecisionView[];
+    };
+  };
+  stale: boolean;
+  staleReasons: string[];
+}
 
 // ---- Search read-model shapes (mirror the Operator API exactly) ----------
 

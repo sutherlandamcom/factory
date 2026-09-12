@@ -1126,7 +1126,13 @@ export class WriterQaStore {
         // Two concurrent acceptances of different slugs can race the
         // max-version allocation into UNIQUE(project_id, version). Fail
         // closed with the typed acceptance conflict instead of a raw 500.
-        if ((error as { code?: string } | null)?.code === "23505") {
+        // drizzle-orm 0.45.x wraps driver errors in DrizzleQueryError: the
+        // PostgreSQL error code lives on error.cause.code, not error.code.
+        // Both shapes are checked so the typed conflict is guaranteed.
+        const pgCode =
+          (error as { code?: string } | null)?.code ??
+          (error as { cause?: { code?: string } | null } | null)?.cause?.code;
+        if (pgCode === "23505") {
           throw new FactoryError(
             "content_accept_failed",
             "Concurrent acceptance conflict on the project version sequence; retry the acceptance.",

@@ -5,6 +5,10 @@ import type {
   QaEvidenceRef,
   QaVerdict,
 } from "@factory/contracts";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { retext } from "retext";
 import retextEnglish from "retext-english";
 import retextReadability from "retext-readability";
@@ -502,7 +506,100 @@ export function runEditorialQa(
     );
   }
 
+  // E7: Vale style lint (Run 4.1 W4) — advisory line-level style findings from
+  // the vendored write-good pack. Strict opt-in: the check exists ONLY when
+  // FACTORY_VALE_BIN is explicitly configured (absolute path to the vale
+  // binary). There is deliberately NO PATH fallback: CI installs Vale but does
+  // not set FACTORY_VALE_BIN, so unit-fixture verdicts stay identical in every
+  // environment (overall = worst-of; an extra REVIEW would break PASS
+  // assertions). Absence of the check when unconfigured is documented
+  // behavior, not silent loss — Vale is an optional advisory instrument, not a
+  // governance control.
+  checks.push(...runValeStyleLint(bodyText));
+
   return checks;
+}
+
+interface ValeAlert {
+  Check?: unknown;
+  Line?: unknown;
+  Severity?: unknown;
+  Message?: unknown;
+}
+
+interface ValeOutput {
+  [file: string]: ValeAlert[] | undefined;
+}
+
+/**
+ * E7 implementation. Emits NOTHING when FACTORY_VALE_BIN is unset. When set
+ * but the binary is missing/broken, the spawn fails, times out, or the JSON is
+ * unparseable, emits ONE loud degradation REVIEW (never FAIL, never crashes
+ * QA). Otherwise maps each Vale alert to an evidence ref.
+ */
+function runValeStyleLint(bodyText: string): QaCheckResult[] {
+  const valeBin = process.env.FACTORY_VALE_BIN?.trim();
+  if (!valeBin) {
+    return []; // documented opt-out: no check in the array
+  }
+
+  const valeIniPath = join(process.cwd(), "vale", ".vale.ini");
+  const dir = mkdtempSync(join(tmpdir(), "factory-vale-"));
+  const tmpPath = join(dir, "body.txt");
+  try {
+    writeFileSync(tmpPath, bodyText, "utf8");
+    const result = spawnSync(
+      valeBin,
+      ["--config", valeIniPath, "--no-exit", "--output=JSON", tmpPath],
+      { timeout: 10_000, encoding: "utf8" },
+    );
+    if (result.error || result.status === null || typeof result.stdout !== "string") {
+      return [degradedValeCheck()];
+    }
+    let parsed: ValeOutput;
+    try {
+      parsed = JSON.parse(result.stdout) as ValeOutput;
+    } catch {
+      return [degradedValeCheck()];
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return [degradedValeCheck()];
+    }
+    const alerts = Object.values(parsed).flatMap((entries) =>
+      Array.isArray(entries) ? entries : [],
+    );
+    const evidence: QaEvidenceRef[] = [];
+    for (const alert of alerts) {
+      const line = typeof alert.Line === "number" ? alert.Line : 0;
+      const message = typeof alert.Message === "string" ? alert.Message : "unknown finding";
+      const rule = typeof alert.Check === "string" ? alert.Check : "unknown";
+      evidence.push({
+        kind: "section",
+        ref: `L${line}: ${message} [${rule}]`.slice(0, 280),
+        note: "Vale style lint finding (advisory)",
+      });
+    }
+    return [
+      evidence.length === 0
+        ? check("editorial.vale_style", "PASS", "Vale style lint: no findings (advisory).")
+        : check(
+            "editorial.vale_style",
+            "REVIEW",
+            `Vale style lint: ${evidence.length} finding(s) (advisory).`,
+            evidence.slice(0, 50),
+          ),
+    ];
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function degradedValeCheck(): QaCheckResult {
+  return check(
+    "editorial.vale_style",
+    "REVIEW",
+    "Vale configured but unavailable/unparseable — style lint degraded.",
+  );
 }
 
 export interface ContentQaOutcome {

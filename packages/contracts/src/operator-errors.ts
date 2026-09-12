@@ -127,6 +127,24 @@ export const OPERATOR_ERROR_CODES = [
   "writer_qa_conflict",
   /** Budget ledger invariant trip; usage was durably accounted before failing. */
   "budget_invariant_violation",
+  /** Asset upload failed deterministic validation (type, size, corruption, mismatch). */
+  "asset_upload_invalid",
+  /** Asset does not exist for this project. */
+  "asset_not_found",
+  /** Asset version does not exist for this project. */
+  "asset_version_not_found",
+  /** Asset page assignment does not exist for this project. */
+  "asset_assignment_not_found",
+  /** Asset approval/rejection rejected (digest mismatch or non-pending state). */
+  "asset_approval_failed",
+  /** Metadata mutation rejected: approved asset versions are immutable. */
+  "asset_version_immutable",
+  /** Assignment rejected: version not approved or rights unresolved. */
+  "asset_rights_blocked",
+  /** Assignment slot conflict or replacement digest/version mismatch. */
+  "asset_assignment_conflict",
+  /** Trusted local asset storage failed (fail closed, nothing persisted). */
+  "asset_storage_failed",
   /** Unexpected server fault (message is always the sanitized fixed string). */
   "internal_error",
 ] as const;
@@ -192,6 +210,15 @@ export const OPERATOR_ERROR_STATUS: Readonly<Record<OperatorErrorCode, number>> 
   accepted_content_not_found: 404,
   writer_qa_conflict: 409,
   budget_invariant_violation: 409,
+  asset_upload_invalid: 422,
+  asset_not_found: 404,
+  asset_version_not_found: 404,
+  asset_assignment_not_found: 404,
+  asset_approval_failed: 409,
+  asset_version_immutable: 409,
+  asset_rights_blocked: 409,
+  asset_assignment_conflict: 409,
+  asset_storage_failed: 500,
   internal_error: 500,
 };
 

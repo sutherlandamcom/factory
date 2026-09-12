@@ -99,6 +99,13 @@
       "when": 1788932000000,
       "tag": "0013_writer_snapshot_proposal_qa",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1789040000000,
+      "tag": "0014_assets_v0",
+      "breakpoints": true
     }
   ]
 }

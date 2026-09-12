@@ -336,7 +336,21 @@ export function ContentPage({ projectId }: { projectId: string }) {
       {/* 3. WriterPromptSnapshot */}
       <Section title="Writer Prompt Snapshot">
         {snapshot === null ? (
-          <p className="text-sm text-gray-600">Compile the exact prompt packet from the approved brief.</p>
+          <div className="space-y-2">
+            <p className="text-sm text-gray-600">Compile the exact prompt packet from the approved brief.</p>
+            <button
+              onClick={() =>
+                run(async () => {
+                  const s = await writerApi.compileSnapshot(projectId);
+                  return `Snapshot v${s.version} compiled (digest ${s.digest.slice(0, 12)}…).`;
+                }, "Snapshot compilation failed.")
+              }
+              disabled={busy}
+              className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-900 disabled:opacity-50"
+            >
+              Compile new snapshot
+            </button>
+          </div>
         ) : (
           <div className="space-y-2 text-sm">
             <div className="flex items-center gap-2">
@@ -391,13 +405,30 @@ export function ContentPage({ projectId }: { projectId: string }) {
 
       {/* 4. Proposal + QA */}
       <Section title="Proposal & QA">
-        {proposal === null ? (
-          <p className="text-sm text-gray-600">
-            {snapshot?.state === "approved" && !snapshot.stale
-              ? "Generate a proposal from the approved snapshot (budget-governed)."
-              : "Approve a snapshot first — no writer call can run without an approved exact digest."}
-          </p>
-        ) : (
+        {proposal === null && (
+          <div className="space-y-2">
+            <p className="text-sm text-gray-600">
+              {snapshot?.state === "approved" && !snapshot.stale
+                ? "Generate a proposal from the approved snapshot (budget-governed)."
+                : "Approve a snapshot first — no writer call can run without an approved exact digest."}
+            </p>
+            {snapshot?.state === "approved" && !snapshot.stale && (
+              <button
+                onClick={() =>
+                  run(async () => {
+                    await writerApi.generate(projectId, snapshot.id);
+                    return "Proposal generated from the approved snapshot.";
+                  }, "Generation failed.")
+                }
+                disabled={busy}
+                className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-900 disabled:opacity-50"
+              >
+                Generate proposal
+              </button>
+            )}
+          </div>
+        )}
+        {proposal !== null && (
           <div className="space-y-3 text-sm">
             <div className="flex items-center gap-2">
               {proposal.stale && <StatusBadge status="STALE" />}

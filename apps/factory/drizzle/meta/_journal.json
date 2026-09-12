@@ -78,6 +78,27 @@
       "when": 1788920000000,
       "tag": "0010_writer_budget_and_override",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1788930000000,
+      "tag": "0011_writer_policy",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1788931000000,
+      "tag": "0012_content_brief",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1788932000000,
+      "tag": "0013_writer_snapshot_proposal_qa",
+      "breakpoints": true
     }
   ]
 }

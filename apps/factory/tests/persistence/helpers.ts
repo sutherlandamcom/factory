@@ -78,6 +78,7 @@ export async function resetTestDatabase(dbInst: FactoryDatabaseInstance): Promis
       content_gap_decisions,
       content_gap_reports,
       competitor_budget_reservations,
+      writer_budget_reservations,
       competitor_page_analyses,
       competitor_classification_overrides,
       competitor_page_snapshots,

@@ -1,0 +1,105 @@
+{
+  "name": "good-page",
+  "description": "Clean, concrete, short-sentence English roofing page. Facts verbatim from the brief's evidence.",
+  "proposal": {
+    "schemaVersion": "writer-content-v1",
+    "snapshotId": "cal-good",
+    "snapshotVersion": 1,
+    "snapshotDigest": "1111111111111111111111111111111111111111111111111111111111111111",
+    "title": "Roof Replacement in Denver",
+    "metaDescription": "Licensed Denver roof replacement with a limited warranty.",
+    "introduction": "Denver hailstorms and freeze-thaw cycles put every roof under storm-damage stress. Homeowners comparing local roofers need clear answers about roof replacement cost drivers, process and trust signals before requesting a quote.",
+    "sections": [
+      {
+        "heading": "What a full roof replacement includes",
+        "body": "A full roof replacement covers tear-off, deck inspection, underlayment and shingle installation. Licensed and insured crews handle permits and disposal."
+      },
+      {
+        "heading": "Timeline and process",
+        "body": "Most replacements finish within days of material delivery. The inspection, scheduling and installation steps are explained before work begins."
+      },
+      {
+        "heading": "Warranty and workmanship",
+        "body": "Work carries a 25-year limited warranty. Serving Denver since 1998. The crew holds an BBB A+ rating. Licensing and insurance details are provided on request so homeowners can verify trust signals."
+      }
+    ],
+    "conclusion": "Understanding cost drivers and process steps makes comparing roofers straightforward.",
+    "cta": "Book a free roof inspection today.",
+    "internalLinks": [
+      "storm-damage-repair"
+    ]
+  },
+  "brief": {
+    "lineage": {
+      "acceptedInputSnapshotId": "s",
+      "acceptedInputSnapshotVersion": 1,
+      "acceptedInputDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "writerPolicyId": "p",
+      "writerPolicyVersion": 1,
+      "writerPolicyDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "gapSnapshotId": "g",
+      "gapSnapshotVersion": 1,
+      "gapSnapshotDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "pageTarget": {
+      "slug": "roof-replacement-denver",
+      "title": "Roof Replacement in Denver",
+      "objective": "Convert homeowners researching replacement into inspection requests.",
+      "audience": "Denver homeowners 30-60 comparing local roofers",
+      "structureGuidance": [
+        "What a full roof replacement includes",
+        "Typical timeline and process steps",
+        "Warranty and workmanship guarantees"
+      ],
+      "internalLinkIntent": [
+        "Link to storm damage repair page"
+      ],
+      "ctaIntent": "Book a free roof inspection"
+    },
+    "allowedClaims": [
+      "Licensed and insured",
+      "25-year limited warranty"
+    ],
+    "prohibitedClaims": [
+      "#1 roofing company",
+      "Cheapest prices in Denver"
+    ],
+    "unknownClaims": [
+      "Insurance approval timelines"
+    ],
+    "operatorFacts": [
+      "Serving Denver since 1998",
+      "BBB A+ rating"
+    ],
+    "searchSemantics": {
+      "primaryIntent": "commercial investigation — local roofing replacement",
+      "semanticCoverageRequirements": [
+        "What a full roof replacement includes",
+        "Typical timeline and process steps",
+        "Warranty and workmanship guarantees"
+      ],
+      "userNeeds": [
+        "Understand cost drivers before requesting a quote",
+        "Trust signals: licensing, insurance, reviews"
+      ]
+    },
+    "contentBriefKeyPoints": [],
+    "noGapLineageAcknowledged": false
+  },
+  "policyRules": {
+    "forbiddenTerminology": [
+      "cheap",
+      "bargain"
+    ],
+    "aiLanguageAvoidance": [
+      "delve",
+      "unleash",
+      "elevate"
+    ],
+    "clicheAvoidance": [
+      "your one-stop shop",
+      "we've got you covered"
+    ],
+    "localePreferences": "US English"
+  }
+}

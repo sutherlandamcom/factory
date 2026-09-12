@@ -5,6 +5,9 @@ import type {
   QaEvidenceRef,
   QaVerdict,
 } from "@factory/contracts";
+import { retext } from "retext";
+import retextEnglish from "retext-english";
+import retextReadability from "retext-readability";
 
 /**
  * DETERMINISTIC CONTENT QA TRIAD (Macro Run 4).
@@ -36,6 +39,31 @@ function check(
 /** Normalized text for deterministic matching: lowercase, collapsed whitespace. */
 function norm(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+// ---------------------------------------------------------------------------
+// E6 readability support (Run 4.1 W3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Readability processor with DEFAULT configuration (threshold 4/7, target age
+ * 16, minWords 5). The binding design forbids configuring the formulas.
+ * processSync keeps the QA pipeline synchronous.
+ */
+const readabilityProcessor = retext().use(retextEnglish).use(retextReadability);
+
+/**
+ * Sentences below this word count are not scored by the advisory readability
+ * check: grade-level formulas are statistically unreliable on very short
+ * passages (see E6 comment). 25 words keeps the accepted short-sentence v0
+ * writer style out of the advisory signal.
+ */
+const READABILITY_MIN_SENTENCE_WORDS = 25;
+
+function countWords(text: string): number {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return 0;
+  return trimmed.split(/\s+/).length;
 }
 
 // ---------------------------------------------------------------------------
@@ -417,6 +445,62 @@ export function runEditorialQa(
           duplicateHeadings.map((h) => ({ kind: "section" as const, ref: h, note: "duplicate heading" })),
         ),
   );
+
+  // E6: readability (Run 4.1 W3) — deterministic readability formulas over body
+  // text only (introduction + section bodies + conclusion; NOT title, meta,
+  // headings or CTA). Advisory: never FAIL.
+  //
+  // Locale gate: the seven formulas behind retext-readability (Dale–Chall,
+  // Automated Readability, Coleman–Liau, Flesch, Gunning Fog, SMOG, Spache)
+  // are English-calibrated. Non-English (or unspecified) locales therefore
+  // receive an explicit waiver REVIEW instead of a score — never silently
+  // skipped, never scored with the wrong calibration.
+  const locale = policyRules.localePreferences?.trim() ?? "";
+  const isEnglishLocale = /\b(en|english|en-us|en-gb|us english)\b/i.test(locale);
+  const bodyText = [proposal.introduction, ...proposal.sections.map((s) => s.body), proposal.conclusion]
+    .join("\n")
+    .trim();
+  if (!isEnglishLocale) {
+    checks.push(
+      check(
+        "editorial.readability",
+        "REVIEW",
+        `Readability formulas are English-calibrated; locale "${locale}" — check not applicable, human review required.`,
+      ),
+    );
+  } else if (bodyText.length === 0) {
+    checks.push(
+      check("editorial.readability", "REVIEW", "No body text available for readability evaluation."),
+    );
+  } else {
+    // Default plugin configuration (threshold 4/7, age 16, minWords 5) — the
+    // spec forbids tuning the formula configuration itself.
+    const file = readabilityProcessor.processSync(bodyText);
+    // Sentence reliability floor: per-sentence grade formulas are statistically
+    // unreliable below ~25 words (they need a minimum passage to estimate grade
+    // level); the plugin's own minWords=5 default only excludes degenerate
+    // input. Sentences shorter than READABILITY_MIN_SENTENCE_WORDS are therefore
+    // not reported even when flagged. This floor is what keeps short-sentence
+    // professional prose (the accepted v0 writer style) out of the advisory
+    // signal while still flagging genuinely convoluted long sentences.
+    const flaggedSentences = file.messages
+      .map((message) => String(message.actual ?? ""))
+      .filter((sentence) => countWords(sentence) >= READABILITY_MIN_SENTENCE_WORDS);
+    checks.push(
+      flaggedSentences.length === 0
+        ? check("editorial.readability", "PASS", "No long sentence flagged hard to read by readability formulas.")
+        : check(
+            "editorial.readability",
+            "REVIEW",
+            `${flaggedSentences.length} sentence(s) flagged hard to read by readability formulas`,
+            flaggedSentences.slice(0, 5).map((sentence) => ({
+              kind: "section" as const,
+              ref: sentence.slice(0, 280),
+              note: "flagged hard to read by readability formulas",
+            })),
+          ),
+    );
+  }
 
   return checks;
 }

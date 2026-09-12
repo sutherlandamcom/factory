@@ -127,6 +127,7 @@ const writerBriefDraftSchema = z
     pageTarget: z.unknown(),
     contentBriefKeyPoints: z.array(z.string().trim().min(1).max(500)).max(20).default([]),
     expectedRevision: z.number().int().min(1).optional(),
+    noGapLineageAcknowledged: z.boolean().optional(),
   })
   .strict();
 

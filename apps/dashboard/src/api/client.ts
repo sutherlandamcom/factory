@@ -650,6 +650,9 @@ export interface AcceptedContentView {
   version: number;
   slug: string;
   digest: string;
+  proposalId: string;
+  proposalDigest: string;
+  qaReportDigest: string;
   data: unknown;
   acceptedAt: string;
 }
@@ -699,6 +702,7 @@ export const writerApi = {
       };
       contentBriefKeyPoints: string[];
       expectedRevision?: number;
+      noGapLineageAcknowledged?: boolean;
     },
   ) =>
     request<{ id: string; version: number; digest: string }>(

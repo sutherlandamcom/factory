@@ -222,7 +222,7 @@ async function setupThroughProposal(key: string, proposalOverride: Partial<PageC
       env: { FACTORY_MODEL_OVERRIDE__CONTENT_WRITER: "z-ai/glm-5.3-flash" },
     },
   );
-  return { dbInst, service, qaStore, seed, proposal };
+  return { dbInst, service, store, qaStore, seed, proposal };
 }
 
 test("service QA: verdicts persisted bound to exact proposal digest; accept blocked without QA", async () => {
@@ -301,6 +301,195 @@ test("service QA: REVIEW overall permits human acceptance (human gate decides)",
     assert.equal(accepted.version, 1);
     const ws = await service.acceptedContentWorkspace(seed.projectId);
     assert.equal(ws.latest?.version, 1);
+  } finally {
+    await dbInst.close();
+  }
+});
+
+test("service QA: report is insert-only — same-digest re-run idempotent; accepted view digests populated and never orphaned", async () => {
+  const { dbInst, service, seed, proposal } = await setupThroughProposal("wq4");
+  try {
+    const qa1 = await service.runQa({ projectId: seed.projectId });
+    assert.equal(qa1.overall, "PASS");
+    const qa2 = await service.runQa({ projectId: seed.projectId });
+    assert.equal(qa2.reportId, qa1.reportId, "same-digest re-run returns the SAME stored report");
+    assert.equal(qa2.digest, qa1.digest);
+    assert.equal(qa2.overall, qa1.overall);
+    const { contentQaReports, acceptedPageContent, writerPolicies } = await import("../../src/persistence/schema.js");
+    const { eq } = await import("drizzle-orm");
+    let rows = await dbInst.db.select().from(contentQaReports).where(eq(contentQaReports.proposalId, proposal.id));
+    assert.equal(rows.length, 1, "exactly one stored report row (never replaced)");
+
+    // Accept: the view carries the binding digests from the stored record.
+    const accepted = await service.acceptContent({
+      projectId: seed.projectId,
+      proposalId: proposal.id,
+      expectedProposalDigest: proposal.digest,
+    });
+    assert.equal(accepted.proposalId, proposal.id);
+    assert.equal(accepted.proposalDigest, proposal.digest);
+    assert.equal(accepted.qaReportDigest, qa1.digest);
+    const ws = await service.acceptedContentWorkspace(seed.projectId);
+    assert.equal(ws.latest!.proposalId, proposal.id);
+    assert.equal(ws.latest!.proposalDigest, proposal.digest);
+    assert.equal(ws.latest!.qaReportDigest, qa1.digest);
+
+    // Post-acceptance re-QA under a CHANGED writer policy (fresh recompute
+    // would now FAIL) must not replace the stored report nor orphan the
+    // accepted row's qa_report_digest reference.
+    const [policyRow] = await dbInst.db.select().from(writerPolicies).where(eq(writerPolicies.projectId, seed.projectId));
+    const mutatedData = JSON.parse(JSON.stringify(policyRow!.data));
+    mutatedData.rules.forbiddenTerminology = [...(mutatedData.rules.forbiddenTerminology ?? []), "roof"];
+    await dbInst.db.update(writerPolicies).set({ data: mutatedData }).where(eq(writerPolicies.id, policyRow!.id));
+
+    const qa3 = await service.runQa({ projectId: seed.projectId });
+    assert.equal(qa3.reportId, qa1.reportId);
+    assert.equal(qa3.digest, qa1.digest, "stored digest unchanged (insert-only)");
+    assert.equal(qa3.overall, "PASS", "persisted verdicts win over the silently recomputed FAIL");
+    rows = await dbInst.db.select().from(contentQaReports).where(eq(contentQaReports.proposalId, proposal.id));
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.reportDigest, qa1.digest);
+    const [acceptedRow] = await dbInst.db
+      .select()
+      .from(acceptedPageContent)
+      .where(eq(acceptedPageContent.projectId, seed.projectId));
+    assert.equal(acceptedRow!.qaReportDigest, qa1.digest, "accepted reference still resolves to the stored report");
+  } finally {
+    await dbInst.close();
+  }
+});
+
+test("service QA: acceptance verifies the TRANSITIVE upstream chain (policy, gap, intake) and rejects stale with writer_artifact_stale", async () => {
+  const { dbInst, service, seed, proposal } = await setupThroughProposal("wq6");
+  try {
+    await service.runQa({ projectId: seed.projectId });
+    const accept = () =>
+      service.acceptContent({
+        projectId: seed.projectId,
+        proposalId: proposal.id,
+        expectedProposalDigest: proposal.digest,
+      });
+    const { writerPolicies, acceptedContentGapSnapshots } = await import("../../src/persistence/schema.js");
+    const { eq } = await import("drizzle-orm");
+
+    // Writer policy mutated -> stale.
+    const [policyRow] = await dbInst.db.select().from(writerPolicies).where(eq(writerPolicies.projectId, seed.projectId));
+    const originalPolicyDigest = policyRow!.policyDigest;
+    await dbInst.db.update(writerPolicies).set({ policyDigest: "7".repeat(64) }).where(eq(writerPolicies.id, policyRow!.id));
+    await assert.rejects(accept, (e: unknown) => isCode(e, "writer_artifact_stale"));
+    await dbInst.db.update(writerPolicies).set({ policyDigest: originalPolicyDigest }).where(eq(writerPolicies.id, policyRow!.id));
+
+    // Gap snapshot mutated -> stale.
+    const [gapRow] = await dbInst.db
+      .select()
+      .from(acceptedContentGapSnapshots)
+      .where(eq(acceptedContentGapSnapshots.projectId, seed.projectId));
+    const originalGapDigest = gapRow!.snapshotDigest;
+    await dbInst.db
+      .update(acceptedContentGapSnapshots)
+      .set({ snapshotDigest: "6".repeat(64) })
+      .where(eq(acceptedContentGapSnapshots.id, gapRow!.id));
+    await assert.rejects(accept, (e: unknown) => isCode(e, "writer_artifact_stale"));
+    await dbInst.db
+      .update(acceptedContentGapSnapshots)
+      .set({ snapshotDigest: originalGapDigest })
+      .where(eq(acceptedContentGapSnapshots.id, gapRow!.id));
+
+    // Chain current again -> acceptance succeeds (default path unchanged).
+    const accepted = await accept();
+    assert.equal(accepted.version, 1);
+
+    // New accepted intake generation -> even the idempotent same-digest
+    // re-acceptance is now rejected: the transitive intake snapshot mutated.
+    const { ProjectIntakeStore } = await import("../../src/operator/intake-store.js");
+    const { buildIntakePayload } = await import("../fixtures/intake-payloads.js");
+    const { deterministicDigest } = await import("../../src/intelligence/digest.js");
+    const intake = new ProjectIntakeStore(dbInst.db);
+    const pay2 = buildIntakePayload({ business: { name: "Summit Roofing", description: "Updated description." } });
+    await intake.saveDraft({ projectId: seed.projectId, baseRevision: 1, payload: pay2 });
+    await intake.accept({
+      projectId: seed.projectId,
+      expectedRevision: 2,
+      expectedDigest: deterministicDigest(pay2),
+    });
+    await assert.rejects(accept, (e: unknown) => isCode(e, "writer_artifact_stale"));
+  } finally {
+    await dbInst.close();
+  }
+});
+
+test("service QA: concurrent acceptance of two slugs never 500s — typed content_accept_failed, contiguous versions", async () => {
+  const { dbInst, service, store, seed, proposal } = await setupThroughProposal("wq7");
+  try {
+    await service.runQa({ projectId: seed.projectId }); // QA report for proposal A
+
+    // Second slug: brief v2 -> snapshot v2 -> proposal B -> QA report for B.
+    const slugB = "roof-inspection-austin";
+    const saved2 = await store.saveBriefDraft({
+      projectId: seed.projectId,
+      pageTarget: { ...samplePageTarget, slug: slugB, title: "Roof Inspection in Austin" },
+      contentBriefKeyPoints: [],
+    });
+    await store.approveBrief({
+      projectId: seed.projectId,
+      briefId: saved2.id,
+      expectedVersion: saved2.version,
+      expectedDigest: saved2.digest,
+    });
+    const snap2 = await service.compileSnapshot({ projectId: seed.projectId });
+    await service.approveSnapshot({
+      projectId: seed.projectId,
+      snapshotId: snap2.id,
+      expectedVersion: snap2.version,
+      expectedDigest: snap2.digest,
+    });
+    const proposalB = await service.generateProposal(
+      { projectId: seed.projectId, snapshotId: snap2.id },
+      {
+        invoke: async () => ({
+          requestedModel: "m",
+          respondedModel: "m",
+          provider: "p",
+          durationMs: 1,
+          promptTokens: 100,
+          completionTokens: 50,
+          totalTokens: 150,
+          costUsd: null,
+          content: JSON.stringify({ ...GOOD_PROPOSAL }),
+        }),
+        env: { FACTORY_MODEL_OVERRIDE__CONTENT_WRITER: "z-ai/glm-5.3-flash" },
+      },
+    );
+    await service.runQa({ projectId: seed.projectId }); // QA for the latest proposal (B)
+
+    const results = await Promise.allSettled([
+      service.acceptContent({ projectId: seed.projectId, proposalId: proposal.id, expectedProposalDigest: proposal.digest }),
+      service.acceptContent({ projectId: seed.projectId, proposalId: proposalB.id, expectedProposalDigest: proposalB.digest }),
+    ]);
+    for (const r of results) {
+      if (r.status === "rejected") {
+        assert.ok(
+          isCode(r.reason, "content_accept_failed"),
+          `rejections must be the typed acceptance conflict, got: ${String(r.reason)}`,
+        );
+      }
+    }
+    const fulfilled = results.filter((r) => r.status === "fulfilled") as Array<
+      PromiseFulfilledResult<{ version: number; slug: string }>
+    >;
+    assert.ok(fulfilled.length >= 1, "at least one acceptance succeeds");
+
+    const { acceptedPageContent } = await import("../../src/persistence/schema.js");
+    const { eq } = await import("drizzle-orm");
+    const rows = await dbInst.db
+      .select()
+      .from(acceptedPageContent)
+      .where(eq(acceptedPageContent.projectId, seed.projectId));
+    assert.equal(rows.length, fulfilled.length, "no partial/duplicated acceptance");
+    const versions = rows.map((r) => r.version).sort((a, b) => a - b);
+    assert.equal(new Set(versions).size, versions.length, "no duplicate version numbers");
+    assert.deepEqual(versions, versions.map((_, i) => i + 1), "contiguous versions starting at 1");
+    assert.equal(new Set(rows.map((r) => r.slug)).size, rows.length, "one accepted row per slug");
   } finally {
     await dbInst.close();
   }

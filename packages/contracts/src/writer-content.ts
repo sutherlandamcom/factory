@@ -256,6 +256,7 @@ export const WRITER_ERROR_CODES = [
   "writer_proposal_invalid",
   "content_accept_failed",
   "accepted_content_not_found",
+  "writer_qa_conflict",
   "budget_invariant_violation",
 ] as const;
 export type WriterErrorCode = (typeof WRITER_ERROR_CODES)[number];

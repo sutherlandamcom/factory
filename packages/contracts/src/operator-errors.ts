@@ -123,6 +123,10 @@ export const OPERATOR_ERROR_CODES = [
   "content_accept_failed",
   /** Accepted page content does not exist for this project. */
   "accepted_content_not_found",
+  /** Deterministic QA report already exists for this proposal at a different digest (insert-only, never replaced). */
+  "writer_qa_conflict",
+  /** Budget ledger invariant trip; usage was durably accounted before failing. */
+  "budget_invariant_violation",
   /** Unexpected server fault (message is always the sanitized fixed string). */
   "internal_error",
 ] as const;
@@ -186,6 +190,8 @@ export const OPERATOR_ERROR_STATUS: Readonly<Record<OperatorErrorCode, number>> 
   writer_proposal_invalid: 502,
   content_accept_failed: 409,
   accepted_content_not_found: 404,
+  writer_qa_conflict: 409,
+  budget_invariant_violation: 409,
   internal_error: 500,
 };
 

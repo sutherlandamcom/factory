@@ -102,6 +102,7 @@ export class WriterService {
     pageTarget: unknown;
     contentBriefKeyPoints: string[];
     expectedRevision?: number | null;
+    noGapLineageAcknowledged?: boolean;
   }): Promise<{ id: string; version: number; digest: string }> {
     return await this.store.saveBriefDraft(input);
   }
@@ -184,9 +185,24 @@ export class WriterService {
     projectId: string;
     briefId?: string;
   }): Promise<WriterSnapshotView> {
+    const latest = await this.store.latestBrief(input.projectId);
+    // Honor the explicit briefId: it must resolve to the CURRENT brief for
+    // this project — snapshots can only be compiled from the latest brief
+    // version, never from an older/superseded one.
     const brief = input.briefId
-      ? await this.store.briefVersion(input.projectId, (await this.store.latestBrief(input.projectId))!.version)
-      : await this.store.latestBrief(input.projectId);
+      ? await this.store.briefById(input.projectId, input.briefId)
+      : latest;
+    if (input.briefId) {
+      if (!brief) {
+        throw new FactoryError("writer_artifact_not_found", "Content brief not found for this project.");
+      }
+      if (!latest || latest.id !== brief.id) {
+        throw new FactoryError(
+          "writer_artifact_stale",
+          "Snapshot compilation requires the CURRENT brief; the requested briefId is not the latest brief version.",
+        );
+      }
+    }
     if (!brief || brief.state !== "approved") {
       throw new FactoryError("writer_policy_not_approved", "An approved brief is required before compiling a snapshot.");
     }
@@ -464,6 +480,8 @@ export class WriterService {
       briefData,
       policyRules,
     );
+    // Insert-only persistence: a re-run for the same proposal digest returns
+    // the FIRST stored report unchanged (idempotent-identical QA history).
     const saved = await this.qaStore.saveQaReport({
       projectId: input.projectId,
       proposalId: proposal.id,
@@ -480,15 +498,23 @@ export class WriterService {
         overall: report.overall,
       },
     });
+    // Always surface the PERSISTED report's verdicts (on an idempotent re-run
+    // these are the stored ones, never a silently replaced recompute).
+    const stored = saved.data as {
+      factual: unknown[];
+      search: unknown[];
+      editorial: unknown[];
+      overall: string;
+    };
     return {
       reportId: saved.id,
       digest: saved.digest,
       proposalId: proposal.id,
       proposalDigest: proposal.proposalDigest,
-      factual: report.factual,
-      search: report.search,
-      editorial: report.editorial,
-      overall: report.overall,
+      factual: stored.factual,
+      search: stored.search,
+      editorial: stored.editorial,
+      overall: stored.overall,
     };
   }
 
@@ -502,9 +528,9 @@ export class WriterService {
       version: result.version,
       slug: result.slug,
       digest: result.digest,
-      proposalId: input.proposalId,
-      proposalDigest: input.expectedProposalDigest,
-      qaReportDigest: "",
+      proposalId: result.proposalId,
+      proposalDigest: result.proposalDigest,
+      qaReportDigest: result.qaReportDigest,
       data: latest?.data ?? null,
       acceptedAt: latest?.acceptedAt.toISOString() ?? new Date().toISOString(),
     };
@@ -520,9 +546,9 @@ export class WriterService {
         version: latest.version,
         slug: latest.slug,
         digest: latest.digest,
-        proposalId: "",
-        proposalDigest: "",
-        qaReportDigest: "",
+        proposalId: latest.proposalId,
+        proposalDigest: latest.proposalDigest,
+        qaReportDigest: latest.qaReportDigest,
         data: latest.data,
         acceptedAt: latest.acceptedAt.toISOString(),
       },

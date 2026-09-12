@@ -155,6 +155,44 @@ test("snapshot compile requires approved brief; digest deterministic; approval b
   }
 });
 
+test("compileSnapshot honors an explicit briefId: must resolve to the CURRENT approved brief", async () => {
+  const { dbInst, service, store, seed } = await setupApprovedThroughBrief("ws6");
+  try {
+    const v1 = (await store.latestBrief(seed.projectId))!;
+
+    // Explicit briefId of the current approved brief is honored and binds it.
+    const snap = await service.compileSnapshot({ projectId: seed.projectId, briefId: v1.id });
+    assert.equal(snap.briefId, v1.id);
+    assert.equal(snap.briefVersion, v1.version);
+
+    // A NEW draft brief becomes the latest: the older briefId is no longer
+    // current -> typed stale failure (never silently resolves the latest).
+    await store.saveBriefDraft({
+      projectId: seed.projectId,
+      pageTarget: { ...samplePageTarget, title: "Second page target" },
+      contentBriefKeyPoints: [],
+    });
+    await assert.rejects(
+      service.compileSnapshot({ projectId: seed.projectId, briefId: v1.id }),
+      (e: unknown) => isCode(e, "writer_artifact_stale"),
+    );
+
+    // Unknown briefId -> typed not-found (previously a TypeError -> 500).
+    await assert.rejects(
+      service.compileSnapshot({ projectId: seed.projectId, briefId: "wbrf-nonexistent" }),
+      (e: unknown) => isCode(e, "writer_artifact_not_found"),
+    );
+
+    // Default path unchanged: the current draft is not approved yet.
+    await assert.rejects(
+      service.compileSnapshot({ projectId: seed.projectId }),
+      (e: unknown) => isCode(e, "writer_policy_not_approved"),
+    );
+  } finally {
+    await dbInst.close();
+  }
+});
+
 test("generateProposal: fixture writer output persisted with snapshot digest binding + telemetry", async () => {
   const { dbInst, service, seed } = await setupApprovedThroughBrief("ws2");
   try {

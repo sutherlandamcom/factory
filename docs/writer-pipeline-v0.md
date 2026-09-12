@@ -29,10 +29,14 @@ runs. Models propose; Factory validates and governs.
    lineage INCLUDING its `searchSemantics` (the Runs 2–3 search-evidence
    bridge).
 3. **Gap lineage rule** — default: an accepted ContentGap snapshot is REQUIRED
-   (`content_gap_lineage_missing` otherwise). The operator may explicitly
-   approve a brief without gap lineage only by setting
-   `noGapLineageAcknowledged` at approval time; the flag is persisted,
-   digest-bound and shown in the Dashboard. No silent fallback either way.
+   (`content_gap_lineage_missing` otherwise). The operator may explicitly draft
+   AND approve a brief without gap lineage only by setting
+   `noGapLineageAcknowledged: true` at draft time (a brief without an accepted
+   gap snapshot cannot be created otherwise) and again at approval time; the
+   flag is persisted on the brief row, digest-bound (it is part of the brief
+   payload), carried through approval, and shown in the Dashboard. Passing the
+   flag while an accepted gap snapshot exists fails closed. No silent fallback
+   either way.
 4. **WriterPromptSnapshot** — the EXACT compiled prompt packet (deterministic
    canonical-JSON SHA-256 digest, server-side). Persisted, Dashboard-visible,
    human-reviewable. Staleness: bound brief changed OR a newer approved brief
@@ -47,12 +51,19 @@ runs. Models propose; Factory validates and governs.
    keyword-density/LSI scoring. All three families are fully deterministic in
    v0 (documented decision: every acceptance criterion is deterministically
    expressible against the accepted inputs; no model-based editorial check is
-   required).
+   required). QA reports are INSERT-ONLY: a re-run for the same proposal
+   digest is idempotent-identical (the first stored report is returned, never
+   replaced), so an accepted row's `qa_report_digest` reference can never be
+   orphaned by a later re-run.
 7. **AcceptedPageContent** — human acceptance gate. Fails closed without a QA
    report for the exact proposal digest, on QA overall FAIL, on digest
-   mismatch, or on stale snapshot binding. Immutable; same-slug re-acceptance
-   with a different proposal requires a new brief version. REVIEW overall
-   permits the human gate to decide.
+   mismatch, on stale snapshot binding, OR on any transitive upstream
+   mutation behind the bound brief (accepted ProjectInputSnapshot, approved
+   Writer Policy, accepted ContentGap snapshot) with `writer_artifact_stale`.
+   Concurrent acceptances that race the version allocation fail closed with
+   the typed `content_accept_failed` conflict. Immutable; same-slug
+   re-acceptance with a different proposal requires a new brief version.
+   REVIEW overall permits the human gate to decide.
 
 ## Budget governance
 

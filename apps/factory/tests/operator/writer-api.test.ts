@@ -224,6 +224,39 @@ test("writer API: typed stale/digest errors propagate with the contract status m
   assert.equal((acceptFail.body as { error: { code: string } }).error.code, "content_accept_failed");
 });
 
+test("writer API: budget invariant violation maps to 409; QA conflict maps to 409; brief-draft acknowledgement passes through", async () => {
+  const calls: Call[] = [];
+  const handlers = new Map<string, (body: unknown) => unknown>([
+    ["generate", () => {
+      throw new FactoryError("budget_invariant_violation", "Usage exceeded the reserved amount; usage accounted in full.");
+    }],
+    ["qa", () => {
+      throw new FactoryError("writer_qa_conflict", "A QA report already exists for this proposal at a different digest.");
+    }],
+    ["brief-draft", (b) => ({ ok: true, echo: b })],
+  ]);
+  const deps = makeDeps(makeWriterStub(handlers, calls));
+
+  const invariant = await callApi(deps, "POST", "/api/projects/p-1/writer/generate", { snapshotId: "wsnp-1" });
+  assert.equal(invariant.status, 409, "budget_invariant_violation must map to its typed status, not a sanitized 500");
+  assert.equal((invariant.body as { error: { code: string } }).error.code, "budget_invariant_violation");
+
+  const qaConflict = await callApi(deps, "POST", "/api/projects/p-1/writer/qa");
+  assert.equal(qaConflict.status, 409);
+  assert.equal((qaConflict.body as { error: { code: string } }).error.code, "writer_qa_conflict");
+
+  // The draft-time no-gap-lineage acknowledgement passes strict validation
+  // and reaches the service.
+  const draft = await callApi(deps, "PUT", "/api/projects/p-1/writer/brief-draft", {
+    pageTarget: { slug: "x", title: "T", objective: "O", audience: "A", structureGuidance: [], internalLinkIntent: [], ctaIntent: "C" },
+    contentBriefKeyPoints: [],
+    noGapLineageAcknowledged: true,
+  });
+  assert.equal(draft.status, 200);
+  const received = calls.find((c) => c.path === "brief-draft")?.body as { noGapLineageAcknowledged?: boolean };
+  assert.equal(received.noGapLineageAcknowledged, true);
+});
+
 test("writer API: malformed request bodies fail closed with validation_error (never reach the service)", async () => {
   const calls: Call[] = [];
   const handlers = new Map<string, (body: unknown) => unknown>([

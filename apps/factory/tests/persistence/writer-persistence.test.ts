@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { setupMigratedTestDatabase } from "./helpers.js";
 import { deterministicDigest } from "../../src/intelligence/digest.js";
-import { WriterStore } from "../../src/writer/writer-store.js";
+import { WriterStore, WriterSnapshotStore } from "../../src/writer/writer-store.js";
+import { WriterService } from "../../src/writer/service.js";
+import { WriterBudgetStore } from "../../src/writer/budget.js";
 import { samplePageTarget, seedProjectWithAcceptedInputs } from "../fixtures/writer-seeds.js";
 import { FactoryError } from "../../src/executor/errors.js";
 
@@ -285,9 +287,11 @@ test("PG: brief staleness across all lineage dimensions (input, policy, gap)", a
   }
 });
 
-test("PG: noGapLineageAcknowledged is approval-time only, persisted, digest-bound, Dashboard-visible", async () => {
+test("PG: noGapLineageAcknowledged — default REQUIRED fails closed; explicit acknowledgement drafts+approves, persisted and digest-bound", async () => {
   const dbInst = await setupMigratedTestDatabase();
   const store = new WriterStore(dbInst.db);
+  const snapshotStore = new WriterSnapshotStore(dbInst.db);
+  const service = new WriterService(store, snapshotStore, new WriterBudgetStore(dbInst.db));
   try {
     const seed = await seedProjectWithAcceptedInputs(dbInst, "wb4");
     const draft = await store.deriveWriterPolicyDraft({ projectId: seed.projectId });
@@ -298,23 +302,86 @@ test("PG: noGapLineageAcknowledged is approval-time only, persisted, digest-boun
       expectedDigest: draft.policyDigest,
     });
 
-    // Approval without lineage and WITHOUT the flag -> typed failure.
+    // DEFAULT PATH (byte-identical): drafting without lineage and WITHOUT the
+    // flag fails closed with the typed error.
     const { acceptedContentGapSnapshots } = await import("../../src/persistence/schema.js");
     const { eq } = await import("drizzle-orm");
     await dbInst.db.delete(acceptedContentGapSnapshots).where(eq(acceptedContentGapSnapshots.projectId, seed.projectId));
 
-    // Drafting also requires gap lineage (default REQUIRED).
     await assert.rejects(
       store.saveBriefDraft({ projectId: seed.projectId, pageTarget: samplePageTarget, contentBriefKeyPoints: [] }),
       (e: unknown) => isCode(e, "content_gap_lineage_missing"),
     );
 
-    // Re-seed a gap, draft, then delete the gap before approval -> the brief
-    // lineage still points at the gap so approval-time staleness fails; this
-    // proves no silent fallback. The explicit flag path is proven by the
-    // API-level journey (Phase 5/6) with a brief created under the flag.
+    // EXPLICIT PATH: drafting WITH noGapLineageAcknowledged succeeds without
+    // a gap snapshot; the flag is persisted on the draft and digest-bound.
+    const saved = await store.saveBriefDraft({
+      projectId: seed.projectId,
+      pageTarget: samplePageTarget,
+      contentBriefKeyPoints: [],
+      noGapLineageAcknowledged: true,
+    });
+    const briefRow = (await store.briefVersion(seed.projectId, saved.version))!;
+    assert.equal(briefRow.noGapLineageAcknowledged, true, "flag persisted on the draft row");
+    const briefData = briefRow.data as {
+      noGapLineageAcknowledged: boolean;
+      lineage: { gapSnapshotId?: string };
+      searchSemantics: { primaryIntent: string; semanticCoverageRequirements: string[] };
+    };
+    assert.equal(briefData.noGapLineageAcknowledged, true, "flag digest-bound in the brief payload");
+    assert.equal(briefData.lineage.gapSnapshotId, undefined);
+    assert.equal(deterministicDigest(briefRow.data), saved.digest, "digest covers the acknowledged payload");
+    assert.equal(briefData.searchSemantics.semanticCoverageRequirements.length, 0);
+
+    // Approval-time validation kept: approving without the flag still fails.
+    await assert.rejects(
+      store.approveBrief({
+        projectId: seed.projectId,
+        briefId: saved.id,
+        expectedVersion: saved.version,
+        expectedDigest: saved.digest,
+      }),
+      (e: unknown) => isCode(e, "content_gap_lineage_missing"),
+    );
+
+    // Approval WITH the flag approves and carries the acknowledgement through.
+    const approved = await store.approveBrief({
+      projectId: seed.projectId,
+      briefId: saved.id,
+      expectedVersion: saved.version,
+      expectedDigest: saved.digest,
+      noGapLineageAcknowledged: true,
+    });
+    assert.equal(approved.state, "approved");
+    const approvedRow = (await store.briefVersion(seed.projectId, saved.version))!;
+    assert.equal(approvedRow.noGapLineageAcknowledged, true);
+    const view = await service.briefDetail(seed.projectId, saved.version);
+    assert.equal(view.noGapLineageAcknowledged, true, "flag visible in the service/Dashboard view");
+
+    // The acknowledged no-lineage brief is usable end-to-end: the prompt
+    // snapshot compiles from it.
+    const snap = await service.compileSnapshot({ projectId: seed.projectId, briefId: saved.id });
+    assert.equal(snap.briefId, saved.id);
+
+    // The flag is only valid when the brief genuinely has no gap lineage:
+    // with an accepted gap snapshot present, the acknowledged draft fails.
     const seed2 = await seedProjectWithAcceptedInputs(dbInst, "wb4b");
-    void seed2;
+    const draft2 = await store.deriveWriterPolicyDraft({ projectId: seed2.projectId });
+    await store.approveWriterPolicy({
+      projectId: seed2.projectId,
+      policyId: draft2.id,
+      expectedVersion: draft2.version,
+      expectedDigest: draft2.policyDigest,
+    });
+    await assert.rejects(
+      store.saveBriefDraft({
+        projectId: seed2.projectId,
+        pageTarget: samplePageTarget,
+        contentBriefKeyPoints: [],
+        noGapLineageAcknowledged: true,
+      }),
+      (e: unknown) => isCode(e, "writer_approval_failed"),
+    );
   } finally {
     await dbInst.close();
   }

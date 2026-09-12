@@ -16,7 +16,8 @@ import http from "node:http";
  *   -> ACCEPT CONTENT -> AcceptedPageContent v1
  *   -> browser reload -> persists
  *   -> service restart (DB kept) -> persists
- *   -> edit upstream (new accepted inputs) -> snapshot STALE, v1 unchanged
+ *   -> edit upstream (new accepted inputs) -> workspace artifacts show STALE,
+ *      accepted v1 unchanged
  *
  * Rules honored: built dashboard served by the real Operator service, real
  * PostgreSQL, no JSON editing, no direct SQL for product actions, zero paid
@@ -99,7 +100,7 @@ async function acceptGapSnapshot(page: Page) {
 }
 
 test.describe("Content Writer journey", () => {
-  test("accepted inputs + gap -> writer policy -> brief -> snapshot -> proposal -> QA -> ACCEPT v1 -> reload/restart persistence -> upstream edit stales snapshot", async ({ page }) => {
+  test("accepted inputs + gap -> writer policy -> brief -> snapshot -> proposal -> QA -> ACCEPT v1 -> reload/restart persistence -> upstream edit marks artifacts STALE, v1 unchanged", async ({ page }) => {
     test.setTimeout(600_000);
     await createAndAcceptProject(page);
     await acceptGapSnapshot(page);

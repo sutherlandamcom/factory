@@ -255,6 +255,10 @@ export function ContentPage({ projectId }: { projectId: string }) {
               className="mt-1 w-full rounded border border-gray-300 px-2 py-1.5"
             />
           </label>
+          <label className="flex items-center gap-2 text-xs text-gray-700">
+            <input type="checkbox" checked={noGapAck} onChange={(e) => setNoGapAck(e.target.checked)} />
+            Explicitly draft/approve WITHOUT accepted gap lineage (acknowledgement is persisted and digest-bound)
+          </label>
           <button
             onClick={() =>
               run(async () => {
@@ -270,6 +274,7 @@ export function ContentPage({ projectId }: { projectId: string }) {
                   },
                   contentBriefKeyPoints: splitLines(keyPoints),
                   ...(brief && brief.state === "draft" ? { expectedRevision: brief.version } : {}),
+                  ...(noGapAck ? { noGapLineageAcknowledged: true } : {}),
                 });
                 return `Brief draft v${result.version} saved (digest ${result.digest.slice(0, 12)}…).`;
               }, "Brief draft rejected.")
@@ -305,10 +310,6 @@ export function ContentPage({ projectId }: { projectId: string }) {
               {brief.staleReason && <div className="mt-1 text-amber-700">Stale: {brief.staleReason}</div>}
               {brief.state === "draft" && !brief.stale && (
                 <div className="mt-2 space-y-2">
-                  <label className="flex items-center gap-2 text-xs text-gray-700">
-                    <input type="checkbox" checked={noGapAck} onChange={(e) => setNoGapAck(e.target.checked)} />
-                    Explicitly approve WITHOUT accepted gap lineage (acknowledgement is persisted and digest-bound)
-                  </label>
                   <button
                     onClick={() =>
                       run(async () => {
@@ -540,6 +541,9 @@ export function ContentPage({ projectId }: { projectId: string }) {
             </div>
             <div>
               Digest: <Digest digest={accepted.digest} />
+            </div>
+            <div className="text-gray-500">
+              Proposal: <Digest digest={accepted.proposalDigest} /> · QA report: <Digest digest={accepted.qaReportDigest} />
             </div>
             <div className="text-gray-500">Accepted at {accepted.acceptedAt}</div>
           </div>

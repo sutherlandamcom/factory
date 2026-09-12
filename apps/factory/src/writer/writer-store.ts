@@ -205,6 +205,13 @@ export class WriterStore {
     pageTarget: unknown;
     contentBriefKeyPoints: string[];
     expectedRevision?: number | null;
+    /**
+     * Explicit operator acknowledgement that this brief is drafted WITHOUT an
+     * accepted ContentGap snapshot. Persisted on the draft, digest-bound, and
+     * must be provided again (unchanged) at approval time. The default path
+     * (flag absent/false) stays REQUIRED and is unchanged.
+     */
+    noGapLineageAcknowledged?: boolean;
   }): Promise<{ id: string; version: number; digest: string }> {
     const pageTarget = parsePageTarget(input.pageTarget);
     const snapshot = await this.latestAcceptedInputSnapshot(input.projectId);
@@ -215,19 +222,29 @@ export class WriterStore {
         "An approved Factory Writer Policy is required before a Content Production Brief can be drafted.",
       );
     }
-    // Gap lineage: default REQUIRED (typed failure when missing).
+    const acknowledged = input.noGapLineageAcknowledged === true;
+    // Gap lineage: default REQUIRED (typed failure when missing). Drafting
+    // without a gap snapshot is only possible with the explicit flag.
     const gap = await this.latestAcceptedGapSnapshot(input.projectId);
     if (!gap) {
-      throw new FactoryError(
-        "content_gap_lineage_missing",
-        "No accepted ContentGap snapshot exists for this project. Accept a gap snapshot first, or explicitly acknowledge the missing gap lineage at approval time.",
-      );
-    }
-    if (gap.acceptedInputSnapshotId !== snapshot.id || gap.acceptedInputDigest !== snapshot.digest) {
-      throw staleError("Accepted ContentGap snapshot is stale versus the current accepted ProjectInputSnapshot.");
+      if (!acknowledged) {
+        throw new FactoryError(
+          "content_gap_lineage_missing",
+          "No accepted ContentGap snapshot exists for this project. Accept a gap snapshot first, or explicitly acknowledge the missing gap lineage at draft and approval time.",
+        );
+      }
+    } else {
+      if (acknowledged) {
+        throw approvalError(
+          "noGapLineageAcknowledged is only valid when the brief has no accepted gap lineage.",
+        );
+      }
+      if (gap.acceptedInputSnapshotId !== snapshot.id || gap.acceptedInputDigest !== snapshot.digest) {
+        throw staleError("Accepted ContentGap snapshot is stale versus the current accepted ProjectInputSnapshot.");
+      }
     }
 
-    const data = this.composeBriefData({ snapshot, policy, pageTarget, keyPoints: input.contentBriefKeyPoints, gap });
+    const data = this.composeBriefData({ snapshot, policy, pageTarget, keyPoints: input.contentBriefKeyPoints, gap, noGapLineageAcknowledged: acknowledged });
     const briefDigest = deterministicDigest(data);
     return await this.db.transaction(async (tx) => {
       const [current] = await tx
@@ -259,6 +276,7 @@ export class WriterStore {
             gapSnapshotId: data.lineage.gapSnapshotId ?? null,
             gapSnapshotVersion: data.lineage.gapSnapshotVersion ?? null,
             gapSnapshotDigest: data.lineage.gapSnapshotDigest ?? null,
+            noGapLineageAcknowledged: acknowledged,
           })
           .where(eq(contentBriefs.id, current.id));
         return { id: current.id, version: current.version, digest: briefDigest };
@@ -282,7 +300,7 @@ export class WriterStore {
         gapSnapshotId: data.lineage.gapSnapshotId ?? null,
         gapSnapshotVersion: data.lineage.gapSnapshotVersion ?? null,
         gapSnapshotDigest: data.lineage.gapSnapshotDigest ?? null,
-        noGapLineageAcknowledged: false,
+        noGapLineageAcknowledged: acknowledged,
       });
       return { id, version: nextVersion, digest: briefDigest };
     });
@@ -408,6 +426,14 @@ export class WriterStore {
     return row ?? null;
   }
 
+  async briefById(projectId: string, briefId: string): Promise<ContentBriefRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(contentBriefs)
+      .where(and(eq(contentBriefs.id, briefId), eq(contentBriefs.projectId, projectId)));
+    return row ?? null;
+  }
+
   /** Brief staleness across ALL lineage dimensions (input, policy, gap). */
   async briefStaleness(projectId: string, brief: ContentBriefRecord): Promise<{ stale: boolean; reason: string | null }> {
     const data = parseContentBriefData(brief.data);
@@ -449,19 +475,21 @@ export class WriterStore {
     policy: WriterPolicyRecord;
     pageTarget: ReturnType<typeof parsePageTarget>;
     keyPoints: string[];
+    /** Accepted gap snapshot, or null when drafting under an explicit no-gap-lineage acknowledgement. */
     gap: {
       id: string;
       version: number;
       snapshotDigest: string;
       data: unknown;
-    };
+    } | null;
+    noGapLineageAcknowledged: boolean;
   }): ContentBriefData {
     const intake = input.snapshot.data as {
       evidence: { allowedClaims: string[]; prohibitedClaims: string[]; unknownClaims: string[]; operatorFacts: string[] };
     };
-    const gapData = input.gap.data as {
-      searchSemantics: { primaryIntent: string; semanticCoverageRequirements: string[]; userNeeds: string[] };
-    };
+    const gapData = input.gap?.data as
+      | { searchSemantics: { primaryIntent: string; semanticCoverageRequirements: string[]; userNeeds: string[] } }
+      | undefined;
     return parseContentBriefData({
       schemaVersion: "writer-content-v1",
       lineage: {
@@ -471,9 +499,13 @@ export class WriterStore {
         writerPolicyId: input.policy.id,
         writerPolicyVersion: input.policy.version,
         writerPolicyDigest: input.policy.policyDigest,
-        gapSnapshotId: input.gap.id,
-        gapSnapshotVersion: input.gap.version,
-        gapSnapshotDigest: input.gap.snapshotDigest,
+        ...(input.gap
+          ? {
+              gapSnapshotId: input.gap.id,
+              gapSnapshotVersion: input.gap.version,
+              gapSnapshotDigest: input.gap.snapshotDigest,
+            }
+          : {}),
       },
       pageTarget: input.pageTarget,
       allowedClaims: intake.evidence.allowedClaims,
@@ -481,12 +513,12 @@ export class WriterStore {
       unknownClaims: intake.evidence.unknownClaims,
       operatorFacts: intake.evidence.operatorFacts,
       searchSemantics: {
-        primaryIntent: gapData.searchSemantics.primaryIntent,
-        semanticCoverageRequirements: gapData.searchSemantics.semanticCoverageRequirements,
-        userNeeds: gapData.searchSemantics.userNeeds,
+        primaryIntent: gapData?.searchSemantics.primaryIntent ?? "no accepted gap snapshot (explicit operator acknowledgement)",
+        semanticCoverageRequirements: gapData?.searchSemantics.semanticCoverageRequirements ?? [],
+        userNeeds: gapData?.searchSemantics.userNeeds ?? [],
       },
       contentBriefKeyPoints: input.keyPoints,
-      noGapLineageAcknowledged: false,
+      noGapLineageAcknowledged: input.noGapLineageAcknowledged,
     });
   }
 
@@ -851,33 +883,51 @@ export type { WriterPromptSnapshotData, PageContentProposalData };
 export class WriterQaStore {
   constructor(private readonly db: FactoryDb) {}
 
+  /**
+   * Save the deterministic QA report for a proposal. Rows are INSERT-ONLY:
+   * a stored report is never replaced, so an AcceptedPageContent row's
+   * `qa_report_digest` reference can never be orphaned by a later re-run.
+   * - No report yet -> insert.
+   * - Re-run for the SAME proposal digest -> idempotent-identical: the FIRST
+   *   stored report is returned unchanged (its verdicts are the QA history
+   *   that gated acceptance).
+   * - Existing row for the proposal at a DIFFERENT digest -> typed conflict
+   *   (defensive: proposals are immutable, so this must never occur).
+   */
   async saveQaReport(input: {
     projectId: string;
     proposalId: string;
     proposalVersion: number;
     proposalDigest: string;
     data: unknown;
-  }): Promise<{ id: string; digest: string }> {
+  }): Promise<{ id: string; digest: string; data: unknown; reused: boolean }> {
     const { parseContentQaReportData } = await import("@factory/contracts");
     const data = parseContentQaReportData(input.data);
     const reportDigest = deterministicDigest(data);
+    const [existing] = await this.db
+      .select()
+      .from(contentQaReports)
+      .where(eq(contentQaReports.proposalId, input.proposalId));
+    if (existing) {
+      if (existing.proposalDigest !== input.proposalDigest) {
+        throw new FactoryError(
+          "writer_qa_conflict",
+          "A QA report already exists for this proposal at a different digest; QA reports are insert-only and are never replaced.",
+        );
+      }
+      return { id: existing.id, digest: existing.reportDigest, data: existing.data, reused: true };
+    }
     const id = `wqar-${randomUUID()}`;
-    await this.db
-      .insert(contentQaReports)
-      .values({
-        id,
-        projectId: input.projectId,
-        proposalId: input.proposalId,
-        proposalVersion: input.proposalVersion,
-        proposalDigest: input.proposalDigest,
-        data,
-        reportDigest,
-      })
-      .onConflictDoUpdate({
-        target: contentQaReports.proposalId,
-        set: { data, reportDigest, proposalVersion: input.proposalVersion, proposalDigest: input.proposalDigest },
-      });
-    return { id, digest: reportDigest };
+    await this.db.insert(contentQaReports).values({
+      id,
+      projectId: input.projectId,
+      proposalId: input.proposalId,
+      proposalVersion: input.proposalVersion,
+      proposalDigest: input.proposalDigest,
+      data,
+      reportDigest,
+    });
+    return { id, digest: reportDigest, data, reused: false };
   }
 
   async latestQaReport(projectId: string): Promise<{ id: string; proposalId: string; digest: string; data: unknown } | null> {
@@ -895,13 +945,16 @@ export class WriterQaStore {
    * Accept the proposal as AcceptedPageContent v1 (or next version for a new
    * slug after upstream mutation). FAILS CLOSED unless:
    * - the proposal is current (not stale) and bound to an approved snapshot;
+   * - the TRANSITIVE upstream lineage of the bound brief is still current
+   *   (accepted ProjectInputSnapshot, approved Writer Policy, accepted gap
+   *   snapshot) — an upstream mutation marks the whole chain STALE;
    * - a QA report exists for the exact proposal digest with overall != FAIL.
    */
   async acceptContent(input: {
     projectId: string;
     proposalId: string;
     expectedProposalDigest: string;
-  }): Promise<{ id: string; version: number; digest: string; slug: string }> {
+  }): Promise<{ id: string; version: number; digest: string; slug: string; proposalId: string; proposalDigest: string; qaReportDigest: string }> {
     return await this.db.transaction(async (tx) => {
       const [proposal] = await tx
         .select()
@@ -923,6 +976,52 @@ export class WriterQaStore {
       if (!snapshot || snapshot.state !== "approved" || snapshot.snapshotDigest !== proposal.snapshotDigest) {
         throw staleError("Proposal is stale: the approved snapshot changed.");
       }
+      // Transitive upstream chain: the snapshot's bound brief must still be
+      // the exact approved brief, and ITS upstream lineage (accepted intake
+      // snapshot, approved writer policy, accepted gap snapshot) must still
+      // be current. An upstream mutation anywhere rejects with STALE.
+      const [brief] = await tx
+        .select()
+        .from(contentBriefs)
+        .where(and(eq(contentBriefs.id, snapshot.briefId), eq(contentBriefs.projectId, input.projectId)));
+      if (!brief || brief.state !== "approved" || brief.briefDigest !== snapshot.briefDigest) {
+        throw staleError("Proposal is stale: the bound approved brief changed.");
+      }
+      const briefData = parseContentBriefData(brief.data);
+      const [latestInput] = await tx
+        .select()
+        .from(projectInputSnapshots)
+        .where(eq(projectInputSnapshots.projectId, input.projectId))
+        .orderBy(desc(projectInputSnapshots.version))
+        .limit(1);
+      if (
+        !latestInput ||
+        latestInput.id !== briefData.lineage.acceptedInputSnapshotId ||
+        latestInput.digest !== briefData.lineage.acceptedInputDigest
+      ) {
+        throw staleError("Proposal is stale: the accepted ProjectInputSnapshot changed after the bound brief was created.");
+      }
+      const [policy] = await tx
+        .select()
+        .from(writerPolicies)
+        .where(and(eq(writerPolicies.id, briefData.lineage.writerPolicyId), eq(writerPolicies.projectId, input.projectId)));
+      if (!policy || policy.state !== "approved" || policy.policyDigest !== briefData.lineage.writerPolicyDigest) {
+        throw staleError("Proposal is stale: the approved Factory Writer Policy changed.");
+      }
+      if (briefData.lineage.gapSnapshotId != null) {
+        const [gap] = await tx
+          .select()
+          .from(acceptedContentGapSnapshots)
+          .where(
+            and(
+              eq(acceptedContentGapSnapshots.id, briefData.lineage.gapSnapshotId),
+              eq(acceptedContentGapSnapshots.projectId, input.projectId),
+            ),
+          );
+        if (!gap || gap.snapshotDigest !== briefData.lineage.gapSnapshotDigest) {
+          throw staleError("Proposal is stale: the accepted ContentGap snapshot changed.");
+        }
+      }
       // QA gate: a QA report for the exact proposal digest with overall != FAIL.
       const [qa] = await tx
         .select()
@@ -941,7 +1040,15 @@ export class WriterQaStore {
         .from(acceptedPageContent)
         .where(and(eq(acceptedPageContent.projectId, input.projectId), eq(acceptedPageContent.slug, proposal.slug)));
       if (existing && existing.proposalDigest === proposal.proposalDigest) {
-        return { id: existing.id, version: existing.version, digest: existing.contentDigest, slug: existing.slug };
+        return {
+          id: existing.id,
+          version: existing.version,
+          digest: existing.contentDigest,
+          slug: existing.slug,
+          proposalId: existing.proposalId,
+          proposalDigest: existing.proposalDigest,
+          qaReportDigest: existing.qaReportDigest,
+        };
       }
       if (existing) {
         throw new FactoryError(
@@ -962,23 +1069,56 @@ export class WriterQaStore {
         qaReportDigest: qa.reportDigest,
         data: proposal.data,
       });
-      await tx.insert(acceptedPageContent).values({
+      try {
+        await tx.insert(acceptedPageContent).values({
+          id,
+          projectId: input.projectId,
+          version: nextVersion,
+          slug: proposal.slug,
+          proposalId: proposal.id,
+          proposalVersion: proposal.version,
+          proposalDigest: proposal.proposalDigest,
+          qaReportDigest: qa.reportDigest,
+          data: proposal.data,
+          contentDigest,
+        });
+      } catch (error) {
+        // Two concurrent acceptances of different slugs can race the
+        // max-version allocation into UNIQUE(project_id, version). Fail
+        // closed with the typed acceptance conflict instead of a raw 500.
+        if ((error as { code?: string } | null)?.code === "23505") {
+          throw new FactoryError(
+            "content_accept_failed",
+            "Concurrent acceptance conflict on the project version sequence; retry the acceptance.",
+          );
+        }
+        throw error;
+      }
+      return {
         id,
-        projectId: input.projectId,
         version: nextVersion,
+        digest: contentDigest,
         slug: proposal.slug,
         proposalId: proposal.id,
-        proposalVersion: proposal.version,
         proposalDigest: proposal.proposalDigest,
         qaReportDigest: qa.reportDigest,
-        data: proposal.data,
-        contentDigest,
-      });
-      return { id, version: nextVersion, digest: contentDigest, slug: proposal.slug };
+      };
     });
   }
 
-  async latestAcceptedContent(projectId: string): Promise<{ id: string; version: number; slug: string; digest: string; data: unknown; acceptedAt: Date } | null> {
+  async latestAcceptedContent(
+    projectId: string,
+  ): Promise<{
+    id: string;
+    version: number;
+    slug: string;
+    digest: string;
+    proposalId: string;
+    proposalDigest: string;
+    qaReportDigest: string;
+    data: unknown;
+    acceptedAt: Date;
+  } | null> {
     const [row] = await this.db
       .select()
       .from(acceptedPageContent)
@@ -986,6 +1126,16 @@ export class WriterQaStore {
       .orderBy(desc(acceptedPageContent.version))
       .limit(1);
     if (!row) return null;
-    return { id: row.id, version: row.version, slug: row.slug, digest: row.contentDigest, data: row.data, acceptedAt: row.acceptedAt };
+    return {
+      id: row.id,
+      version: row.version,
+      slug: row.slug,
+      digest: row.contentDigest,
+      proposalId: row.proposalId,
+      proposalDigest: row.proposalDigest,
+      qaReportDigest: row.qaReportDigest,
+      data: row.data,
+      acceptedAt: row.acceptedAt,
+    };
   }
 }

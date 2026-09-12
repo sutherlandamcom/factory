@@ -4,12 +4,13 @@ import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import { createAssetStorage, sha256HexBytes } from "../src/assets/storage.js";
-import { AssetService, MAX_UPLOAD_BYTES } from "../src/assets/service.js";
-import { AssetStore } from "../src/assets/asset-store.js";
-import { FactoryError } from "../src/executor/errors.js";
-import { setupMigratedTestDatabase } from "./persistence/helpers.js";
-import type { FactoryDatabaseInstance } from "../src/persistence/db.js";import { parseAssetUploadInput } from "@factory/contracts";
+import { createAssetStorage, sha256HexBytes } from "../../src/assets/storage.js";
+import { AssetService, MAX_UPLOAD_BYTES } from "../../src/assets/service.js";
+import { AssetStore } from "../../src/assets/asset-store.js";
+import { FactoryError } from "../../src/executor/errors.js";
+import { setupMigratedTestDatabase } from "./helpers.js";
+import type { FactoryDatabaseInstance } from "../../src/persistence/db.js";
+import { parseAssetUploadInput } from "@factory/contracts";
 
 /**
  * Asset ingest pipeline acceptance (Macro Run 5):
@@ -47,7 +48,7 @@ async function makeService(): Promise<{ service: AssetService; storageRoot: stri
 }
 
 async function createProject(key: string): Promise<string> {
-  const store = new (await import("../src/persistence/store.js")).FactoryStore(dbInst.db);
+  const store = new (await import("../../src/persistence/store.js")).FactoryStore(dbInst.db);
   const project = await store.createProject({ key, name: `Project ${key}` });
   return project.id;
 }
@@ -421,7 +422,7 @@ test("ingest: SVG is rejected even with a matching .svg filename (unsupported fo
 test("ingest: writeFile helper is not used for storage paths (import audit)", async () => {
   // Static guard: the service must not construct paths from input.filename.
   const { readFileSync } = await import("node:fs");
-  const src = readFileSync(new URL("../src/assets/service.ts", import.meta.url), "utf8");
+  const src = readFileSync(new URL("../../src/assets/service.ts", import.meta.url), "utf8");
   assert.ok(!src.includes("path.join("), "service must never build filesystem paths itself");
   assert.ok(!src.includes("input.filename)"), "filename must not flow into path construction");
 });

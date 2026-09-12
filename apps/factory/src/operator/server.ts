@@ -17,6 +17,7 @@ import { FixtureSerpProvider } from "../search/serp-fixture.js";
 import { FixtureGroundedSearchProvider } from "../search/grounded-types.js";
 import { FixtureSearchAnalyst, OpenRouterSearchAnalyst } from "../search/analyst.js";
 import { invokeModel } from "../models/gateway.js";
+import { assertOverrideStartupPolicy, logOverrideDiagnostics } from "../models/override-guard.js";
 import { CompetitorStore } from "../competitors/competitor-store.js";
 import { CompetitorContentGapService, buildCompetitorAnalysts } from "../competitors/service.js";
 import { FixturePageProvider } from "../competitors/fixture-page-provider.js";
@@ -283,6 +284,9 @@ async function serveStatic(
 }
 
 export async function startOperatorServer(): Promise<http.Server> {
+  // Fail closed before any wiring when dev-time model overrides leak into a
+  // governed environment, or fixture mode is set on a gated live-proof path.
+  logOverrideDiagnostics(assertOverrideStartupPolicy(process.env));
   const config = resolveDatabaseConfig(process.env);
   const dbInstance = createDatabaseInstance(config);
   const store = new FactoryStore(dbInstance.db);

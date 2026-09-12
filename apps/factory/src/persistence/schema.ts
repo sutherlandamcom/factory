@@ -205,6 +205,12 @@ export const modelInvocations = pgTable(
     reasoningEffort: text("reasoning_effort"),
     escalation: boolean("escalation"),
     escalationReason: text("escalation_reason"),
+    // Dev-time model override provenance (FACTORY_MODEL_OVERRIDE__*):
+    // rows produced under an override record the actual model plus the
+    // champion it replaced, so override artifacts never masquerade as
+    // champion-produced. Nullable for all pre-override rows.
+    overrideApplied: boolean("override_applied"),
+    overriddenChampion: text("overridden_champion"),
     exitCode: integer("exit_code"),
     status: text("status").notNull(), // 'running' | 'succeeded' | 'failed' | 'interrupted'
     startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
@@ -869,3 +875,36 @@ export type InsertAcceptedContentGapSnapshot = typeof acceptedContentGapSnapshot
 
 export type CompetitorBudgetReservationRecord = typeof competitorBudgetReservations.$inferSelect;
 export type InsertCompetitorBudgetReservation = typeof competitorBudgetReservations.$inferInsert;
+
+/**
+ * Durable budget reservation ledger for paid WRITER model invocations.
+ * Reuses the exact lifecycle mechanism of competitor_budget_reservations
+ * (ACTIVE -> ACCOUNTED | RELEASED under an advisory xact lock) with its own
+ * daily limit (FACTORY_WRITER_DAILY_LIMIT_USD).
+ */
+export const writerBudgetReservations = pgTable(
+  "writer_budget_reservations",
+  {
+    id: text("id").primaryKey(),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    authorizedMicros: integer("authorized_micros").notNull(),
+    accountedMicros: integer("accounted_micros"),
+    state: text("state").notNull(),
+    invocationDigest: text("invocation_digest").notNull(),
+    lineage: jsonb("lineage"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    accountedAt: timestamp("accounted_at", { withTimezone: true }),
+  },
+  (table) => [
+    check(
+      "writer_budget_reservations_state_valid",
+      sql`${table.state} IN ('ACTIVE', 'ACCOUNTED', 'RELEASED')`,
+    ),
+    index("writer_budget_reservations_state_created_idx").on(table.state, table.createdAt),
+    index("writer_budget_reservations_created_idx").on(table.createdAt),
+  ],
+);
+
+export type WriterBudgetReservationRecord = typeof writerBudgetReservations.$inferSelect;
+export type InsertWriterBudgetReservation = typeof writerBudgetReservations.$inferInsert;

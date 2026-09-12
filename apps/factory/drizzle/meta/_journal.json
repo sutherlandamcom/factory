@@ -71,6 +71,13 @@
       "when": 1788840000000,
       "tag": "0009_budget_reservations",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788920000000,
+      "tag": "0010_writer_budget_and_override",
+      "breakpoints": true
     }
   ]
 }

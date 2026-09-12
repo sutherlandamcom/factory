@@ -357,6 +357,76 @@ function deepFreeze<T>(value: T): Readonly<T> {
   return Object.freeze(value);
 }
 
+/**
+ * GOVERNED DEV-TIME MODEL OVERRIDE — single resolution seam.
+ *
+ * An explicit environment variable `FACTORY_MODEL_OVERRIDE__<ROLE_ID>` (role id
+ * upper-snake-cased, e.g. `FACTORY_MODEL_OVERRIDE__CONTENT_WRITER`) replaces
+ * the policy champion for that role WITHOUT editing the frozen policy matrix.
+ * The override is DEV-TIME ONLY: operator server startup hard-fails when any
+ * override is set in CI/acceptance mode or any gated live-proof path (see
+ * apps/factory/src/operator/server.ts). Every invocation records the ACTUAL
+ * model plus an explicit override marker so an override-produced artifact can
+ * never masquerade as champion-produced.
+ *
+ * Default behavior with no override set is byte-identical to the frozen
+ * champion resolution.
+ */
+export const MODEL_OVERRIDE_ENV_PREFIX = "FACTORY_MODEL_OVERRIDE__";
+
+export interface ResolvedRoleModel {
+  /** The model id that will actually be used. */
+  model: string;
+  /** The frozen policy champion for the role. */
+  championModel: string;
+  /** True when an env override replaced the champion. */
+  overrideApplied: boolean;
+}
+
+/** Upper-snake-case form of a role id used in override env keys. */
+export function overrideEnvKeyForRole(roleId: FactoryRoleId): string {
+  return `${MODEL_OVERRIDE_ENV_PREFIX}${roleId.toUpperCase()}`;
+}
+
+/**
+ * Resolve the effective model for a policy role from an environment record.
+ * Unknown role ids fail closed. An override naming the champion itself is a
+ * no-op by value (overrideApplied stays false) — it changes nothing.
+ */
+export function resolveRoleModel(
+  roleId: FactoryRoleId,
+  env: Record<string, string | undefined> = process.env,
+): ResolvedRoleModel {
+  const policy = MODEL_ROLE_POLICY[roleId as ModelRoleId];
+  if (!policy) {
+    throw new Error(`unknown factory role id: ${roleId}`);
+  }
+  const championModel = policy.championModel;
+  const overrideRaw = env[overrideEnvKeyForRole(roleId)]?.trim();
+  if (!overrideRaw) {
+    return { model: championModel, championModel, overrideApplied: false };
+  }
+  if (overrideRaw === championModel) {
+    return { model: championModel, championModel, overrideApplied: false };
+  }
+  return { model: overrideRaw, championModel, overrideApplied: true };
+}
+
+/** All overrides currently active in the given environment (for startup diagnostics). */
+export function activeModelOverrides(
+  env: Record<string, string | undefined> = process.env,
+): Array<{ roleId: FactoryRoleId; model: string; championModel: string }> {
+  const active: Array<{ roleId: FactoryRoleId; model: string; championModel: string }> = [];
+  for (const roleId of FACTORY_ROLE_IDS) {
+    if (roleId === "code_worker") continue; // not a policy-resolved chat role
+    const resolved = resolveRoleModel(roleId, env);
+    if (resolved.overrideApplied) {
+      active.push({ roleId, model: resolved.model, championModel: resolved.championModel });
+    }
+  }
+  return active;
+}
+
 /** Fallback resolution: champion first, then explicit challengers in order. */
 export function resolveModelSequence(policy: ModelRolePolicy): readonly string[] {
   if (!policy.championModel || policy.challengerModels.includes(policy.championModel)) {

@@ -9,6 +9,7 @@ import {
   WRITER_MAX_OUTPUT_TOKENS,
 } from "./provider.js";
 import type { WriterBudgetStore } from "./budget.js";
+import { FixtureWriterProvider } from "./fixture-writer.js";
 import type { ContentBriefRecord, WriterPolicyRecord, WriterPromptSnapshotRecord, PageContentProposalRecord } from "../persistence/schema.js";
 
 /**
@@ -55,6 +56,12 @@ export class WriterService {
     private readonly snapshotStore: WriterSnapshotStore,
     private readonly budget: WriterBudgetStore,
     private readonly qaStore?: WriterQaStore,
+    /**
+     * Optional fixture provider override (trusted server config only —
+     * FACTORY_WRITER_MODE=fixture). When absent, generation uses the real
+     * OpenRouter-backed provider boundary.
+     */
+    private readonly fixtureProvider?: { generate(request: unknown): Promise<unknown> } | null,
   ) {}
 
   // ---- Writer Policy -----------------------------------------------------------
@@ -294,6 +301,33 @@ export class WriterService {
       throw new FactoryError("writer_artifact_stale", "Snapshot brief binding mismatch.");
     }
     const briefData = brief.data as { pageTarget: PageTarget };
+
+    // Fixture provider mode (trusted config): deterministic proposal, zero
+    // paid calls, zero budget movement. The provider field records "fixture"
+    // so fixture output can never masquerade as champion output.
+    if (this.fixtureProvider) {
+      const fixtureData = FixtureWriterProvider.deterministicProposal({
+        snapshotId: snapshot.id,
+        snapshotVersion: snapshot.version,
+        snapshotDigest: snapshot.snapshotDigest,
+        title: briefData.pageTarget.title,
+        slug: briefData.pageTarget.slug,
+      });
+      const fixtureSaved = await this.snapshotStore.saveProposal({
+        projectId: input.projectId,
+        snapshotId: snapshot.id,
+        snapshotVersion: snapshot.version,
+        snapshotDigest: snapshot.snapshotDigest,
+        slug: briefData.pageTarget.slug,
+        provider: "fixture",
+        model: "fixture-writer",
+        overrideApplied: false,
+        overriddenChampion: null,
+        data: fixtureData,
+      });
+      const fixtureRow = (await this.snapshotStore.proposalVersion(input.projectId, fixtureSaved.version))!;
+      return this.proposalView(fixtureRow, false, null);
+    }
 
     let result;
     try {

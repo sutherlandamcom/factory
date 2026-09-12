@@ -22,6 +22,10 @@ import { CompetitorStore } from "../competitors/competitor-store.js";
 import { CompetitorContentGapService, buildCompetitorAnalysts } from "../competitors/service.js";
 import { FixturePageProvider } from "../competitors/fixture-page-provider.js";
 import { DirectHttpPageProvider } from "../competitors/direct-http.js";
+import { WriterStore, WriterSnapshotStore, WriterQaStore } from "../writer/writer-store.js";
+import { WriterService } from "../writer/service.js";
+import { WriterBudgetStore } from "../writer/budget.js";
+import { FixtureWriterProvider } from "../writer/fixture-writer.js";
 import { FactoryError } from "../executor/errors.js";
 
 /**
@@ -315,7 +319,17 @@ export async function startOperatorServer(): Promise<http.Server> {
         : {}),
     },
   });
-  const deps: OperatorApiDeps = { store, intake, search, competitors };
+  const writerBudget = new WriterBudgetStore(dbInstance.db);
+  const writerStore = new WriterStore(dbInstance.db);
+  const writerSnapshotStore = new WriterSnapshotStore(dbInstance.db);
+  const writerQaStore = new WriterQaStore(dbInstance.db);
+  const writerMode = process.env.FACTORY_WRITER_MODE === "fixture" ? "fixture" : "production";
+  const writerProvider =
+    writerMode === "fixture"
+      ? new FixtureWriterProvider()
+      : undefined; // production uses the OpenRouter adapter inside the provider boundary
+  const writer = new WriterService(writerStore, writerSnapshotStore, writerBudget, writerQaStore, writerProvider);
+  const deps: OperatorApiDeps = { store, intake, search, competitors, writer };
   const server = createOperatorServer(deps);
   const host = process.env.FACTORY_OPERATOR_HOST ?? "127.0.0.1";
   const port = Number(process.env.FACTORY_OPERATOR_PORT ?? 3000);

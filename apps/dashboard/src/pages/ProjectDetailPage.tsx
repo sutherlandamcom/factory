@@ -8,12 +8,13 @@ import { usePolling } from "../hooks/usePolling";
 import { SearchPage } from "./SearchPage";
 import { CompetitorsPage } from "./CompetitorsPage";
 import { ContentGapsPage } from "./ContentGapsPage";
+import { ContentPage } from "./ContentPage";
 
 const TABS = [
   "Overview", "Business", "Offering", "Audience", "Markets", "Site Identity",
   "Conversion", "Evidence & Claims", "Search Seeds", "Competitor Seeds", "Brand",
   "References", "Assets", "Constraints", "Content Constitution", "Review",
-  "Versions", "Search", "Competitors Research", "Content Gaps",
+  "Versions", "Search", "Competitors Research", "Content Gaps", "Content",
 ] as const;
 
 type Tab = (typeof TABS)[number];
@@ -156,6 +157,7 @@ export function ProjectDetailPage({ projectId, onBack }: { projectId: string; on
         {tab === "Search" && <SearchPage projectId={projectId} />}
         {tab === "Competitors Research" && <CompetitorsPage projectId={projectId} />}
         {tab === "Content Gaps" && <ContentGapsPage projectId={projectId} />}
+        {tab === "Content" && <ContentPage projectId={projectId} />}
         {tab === "Content Constitution" && <Constitution form={form} setForm={setForm} />}
         {["Business","Offering","Audience","Markets","Site Identity","Conversion","Evidence & Claims","Search Seeds","Competitors","Brand","References","Assets","Constraints"].includes(tab) && (
           <GenericForm tab={tab} form={form} setForm={setForm} />

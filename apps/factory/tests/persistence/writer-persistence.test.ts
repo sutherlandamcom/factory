@@ -493,3 +493,48 @@ test("PG: restart safety — artifacts persist across store re-instantiation", a
     await dbInst.close();
   }
 });
+
+test("PG: policy derivation is idempotent — in-place draft, no version churn, approved short-circuit", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const store = new WriterStore(dbInst.db);
+  try {
+    const seed = await seedProjectWithAcceptedInputs(dbInst, "wp7");
+    const d1 = await store.deriveWriterPolicyDraft({ projectId: seed.projectId });
+    // Re-deriving with an existing draft updates it IN PLACE (same id+version).
+    const d2 = await store.deriveWriterPolicyDraft({ projectId: seed.projectId });
+    assert.equal(d2.id, d1.id, "no duplicate draft rows for the same derivation");
+    assert.equal(d2.version, 1, "no version churn on re-derive");
+    assert.equal(d2.policyDigest, d1.policyDigest);
+
+    await store.approveWriterPolicy({
+      projectId: seed.projectId,
+      policyId: d1.id,
+      expectedVersion: d1.version,
+      expectedDigest: d1.policyDigest,
+    });
+    // Re-deriving when the derivation is identical to the approved policy is a
+    // no-op returning the approved row — NOT a new draft version.
+    const d3 = await store.deriveWriterPolicyDraft({ projectId: seed.projectId });
+    assert.equal(d3.id, d1.id);
+    assert.equal(d3.state, "approved");
+    assert.equal(d3.version, 1);
+
+    // Input mutation -> a genuinely new derivation -> a new draft version.
+    const { ProjectIntakeStore } = await import("../../src/operator/intake-store.js");
+    const { buildIntakePayload } = await import("../fixtures/intake-payloads.js");
+    const intake = new ProjectIntakeStore(dbInst.db);
+    const pay2 = buildIntakePayload({ business: { name: "Summit Roofing", description: "Updated description." } });
+    await intake.saveDraft({ projectId: seed.projectId, baseRevision: 1, payload: pay2 });
+    await intake.accept({
+      projectId: seed.projectId,
+      expectedRevision: 2,
+      expectedDigest: deterministicDigest(pay2),
+    });
+    const d4 = await store.deriveWriterPolicyDraft({ projectId: seed.projectId });
+    assert.equal(d4.version, 2, "changed input derives a new draft version");
+    assert.equal(d4.state, "draft");
+    assert.notEqual(d4.policyDigest, d1.policyDigest);
+  } finally {
+    await dbInst.close();
+  }
+});

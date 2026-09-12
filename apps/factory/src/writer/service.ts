@@ -1,4 +1,5 @@
 import type { PageTarget } from "@factory/contracts";
+import { parseContentBriefData } from "@factory/contracts";
 import { FactoryError } from "../executor/errors.js";
 import { WriterStore, WriterSnapshotStore, WriterQaStore } from "./writer-store.js";
 import { runContentQa } from "./qa.js";
@@ -471,14 +472,51 @@ export class WriterService {
     if (!snapshot) throw new FactoryError("writer_artifact_stale", "Bound snapshot missing.");
     const brief = await this.store.briefVersion(input.projectId, snapshot.briefVersion);
     if (!brief) throw new FactoryError("writer_artifact_stale", "Bound brief missing.");
-    const briefData = brief.data as Parameters<typeof runContentQa>[1];
-    const policy = await this.store.latestWriterPolicy(input.projectId);
-    const policyRules =
-      (policy?.data as { rules?: Record<string, string[] | string> })?.rules ?? {};
+    const briefData = parseContentBriefData(brief.data);
+    // QA judges against the policy BOUND to the brief's exact lineage — never
+    // against whatever draft happens to be latest. Drift or lost approval ->
+    // stale (fail closed). (Independent QA finding, post-merge hardening.)
+    const policy = await this.store.writerPolicyVersion(input.projectId, briefData.lineage.writerPolicyVersion);
+    if (
+      !policy ||
+      policy.id !== briefData.lineage.writerPolicyId ||
+      policy.state !== "approved" ||
+      policy.policyDigest !== briefData.lineage.writerPolicyDigest
+    ) {
+      throw new FactoryError(
+        "writer_artifact_stale",
+        "The Factory Writer Policy bound to this brief changed or is no longer approved.",
+      );
+    }
+    const policyRules = (policy.data as { rules: Record<string, string[] | string> }).rules;
+    // Accepted-intake identity text is legitimate numeric evidence for the
+    // invented-numbers check (it is never invented by the writer); resolved
+    // through the brief's exact bound input snapshot (digest-verified).
+    const intake = await this.store.acceptedInputSnapshotByLineage(
+      input.projectId,
+      briefData.lineage.acceptedInputSnapshotId,
+      briefData.lineage.acceptedInputSnapshotVersion,
+    );
+    if (!intake || intake.digest !== briefData.lineage.acceptedInputDigest) {
+      throw new FactoryError("writer_artifact_stale", "The accepted ProjectInputSnapshot bound to this brief changed.");
+    }
+    const intakeData = intake.data as {
+      evidence?: { evidenceNotes?: string[] };
+      conversion?: { ctaDestination?: string };
+      brand?: { facts?: string[] };
+      business?: { description?: string };
+    };
+    const evidenceExtras = [
+      ...(intakeData.evidence?.evidenceNotes ?? []),
+      ...(intakeData.conversion?.ctaDestination ? [intakeData.conversion.ctaDestination] : []),
+      ...(intakeData.brand?.facts ?? []),
+      ...(intakeData.business?.description ? [intakeData.business.description] : []),
+    ];
     const report = runContentQa(
       proposal.data as Parameters<typeof runContentQa>[0],
       briefData,
       policyRules,
+      evidenceExtras,
     );
     // Insert-only persistence: a re-run for the same proposal digest returns
     // the FIRST stored report unchanged (idempotent-identical QA history).

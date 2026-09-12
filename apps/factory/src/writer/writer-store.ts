@@ -75,11 +75,31 @@ export class WriterStore {
       rules: (snapshot.data as { contentConstitution: Record<string, unknown> }).contentConstitution,
     });
     const policyDigest = deterministicDigest(data);
-    const nextVersion =
-      ((await this.db
-        .select({ maxVersion: sql<number>`coalesce(max(${writerPolicies.version}), 0)` })
-        .from(writerPolicies)
-        .where(eq(writerPolicies.projectId, input.projectId)))[0]?.maxVersion ?? 0) + 1;
+    // Idempotent derivation (mirrors the brief/snapshot draft pattern):
+    // - re-deriving with an existing DRAFT updates that draft in place (same
+    //   version, re-digest) instead of churning unbounded draft versions;
+    // - re-deriving when the derivation is IDENTICAL to the latest approved
+    //   policy returns it unchanged;
+    // - otherwise (input changed vs the approved policy) a new draft version.
+    const latest = await this.latestWriterPolicy(input.projectId);
+    if (latest && latest.state === "draft") {
+      const [row] = await this.db
+        .update(writerPolicies)
+        .set({
+          acceptedInputSnapshotId: data.acceptedInputSnapshotId,
+          acceptedInputVersion: data.acceptedInputSnapshotVersion,
+          acceptedInputDigest: data.acceptedInputDigest,
+          data,
+          policyDigest,
+        })
+        .where(and(eq(writerPolicies.id, latest.id), eq(writerPolicies.state, "draft")))
+        .returning();
+      return row!;
+    }
+    if (latest && latest.state === "approved" && latest.policyDigest === policyDigest) {
+      return latest;
+    }
+    const nextVersion = (latest?.version ?? 0) + 1;
     const id = `wpol-${randomUUID()}`;
     const [row] = await this.db
       .insert(writerPolicies)
@@ -540,6 +560,26 @@ export class WriterStore {
         "No accepted ProjectInputSnapshot exists for this project; accept project inputs first.",
       );
     }
+    return { id: row.id, version: row.version, digest: row.digest, data: row.payload };
+  }
+
+  /** Fetch the EXACT accepted input snapshot a brief lineage binds to. */
+  async acceptedInputSnapshotByLineage(
+    projectId: string,
+    snapshotId: string,
+    version: number,
+  ): Promise<{ id: string; version: number; digest: string; data: unknown } | null> {
+    const [row] = await this.db
+      .select()
+      .from(projectInputSnapshots)
+      .where(
+        and(
+          eq(projectInputSnapshots.projectId, projectId),
+          eq(projectInputSnapshots.id, snapshotId),
+          eq(projectInputSnapshots.version, version),
+        ),
+      );
+    if (!row) return null;
     return { id: row.id, version: row.version, digest: row.digest, data: row.payload };
   }
 

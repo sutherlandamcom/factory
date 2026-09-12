@@ -901,6 +901,10 @@ export const writerBudgetReservations = pgTable(
       "writer_budget_reservations_state_valid",
       sql`${table.state} IN ('ACTIVE', 'ACCOUNTED', 'RELEASED')`,
     ),
+    check(
+      "writer_budget_reservations_accounted_valid",
+      sql`(${table.state} = 'ACTIVE' AND ${table.accountedMicros} IS NULL AND ${table.accountedAt} IS NULL) OR (${table.state} = 'ACCOUNTED' AND ${table.accountedMicros} IS NOT NULL AND ${table.accountedAt} IS NOT NULL) OR (${table.state} = 'RELEASED' AND ${table.accountedMicros} IS NULL AND ${table.accountedAt} IS NOT NULL)`,
+    ),
     index("writer_budget_reservations_state_created_idx").on(table.state, table.createdAt),
     index("writer_budget_reservations_created_idx").on(table.createdAt),
   ],
@@ -938,6 +942,10 @@ export const writerPolicies = pgTable(
   (table) => [
     check("writer_policies_state_valid", sql`${table.state} IN ('draft', 'approved')`),
     unique("writer_policies_project_version_unique").on(table.projectId, table.version),
+    check(
+      "writer_policies_approved_state_valid",
+      sql`(${table.state} = 'draft' AND ${table.approvedAt} IS NULL) OR (${table.state} = 'approved' AND ${table.approvedAt} IS NOT NULL)`,
+    ),
     index("writer_policies_project_idx").on(table.projectId, table.version),
   ],
 );
@@ -978,6 +986,18 @@ export const contentBriefs = pgTable(
   (table) => [
     check("content_briefs_state_valid", sql`${table.state} IN ('draft', 'approved')`),
     unique("content_briefs_project_version_unique").on(table.projectId, table.version),
+    check(
+      "content_briefs_approved_state_valid",
+      sql`(${table.state} = 'draft' AND ${table.approvedAt} IS NULL) OR (${table.state} = 'approved' AND ${table.approvedAt} IS NOT NULL)`,
+    ),
+    check(
+      "content_briefs_gap_lineage_valid",
+      sql`(${table.gapSnapshotId} IS NOT NULL AND ${table.gapSnapshotVersion} IS NOT NULL AND ${table.gapSnapshotDigest} IS NOT NULL) OR (${table.noGapLineageAcknowledged} = true)`,
+    ),
+    check(
+      "content_briefs_no_gap_flag_consistent",
+      sql`(${table.noGapLineageAcknowledged} = false) OR (${table.gapSnapshotId} IS NULL)`,
+    ),
     index("content_briefs_project_slug_idx").on(table.projectId, table.slug),
   ],
 );
@@ -1007,6 +1027,10 @@ export const writerPromptSnapshots = pgTable(
   (table) => [
     check("writer_prompt_snapshots_state_valid", sql`${table.state} IN ('draft', 'approved')`),
     unique("writer_prompt_snapshots_project_version_unique").on(table.projectId, table.version),
+    check(
+      "writer_prompt_snapshots_approved_state_valid",
+      sql`(${table.state} = 'draft' AND ${table.approvedAt} IS NULL) OR (${table.state} = 'approved' AND ${table.approvedAt} IS NOT NULL)`,
+    ),
     index("writer_prompt_snapshots_project_idx").on(table.projectId, table.version),
   ],
 );

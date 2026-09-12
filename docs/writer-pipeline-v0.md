@@ -55,6 +55,20 @@ runs. Models propose; Factory validates and governs.
    digest is idempotent-identical (the first stored report is returned, never
    replaced), so an accepted row's `qa_report_digest` reference can never be
    orphaned by a later re-run.
+   - `runQa` evaluates rules from the EXACT Writer Policy bound in the
+     brief lineage (id + version + digest), never the latest policy version;
+     a policy that changed or lost approval since binding fails closed with
+     `writer_artifact_stale`.
+   - `factual.evidence_trace` emits REVIEW (not PASS) when operator facts
+     exist in the accepted intake but NONE appears verbatim in the proposal —
+     "0/N facts traced" is a human-review signal, never a silent pass.
+   - `factual.claim_support` checks proposal sentences against an evidence
+     universe extended beyond the gap-snapshot corpus: accepted-intake
+     evidence notes, CTA destination, brand facts, business description, and
+     the brief's page-target / search-semantics fields.
+   - On a brief with operator-acknowledged no-gap lineage, the search family
+     returns a single explicit `search.lineage_waived` REVIEW check — waived
+     lineage is surfaced for human review, never reported as PASS.
 7. **AcceptedPageContent** — human acceptance gate. Fails closed without a QA
    report for the exact proposal digest, on QA overall FAIL, on digest
    mismatch, on stale snapshot binding, OR on any transitive upstream

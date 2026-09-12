@@ -82,3 +82,62 @@
 **GO** for merging PR #25 at exact SHA `6dddbf8c3afa2589f7a5cba488055c6be23cfaf0`.
 
 Rationale: every mandatory acceptance criterion I could execute was executed and passed at this SHA (typechecks, 4 test lanes, real-browser E2E, real-PostgreSQL persistence, independent adversarial probes, test-suite integrity, exact-head CI). No P0/P1 finding exists. No existing suite was weakened. No paid provider call was made (no credential present; fixture modes; zero ledger movement). External-catalog pricing verification and live writer acceptance (Phase 9) remain explicitly open and are correctly disclosed as such by the builder; they gate live production writer usage, not this merge. The six P2 findings should be carried into the next appropriate workstream (P2-2 doc correction is the most user-visible) and must not be opportunistically bundled into this PR per AGENTS.md merge governance.
+
+---
+
+# Remediation re-verification at SHA `23919ed9bae6e7e5bda27bf786c0b1d8ff42a885`
+
+- Date: 2026-09-12
+- Verifier: the SAME independent QA engineer who produced this verdict (self-remediation of my own P2 findings only; no scope expansion).
+- Remediation candidate: `23919ed9bae6e7e5bda27bf786c0b1d8ff42a885`
+  (one coherent commit on `feat/content-writer-v0` on top of the audit commit
+  `98fbf89`; the QA lanes and probes below were executed against exactly this
+  content; working tree clean; NOT pushed, NOT merged).
+- Remediation diff vs candidate `6dddbf8`: 13 files, +616/−85. No P2 finding
+  was fixed by weakening anything; see integrity note below.
+
+## R1. P2 → fix → proving test → re-verified evidence
+
+| Finding | Fix (exact change) | Proving test | Re-verified evidence |
+| --- | --- | --- | --- |
+| **P2-1** `compileSnapshot` ignored `briefId` + unguarded `!` | `service.ts` resolves the param via new `WriterStore.briefById(projectId, briefId)`; requires it to be the CURRENT brief (`writer_artifact_stale` if superseded, `writer_artifact_not_found` if unknown); `!` removed; default no-param path byte-identical | `writer-snapshot-proposal.test.ts` "compileSnapshot honors an explicit briefId: must resolve to the CURRENT approved brief" (current-brief success binds that brief; older-brief id → stale; unknown id → not-found; no-param draft → `writer_policy_not_approved`) | Persistence lane PASS (86/86) |
+| **P2-2** `noGapLineageAcknowledged` escape hatch unreachable | Draft-time implementation: `saveBriefDraft` accepts the flag; without a gap snapshot the default path still fails `content_gap_lineage_missing`; with the flag it drafts with NO gap lineage — flag persisted on the brief row, digest-bound (inside `contentBriefDataSchema` payload), carried through approval; flag while a gap exists fails `writer_approval_failed`; approval-time validation kept unchanged; API schema + Dashboard draft form wired (checkbox moved into the draft form, also sent at approval); docs §3 updated | Rewritten `writer-persistence.test.ts` "noGapLineageAcknowledged — default REQUIRED fails closed; explicit acknowledgement drafts+approves, persisted and digest-bound": proves BOTH paths — default-required fails closed (assertion preserved from the original test), explicit flag drafts → column=true, payload flag=true, `deterministicDigest(data)===digest`, approval WITHOUT flag fails, approval WITH flag approves, view shows flag, snapshot compiles from the no-lineage brief, and flag-with-gap-exists fails | Persistence lane PASS; operator lane PASS (draft-time flag passes strict validation and reaches the service); docs §3 updated in the same commit |
+| **P2-3** `budget_invariant_violation` unmapped → sanitized 500 | `operator-errors.ts`: code added to `OPERATOR_ERROR_CODES` + mapped `budget_invariant_violation: 409` (and `writer_qa_conflict: 409` added for P2-4); `WRITER_ERROR_CODES` kept coherent | `writer-api.test.ts` "budget invariant violation maps to 409; QA conflict maps to 409; brief-draft acknowledgement passes through" | Operator lane PASS (48/48): invariant trip → HTTP 409 with the typed code, no longer `internal_error` |
+| **P2-4** `saveQaReport` upsert orphaned accepted `qa_report_digest` | Insert-only: same proposal digest → idempotent-identical (FIRST stored report returned, `reused`), never replaced; different digest on an existing proposalId → typed `writer_qa_conflict` (409); `service.runQa` now always surfaces the PERSISTED report's verdicts; docs stage 6 updated | `writer-qa.test.ts` "report is insert-only — same-digest re-run idempotent; accepted view digests populated and never orphaned": double-run returns same reportId/digest with exactly 1 row; after changing the writer policy (fresh recompute would FAIL on forbidden "roof") the stored PASS report/digest/verdicts are unchanged and the accepted row's `qa_report_digest` still resolves | Persistence lane PASS |
+| **P2-5** accepted-content views returned `""` digests | `acceptContent` returns the stored `proposalId`/`proposalDigest`/`qaReportDigest` (insert + idempotent paths); `latestAcceptedContent` selects them; service views + Dashboard client type + Accepted section now show proposal and QA binding digests | Same `writer-qa.test.ts` test as P2-4: accept response and `acceptedContentWorkspace` both carry the three digests matching the stored proposal and report | Persistence lane PASS; E2E journey re-ran green with the new Dashboard display |
+| **P2-6a** concurrent acceptance could 500 on version-collision | `acceptedPageContent` insert wrapped: PG `23505` → typed `content_accept_failed` (409) "Concurrent acceptance conflict… retry" | `writer-qa.test.ts` "concurrent acceptance of two slugs never 500s — typed content_accept_failed, contiguous versions": two slugs' proposals QA'd then accepted concurrently; every rejection (if any) is the typed code; accepted rows contiguous from v1, no duplicates, one per slug | Persistence lane PASS |
+| **P2-6b** acceptance verified only the snapshot binding | `acceptContent` (in-tx) now verifies the TRANSITIVE chain: bound brief still approved at the exact digest; latest accepted ProjectInputSnapshot id+digest unchanged; approved Writer Policy digest unchanged; accepted gap snapshot digest unchanged (when present) → else `writer_artifact_stale`; docs stage 7 updated | `writer-qa.test.ts` "acceptance verifies the TRANSITIVE upstream chain (policy, gap, intake) and rejects stale with writer_artifact_stale": policy digest mutated → stale; gap digest mutated → stale; chain restored → acceptance succeeds (default path unchanged); new accepted intake v2 → even idempotent same-digest re-acceptance rejected stale | Persistence lane PASS |
+| **P2-6c** E2E test name overstated the assertion | Renamed to "…upstream edit marks artifacts STALE, v1 unchanged" (+ header comment) | — | E2E suite re-ran green with the corrected name |
+
+## R2. Full QA re-execution at `23919ed` (exact counts)
+
+| # | Check | Command | Observed |
+| --- | --- | --- | --- |
+| 1 | Contracts typecheck | `npx tsc --noEmit` (packages/contracts) | PASS (exit 0) |
+| 2 | Factory typecheck | `npx tsc --noEmit` (apps/factory) | PASS (exit 0) |
+| 3 | Dashboard typecheck | `npx tsc --noEmit` (apps/dashboard) | PASS (exit 0) |
+| 4 | Factory unit lane | `pnpm --filter @factory/factory run test` | **859 pass / 0 fail / 0 skipped** |
+| 5 | Persistence lane (real PG 16, `factory_test`:54329, sequential) | `FACTORY_TEST_DATABASE_URL=… pnpm --filter @factory/factory run test:persistence` | **86 pass / 0 fail / 0 skipped** (was 82; +4 new proving tests) |
+| 6 | Operator lane | `pnpm --filter @factory/factory run test:operator` | **48 pass / 0 fail** (was 47; +1) |
+| 7 | Dashboard unit | `pnpm --filter @factory/dashboard run test` | **17 pass / 0 fail** |
+| 8 | Real-browser E2E (all journeys) | `FACTORY_TEST_DATABASE_URL=… pnpm --filter @factory/dashboard run test:e2e` | **6 passed**, incl. the renamed Content Writer journey |
+
+## R3. Adversarial probes re-run at `23919ed` (independent QA scripts, uncommitted)
+
+| Probe | Observed at the new SHA |
+| --- | --- |
+| **A3** Budget double-spend (two independent PG pools, 2 USD limit vs 2×1.5 USD) | exactly **1 fulfilled / 1 `writer_budget_blocked`**; third-pool ledger read shows exactly one ACTIVE 1.5 USD row — **PASS** |
+| **A1** Cross-project isolation (full project-A pipeline over real HTTP in fixture modes; project B attacks with A's policy/brief/snapshot/proposal ids) | policy-approve / brief-approve / snapshot-approve / generate / accept → all **404 `writer_artifact_not_found`**; B's workspace JSON contains **no** A artifact id/digest; legitimate A acceptance still succeeds afterwards — **PASS** |
+| **A2** Forged well-formed 64-hex digests (wrong-digest re-approval of approved policy/brief/snapshot + wrong-digest acceptance) | all **409**: `writer_approval_failed` ×3, `content_accept_failed`; legitimate exact-digest acceptance succeeds — **PASS** |
+| **A4** Override guard (real spawned `startOperatorServer` processes) | override+`FACTORY_ACCEPTANCE_MODE=true` → exit 1, no listen, "DEV MODEL OVERRIDE FORBIDDEN"; override+`CI=true` → same; `FACTORY_LIVE_PROOF`+fixture writer mode → exit 1, "LIVE PROOF REQUIRES PRODUCTION PROVIDER MODE"; controls: dev override **starts** with "DEV MODEL OVERRIDE ACTIVE" banner; acceptance without override starts — **PASS** |
+| **A5** Fixture attribution (fixture-mode `POST /writer/generate` over real HTTP) | `provider="fixture"`, `model="fixture-writer"`, `overrideApplied=false`, `overriddenChampion=null`; never the champion; `writer_budget_reservations` delta during the whole fixture pipeline = **0** rows (and zero `openrouter` rows; no credential in env) — **PASS** |
+
+## R4. Test-suite integrity of the remediation diff
+
+`git diff 6dddbf8..23919ed -- apps/factory/tests apps/dashboard/e2e packages/contracts`: zero deleted files, zero `.skip/.only/xit`. The single replaced test is the P2-2 persistence test whose title asserted the OLD ("approval-time only") semantics that my own finding P2-2 prescribed correcting; its default-REQUIRED fail-closed assertion is preserved verbatim inside the rewritten test, which now ADDS the explicit-acknowledgement path (strictly stronger coverage). All other test changes are additive new proving tests. The two new error codes are additive contract entries (no exhaustive-union test existed that they could break; the existing `competitor-contract.test.ts` subset direction still holds).
+
+## R5. Updated final verdict
+
+**GO** at remediation SHA `23919ed9bae6e7e5bda27bf786c0b1d8ff42a885` (and therefore for the PR containing it).
+
+All six P2 findings from my review at `6dddbf8` are implemented, each with a proving test, and all remain verified at the new SHA. No P0/P1 finding exists. No required suite was weakened. No paid provider call was made (no credential present; fixture modes everywhere; zero writer-ledger movement). The GO at `6dddbf8` is superseded by this GO at `23919ed`, which carries the P2 remediations. External-catalog pricing verification and live writer acceptance (Phase 9) remain open items gating live production writer usage, unchanged from the original verdict.

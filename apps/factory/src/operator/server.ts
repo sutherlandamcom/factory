@@ -7,6 +7,8 @@ import { OPERATOR_ERROR_STATUS, OPERATOR_INTERNAL_ERROR_MESSAGE } from "@factory
 import { createOperatorApi, type OperatorApiDeps } from "./api.js";
 import { ProjectIntakeStore } from "./intake-store.js";
 import { FactoryStore } from "../persistence/store.js";
+import { AssetStore } from "../assets/asset-store.js";
+import { AssetService } from "../assets/service.js";
 import { resolveDatabaseConfig } from "../persistence/config.js";
 import { createDatabaseInstance } from "../persistence/db.js";
 import { SearchStore } from "../search/search-store.js";
@@ -126,7 +128,7 @@ function errorResponse(res: http.ServerResponse, status: number, code: string, m
   sendJson(res, status, { error: { code, message } });
 }
 
-function readBody(req: http.IncomingMessage): Promise<string> {
+function readBody(req: http.IncomingMessage, maxBytes: number = MAX_BODY_BYTES): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -134,7 +136,7 @@ function readBody(req: http.IncomingMessage): Promise<string> {
     req.on("data", (chunk: Buffer) => {
       if (rejected) return;
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > maxBytes) {
         rejected = true;
         chunks.length = 0;
         reject(new Error("payload_too_large"));
@@ -176,6 +178,15 @@ function resolveDashboardDist(): string {
 }
 
 const MAX_BODY_BYTES = 256 * 1024;
+
+/**
+ * Raised cap for the dedicated asset upload route only. Base64 inflates
+ * binary payloads by ~4/3; 34 MiB of JSON carries a 24 MiB image (the
+ * service-level MAX_UPLOAD_BYTES ceiling). The general JSON cap is
+ * unchanged; the same same-origin/host protections apply to both.
+ */
+const MAX_UPLOAD_BODY_BYTES = 34 * 1024 * 1024;
+const ASSET_UPLOAD_PATTERN = /^\/api\/projects\/[^/]+\/assets\/uploads$/;
 
 export function createOperatorServer(
   deps: OperatorApiDeps,
@@ -221,8 +232,9 @@ export function createOperatorServer(
           if (!contentType.includes("application/json")) {
             return errorResponse(res, 415, "unsupported_media_type", "Content-Type must be application/json.");
           }
+          const cap = ASSET_UPLOAD_PATTERN.test(pathname) ? MAX_UPLOAD_BODY_BYTES : MAX_BODY_BYTES;
           try {
-            body = await readBody(req);
+            body = await readBody(req, cap);
           } catch (err) {
             if (err instanceof Error && err.message === "payload_too_large") {
               return errorResponse(res, 413, "payload_too_large", "Request body exceeds the size limit.");
@@ -329,7 +341,9 @@ export async function startOperatorServer(): Promise<http.Server> {
       ? new FixtureWriterProvider()
       : undefined; // production uses the OpenRouter adapter inside the provider boundary
   const writer = new WriterService(writerStore, writerSnapshotStore, writerBudget, writerQaStore, writerProvider);
-  const deps: OperatorApiDeps = { store, intake, search, competitors, writer };
+  const assetStore = new AssetStore(dbInstance.db);
+  const assets = new AssetService({ store: assetStore });
+  const deps: OperatorApiDeps = { store, intake, search, competitors, writer, assets };
   const server = createOperatorServer(deps);
   const host = process.env.FACTORY_OPERATOR_HOST ?? "127.0.0.1";
   const port = Number(process.env.FACTORY_OPERATOR_PORT ?? 3000);

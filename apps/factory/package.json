@@ -17,12 +17,14 @@
   "dependencies": {
     "@factory/contracts": "workspace:*",
     "drizzle-orm": "0.45.2",
+    "file-type": "21.0.0",
     "ipaddr.js": "2.5.0",
     "node-html-parser": "^9.0.3",
     "pg": "8.23.0",
     "retext": "9.0.0",
     "retext-english": "5.0.0",
-    "retext-readability": "8.0.0"
+    "retext-readability": "8.0.0",
+    "sharp": "0.35.4"
   },
   "devDependencies": {
     "@playwright/test": "~1.61.1",

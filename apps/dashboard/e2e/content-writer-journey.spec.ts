@@ -212,7 +212,7 @@ test.describe("Content Writer journey", () => {
     await expect(page.getByText(/Brief draft v1 saved/)).toBeVisible({ timeout: 15_000 });
     // Waiver must be visible and explicit in the UI — never silent.
     await expect(page.getByText("NO GAP LINEAGE — EXPLICIT OPERATOR ACKNOWLEDGEMENT")).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText("no gap lineage")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Lineage: .*no gap lineage/)).toBeVisible({ timeout: 10_000 });
     await page.getByRole("button", { name: "Approve exact digest" }).click();
     await expect(page.getByText("Brief v1 approved.")).toBeVisible({ timeout: 15_000 });
 

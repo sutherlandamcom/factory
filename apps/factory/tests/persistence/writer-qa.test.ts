@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { setupMigratedTestDatabase } from "./persistence/helpers.js";
-import { WriterStore, WriterSnapshotStore, WriterQaStore } from "../src/writer/writer-store.js";
-import { WriterService } from "../src/writer/service.js";
-import { WriterBudgetStore } from "../src/writer/budget.js";
-import { runContentQa } from "../src/writer/qa.js";
-import { samplePageTarget, seedProjectWithAcceptedInputs } from "./fixtures/writer-seeds.js";
-import { FactoryError } from "../src/executor/errors.js";
+import { setupMigratedTestDatabase } from "./helpers.js";
+import { WriterStore, WriterSnapshotStore, WriterQaStore } from "../../src/writer/writer-store.js";
+import { WriterService } from "../../src/writer/service.js";
+import { WriterBudgetStore } from "../../src/writer/budget.js";
+import { runContentQa } from "../../src/writer/qa.js";
+import { samplePageTarget, seedProjectWithAcceptedInputs } from "../fixtures/writer-seeds.js";
+import { FactoryError } from "../../src/executor/errors.js";
 import type { PageContentProposalData } from "@factory/contracts";
 
 function isCode(err: unknown, code: string): boolean {

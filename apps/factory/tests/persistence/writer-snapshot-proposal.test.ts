@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { setupMigratedTestDatabase } from "./persistence/helpers.js";
-import { WriterStore, WriterSnapshotStore } from "../src/writer/writer-store.js";
-import { WriterService, compileWriterPromptPacket } from "../src/writer/service.js";
-import { WriterBudgetStore } from "../src/writer/budget.js";
-import { samplePageTarget, seedProjectWithAcceptedInputs } from "./fixtures/writer-seeds.js";
-import { FactoryError } from "../src/executor/errors.js";
+import { setupMigratedTestDatabase } from "./helpers.js";
+import { WriterStore, WriterSnapshotStore } from "../../src/writer/writer-store.js";
+import { WriterService, compileWriterPromptPacket } from "../../src/writer/service.js";
+import { WriterBudgetStore } from "../../src/writer/budget.js";
+import { samplePageTarget, seedProjectWithAcceptedInputs } from "../fixtures/writer-seeds.js";
+import { FactoryError } from "../../src/executor/errors.js";
 
 function isCode(err: unknown, code: string): boolean {
   return err instanceof FactoryError && err.code === code;

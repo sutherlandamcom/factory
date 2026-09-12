@@ -760,3 +760,152 @@ export const writerApi = {
       body: JSON.stringify(input),
     }),
 };
+
+// ---------------------------------------------------------------------------
+// Assets (Macro Run 5)
+// ---------------------------------------------------------------------------
+
+export interface AssetVersionView {
+  id: string;
+  assetId: string;
+  version: number;
+  binaryDigest: string;
+  mediaType: string;
+  byteSize: number;
+  width: number | null;
+  height: number | null;
+  originalFilename: string;
+  provenance: {
+    category: string;
+    originalFilename: string;
+    uploadedAt: string;
+    extracted?: { format?: string; space?: string; exif?: Record<string, unknown> };
+  };
+  rightsStatus: string;
+  rightsNote: string | null;
+  altIntent: string | null;
+  approvalState: string;
+  approvedAt: string | null;
+  rejectedAt: string | null;
+  governanceDigest: string | null;
+  createdAt: string;
+}
+
+export interface AssetView {
+  id: string;
+  kind: string;
+  title: string;
+  createdAt: string;
+  versions: AssetVersionView[];
+  latestVersion: AssetVersionView | null;
+}
+
+export interface AssetAssignmentView {
+  id: string;
+  assetId: string;
+  assetTitle: string;
+  versionId: string;
+  versionNumber: number;
+  versionDigest: string;
+  binaryDigest: string;
+  pageSlug: string;
+  role: string;
+  assignedAt: string;
+  replacementAvailable: boolean;
+  latestApprovedVersionId: string | null;
+  latestApprovedVersionNumber: number | null;
+}
+
+export interface AssetsWorkspace {
+  schemaVersion: string;
+  imageryStrategy: string;
+  assets: AssetView[];
+  assignments: AssetAssignmentView[];
+}
+
+export interface AssetUploadResponse {
+  assetId: string;
+  versionId: string;
+  version: number;
+  binaryDigest: string;
+  mediaType: string;
+  byteSize: number;
+  width: number | null;
+  height: number | null;
+  derivatives: Array<{ id: string; kind: string; width: number; height: number }>;
+}
+
+export const assetsApi = {
+  workspace: (projectId: string) =>
+    request<AssetsWorkspace>(`/api/projects/${encodeURIComponent(projectId)}/assets/workspace`),
+
+  upload: (
+    projectId: string,
+    input: {
+      dataBase64: string;
+      filename: string;
+      kind: string;
+      title: string;
+      rightsStatus: string;
+      rightsNote?: string;
+      altIntent?: string;
+    },
+  ) =>
+    request<AssetUploadResponse>(`/api/projects/${encodeURIComponent(projectId)}/assets/uploads`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  updateMetadata: (
+    projectId: string,
+    versionId: string,
+    input: { rightsStatus: string; rightsNote?: string; altIntent?: string; expectedBinaryDigest: string },
+  ) =>
+    request<{ id: string; rightsStatus: string; altIntent: string | null }>(
+      `/api/projects/${encodeURIComponent(projectId)}/assets/versions/${encodeURIComponent(versionId)}/metadata`,
+      { method: "PUT", body: JSON.stringify(input) },
+    ),
+
+  approve: (projectId: string, versionId: string, expectedBinaryDigest: string) =>
+    request<{ id: string; approvalState: string; binaryDigest: string; governanceDigest: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/assets/versions/${encodeURIComponent(versionId)}/approve`,
+      { method: "POST", body: JSON.stringify({ expectedBinaryDigest }) },
+    ),
+
+  reject: (projectId: string, versionId: string, expectedBinaryDigest: string) =>
+    request<{ id: string; approvalState: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/assets/versions/${encodeURIComponent(versionId)}/reject`,
+      { method: "POST", body: JSON.stringify({ expectedBinaryDigest }) },
+    ),
+
+  assign: (
+    projectId: string,
+    input: { assetId: string; versionId: string; pageSlug: string; role: string; expectedBinaryDigest: string },
+  ) =>
+    request<{ id: string; versionId: string; pageSlug: string; role: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/assets/assignments`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+
+  replace: (
+    projectId: string,
+    assignmentId: string,
+    input: { toVersionId: string; expectedBinaryDigest: string },
+  ) =>
+    request<{ id: string; versionId: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/assets/assignments/${encodeURIComponent(assignmentId)}/replace`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+
+  setImageryStrategy: (projectId: string, imageryStrategy: string) =>
+    request<{ imageryStrategy: string }>(`/api/projects/${encodeURIComponent(projectId)}/assets/settings`, {
+      method: "PUT",
+      body: JSON.stringify({ imageryStrategy }),
+    }),
+
+  originalUrl: (projectId: string, versionId: string) =>
+    `/api/projects/${encodeURIComponent(projectId)}/assets/versions/${encodeURIComponent(versionId)}/original`,
+
+  derivativeUrl: (projectId: string, derivativeId: string) =>
+    `/api/projects/${encodeURIComponent(projectId)}/assets/derivatives/${encodeURIComponent(derivativeId)}`,
+};

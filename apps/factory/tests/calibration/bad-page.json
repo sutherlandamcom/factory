@@ -1,0 +1,105 @@
+{
+  "name": "bad-page",
+  "description": "Same brief as good-page, but the proposal contains weasel words, passive voice, two sentences over 40 words, one AI cliché from the policy avoidance list, and one unsupported superlative claim.",
+  "proposal": {
+    "schemaVersion": "writer-content-v1",
+    "snapshotId": "cal-bad",
+    "snapshotVersion": 1,
+    "snapshotDigest": "2222222222222222222222222222222222222222222222222222222222222222",
+    "title": "Roof Replacement in Denver",
+    "metaDescription": "The best Denver roof replacement with a limited warranty.",
+    "introduction": "There is a lot of storm damage that can be caused by hail in Denver. It is widely believed by homeowners that the comprehensive roofing replacement process that our fully licensed and insured professional crews have carefully developed over many years of dedicated service throughout the greater Denver metropolitan area encompasses an extensive array of sophisticated procedures.",
+    "sections": [
+      {
+        "heading": "What a full roof replacement includes",
+        "body": "Tear-off, deck inspection, underlayment and shingle installation are handled by our crews. Permits and disposal are also taken care of."
+      },
+      {
+        "heading": "Timeline and process",
+        "body": "The work is finished quickly. The detailed scheduling methodology that our dedicated project coordination specialists have meticulously refined through countless completed engagements is utilized in order to ensure that every single phase of the replacement process is executed at the optimal time."
+      },
+      {
+        "heading": "Warranty and workmanship",
+        "body": "A 25-year limited warranty is carried by the work. We've got you covered on quality."
+      }
+    ],
+    "conclusion": "Comparing roofers can be made straightforward by the understanding of cost drivers and process steps.",
+    "cta": "Book a free roof inspection today.",
+    "internalLinks": [
+      "storm-damage-repair"
+    ]
+  },
+  "brief": {
+    "lineage": {
+      "acceptedInputSnapshotId": "s",
+      "acceptedInputSnapshotVersion": 1,
+      "acceptedInputDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "writerPolicyId": "p",
+      "writerPolicyVersion": 1,
+      "writerPolicyDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "gapSnapshotId": "g",
+      "gapSnapshotVersion": 1,
+      "gapSnapshotDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "pageTarget": {
+      "slug": "roof-replacement-denver",
+      "title": "Roof Replacement in Denver",
+      "objective": "Convert homeowners researching replacement into inspection requests.",
+      "audience": "Denver homeowners 30-60 comparing local roofers",
+      "structureGuidance": [
+        "What a full roof replacement includes",
+        "Typical timeline and process steps",
+        "Warranty and workmanship guarantees"
+      ],
+      "internalLinkIntent": [
+        "Link to storm damage repair page"
+      ],
+      "ctaIntent": "Book a free roof inspection"
+    },
+    "allowedClaims": [
+      "Licensed and insured",
+      "25-year limited warranty"
+    ],
+    "prohibitedClaims": [
+      "#1 roofing company",
+      "Cheapest prices in Denver"
+    ],
+    "unknownClaims": [
+      "Insurance approval timelines"
+    ],
+    "operatorFacts": [
+      "Serving Denver since 1998",
+      "BBB A+ rating"
+    ],
+    "searchSemantics": {
+      "primaryIntent": "commercial investigation — local roofing replacement",
+      "semanticCoverageRequirements": [
+        "What a full roof replacement includes",
+        "Typical timeline and process steps",
+        "Warranty and workmanship guarantees"
+      ],
+      "userNeeds": [
+        "Understand cost drivers before requesting a quote",
+        "Trust signals: licensing, insurance, reviews"
+      ]
+    },
+    "contentBriefKeyPoints": [],
+    "noGapLineageAcknowledged": false
+  },
+  "policyRules": {
+    "forbiddenTerminology": [
+      "cheap",
+      "bargain"
+    ],
+    "aiLanguageAvoidance": [
+      "delve",
+      "unleash",
+      "elevate"
+    ],
+    "clicheAvoidance": [
+      "your one-stop shop",
+      "we've got you covered"
+    ],
+    "localePreferences": "US English"
+  }
+}

@@ -122,6 +122,26 @@ This workstream replaces the legacy idea that the coding worker authors final pa
 
 Exit: high-quality `AcceptedPageContent` for one Sutherland page is produced entirely through Dashboard; no page coder authors production copy.
 
+### Macro Run 4.1 — QA Hardening Window (2026-09-12)
+
+Hardening slice on the accepted Run 4 content pipeline, split into two
+independent PRs:
+
+- Closed-runs hardening: SSRF range classification for the competitor fetcher
+  ported from hand-rolled BigInt range tables to maintained `ipaddr.js`
+  (policy-identical, proven by a frozen equivalence vector table); the
+  canonical JSON digest core proven deterministic against RFC 8785 vectors
+  (test-only; the serializer itself is unchanged because historical digests
+  bind to it).
+- Editorial-QA hardening: new advisory `editorial.readability` check
+  (retext-readability, English-gated), new advisory opt-in `editorial.vale_style`
+  check (vendored write-good style pack, `FACTORY_VALE_BIN`), and a frozen
+  calibration corpus with recorded verdict baselines
+  (`docs/audits/2026-09-12-run41-calibration-baselines.md`).
+
+All new QA signals are advisory (never FAIL) so existing fixture verdicts are
+unchanged. Exit: both PRs pass independent QA and merge.
+
 ## Program III — Design & Assets
 
 ### Macro Run 5 — Asset Foundation + Operator Photography

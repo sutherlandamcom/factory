@@ -5,6 +5,13 @@ import type {
   QaEvidenceRef,
   QaVerdict,
 } from "@factory/contracts";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { retext } from "retext";
+import retextEnglish from "retext-english";
+import retextReadability from "retext-readability";
 
 /**
  * DETERMINISTIC CONTENT QA TRIAD (Macro Run 4).
@@ -36,6 +43,31 @@ function check(
 /** Normalized text for deterministic matching: lowercase, collapsed whitespace. */
 function norm(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+// ---------------------------------------------------------------------------
+// E6 readability support (Run 4.1 W3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Readability processor with DEFAULT configuration (threshold 4/7, target age
+ * 16, minWords 5). The binding design forbids configuring the formulas.
+ * processSync keeps the QA pipeline synchronous.
+ */
+const readabilityProcessor = retext().use(retextEnglish).use(retextReadability);
+
+/**
+ * Sentences below this word count are not scored by the advisory readability
+ * check: grade-level formulas are statistically unreliable on very short
+ * passages (see E6 comment). 25 words keeps the accepted short-sentence v0
+ * writer style out of the advisory signal.
+ */
+const READABILITY_MIN_SENTENCE_WORDS = 25;
+
+function countWords(text: string): number {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return 0;
+  return trimmed.split(/\s+/).length;
 }
 
 // ---------------------------------------------------------------------------
@@ -418,7 +450,156 @@ export function runEditorialQa(
         ),
   );
 
+  // E6: readability (Run 4.1 W3) — deterministic readability formulas over body
+  // text only (introduction + section bodies + conclusion; NOT title, meta,
+  // headings or CTA). Advisory: never FAIL.
+  //
+  // Locale gate: the seven formulas behind retext-readability (Dale–Chall,
+  // Automated Readability, Coleman–Liau, Flesch, Gunning Fog, SMOG, Spache)
+  // are English-calibrated. Non-English (or unspecified) locales therefore
+  // receive an explicit waiver REVIEW instead of a score — never silently
+  // skipped, never scored with the wrong calibration.
+  const locale = policyRules.localePreferences?.trim() ?? "";
+  const isEnglishLocale = /\b(en|english|en-us|en-gb|us english)\b/i.test(locale);
+  const bodyText = [proposal.introduction, ...proposal.sections.map((s) => s.body), proposal.conclusion]
+    .join("\n")
+    .trim();
+  if (!isEnglishLocale) {
+    checks.push(
+      check(
+        "editorial.readability",
+        "REVIEW",
+        `Readability formulas are English-calibrated; locale "${locale}" — check not applicable, human review required.`,
+      ),
+    );
+  } else if (bodyText.length === 0) {
+    checks.push(
+      check("editorial.readability", "REVIEW", "No body text available for readability evaluation."),
+    );
+  } else {
+    // Default plugin configuration (threshold 4/7, age 16, minWords 5) — the
+    // spec forbids tuning the formula configuration itself.
+    const file = readabilityProcessor.processSync(bodyText);
+    // Sentence reliability floor: per-sentence grade formulas are statistically
+    // unreliable below ~25 words (they need a minimum passage to estimate grade
+    // level); the plugin's own minWords=5 default only excludes degenerate
+    // input. Sentences shorter than READABILITY_MIN_SENTENCE_WORDS are therefore
+    // not reported even when flagged. This floor is what keeps short-sentence
+    // professional prose (the accepted v0 writer style) out of the advisory
+    // signal while still flagging genuinely convoluted long sentences.
+    const flaggedSentences = file.messages
+      .map((message) => String(message.actual ?? ""))
+      .filter((sentence) => countWords(sentence) >= READABILITY_MIN_SENTENCE_WORDS);
+    checks.push(
+      flaggedSentences.length === 0
+        ? check("editorial.readability", "PASS", "No long sentence flagged hard to read by readability formulas.")
+        : check(
+            "editorial.readability",
+            "REVIEW",
+            `${flaggedSentences.length} sentence(s) flagged hard to read by readability formulas`,
+            flaggedSentences.slice(0, 5).map((sentence) => ({
+              kind: "section" as const,
+              ref: sentence.slice(0, 280),
+              note: "flagged hard to read by readability formulas",
+            })),
+          ),
+    );
+  }
+
+  // E7: Vale style lint (Run 4.1 W4) — advisory line-level style findings from
+  // the vendored write-good pack. Strict opt-in: the check exists ONLY when
+  // FACTORY_VALE_BIN is explicitly configured (absolute path to the vale
+  // binary). There is deliberately NO PATH fallback: CI installs Vale but does
+  // not set FACTORY_VALE_BIN, so unit-fixture verdicts stay identical in every
+  // environment (overall = worst-of; an extra REVIEW would break PASS
+  // assertions). Absence of the check when unconfigured is documented
+  // behavior, not silent loss — Vale is an optional advisory instrument, not a
+  // governance control.
+  checks.push(...runValeStyleLint(bodyText));
+
   return checks;
+}
+
+interface ValeAlert {
+  Check?: unknown;
+  Line?: unknown;
+  Severity?: unknown;
+  Message?: unknown;
+}
+
+interface ValeOutput {
+  [file: string]: ValeAlert[] | undefined;
+}
+
+/**
+ * E7 implementation. Emits NOTHING when FACTORY_VALE_BIN is unset. When set
+ * but the binary is missing/broken, the spawn fails, times out, or the JSON is
+ * unparseable, emits ONE loud degradation REVIEW (never FAIL, never crashes
+ * QA). Otherwise maps each Vale alert to an evidence ref.
+ */
+function runValeStyleLint(bodyText: string): QaCheckResult[] {
+  const valeBin = process.env.FACTORY_VALE_BIN?.trim();
+  if (!valeBin) {
+    return []; // documented opt-out: no check in the array
+  }
+
+  const valeIniPath = join(process.cwd(), "vale", ".vale.ini");
+  const dir = mkdtempSync(join(tmpdir(), "factory-vale-"));
+  const tmpPath = join(dir, "body.txt");
+  try {
+    writeFileSync(tmpPath, bodyText, "utf8");
+    const result = spawnSync(
+      valeBin,
+      ["--config", valeIniPath, "--no-exit", "--output=JSON", tmpPath],
+      { timeout: 10_000, encoding: "utf8" },
+    );
+    if (result.error || result.status === null || typeof result.stdout !== "string") {
+      return [degradedValeCheck()];
+    }
+    let parsed: ValeOutput;
+    try {
+      parsed = JSON.parse(result.stdout) as ValeOutput;
+    } catch {
+      return [degradedValeCheck()];
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return [degradedValeCheck()];
+    }
+    const alerts = Object.values(parsed).flatMap((entries) =>
+      Array.isArray(entries) ? entries : [],
+    );
+    const evidence: QaEvidenceRef[] = [];
+    for (const alert of alerts) {
+      const line = typeof alert.Line === "number" ? alert.Line : 0;
+      const message = typeof alert.Message === "string" ? alert.Message : "unknown finding";
+      const rule = typeof alert.Check === "string" ? alert.Check : "unknown";
+      evidence.push({
+        kind: "section",
+        ref: `L${line}: ${message} [${rule}]`.slice(0, 280),
+        note: "Vale style lint finding (advisory)",
+      });
+    }
+    return [
+      evidence.length === 0
+        ? check("editorial.vale_style", "PASS", "Vale style lint: no findings (advisory).")
+        : check(
+            "editorial.vale_style",
+            "REVIEW",
+            `Vale style lint: ${evidence.length} finding(s) (advisory).`,
+            evidence.slice(0, 50),
+          ),
+    ];
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function degradedValeCheck(): QaCheckResult {
+  return check(
+    "editorial.vale_style",
+    "REVIEW",
+    "Vale configured but unavailable/unparseable — style lint degraded.",
+  );
 }
 
 export interface ContentQaOutcome {

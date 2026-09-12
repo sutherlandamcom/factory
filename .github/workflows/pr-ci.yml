@@ -63,6 +63,15 @@ jobs:
           pnpm --filter @factory/site-starter exec playwright install --with-deps chromium
           pnpm --filter @factory/dashboard exec playwright install --with-deps chromium
 
+      - name: Install Vale (pinned, checksum-verified)
+        run: |
+          curl -sL "https://github.com/errata-ai/vale/releases/download/v3.21.0/vale_3.21.0_Linux_64-bit.tar.gz" -o vale.tar.gz
+          echo "96997d19a4ca6981673b0d4c5ca7f3ede4a9f97964a96edc29fba9e28a328336  vale.tar.gz" | sha256sum -c -
+          tar xzf vale.tar.gz vale && sudo mv vale /usr/local/bin/vale && vale --version
+
+      - name: Validate vendored Vale config compiles (real binary)
+        run: vale --config apps/factory/vale/.vale.ini --no-exit --output=JSON apps/factory/vale/ || true
+
       - name: Run Factory QA (check -> build -> test)
         run: pnpm qa
 

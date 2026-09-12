@@ -69,6 +69,23 @@ runs. Models propose; Factory validates and governs.
    - On a brief with operator-acknowledged no-gap lineage, the search family
      returns a single explicit `search.lineage_waived` REVIEW check — waived
      lineage is surfaced for human review, never reported as PASS.
+   - `editorial.readability` (Run 4.1) — deterministic readability formulas
+     via `retext-readability` (default configuration, never re-tuned per run),
+     evaluated over body text only (introduction + section bodies +
+     conclusion). Advisory: never FAIL. Gated to English locales
+     (`localePreferences`); non-English or unspecified locales receive an
+     explicit waiver REVIEW instead of a score because the formulas are
+     English-calibrated. Sentences below 25 words are not reported (grade
+     formulas are unreliable below that length); the floor is recorded in
+     `docs/audits/2026-09-12-run41-calibration-baselines.md`.
+   - `editorial.vale_style` (Run 4.1) — advisory line-level style lint via
+     Vale with the vendored `write-good` style pack
+     (`apps/factory/vale/styles/write-good/`, pinned commit, see its
+     `VENDORED.md`). Strict opt-in: the check exists only when
+     `FACTORY_VALE_BIN` names the Vale binary; there is no PATH fallback, so
+     fixture verdicts are identical in every environment. When configured but
+     broken (missing binary, spawn failure, timeout, unparseable JSON) the
+     check degrades loudly to a REVIEW — it never FAILs and never crashes QA.
 7. **AcceptedPageContent** — human acceptance gate. Fails closed without a QA
    report for the exact proposal digest, on QA overall FAIL, on digest
    mismatch, on stale snapshot binding, OR on any transitive upstream

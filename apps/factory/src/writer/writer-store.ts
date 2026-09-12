@@ -15,6 +15,8 @@ import type { FactoryDb } from "../persistence/db.js";
 import {
   acceptedContentGapSnapshots,
   contentBriefs,
+  contentQaReports,
+  acceptedPageContent,
   projectInputSnapshots,
   writerPolicies,
   writerPromptSnapshots,
@@ -843,3 +845,147 @@ export class WriterSnapshotStore {
 }
 
 export type { WriterPromptSnapshotData, PageContentProposalData };
+
+// ---- Content QA report + AcceptedPageContent ---------------------------------
+
+export class WriterQaStore {
+  constructor(private readonly db: FactoryDb) {}
+
+  async saveQaReport(input: {
+    projectId: string;
+    proposalId: string;
+    proposalVersion: number;
+    proposalDigest: string;
+    data: unknown;
+  }): Promise<{ id: string; digest: string }> {
+    const { parseContentQaReportData } = await import("@factory/contracts");
+    const data = parseContentQaReportData(input.data);
+    const reportDigest = deterministicDigest(data);
+    const id = `wqar-${randomUUID()}`;
+    await this.db
+      .insert(contentQaReports)
+      .values({
+        id,
+        projectId: input.projectId,
+        proposalId: input.proposalId,
+        proposalVersion: input.proposalVersion,
+        proposalDigest: input.proposalDigest,
+        data,
+        reportDigest,
+      })
+      .onConflictDoUpdate({
+        target: contentQaReports.proposalId,
+        set: { data, reportDigest, proposalVersion: input.proposalVersion, proposalDigest: input.proposalDigest },
+      });
+    return { id, digest: reportDigest };
+  }
+
+  async latestQaReport(projectId: string): Promise<{ id: string; proposalId: string; digest: string; data: unknown } | null> {
+    const [row] = await this.db
+      .select()
+      .from(contentQaReports)
+      .where(eq(contentQaReports.projectId, projectId))
+      .orderBy(desc(contentQaReports.createdAt))
+      .limit(1);
+    if (!row) return null;
+    return { id: row.id, proposalId: row.proposalId, digest: row.reportDigest, data: row.data };
+  }
+
+  /**
+   * Accept the proposal as AcceptedPageContent v1 (or next version for a new
+   * slug after upstream mutation). FAILS CLOSED unless:
+   * - the proposal is current (not stale) and bound to an approved snapshot;
+   * - a QA report exists for the exact proposal digest with overall != FAIL.
+   */
+  async acceptContent(input: {
+    projectId: string;
+    proposalId: string;
+    expectedProposalDigest: string;
+  }): Promise<{ id: string; version: number; digest: string; slug: string }> {
+    return await this.db.transaction(async (tx) => {
+      const [proposal] = await tx
+        .select()
+        .from(pageContentProposals)
+        .where(and(eq(pageContentProposals.id, input.proposalId), eq(pageContentProposals.projectId, input.projectId)))
+        .for("update");
+      if (!proposal) throw new FactoryError("writer_artifact_not_found", "Proposal not found.");
+      if (proposal.proposalDigest !== input.expectedProposalDigest) {
+        throw new FactoryError(
+          "content_accept_failed",
+          "Proposal digest mismatch: expected digest does not match the stored proposal.",
+        );
+      }
+      // Snapshot binding must still hold.
+      const [snapshot] = await tx
+        .select()
+        .from(writerPromptSnapshots)
+        .where(and(eq(writerPromptSnapshots.id, proposal.snapshotId), eq(writerPromptSnapshots.projectId, input.projectId)));
+      if (!snapshot || snapshot.state !== "approved" || snapshot.snapshotDigest !== proposal.snapshotDigest) {
+        throw staleError("Proposal is stale: the approved snapshot changed.");
+      }
+      // QA gate: a QA report for the exact proposal digest with overall != FAIL.
+      const [qa] = await tx
+        .select()
+        .from(contentQaReports)
+        .where(and(eq(contentQaReports.proposalId, proposal.id), eq(contentQaReports.proposalDigest, proposal.proposalDigest)));
+      if (!qa) {
+        throw new FactoryError("content_accept_failed", "No QA report exists for this proposal; run deterministic QA first.");
+      }
+      const qaData = qa.data as { overall?: string };
+      if (qaData.overall === "FAIL") {
+        throw new FactoryError("content_accept_failed", "QA overall verdict is FAIL; acceptance is blocked.");
+      }
+      // Same slug re-acceptance with the same proposal digest is idempotent.
+      const [existing] = await tx
+        .select()
+        .from(acceptedPageContent)
+        .where(and(eq(acceptedPageContent.projectId, input.projectId), eq(acceptedPageContent.slug, proposal.slug)));
+      if (existing && existing.proposalDigest === proposal.proposalDigest) {
+        return { id: existing.id, version: existing.version, digest: existing.contentDigest, slug: existing.slug };
+      }
+      if (existing) {
+        throw new FactoryError(
+          "content_accept_failed",
+          `Accepted content already exists for slug "${proposal.slug}" at a different digest; a new brief version is required to change it.`,
+        );
+      }
+      const [maxVersion] = await tx
+        .select({ maxVersion: sql<number>`coalesce(max(${acceptedPageContent.version}), 0)` })
+        .from(acceptedPageContent)
+        .where(eq(acceptedPageContent.projectId, input.projectId));
+      const nextVersion = (maxVersion?.maxVersion ?? 0) + 1;
+      const id = `wacc-${randomUUID()}`;
+      const contentDigest = deterministicDigest({
+        projectId: input.projectId,
+        version: nextVersion,
+        proposalDigest: proposal.proposalDigest,
+        qaReportDigest: qa.reportDigest,
+        data: proposal.data,
+      });
+      await tx.insert(acceptedPageContent).values({
+        id,
+        projectId: input.projectId,
+        version: nextVersion,
+        slug: proposal.slug,
+        proposalId: proposal.id,
+        proposalVersion: proposal.version,
+        proposalDigest: proposal.proposalDigest,
+        qaReportDigest: qa.reportDigest,
+        data: proposal.data,
+        contentDigest,
+      });
+      return { id, version: nextVersion, digest: contentDigest, slug: proposal.slug };
+    });
+  }
+
+  async latestAcceptedContent(projectId: string): Promise<{ id: string; version: number; slug: string; digest: string; data: unknown; acceptedAt: Date } | null> {
+    const [row] = await this.db
+      .select()
+      .from(acceptedPageContent)
+      .where(eq(acceptedPageContent.projectId, projectId))
+      .orderBy(desc(acceptedPageContent.version))
+      .limit(1);
+    if (!row) return null;
+    return { id: row.id, version: row.version, slug: row.slug, digest: row.contentDigest, data: row.data, acceptedAt: row.acceptedAt };
+  }
+}

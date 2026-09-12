@@ -1,6 +1,7 @@
 import type { PageTarget } from "@factory/contracts";
 import { FactoryError } from "../executor/errors.js";
-import { WriterStore, WriterSnapshotStore } from "./writer-store.js";
+import { WriterStore, WriterSnapshotStore, WriterQaStore } from "./writer-store.js";
+import { runContentQa } from "./qa.js";
 import {
   runWriterInvocation,
   resolveWriterModel,
@@ -53,6 +54,7 @@ export class WriterService {
     private readonly store: WriterStore,
     private readonly snapshotStore: WriterSnapshotStore,
     private readonly budget: WriterBudgetStore,
+    private readonly qaStore?: WriterQaStore,
   ) {}
 
   // ---- Writer Policy -----------------------------------------------------------
@@ -401,6 +403,121 @@ export class WriterService {
       createdAt: row.createdAt.toISOString(),
     };
   }
+  /**
+   * Run the deterministic QA triad (factual/search/editorial) against the
+   * latest proposal and persist the report bound to the exact proposal digest.
+   */
+  async runQa(input: { projectId: string }): Promise<WriterQaView> {
+    if (!this.qaStore) throw new FactoryError("internal_error", "QA store not configured.");
+    const proposal = await this.snapshotStore.latestProposal(input.projectId);
+    if (!proposal) throw new FactoryError("writer_artifact_not_found", "No proposal exists for this project.");
+    const staleness = await this.snapshotStore.proposalStaleness(input.projectId, proposal);
+    if (staleness.stale) {
+      throw new FactoryError("writer_artifact_stale", `Proposal is stale: ${staleness.reason}`);
+    }
+    // Brief data: resolve through the snapshot's bound brief for the SAME
+    // lineage the proposal was generated from.
+    const snapshot = await this.snapshotStore.snapshotVersion(input.projectId, proposal.snapshotVersion);
+    if (!snapshot) throw new FactoryError("writer_artifact_stale", "Bound snapshot missing.");
+    const brief = await this.store.briefVersion(input.projectId, snapshot.briefVersion);
+    if (!brief) throw new FactoryError("writer_artifact_stale", "Bound brief missing.");
+    const briefData = brief.data as Parameters<typeof runContentQa>[1];
+    const policy = await this.store.latestWriterPolicy(input.projectId);
+    const policyRules =
+      (policy?.data as { rules?: Record<string, string[] | string> })?.rules ?? {};
+    const report = runContentQa(
+      proposal.data as Parameters<typeof runContentQa>[0],
+      briefData,
+      policyRules,
+    );
+    const saved = await this.qaStore.saveQaReport({
+      projectId: input.projectId,
+      proposalId: proposal.id,
+      proposalVersion: proposal.version,
+      proposalDigest: proposal.proposalDigest,
+      data: {
+        schemaVersion: "writer-content-v1",
+        proposalId: proposal.id,
+        proposalVersion: proposal.version,
+        proposalDigest: proposal.proposalDigest,
+        factual: report.factual,
+        search: report.search,
+        editorial: report.editorial,
+        overall: report.overall,
+      },
+    });
+    return {
+      reportId: saved.id,
+      digest: saved.digest,
+      proposalId: proposal.id,
+      proposalDigest: proposal.proposalDigest,
+      factual: report.factual,
+      search: report.search,
+      editorial: report.editorial,
+      overall: report.overall,
+    };
+  }
+
+  /** Human acceptance gate: proposal + QA verdicts -> AcceptedPageContent. */
+  async acceptContent(input: { projectId: string; proposalId: string; expectedProposalDigest: string }): Promise<AcceptedContentView> {
+    if (!this.qaStore) throw new FactoryError("internal_error", "QA store not configured.");
+    const result = await this.qaStore.acceptContent(input);
+    const latest = await this.qaStore.latestAcceptedContent(input.projectId);
+    return {
+      id: result.id,
+      version: result.version,
+      slug: result.slug,
+      digest: result.digest,
+      proposalId: input.proposalId,
+      proposalDigest: input.expectedProposalDigest,
+      qaReportDigest: "",
+      data: latest?.data ?? null,
+      acceptedAt: latest?.acceptedAt.toISOString() ?? new Date().toISOString(),
+    };
+  }
+
+  async acceptedContentWorkspace(projectId: string): Promise<{ latest: AcceptedContentView | null }> {
+    if (!this.qaStore) throw new FactoryError("internal_error", "QA store not configured.");
+    const latest = await this.qaStore.latestAcceptedContent(projectId);
+    if (!latest) return { latest: null };
+    return {
+      latest: {
+        id: latest.id,
+        version: latest.version,
+        slug: latest.slug,
+        digest: latest.digest,
+        proposalId: "",
+        proposalDigest: "",
+        qaReportDigest: "",
+        data: latest.data,
+        acceptedAt: latest.acceptedAt.toISOString(),
+      },
+    };
+  }
+}
+
+
+export interface WriterQaView {
+  reportId: string;
+  digest: string;
+  proposalId: string;
+  proposalDigest: string;
+  factual: unknown[];
+  search: unknown[];
+  editorial: unknown[];
+  overall: string;
+}
+
+export interface AcceptedContentView {
+  id: string;
+  version: number;
+  slug: string;
+  digest: string;
+  proposalId: string;
+  proposalDigest: string;
+  qaReportDigest: string;
+  data: unknown;
+  acceptedAt: string;
 }
 
 // ---- WriterPromptSnapshot --------------------------------------------------------
@@ -524,5 +641,6 @@ export async function compileWriterPromptPacket(input: {
     .filter((line) => line !== "")
     .join("\n");
   return { systemPrompt, userPrompt };
-}
 
+
+}

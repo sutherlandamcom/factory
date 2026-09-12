@@ -189,3 +189,69 @@ test("readability: body text scope excludes title, meta, headings and CTA", () =
   const e6 = readabilityCheck(checks);
   assert.equal(e6.verdict, "PASS", JSON.stringify(e6, null, 2));
 });
+
+// ---------------------------------------------------------------------------
+// F2 remediation (P2): below-floor suppression must be DISCLOSED, never silent
+// ---------------------------------------------------------------------------
+
+test("readability: below-floor flags are disclosed in PASS detail, not silently suppressed", () => {
+  // The original QA F2 probe: a genuinely hard 19-word nominalized sentence.
+  // The raw plugin flags it; the 25-word floor filters it out. The verdict
+  // stays PASS (floor is a documented threshold) but the detail MUST disclose
+  // the suppression — a bare "no flags" PASS would hide the floor's effect.
+  const hard19 =
+    "Methodology consideration facilitation process requirements specification documentation verification implementation operationalization commenced following extensive deliberation among previously documented comprehensive stakeholder groups.";
+  const checks = runEditorialQa(
+    proposal({ introduction: hard19 }),
+    BRIEF,
+    POLICY,
+  );
+  const e6 = readabilityCheck(checks);
+  assert.equal(e6.verdict, "PASS", JSON.stringify(e6, null, 2));
+  assert.match(
+    e6.detail,
+    /1 flagged sentence\(s\) below the 25-word reporting floor were suppressed/,
+    `detail must disclose the suppressed below-floor flag: ${e6.detail}`,
+  );
+  assert.match(e6.detail, /see calibration baselines doc/);
+  // No evidence refs for suppressed sentences (schema-bounded to ≥25-word refs).
+  assert.deepEqual(e6.evidence, []);
+});
+
+test("readability: PASS with zero flags at all carries no suppression suffix", () => {
+  // Plain short prose the formulas do not flag at all — the detail must NOT
+  // claim suppression happened when it did not.
+  const clean =
+    "The cat sat on the mat. It was warm and soft. The dog joined it. They slept together all afternoon long.";
+  const checks = runEditorialQa(
+    proposal({ introduction: clean, sections: [{ heading: "Process", body: "Crews handle permits." }], conclusion: "Comparing roofers is simple." }),
+    BRIEF,
+    POLICY,
+  );
+  const e6 = readabilityCheck(checks);
+  assert.equal(e6.verdict, "PASS", JSON.stringify(e6, null, 2));
+  assert.doesNotMatch(e6.detail, /suppressed/);
+  assert.match(e6.detail, /No sentence ≥ 25 words flagged hard to read by readability formulas\./);
+});
+
+test("readability: REVIEW detail discloses additional below-floor suppressions", () => {
+  // One 40+-word flagged sentence (drives REVIEW) plus one below-floor flagged
+  // sentence (suppressed) — the REVIEW detail must quantify both populations.
+  const longSentence =
+    "The comprehensive residential roofing replacement methodology that our fully licensed and insured professional crews have meticulously developed over many years of dedicated service throughout the greater Denver metropolitan area encompasses an extensive array of technically sophisticated procedures including systematic tear-off operations, thorough structural deck inspections, premium weather-resistant underlayment installations, and precision-engineered shingle placement protocols that collectively ensure optimal long-term performance.";
+  const hardShort =
+    "Methodology consideration facilitation process requirements specification documentation verification implementation operationalization commenced following extensive deliberation among previously documented comprehensive stakeholder groups.";
+  const checks = runEditorialQa(
+    proposal({ sections: [{ heading: "Process", body: `${longSentence} ${hardShort}` }] }),
+    BRIEF,
+    POLICY,
+  );
+  const e6 = readabilityCheck(checks);
+  assert.equal(e6.verdict, "REVIEW");
+  assert.match(e6.detail, /^\d+ sentence\(s\) flagged hard to read by readability formulas/);
+  assert.match(e6.detail, /below the 25-word reporting floor were suppressed/);
+  // Evidence refs still only carry ≥25-word sentences.
+  for (const ref of e6.evidence) {
+    assert.ok(longSentence.includes(ref.ref) || !hardShort.includes(ref.ref));
+  }
+});

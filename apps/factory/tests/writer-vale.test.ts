@@ -201,3 +201,46 @@ test("vale: evidence refs respect the 280-char cap", () => {
     }),
   );
 });
+
+// ---------------------------------------------------------------------------
+// F3 remediation (P3): the vendored config path must NOT depend on cwd
+// ---------------------------------------------------------------------------
+
+test("vale: config path is module-relative — works from an unrelated cwd", () => {
+  // The stub writes a marker proving the --config path it received EXISTS.
+  // Then runEditorialQa is invoked from a completely unrelated cwd; the check
+  // must still behave as if properly configured (PASS on {} output), proving
+  // the config resolved from the module location, not process.cwd().
+  const dir = mkdtempSync(join(tmpdir(), "vale-cwd-"));
+  const bin = join(dir, "vale-probe.mjs");
+  const script = [
+    "#!/usr/bin/env node",
+    "import fs from 'node:fs';",
+    "const args = process.argv.slice(2);",
+    "const configIdx = args.indexOf('--config');",
+    "const configPath = configIdx >= 0 ? args[configIdx + 1] : '';",
+    "const configExists = configPath !== '' && fs.existsSync(configPath);",
+    "process.stdout.write(configExists ? '{}' : 'CONFIG-MISSING');",
+  ].join("\n");
+  writeFileSync(bin, script, { mode: 0o755 });
+  dirs.push(dir);
+  const foreignCwd = mkdtempSync(join(tmpdir(), "vale-foreign-cwd-"));
+  dirs.push(foreignCwd);
+  const savedCwd = process.cwd();
+  process.chdir(foreignCwd);
+  try {
+    withEnv({ FACTORY_VALE_BIN: bin }, () => {
+      const checks = runEditorialQa(proposal(), BRIEF, POLICY);
+      const e7 = valeCheck(checks);
+      assert.ok(e7, "E7 must be present when configured");
+      assert.equal(
+        e7!.verdict,
+        "PASS",
+        `config must resolve from module location regardless of cwd; got: ${e7!.detail}`,
+      );
+      assert.doesNotMatch(e7!.detail, /degraded/);
+    });
+  } finally {
+    process.chdir(savedCwd);
+  }
+});

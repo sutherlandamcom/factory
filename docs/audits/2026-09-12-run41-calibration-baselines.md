@@ -32,6 +32,12 @@ explicit waiver REVIEW instead of a score. Vale lint is opt-in via
 - Sentences ≥ 25 words (the E6 reporting floor): **0**.
 - retext-readability flagged messages (before floor): 6 — all short sentences
   below the floor, therefore not reported.
+- **Below-floor suppression disclosure (F2 remediation):** since the Run 4.1
+  P2/P3 remediation the check detail discloses suppressed below-floor flags
+  instead of hiding them; for this fixture a PASS now reads
+  "No sentence ≥ 25 words flagged hard to read by readability formulas; 6
+  flagged sentence(s) below the 25-word reporting floor were suppressed (see
+  calibration baselines doc)."
 - Vale: not applicable (opt-in; unset for calibration).
 
 ### bad-page
@@ -84,7 +90,7 @@ explicit waiver REVIEW instead of a score. Vale lint is opt-in via
 | editorial.structure_integrity | PASS | All structure guidance reflected. |
 | editorial.cta_integrity | PASS | CTA present. |
 | editorial.heading_integrity | PASS | Unique headings. |
-| editorial.readability | REVIEW | 2 sentences ≥ 25 words flagged hard to read. |
+| editorial.readability | REVIEW | 2 sentences ≥ 25 words flagged hard to read; 1 additional flagged sentence below the 25-word floor suppressed (disclosed in detail). |
 
 ### non-english-locale — overall REVIEW
 
@@ -101,6 +107,10 @@ explicit waiver REVIEW instead of a score. Vale lint is opt-in via
   short-sentence v0 writer style out of the advisory signal while still
   flagging genuinely convoluted long sentences. The plugin's own
   configuration (threshold 4/7, age 16, minWords 5) is untouched.
+  **F2 remediation:** the floor's effect is no longer silent — the check
+  detail always quantifies how many flagged sentences were suppressed below
+  the floor, in both PASS and REVIEW verdicts, so the human gate sees the
+  formulas' full signal and the floor's filtering effect side by side.
 - **E6 English gate:** all seven formulas are calibrated on English prose;
   scoring non-English text would produce meaningless numbers, so the gate
   emits an explicit waiver REVIEW instead.

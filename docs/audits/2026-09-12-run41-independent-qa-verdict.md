@@ -116,9 +116,9 @@ fix), which is why it surfaced only on the PR run.
 | ID | Severity | Where | Evidence | Status |
 | --- | --- | --- | --- | --- |
 | F1 | P1 | `writer-store.ts:1129` (pre-existing on main) | CI PR-B red; deterministic drizzle error-shape reproduction | **FIXED** in `f9f9033`; CI green on new head |
-| F2 | P2 | `qa.ts` E6 25-word floor | 19-word hard sentence invisible (QA probe) | Documented + justified in baselines doc; operator accepts via merge |
-| F3 | P3 | `qa.ts:546` cwd-relative Vale config path | Works from `apps/factory`; loud degradation otherwise | Accepted |
-| F4 | P3 | vendored pack | upstream README.md not copied | Accepted (provenance covered by VENDORED.md) |
+| F2 | P2 | `qa.ts` E6 25-word floor | 19-word hard sentence invisible (QA probe) | **FIXED** (post-merge remediation): floor retained as calibrated threshold, but suppression is now disclosed in the check detail (PASS and REVIEW); probe converted to regression test |
+| F3 | P3 | `qa.ts:546` cwd-relative Vale config path | Works from `apps/factory`; loud degradation otherwise | **FIXED** (post-merge remediation): config resolved module-relative via `import.meta.url`; cwd-independence regression test added |
+| F4 | P3 | vendored pack | upstream README.md not copied | **FIXED** (post-merge remediation): README.md vendored byte-verbatim; vendored dir now byte-identical to upstream `c9ceca7f` except VENDORED.md/LICENSE |
 
 ## 8. Verdict
 

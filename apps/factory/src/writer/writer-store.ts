@@ -4,8 +4,12 @@ import {
   parseWriterPolicyData,
   parseContentBriefData,
   parsePageTarget,
+  parseWriterPromptSnapshotData,
+  parsePageContentProposalData,
   type WriterPolicyData,
   type ContentBriefData,
+  type WriterPromptSnapshotData,
+  type PageContentProposalData,
 } from "@factory/contracts";
 import type { FactoryDb } from "../persistence/db.js";
 import {
@@ -13,8 +17,12 @@ import {
   contentBriefs,
   projectInputSnapshots,
   writerPolicies,
+  writerPromptSnapshots,
+  pageContentProposals,
   type WriterPolicyRecord,
   type ContentBriefRecord,
+  type WriterPromptSnapshotRecord,
+  type PageContentProposalRecord,
 } from "../persistence/schema.js";
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
@@ -540,3 +548,298 @@ export class WriterStore {
 
 // Re-export contract types for service consumers.
 export type { WriterPolicyData, ContentBriefData };
+
+// ---- WriterPromptSnapshot -----------------------------------------------------
+
+export interface WriterSnapshotSaveResult {
+  id: string;
+  version: number;
+  digest: string;
+}
+
+export class WriterSnapshotStore {
+  constructor(private readonly db: FactoryDb) {}
+
+  /** Compile + persist a draft snapshot from the CURRENT approved brief. */
+  async compileSnapshot(input: {
+    projectId: string;
+    briefId: string;
+    systemPrompt: string;
+    userPrompt: string;
+    maxOutputTokens: number;
+  }): Promise<WriterSnapshotSaveResult> {
+    const brief = await this.db
+      .select()
+      .from(contentBriefs)
+      .where(and(eq(contentBriefs.id, input.briefId), eq(contentBriefs.projectId, input.projectId)))
+      .limit(1);
+    const briefRow = brief[0];
+    if (!briefRow) throw new FactoryError("writer_artifact_not_found", "Content brief not found.");
+    if (briefRow.state !== "approved") {
+      throw new FactoryError("writer_policy_not_approved", "The brief must be approved before a snapshot can be compiled.");
+    }
+    const data = parseWriterPromptSnapshotData({
+      schemaVersion: "writer-content-v1",
+      briefId: briefRow.id,
+      briefVersion: briefRow.version,
+      briefDigest: briefRow.briefDigest,
+      systemPrompt: input.systemPrompt,
+      userPrompt: input.userPrompt,
+      maxOutputTokens: input.maxOutputTokens,
+    });
+    const snapshotDigest = deterministicDigest(data);
+    return await this.db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({ version: writerPromptSnapshots.version, state: writerPromptSnapshots.state })
+        .from(writerPromptSnapshots)
+        .where(eq(writerPromptSnapshots.projectId, input.projectId))
+        .orderBy(desc(writerPromptSnapshots.version))
+        .limit(1);
+      if (current && current.state === "draft") {
+        await tx
+          .update(writerPromptSnapshots)
+          .set({
+            briefId: data.briefId,
+            briefVersion: data.briefVersion,
+            briefDigest: data.briefDigest,
+            systemPrompt: data.systemPrompt,
+            userPrompt: data.userPrompt,
+            maxOutputTokens: data.maxOutputTokens,
+            data,
+            snapshotDigest,
+          })
+          .where(
+            and(
+              eq(writerPromptSnapshots.projectId, input.projectId),
+              eq(writerPromptSnapshots.version, current.version),
+              eq(writerPromptSnapshots.state, "draft"),
+            ),
+          );
+        const [updatedRow] = await tx
+          .select({ id: writerPromptSnapshots.id })
+          .from(writerPromptSnapshots)
+          .where(
+            and(
+              eq(writerPromptSnapshots.projectId, input.projectId),
+              eq(writerPromptSnapshots.version, current.version),
+            ),
+          );
+        return { version: current.version, digest: snapshotDigest, id: updatedRow!.id };
+      }
+      const nextVersion = (current?.version ?? 0) + 1;
+      const id = `wsnp-${randomUUID()}`;
+      await tx.insert(writerPromptSnapshots).values({
+        id,
+        projectId: input.projectId,
+        version: nextVersion,
+        state: "draft",
+        briefId: data.briefId,
+        briefVersion: data.briefVersion,
+        briefDigest: data.briefDigest,
+        systemPrompt: data.systemPrompt,
+        userPrompt: data.userPrompt,
+        maxOutputTokens: data.maxOutputTokens,
+        data,
+        snapshotDigest,
+      });
+      return { id, version: nextVersion, digest: snapshotDigest };
+    });
+  }
+
+  /**
+   * Approve the exact snapshot revision + digest. Staleness: the brief the
+   * snapshot was compiled from must still be the approved brief with the same
+   * digest. Approved snapshots are immutable; no paid call without approval.
+   */
+  async approveSnapshot(input: {
+    projectId: string;
+    snapshotId: string;
+    expectedVersion: number;
+    expectedDigest: string;
+  }): Promise<ApprovalResult> {
+    return await this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .select()
+        .from(writerPromptSnapshots)
+        .where(and(eq(writerPromptSnapshots.id, input.snapshotId), eq(writerPromptSnapshots.projectId, input.projectId)))
+        .for("update");
+      if (!row) throw new FactoryError("writer_artifact_not_found", "Writer prompt snapshot not found.");
+      if (row.state === "approved") {
+        if (row.snapshotDigest === input.expectedDigest) {
+          return { id: row.id, version: row.version, digest: row.snapshotDigest, state: "approved" as const };
+        }
+        throw approvalError("Snapshot is already approved at a different digest.");
+      }
+      if (row.version !== input.expectedVersion) {
+        throw approvalError(`Snapshot revision mismatch: expected ${input.expectedVersion}, current ${row.version}.`);
+      }
+      const [brief] = await tx
+        .select()
+        .from(contentBriefs)
+        .where(and(eq(contentBriefs.id, row.briefId), eq(contentBriefs.projectId, input.projectId)));
+      if (!brief || brief.state !== "approved" || brief.briefDigest !== row.briefDigest) {
+        throw staleError("Snapshot is stale: the approved brief changed after this snapshot was compiled.");
+      }
+      if (row.snapshotDigest !== input.expectedDigest) {
+        throw approvalError("Snapshot digest mismatch: expected digest does not match the stored draft.");
+      }
+      const [updated] = await tx
+        .update(writerPromptSnapshots)
+        .set({ state: "approved", approvedAt: new Date() })
+        .where(and(eq(writerPromptSnapshots.id, row.id), eq(writerPromptSnapshots.state, "draft")))
+        .returning();
+      return { id: updated!.id, version: updated!.version, digest: updated!.snapshotDigest, state: "approved" as const };
+    });
+  }
+
+  async latestSnapshot(projectId: string): Promise<WriterPromptSnapshotRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(writerPromptSnapshots)
+      .where(eq(writerPromptSnapshots.projectId, projectId))
+      .orderBy(desc(writerPromptSnapshots.version))
+      .limit(1);
+    return row ?? null;
+  }
+
+  async snapshotVersion(projectId: string, version: number): Promise<WriterPromptSnapshotRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(writerPromptSnapshots)
+      .where(and(eq(writerPromptSnapshots.projectId, projectId), eq(writerPromptSnapshots.version, version)));
+    return row ?? null;
+  }
+
+  async listSnapshotVersions(
+    projectId: string,
+  ): Promise<Array<{ id: string; version: number; state: string; digest: string; createdAt: Date }>> {
+    return await this.db
+      .select({
+        id: writerPromptSnapshots.id,
+        version: writerPromptSnapshots.version,
+        state: writerPromptSnapshots.state,
+        digest: writerPromptSnapshots.snapshotDigest,
+        createdAt: writerPromptSnapshots.createdAt,
+      })
+      .from(writerPromptSnapshots)
+      .where(eq(writerPromptSnapshots.projectId, projectId))
+      .orderBy(desc(writerPromptSnapshots.version));
+  }
+
+  /** Snapshot staleness: bound to the exact approved brief digest AND to the
+   * current approved brief — a newer approved brief makes older snapshots
+   * stale (they can no longer be executed against). */
+  async snapshotStaleness(
+    projectId: string,
+    snapshot: WriterPromptSnapshotRecord,
+  ): Promise<{ stale: boolean; reason: string | null }> {
+    const [brief] = await this.db
+      .select()
+      .from(contentBriefs)
+      .where(and(eq(contentBriefs.id, snapshot.briefId), eq(contentBriefs.projectId, projectId)));
+    if (!brief || brief.state !== "approved" || brief.briefDigest !== snapshot.briefDigest) {
+      return { stale: true, reason: "approved brief changed" };
+    }
+    const latest = await this.db
+      .select({ state: contentBriefs.state, briefDigest: contentBriefs.briefDigest })
+      .from(contentBriefs)
+      .where(eq(contentBriefs.projectId, projectId))
+      .orderBy(desc(contentBriefs.version))
+      .limit(1);
+    if (latest[0] && latest[0].state === "approved" && latest[0].briefDigest !== snapshot.briefDigest) {
+      return { stale: true, reason: "a newer approved brief exists" };
+    }
+    return { stale: false, reason: null };
+  }
+
+  // ---- PageContentProposal ------------------------------------------------------
+
+  async saveProposal(input: {
+    projectId: string;
+    snapshotId: string;
+    snapshotVersion: number;
+    snapshotDigest: string;
+    slug: string;
+    provider: string;
+    model: string;
+    overrideApplied: boolean;
+    overriddenChampion: string | null;
+    data: unknown;
+  }): Promise<{ id: string; version: number; digest: string }> {
+    const data = parsePageContentProposalData(input.data);
+    // The proposal MUST bind to an APPROVED snapshot at the exact digest.
+    const [snapshot] = await this.db
+      .select()
+      .from(writerPromptSnapshots)
+      .where(and(eq(writerPromptSnapshots.id, input.snapshotId), eq(writerPromptSnapshots.projectId, input.projectId)));
+    if (!snapshot) throw new FactoryError("writer_artifact_not_found", "Writer prompt snapshot not found.");
+    if (snapshot.state !== "approved" || snapshot.snapshotDigest !== input.snapshotDigest) {
+      throw new FactoryError(
+        "writer_proposal_invalid",
+        "Proposal rejected: it does not bind to the exact approved WriterPromptSnapshot digest.",
+      );
+    }
+    const proposalDigest = deterministicDigest(data);
+    return await this.db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({ version: pageContentProposals.version })
+        .from(pageContentProposals)
+        .where(eq(pageContentProposals.projectId, input.projectId))
+        .orderBy(desc(pageContentProposals.version))
+        .limit(1);
+      const nextVersion = (current?.version ?? 0) + 1;
+      const id = `wprp-${randomUUID()}`;
+      await tx.insert(pageContentProposals).values({
+        id,
+        projectId: input.projectId,
+        version: nextVersion,
+        snapshotId: input.snapshotId,
+        snapshotVersion: input.snapshotVersion,
+        snapshotDigest: input.snapshotDigest,
+        slug: input.slug,
+        provider: input.provider,
+        model: input.model,
+        overrideApplied: input.overrideApplied,
+        overriddenChampion: input.overriddenChampion,
+        data,
+        proposalDigest,
+      });
+      return { id, version: nextVersion, digest: proposalDigest };
+    });
+  }
+
+  async latestProposal(projectId: string): Promise<PageContentProposalRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(pageContentProposals)
+      .where(eq(pageContentProposals.projectId, projectId))
+      .orderBy(desc(pageContentProposals.version))
+      .limit(1);
+    return row ?? null;
+  }
+
+  async proposalVersion(projectId: string, version: number): Promise<PageContentProposalRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(pageContentProposals)
+      .where(and(eq(pageContentProposals.projectId, projectId), eq(pageContentProposals.version, version)));
+    return row ?? null;
+  }
+
+  /** Proposal staleness: bound to the exact approved snapshot digest. */
+  async proposalStaleness(
+    projectId: string,
+    proposal: PageContentProposalRecord,
+  ): Promise<{ stale: boolean; reason: string | null }> {
+    const [snapshot] = await this.db
+      .select()
+      .from(writerPromptSnapshots)
+      .where(and(eq(writerPromptSnapshots.id, proposal.snapshotId), eq(writerPromptSnapshots.projectId, projectId)));
+    if (!snapshot || snapshot.state !== "approved" || snapshot.snapshotDigest !== proposal.snapshotDigest) {
+      return { stale: true, reason: "approved snapshot changed" };
+    }
+    return { stale: false, reason: null };
+  }
+}
+
+export type { WriterPromptSnapshotData, PageContentProposalData };

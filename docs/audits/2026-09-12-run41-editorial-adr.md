@@ -127,3 +127,36 @@ manifest): `automated-readability`, `coleman-liau`, `dale-chall`,
 - Typecheck (`pnpm -r run check`): green.
 - New pinned deps: `retext@9.0.0`, `retext-english@5.0.0`,
   `retext-readability@8.0.0` (lockfile committed).
+
+## Remediation addendum — 2026-09-12 (P2/P3 findings from independent QA)
+
+The independent QA verdict for PR #28 raised three non-blocking findings on
+this workstream. All three are remediated in the same change set:
+
+- **F2 (P2) — below-floor suppression is now disclosed, not silent.** The
+  25-word sentence floor itself is unchanged (it is a calibrated threshold:
+  the formulas false-positive on short sentences, and removing it re-flips
+  existing fixtures). What changed is honesty: the check detail now always
+  quantifies suppressed below-floor flags — in PASS
+  ("No sentence ≥ 25 words flagged hard to read by readability formulas; N
+  flagged sentence(s) below the 25-word reporting floor were suppressed (see
+  calibration baselines doc).") and in REVIEW (same suffix appended). The
+  human gate now sees the formulas' full signal and the floor's filtering
+  effect side by side. The original QA probe (a hard 19-word nominalized
+  sentence) is now a regression test asserting the disclosure.
+  `QA_VERSION` stays `content-qa-v1`: verdict semantics (the PASS/REVIEW/FAIL
+  distribution over the calibration corpus) are unchanged — only human-facing
+  detail prose gained the disclosure, so historical stored reports are not
+  invalidated.
+- **F3 (P3) — `.vale.ini` path is module-relative.** `runValeStyleLint`
+  resolves the vendored config from the module's own location
+  (`src/writer/qa.ts` → `apps/factory/vale/.vale.ini`) via
+  `fileURLToPath(import.meta.url)` (the established pattern in this codebase,
+  cf. `src/persistence/migrate.ts`), not from `process.cwd()`. A test now
+  runs the check from an unrelated cwd with a config-existence-probing stub
+  and asserts the check behaves as properly configured.
+- **F4 (P3) — upstream `README.md` vendored.** The pack's upstream README is
+  copied verbatim into `apps/factory/vale/styles/write-good/`; the vendored
+  directory is now byte-identical to upstream `c9ceca7f` except for the
+  intentionally-added `VENDORED.md` and `LICENSE`. `VENDORED.md` file list
+  updated.

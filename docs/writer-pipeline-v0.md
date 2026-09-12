@@ -75,9 +75,12 @@ runs. Models propose; Factory validates and governs.
      conclusion). Advisory: never FAIL. Gated to English locales
      (`localePreferences`); non-English or unspecified locales receive an
      explicit waiver REVIEW instead of a score because the formulas are
-     English-calibrated. Sentences below 25 words are not reported (grade
-     formulas are unreliable below that length); the floor is recorded in
-     `docs/audits/2026-09-12-run41-calibration-baselines.md`.
+     English-calibrated. Sentences below 25 words do not drive the verdict
+     (grade formulas are unreliable below that length); the floor is recorded
+     in `docs/audits/2026-09-12-run41-calibration-baselines.md`, and its
+     effect is always disclosed in the check detail: the number of flagged
+     sentences suppressed below the floor is reported in both PASS and
+     REVIEW verdicts, never silently dropped.
    - `editorial.vale_style` (Run 4.1) — advisory line-level style lint via
      Vale with the vendored `write-good` style pack
      (`apps/factory/vale/styles/write-good/`, pinned commit, see its
@@ -86,6 +89,9 @@ runs. Models propose; Factory validates and governs.
      fixture verdicts are identical in every environment. When configured but
      broken (missing binary, spawn failure, timeout, unparseable JSON) the
      check degrades loudly to a REVIEW — it never FAILs and never crashes QA.
+     The vendored `.vale.ini` is resolved relative to the module location
+     (not the process working directory), so the config follows the reviewed
+     repository regardless of how the service is started.
 7. **AcceptedPageContent** — human acceptance gate. Fails closed without a QA
    report for the exact proposal digest, on QA overall FAIL, on digest
    mismatch, on stale snapshot binding, OR on any transitive upstream

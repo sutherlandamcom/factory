@@ -10,7 +10,8 @@
 All rule files from the pack's `write-good/` directory, copied flat:
 
 `Cliches.yml`, `E-Prime.yml`, `Illusions.yml`, `Passive.yml`, `So.yml`,
-`ThereIs.yml`, `TooWordy.yml`, `Weasel.yml`, plus `meta.json`.
+`ThereIs.yml`, `TooWordy.yml`, `Weasel.yml`, plus `meta.json` and the pack's
+upstream `README.md` (copied verbatim; remediation of QA finding F4).
 
 ## Why vendored
 

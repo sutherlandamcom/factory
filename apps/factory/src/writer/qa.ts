@@ -7,8 +7,9 @@ import type {
 } from "@factory/contracts";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { retext } from "retext";
 import retextEnglish from "retext-english";
 import retextReadability from "retext-readability";
@@ -483,20 +484,31 @@ export function runEditorialQa(
     // Sentence reliability floor: per-sentence grade formulas are statistically
     // unreliable below ~25 words (they need a minimum passage to estimate grade
     // level); the plugin's own minWords=5 default only excludes degenerate
-    // input. Sentences shorter than READABILITY_MIN_SENTENCE_WORDS are therefore
-    // not reported even when flagged. This floor is what keeps short-sentence
-    // professional prose (the accepted v0 writer style) out of the advisory
-    // signal while still flagging genuinely convoluted long sentences.
+    // input. Sentences shorter than READABILITY_MIN_SENTENCE_WORDS do not
+    // drive the verdict — but their suppression is DISCLOSED in the check
+    // detail (remediation of QA finding F2): the human gate must see that the
+    // formulas flagged content the floor filtered out, never a bare PASS that
+    // hides the suppression.
     const flaggedSentences = file.messages
       .map((message) => String(message.actual ?? ""))
       .filter((sentence) => countWords(sentence) >= READABILITY_MIN_SENTENCE_WORDS);
+    const belowFloorCount =
+      file.messages.length - flaggedSentences.length;
+    const suppressionSuffix =
+      belowFloorCount > 0
+        ? `; ${belowFloorCount} flagged sentence(s) below the ${READABILITY_MIN_SENTENCE_WORDS}-word reporting floor were suppressed (see calibration baselines doc)`
+        : "";
     checks.push(
       flaggedSentences.length === 0
-        ? check("editorial.readability", "PASS", "No long sentence flagged hard to read by readability formulas.")
+        ? check(
+            "editorial.readability",
+            "PASS",
+            `No sentence ≥ ${READABILITY_MIN_SENTENCE_WORDS} words flagged hard to read by readability formulas${suppressionSuffix}.`,
+          )
         : check(
             "editorial.readability",
             "REVIEW",
-            `${flaggedSentences.length} sentence(s) flagged hard to read by readability formulas`,
+            `${flaggedSentences.length} sentence(s) flagged hard to read by readability formulas${suppressionSuffix}`,
             flaggedSentences.slice(0, 5).map((sentence) => ({
               kind: "section" as const,
               ref: sentence.slice(0, 280),
@@ -543,9 +555,20 @@ function runValeStyleLint(bodyText: string): QaCheckResult[] {
     return []; // documented opt-out: no check in the array
   }
 
-  const valeIniPath = join(process.cwd(), "vale", ".vale.ini");
-  const dir = mkdtempSync(join(tmpdir(), "factory-vale-"));
-  const tmpPath = join(dir, "body.txt");
+  // Remediation of QA finding F3: resolve the vendored config relative to THIS
+  // module (src/writer → apps/factory/vale), not process.cwd(). All entry
+  // points currently run from apps/factory, but a different working directory
+  // must not silently change which config (if any) Vale receives; the config
+  // file is part of the reviewed repository, so its path follows the module.
+  const valeIniPath = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "vale",
+    ".vale.ini",
+  );
+  const dir = mkdtempSync(path.join(tmpdir(), "factory-vale-"));
+  const tmpPath = path.join(dir, "body.txt");
   try {
     writeFileSync(tmpPath, bodyText, "utf8");
     const result = spawnSync(

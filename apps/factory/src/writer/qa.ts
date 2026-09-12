@@ -45,6 +45,11 @@ function norm(text: string): string {
 export function runFactualQa(
   proposal: PageContentProposalData,
   brief: ContentBriefData,
+  /** Additional accepted-intake identity text (evidence notes, CTA
+   *  destination, brand facts, business description) supplied by the caller
+   *  from the brief's bound accepted input snapshot — legitimate numeric
+   *  sources for the invented-numbers check, never invented by the writer. */
+  evidenceExtras: string[] = [],
 ): QaCheckResult[] {
   const checks: QaCheckResult[] = [];
   const fullText = [
@@ -79,17 +84,40 @@ export function runFactualQa(
   const operatorFacts = brief.operatorFacts;
   const quotedFacts = operatorFacts.filter((f) => normText.includes(norm(f)));
   checks.push(
-    check(
-      "factual.evidence_trace",
-      "PASS",
-      `${quotedFacts.length}/${operatorFacts.length} operator facts appear verbatim in the proposal (allowed-claims boundary: only listed claims may be asserted).`,
-      quotedFacts.map((f) => ({ kind: "claim" as const, ref: f, note: "operator fact materialized verbatim" })),
-    ),
+    operatorFacts.length > 0 && quotedFacts.length === 0
+      ? check(
+          "factual.evidence_trace",
+          "REVIEW",
+          `0/${operatorFacts.length} operator facts appear verbatim in the proposal; accepted factual material may have been paraphrased or dropped — human review required.`,
+          operatorFacts.map((f) => ({ kind: "claim" as const, ref: f, note: "operator fact not materialized verbatim" })),
+        )
+      : check(
+          "factual.evidence_trace",
+          "PASS",
+          `${quotedFacts.length}/${operatorFacts.length} operator facts appear verbatim in the proposal (allowed-claims boundary: only listed claims may be asserted).`,
+          quotedFacts.map((f) => ({ kind: "claim" as const, ref: f, note: "operator fact materialized verbatim" })),
+        ),
   );
 
   // F3: no invented numeric claims absent from evidence.
   const evidenceNumbers = new Set<string>(
-    [...brief.operatorFacts, ...brief.allowedClaims, ...brief.contentBriefKeyPoints]
+    [
+      ...brief.operatorFacts,
+      ...brief.allowedClaims,
+      ...brief.contentBriefKeyPoints,
+      ...evidenceExtras,
+      // Numbers inside the operator-approved page target and the accepted
+      // search semantics are legitimate sources, not inventions.
+      brief.pageTarget.title,
+      brief.pageTarget.objective,
+      brief.pageTarget.audience,
+      ...brief.pageTarget.structureGuidance,
+      ...brief.pageTarget.internalLinkIntent,
+      brief.pageTarget.ctaIntent,
+      brief.searchSemantics.primaryIntent,
+      ...brief.searchSemantics.semanticCoverageRequirements,
+      ...brief.searchSemantics.userNeeds,
+    ]
       .map((t) => norm(t))
       .flatMap((t) => t.match(/\b\d[\d.,]*\b/g) ?? []),
   );
@@ -154,6 +182,21 @@ export function runSearchQa(
   brief: ContentBriefData,
 ): QaCheckResult[] {
   const checks: QaCheckResult[] = [];
+  // No accepted gap lineage (operator-acknowledged waiver): there is NO real
+  // search-evidence basis to check against (searchSemantics carries only the
+  // documented placeholder). Never silently PASS — the waived lineage is
+  // surfaced as REVIEW so the human gate explicitly decides.
+  if (brief.lineage.gapSnapshotId == null) {
+    checks.push(
+      check(
+        "search.lineage_waived",
+        "REVIEW",
+        "Brief has no accepted gap lineage (operator-acknowledged waiver): search semantics checks are not applicable. Human review required.",
+        [{ kind: "briefField", ref: "lineage.gapSnapshotId", note: "no accepted ContentGap snapshot bound to this brief" }],
+      ),
+    );
+    return checks;
+  }
   const sectionTexts = [
     { ref: "introduction", text: `${proposal.title} ${proposal.introduction}` },
     ...proposal.sections.map((s, i) => ({ ref: `section[${i}]:${s.heading}`, text: `${s.heading} ${s.body}` })),
@@ -391,8 +434,9 @@ export function runContentQa(
   proposal: PageContentProposalData,
   brief: ContentBriefData,
   policyRules: Parameters<typeof runEditorialQa>[2],
+  evidenceExtras: string[] = [],
 ): ContentQaOutcome {
-  const factual = runFactualQa(proposal, brief);
+  const factual = runFactualQa(proposal, brief, evidenceExtras);
   const search = runSearchQa(proposal, brief);
   const editorial = runEditorialQa(proposal, brief, policyRules);
   return {

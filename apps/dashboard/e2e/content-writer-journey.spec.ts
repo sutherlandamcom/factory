@@ -42,18 +42,19 @@ function supervisorCall(path: string): Promise<void> {
 }
 
 const UNIQUE = `${Date.now()}`;
-const PROJECT = {
-  key: `e2e-writer-${UNIQUE}`,
-  name: "E2E Writer Roofing",
-};
+function projectDescriptor(tag: string) {
+  return { key: `e2e-writer-${tag}-${UNIQUE}`, name: `E2E Writer Roofing ${tag}` };
+}
+const PROJECT = projectDescriptor("gap");
+const PROJECT_NOGAP = projectDescriptor("nogap");
 
-async function createAndAcceptProject(page: Page) {
+async function createAndAcceptProject(page: Page, project: { key: string; name: string } = PROJECT) {
   await page.goto("/");
   await page.getByRole("button", { name: "New Project" }).click();
-  await page.locator('input[placeholder="e.g. summit-roofing"]').fill(PROJECT.key);
-  await page.locator('input[placeholder="e.g. Summit Roofing"]').fill(PROJECT.name);
+  await page.locator('input[placeholder="e.g. summit-roofing"]').fill(project.key);
+  await page.locator('input[placeholder="e.g. Summit Roofing"]').fill(project.name);
   await page.getByRole("button", { name: "Create", exact: true }).click();
-  await expect(page.locator("h1", { hasText: PROJECT.name })).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator("h1", { hasText: project.name })).toBeVisible({ timeout: 10_000 });
 
   const set = async (tab: string, label: string, value: string) => {
     await page.getByRole("button", { name: tab, exact: true }).click();
@@ -180,5 +181,69 @@ test.describe("Content Writer journey", () => {
     // Accepted v1 remains unchanged and inspectable.
     await expect(page.getByText("Accepted Page Content")).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/Digest: [0-9a-f]{64}/).first()).toBeVisible({ timeout: 10_000 });
+  });
+
+  test("no-gap acknowledged path: waiver badge + digest-bound ack -> policy -> brief -> snapshot (sentinel packet) -> proposal -> QA REVIEW -> ACCEPT v1", async ({ page }) => {
+    test.setTimeout(600_000);
+    // Same accepted inputs, but NO gap snapshot is ever acquired or accepted.
+    await createAndAcceptProject(page, PROJECT_NOGAP);
+
+    // ---- Content workspace ----
+    await page.getByRole("button", { name: "Content", exact: true }).click();
+    await expect(page.getByText("Factory Writer Policy")).toBeVisible({ timeout: 10_000 });
+
+    // ---- Writer Policy: derive + approve ----
+    await page.getByRole("button", { name: "Derive draft" }).click();
+    await expect(page.getByText("Writer policy draft created")).toBeVisible({ timeout: 15_000 });
+    await page.getByRole("button", { name: "Approve exact digest" }).first().click();
+    await expect(page.getByText("Writer policy v1 approved and immutable.")).toBeVisible({ timeout: 15_000 });
+
+    // ---- Brief: Page Target fields + explicit no-gap acknowledgement ----
+    await page.locator('input[placeholder="roof-replacement-denver"]').fill("roof-repair-austin");
+    await page.getByLabel("Title", { exact: false }).first().fill("Roof Repair in Austin");
+    await page.getByLabel("Objective", { exact: false }).fill("Convert homeowners researching roof repair into inspection requests.");
+    await page.getByLabel("Audience", { exact: false }).fill("Austin homeowners comparing local roofers");
+    await page.getByLabel("Structure guidance (one per line)").fill("Storm damage context\nRepair process\nWarranty and trust signals");
+    await page.getByLabel("CTA intent", { exact: false }).fill("Book a free roof inspection");
+    await page
+      .getByLabel(/Explicitly draft\/approve WITHOUT accepted gap lineage/)
+      .check();
+    await page.getByRole("button", { name: "Create draft" }).click();
+    await expect(page.getByText(/Brief draft v1 saved/)).toBeVisible({ timeout: 15_000 });
+    // Waiver must be visible and explicit in the UI — never silent.
+    await expect(page.getByText("NO GAP LINEAGE — EXPLICIT OPERATOR ACKNOWLEDGEMENT")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("no gap lineage")).toBeVisible({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Approve exact digest" }).click();
+    await expect(page.getByText("Brief v1 approved.")).toBeVisible({ timeout: 15_000 });
+
+    // ---- Snapshot: compile + verify the waiver is digest-bound inside the packet ----
+    await page.getByRole("button", { name: "Compile new snapshot" }).click();
+    await expect(page.getByText(/Snapshot v1 compiled/)).toBeVisible({ timeout: 15_000 });
+    await page.getByText("Review exact prompt packet").click();
+    await expect(
+      page.getByText("- Primary intent: no accepted gap snapshot (explicit operator acknowledgement)")
+    ).toBeVisible({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Approve exact digest" }).click();
+    await expect(page.getByText(/approved\. Generation is now authorized/)).toBeVisible({ timeout: 15_000 });
+
+    // ---- Proposal (fixture writer) + QA: waived lineage is REVIEW, never PASS ----
+    await page.getByRole("button", { name: "Generate proposal" }).click();
+    await expect(page.getByText(/Proposal generated/)).toBeVisible({ timeout: 30_000 });
+    await page.getByRole("button", { name: "Run QA" }).click();
+    await expect(page.getByText("QA verdict: REVIEW")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText("search.lineage_waived")).toBeVisible({ timeout: 10_000 });
+
+    // ---- ACCEPT CONTENT: REVIEW overall is acceptable, FAIL is not ----
+    await page.getByRole("button", { name: "ACCEPT CONTENT" }).click();
+    await expect(page.getByText(/AcceptedPageContent v1 created for roof-repair-austin/)).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText("Accepted Page Content")).toBeVisible({ timeout: 10_000 });
+
+    // ---- Reload persistence: accepted v1 with proposal + QA digests survives ----
+    await page.reload();
+    await page.getByRole("button", { name: new RegExp(PROJECT_NOGAP.key) }).click();
+    await expect(page.locator("h1", { hasText: PROJECT_NOGAP.name })).toBeVisible({ timeout: 15_000 });
+    await page.getByRole("button", { name: "Content", exact: true }).click();
+    await expect(page.getByText("Accepted Page Content")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/QA report: [0-9a-f]{64}/)).toBeVisible({ timeout: 10_000 });
   });
 });

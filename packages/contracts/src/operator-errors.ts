@@ -97,6 +97,36 @@ export const OPERATOR_ERROR_CODES = [
   "content_gap_decision_invalid",
   /** Acceptance rejected (digest mismatch, stale, or invalid state). */
   "content_gap_accept_failed",
+  /** No accepted ProjectInputSnapshot exists for this project (writer). */
+  "writer_input_not_accepted",
+  /** No accepted ContentGap snapshot exists and no explicit no-gap-lineage acknowledgement was provided. */
+  "content_gap_lineage_missing",
+  /** Factory Writer Policy does not exist or is not approved for this project. */
+  "writer_policy_not_approved",
+  /** Writer policy/brief/snapshot approval rejected (digest mismatch, stale revision, or invalid state). */
+  "writer_approval_failed",
+  /** Writer policy/brief/snapshot is stale versus an upstream accepted input mutation. */
+  "writer_artifact_stale",
+  /** Referenced writer artifact (brief/snapshot/proposal) does not exist for this project. */
+  "writer_artifact_not_found",
+  /** Writer artifact payload violates the writer content contract. */
+  "writer_content_invalid",
+  /** Trusted writer budget policy blocks this execution (fail before spend). */
+  "writer_budget_blocked",
+  /** Writer provider credentials (e.g. OpenRouter API key) are missing in production mode. */
+  "writer_provider_not_configured",
+  /** Writer provider endpoint unreachable/failed before or during generation. */
+  "writer_provider_unavailable",
+  /** Writer proposal output failed strict contract validation (fail closed, no silent repair). */
+  "writer_proposal_invalid",
+  /** Page content acceptance rejected (digest mismatch, stale, or QA not passed). */
+  "content_accept_failed",
+  /** Accepted page content does not exist for this project. */
+  "accepted_content_not_found",
+  /** Deterministic QA report already exists for this proposal at a different digest (insert-only, never replaced). */
+  "writer_qa_conflict",
+  /** Budget ledger invariant trip; usage was durably accounted before failing. */
+  "budget_invariant_violation",
   /** Unexpected server fault (message is always the sanitized fixed string). */
   "internal_error",
 ] as const;
@@ -147,6 +177,21 @@ export const OPERATOR_ERROR_STATUS: Readonly<Record<OperatorErrorCode, number>> 
   content_gap_stale: 409,
   content_gap_decision_invalid: 422,
   content_gap_accept_failed: 409,
+  writer_input_not_accepted: 409,
+  content_gap_lineage_missing: 409,
+  writer_policy_not_approved: 409,
+  writer_approval_failed: 409,
+  writer_artifact_stale: 409,
+  writer_artifact_not_found: 404,
+  writer_content_invalid: 422,
+  writer_budget_blocked: 402,
+  writer_provider_not_configured: 409,
+  writer_provider_unavailable: 502,
+  writer_proposal_invalid: 502,
+  content_accept_failed: 409,
+  accepted_content_not_found: 404,
+  writer_qa_conflict: 409,
+  budget_invariant_violation: 409,
   internal_error: 500,
 };
 

@@ -17,10 +17,15 @@ import { FixtureSerpProvider } from "../search/serp-fixture.js";
 import { FixtureGroundedSearchProvider } from "../search/grounded-types.js";
 import { FixtureSearchAnalyst, OpenRouterSearchAnalyst } from "../search/analyst.js";
 import { invokeModel } from "../models/gateway.js";
+import { assertOverrideStartupPolicy, logOverrideDiagnostics } from "../models/override-guard.js";
 import { CompetitorStore } from "../competitors/competitor-store.js";
 import { CompetitorContentGapService, buildCompetitorAnalysts } from "../competitors/service.js";
 import { FixturePageProvider } from "../competitors/fixture-page-provider.js";
 import { DirectHttpPageProvider } from "../competitors/direct-http.js";
+import { WriterStore, WriterSnapshotStore, WriterQaStore } from "../writer/writer-store.js";
+import { WriterService } from "../writer/service.js";
+import { WriterBudgetStore } from "../writer/budget.js";
+import { FixtureWriterProvider } from "../writer/fixture-writer.js";
 import { FactoryError } from "../executor/errors.js";
 
 /**
@@ -283,6 +288,9 @@ async function serveStatic(
 }
 
 export async function startOperatorServer(): Promise<http.Server> {
+  // Fail closed before any wiring when dev-time model overrides leak into a
+  // governed environment, or fixture mode is set on a gated live-proof path.
+  logOverrideDiagnostics(assertOverrideStartupPolicy(process.env));
   const config = resolveDatabaseConfig(process.env);
   const dbInstance = createDatabaseInstance(config);
   const store = new FactoryStore(dbInstance.db);
@@ -311,7 +319,17 @@ export async function startOperatorServer(): Promise<http.Server> {
         : {}),
     },
   });
-  const deps: OperatorApiDeps = { store, intake, search, competitors };
+  const writerBudget = new WriterBudgetStore(dbInstance.db);
+  const writerStore = new WriterStore(dbInstance.db);
+  const writerSnapshotStore = new WriterSnapshotStore(dbInstance.db);
+  const writerQaStore = new WriterQaStore(dbInstance.db);
+  const writerMode = process.env.FACTORY_WRITER_MODE === "fixture" ? "fixture" : "production";
+  const writerProvider =
+    writerMode === "fixture"
+      ? new FixtureWriterProvider()
+      : undefined; // production uses the OpenRouter adapter inside the provider boundary
+  const writer = new WriterService(writerStore, writerSnapshotStore, writerBudget, writerQaStore, writerProvider);
+  const deps: OperatorApiDeps = { store, intake, search, competitors, writer };
   const server = createOperatorServer(deps);
   const host = process.env.FACTORY_OPERATOR_HOST ?? "127.0.0.1";
   const port = Number(process.env.FACTORY_OPERATOR_PORT ?? 3000);

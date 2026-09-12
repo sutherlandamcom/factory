@@ -2987,8 +2987,8 @@ test("P1-05: STRONG coverage matrix with ABSENT model coverage fails closed", ()
 // Macro Run 3 Independent QA Remediation: P1-1, P1-2, P1-3 Targeted Test Suite
 // ---------------------------------------------------------------------------
 
-test("P1-1: model pricing policy version is model-pricing-v0.2 and covers Google Gemini rates conservatively", () => {
-  assert.equal(FACTORY_MODEL_PRICING_POLICY_VERSION, "model-pricing-v0.2");
+test("P1-1: model pricing policy version is model-pricing-v0.3 and covers Google Gemini rates conservatively", () => {
+  assert.equal(FACTORY_MODEL_PRICING_POLICY_VERSION, "model-pricing-v0.3");
 
   const gemini37 = getModelPricing("google/gemini-3.7-flash");
   assert.ok(gemini37);

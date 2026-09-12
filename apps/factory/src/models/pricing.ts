@@ -8,7 +8,7 @@ import { FactoryError } from "../executor/errors.js";
  * to guarantee that actual invocation cost is strictly <= authorized reservation.
  */
 
-export const FACTORY_MODEL_PRICING_POLICY_VERSION = "model-pricing-v0.2";
+export const FACTORY_MODEL_PRICING_POLICY_VERSION = "model-pricing-v0.3";
 
 export interface ModelTokenPricing {
   promptUsdPerToken: number;
@@ -32,6 +32,20 @@ export interface ModelTokenPricing {
  * - Fixtures: 0 USD.
  */
 export const TRUSTED_MODEL_PRICING: Readonly<Record<string, ModelTokenPricing>> = {
+  // Verified against the authenticated OpenRouter model catalog (2026-09-12):
+  // anthropic/claude-opus-5 prompt $5/1M, completion $25/1M. Rates set at the
+  // exact verified catalog values (verified, not estimated).
+  "anthropic/claude-opus-5": {
+    promptUsdPerToken: 0.000005,
+    completionUsdPerToken: 0.000025,
+  },
+  // Verified against the authenticated OpenRouter model catalog (2026-09-12):
+  // z-ai/glm-5.3-flash prompt $0.075/1M, completion $0.25/1M. Conservative
+  // ceilings strictly above catalog rates.
+  "z-ai/glm-5.3-flash": {
+    promptUsdPerToken: 0.0000001,
+    completionUsdPerToken: 0.0000003,
+  },
   "google/gemini-3.7-flash": {
     promptUsdPerToken: 0.00000150, // $1.50 per million tokens (catalog: $0.75/1M intro, $1.50/1M standard)
     completionUsdPerToken: 0.00000750, // $7.50 per million tokens (catalog: $3.75/1M intro, $7.50/1M standard)

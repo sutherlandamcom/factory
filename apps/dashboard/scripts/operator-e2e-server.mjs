@@ -40,6 +40,9 @@ const CHILD_ENV = {
   // read only by the trusted backend (never by the browser).
   FACTORY_SEARCH_MODE: process.env.FACTORY_SEARCH_MODE || "fixture",
   FACTORY_COMPETITOR_MODE: process.env.FACTORY_COMPETITOR_MODE || "fixture",
+  // Writer pipeline (Macro Run 4): fixture writer provider so the full
+  // journey never touches a paid provider. Trusted backend config only.
+  FACTORY_WRITER_MODE: process.env.FACTORY_WRITER_MODE || "fixture",
 };
 
 /** @type {import('node:child_process').ChildProcess | null} */

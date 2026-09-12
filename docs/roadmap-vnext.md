@@ -29,8 +29,9 @@ distinct facts.
 | Macro Run 1 — Operator Kernel / Intake | Implemented and merged | [PR #18](https://github.com/sutherlandamcom/factory/pull/18), final head `dd1cda5d5efe7394335c7bf0ca1678fde8ac5f15`; merged 2026-09-05; Operator code exists on inspected main |
 | Agent-instruction alignment | Merged; post-merge documentation inconsistencies require the present follow-up | [PR #19](https://github.com/sutherlandamcom/factory/pull/19), head `88c83e87cdbecb24d99839ab046790f9a615b5a2`; [candidate CI success](https://github.com/sutherlandamcom/factory/actions/runs/33989714882) |
 | Macro Run 2 — Live Search Intelligence | Implemented and merged | [PR #21](https://github.com/sutherlandamcom/factory/pull/21), merge commit `3bf9652e89f213c9ffd3b2fae2007d8ed155c68f`; Search Intelligence code merged into main |
-| Macro Run 3 — Competitors + Content Gap | Implementation candidate; open, awaiting independent QA | Branch `feat/competitor-content-gap-v0`; deterministic QA green; bounded live proof performed (Bright Data SERP + direct-HTTP acquisition + Gemini analyses); see PR description for exact evidence |
-| Macro Runs 4–13 | Planned | Exit criteria below; no completion inferred from provider/eval scaffolding |
+| Macro Run 3 — Competitors + Content Gap | Implemented and merged | [PR #24](https://github.com/sutherlandamcom/factory/pull/24), merge commit `46a556603047c4dce75ca3bbd05e1ed4b7ea817c`, merged 2026-09-11 |
+| Macro Run 4 — Content Constitution + Opus Writer | Implementation candidate; open, awaiting independent QA | Branch `feat/content-writer-v0`; deterministic QA green (unit, contracts, real-PostgreSQL persistence, Operator API, Dashboard unit, real-browser Content Writer E2E); see PR description for exact evidence |
+| Macro Runs 5–13 | Planned | Exit criteria below; no completion inferred from provider/eval scaffolding |
 
 Inspected main's [CI](https://github.com/sutherlandamcom/factory/actions/runs/33998967648)
 checked out the exact SHA above and passed: Factory unit 582, Dashboard unit 6,

@@ -11,6 +11,8 @@ import { FactoryStore } from "../persistence/store.js";
 import { getProjectOperatorWorkspace } from "./workspace.js";
 import type { SearchIntelligenceService } from "../search/service.js";
 import type { CompetitorContentGapService } from "../competitors/service.js";
+import type { WriterService } from "../writer/service.js";
+import { activeModelOverrides } from "../models/policy.js";
 
 export interface OperatorApiDeps {
   readonly store: FactoryStore;
@@ -19,6 +21,8 @@ export interface OperatorApiDeps {
   readonly search?: SearchIntelligenceService;
   /** Competitors + Content Gap v0; optional for backward compatibility. */
   readonly competitors?: CompetitorContentGapService;
+  /** Writer pipeline v0 (Macro Run 4); optional for backward compatibility. */
+  readonly writer?: WriterService;
 }
 
 const projectKeySchema = z
@@ -109,6 +113,55 @@ const gapAcceptSchema = z
   .refine((data) => Boolean(data.expectedReportDigest || data.expectedDigest), {
     message: "expectedReportDigest (or expectedDigest) is required",
   });
+
+const writerPolicyApproveSchema = z
+  .object({
+    policyId: z.string().trim().min(1).max(128),
+    expectedVersion: z.number().int().min(1),
+    expectedDigest: z.string().trim().min(1).max(128),
+  })
+  .strict();
+
+const writerBriefDraftSchema = z
+  .object({
+    pageTarget: z.unknown(),
+    contentBriefKeyPoints: z.array(z.string().trim().min(1).max(500)).max(20).default([]),
+    expectedRevision: z.number().int().min(1).optional(),
+    noGapLineageAcknowledged: z.boolean().optional(),
+  })
+  .strict();
+
+const writerBriefApproveSchema = z
+  .object({
+    briefId: z.string().trim().min(1).max(128),
+    expectedVersion: z.number().int().min(1),
+    expectedDigest: z.string().trim().min(1).max(128),
+    noGapLineageAcknowledged: z.boolean().optional(),
+  })
+  .strict();
+
+const writerSnapshotCompileSchema = z.object({}).strict();
+
+const writerSnapshotApproveSchema = z
+  .object({
+    snapshotId: z.string().trim().min(1).max(128),
+    expectedVersion: z.number().int().min(1),
+    expectedDigest: z.string().trim().min(1).max(128),
+  })
+  .strict();
+
+const writerGenerateSchema = z
+  .object({
+    snapshotId: z.string().trim().min(1).max(128),
+  })
+  .strict();
+
+const writerAcceptSchema = z
+  .object({
+    proposalId: z.string().trim().min(1).max(128),
+    expectedProposalDigest: z.string().trim().min(1).max(128),
+  })
+  .strict();
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
@@ -375,6 +428,129 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         }
         const detail = await deps.competitors.acceptedGapDetail(project.id, version);
         return sendJson(res, 200, detail);
+      }
+
+      // ---- Writer pipeline (Macro Run 4) ------------------------------------
+
+      if (req.method === "GET" && segments.length === 4 && segments[0] === "projects" && segments[2] === "writer" && segments[3] === "workspace") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.writer) return sendError(res, "not_found", "Writer is not available.");
+        const [policy, brief, snapshot, proposal, accepted] = await Promise.all([
+          deps.writer.writerPolicyWorkspace(project.id),
+          deps.writer.briefWorkspace(project.id),
+          deps.writer.snapshotWorkspace(project.id),
+          deps.writer.proposalWorkspace(project.id),
+          deps.writer.acceptedContentWorkspace(project.id),
+        ]);
+        // Dev-time model override banner: surfaced in human terms whenever an
+        // override affects the current run (from the Phase 0 seam).
+        const overrides = activeModelOverrides(process.env);
+        return sendJson(res, 200, {
+          policy,
+          brief,
+          snapshot,
+          proposal,
+          accepted,
+          devModelOverride:
+            overrides.length > 0
+              ? {
+                  active: true,
+                  roles: overrides.map((o) => ({
+                    roleId: o.roleId,
+                    model: o.model,
+                    championModel: o.championModel,
+                  })),
+                }
+              : { active: false, roles: [] },
+        });
+      }
+
+      if (req.method === "POST" && segments.length === 4 && segments[0] === "projects" && segments[2] === "writer" && segments[3] === "policy-draft") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.writer) return sendError(res, "not_found", "Writer is not available.");
+        if (body.trim()) parseJsonBody(body);
+        const policy = await deps.writer.deriveWriterPolicyDraft(project.id);
+        return sendJson(res, 201, policy);
+      }
+
+      if (req.method === "POST" && segments.length === 4 && segments[0] === "projects" && segments[2] === "writer" && segments[3] === "policy-approve") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.writer) return sendError(res, "not_found", "Writer is not available.");
+        const parsed = parseJsonBody(body);
+        const input = parseOr400(writerPolicyApproveSchema, parsed);
+        const result = await deps.writer.approveWriterPolicy({ projectId: project.id, ...input });
+        return sendJson(res, 200, result);
+      }
+
+      if (req.method === "PUT" && segments.length === 4 && segments[0] === "projects" && segments[2] === "writer" && segments[3] === "brief-draft") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.writer) return sendError(res, "not_found", "Writer is not available.");
+        const parsed = parseJsonBody(body);
+        const input = parseOr400(writerBriefDraftSchema, parsed);
+        const result = await deps.writer.saveBriefDraft({ projectId: project.id, ...input });
+        return sendJson(res, 200, result);
+      }
+
+      if (req.method === "POST" && segments.length === 4 && segments[0] === "projects" && segments[2] === "writer" && segments[3] === "brief-approve") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.writer) return sendError(res, "not_found", "Writer is not available.");
+        const parsed = parseJsonBody(body);
+        const input = parseOr400(writerBriefApproveSchema, parsed);
+        const result = await deps.writer.approveBrief({ projectId: project.id, ...input });
+        return sendJson(res, 200, result);
+      }
+
+      if (req.method === "POST" && segments.length === 4 && segments[0] === "projects" && segments[2] === "writer" && segments[3] === "snapshot-compile") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.writer) return sendError(res, "not_found", "Writer is not available.");
+        if (body.trim()) parseJsonBody(body);
+        const snapshot = await deps.writer.compileSnapshot({ projectId: project.id });
+        return sendJson(res, 201, snapshot);
+      }
+
+      if (req.method === "POST" && segments.length === 4 && segments[0] === "projects" && segments[2] === "writer" && segments[3] === "snapshot-approve") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.writer) return sendError(res, "not_found", "Writer is not available.");
+        const parsed = parseJsonBody(body);
+        const input = parseOr400(writerSnapshotApproveSchema, parsed);
+        const result = await deps.writer.approveSnapshot({ projectId: project.id, ...input });
+        return sendJson(res, 200, result);
+      }
+
+      if (req.method === "POST" && segments.length === 4 && segments[0] === "projects" && segments[2] === "writer" && segments[3] === "generate") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.writer) return sendError(res, "not_found", "Writer is not available.");
+        const parsed = parseJsonBody(body);
+        const input = parseOr400(writerGenerateSchema, parsed);
+        const proposal = await deps.writer.generateProposal({ projectId: project.id, snapshotId: input.snapshotId });
+        return sendJson(res, 201, proposal);
+      }
+
+      if (req.method === "POST" && segments.length === 4 && segments[0] === "projects" && segments[2] === "writer" && segments[3] === "qa") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.writer) return sendError(res, "not_found", "Writer is not available.");
+        if (body.trim()) parseJsonBody(body);
+        const qa = await deps.writer.runQa({ projectId: project.id });
+        return sendJson(res, 200, qa);
+      }
+
+      if (req.method === "POST" && segments.length === 4 && segments[0] === "projects" && segments[2] === "writer" && segments[3] === "accept") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.writer) return sendError(res, "not_found", "Writer is not available.");
+        const parsed = parseJsonBody(body);
+        const input = parseOr400(writerAcceptSchema, parsed);
+        const accepted = await deps.writer.acceptContent({ projectId: project.id, ...input });
+        return sendJson(res, 201, accepted);
       }
 
       return sendError(res, "not_found", "Unknown endpoint.");

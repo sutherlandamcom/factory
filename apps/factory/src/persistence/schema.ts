@@ -205,6 +205,12 @@ export const modelInvocations = pgTable(
     reasoningEffort: text("reasoning_effort"),
     escalation: boolean("escalation"),
     escalationReason: text("escalation_reason"),
+    // Dev-time model override provenance (FACTORY_MODEL_OVERRIDE__*):
+    // rows produced under an override record the actual model plus the
+    // champion it replaced, so override artifacts never masquerade as
+    // champion-produced. Nullable for all pre-override rows.
+    overrideApplied: boolean("override_applied"),
+    overriddenChampion: text("overridden_champion"),
     exitCode: integer("exit_code"),
     status: text("status").notNull(), // 'running' | 'succeeded' | 'failed' | 'interrupted'
     startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
@@ -869,3 +875,223 @@ export type InsertAcceptedContentGapSnapshot = typeof acceptedContentGapSnapshot
 
 export type CompetitorBudgetReservationRecord = typeof competitorBudgetReservations.$inferSelect;
 export type InsertCompetitorBudgetReservation = typeof competitorBudgetReservations.$inferInsert;
+
+/**
+ * Durable budget reservation ledger for paid WRITER model invocations.
+ * Reuses the exact lifecycle mechanism of competitor_budget_reservations
+ * (ACTIVE -> ACCOUNTED | RELEASED under an advisory xact lock) with its own
+ * daily limit (FACTORY_WRITER_DAILY_LIMIT_USD).
+ */
+export const writerBudgetReservations = pgTable(
+  "writer_budget_reservations",
+  {
+    id: text("id").primaryKey(),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    authorizedMicros: integer("authorized_micros").notNull(),
+    accountedMicros: integer("accounted_micros"),
+    state: text("state").notNull(),
+    invocationDigest: text("invocation_digest").notNull(),
+    lineage: jsonb("lineage"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    accountedAt: timestamp("accounted_at", { withTimezone: true }),
+  },
+  (table) => [
+    check(
+      "writer_budget_reservations_state_valid",
+      sql`${table.state} IN ('ACTIVE', 'ACCOUNTED', 'RELEASED')`,
+    ),
+    index("writer_budget_reservations_state_created_idx").on(table.state, table.createdAt),
+    index("writer_budget_reservations_created_idx").on(table.createdAt),
+  ],
+);
+
+export type WriterBudgetReservationRecord = typeof writerBudgetReservations.$inferSelect;
+export type InsertWriterBudgetReservation = typeof writerBudgetReservations.$inferInsert;
+
+// ---- Writer pipeline (Macro Run 4) -----------------------------------------
+
+/**
+ * Factory Writer Policy: versioned, digest-bound, immutable-once-approved
+ * projection of the accepted Content Constitution (never a second editable
+ * SOT). Approve exact revision + digest -> immutable approved version;
+ * edits -> new draft version.
+ */
+export const writerPolicies = pgTable(
+  "writer_policies",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    /** 'draft' | 'approved' */
+    state: text("state").notNull(),
+    acceptedInputSnapshotId: text("accepted_input_snapshot_id").notNull(),
+    acceptedInputVersion: integer("accepted_input_version").notNull(),
+    acceptedInputDigest: text("accepted_input_digest").notNull(),
+    data: jsonb("data").notNull(),
+    policyDigest: text("policy_digest").notNull(),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check("writer_policies_state_valid", sql`${table.state} IN ('draft', 'approved')`),
+    unique("writer_policies_project_version_unique").on(table.projectId, table.version),
+    index("writer_policies_project_idx").on(table.projectId, table.version),
+  ],
+);
+
+/**
+ * Content Production Brief: page-level brief composed deterministically from
+ * accepted inputs + approved writer policy + operator Page Target fields +
+ * accepted gap snapshot lineage. Page Target fields are brief draft fields,
+ * not a pages registry.
+ */
+export const contentBriefs = pgTable(
+  "content_briefs",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    /** 'draft' | 'approved' */
+    state: text("state").notNull(),
+    acceptedInputSnapshotId: text("accepted_input_snapshot_id").notNull(),
+    acceptedInputVersion: integer("accepted_input_version").notNull(),
+    acceptedInputDigest: text("accepted_input_digest").notNull(),
+    writerPolicyId: text("writer_policy_id").notNull(),
+    writerPolicyVersion: integer("writer_policy_version").notNull(),
+    writerPolicyDigest: text("writer_policy_digest").notNull(),
+    gapSnapshotId: text("gap_snapshot_id"),
+    gapSnapshotVersion: integer("gap_snapshot_version"),
+    gapSnapshotDigest: text("gap_snapshot_digest"),
+    /** Explicit, digest-bound operator acknowledgement for missing gap lineage. */
+    noGapLineageAcknowledged: boolean("no_gap_lineage_acknowledged").notNull().default(false),
+    slug: text("slug").notNull(),
+    data: jsonb("data").notNull(),
+    briefDigest: text("brief_digest").notNull(),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check("content_briefs_state_valid", sql`${table.state} IN ('draft', 'approved')`),
+    unique("content_briefs_project_version_unique").on(table.projectId, table.version),
+    index("content_briefs_project_slug_idx").on(table.projectId, table.slug),
+  ],
+);
+
+/** WriterPromptSnapshot: exact compiled prompt packet, human-reviewable. */
+export const writerPromptSnapshots = pgTable(
+  "writer_prompt_snapshots",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    /** 'draft' | 'approved' */
+    state: text("state").notNull(),
+    briefId: text("brief_id").notNull(),
+    briefVersion: integer("brief_version").notNull(),
+    briefDigest: text("brief_digest").notNull(),
+    systemPrompt: text("system_prompt").notNull(),
+    userPrompt: text("user_prompt").notNull(),
+    maxOutputTokens: integer("max_output_tokens").notNull(),
+    data: jsonb("data").notNull(),
+    snapshotDigest: text("snapshot_digest").notNull(),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check("writer_prompt_snapshots_state_valid", sql`${table.state} IN ('draft', 'approved')`),
+    unique("writer_prompt_snapshots_project_version_unique").on(table.projectId, table.version),
+    index("writer_prompt_snapshots_project_idx").on(table.projectId, table.version),
+  ],
+);
+
+/** PageContentProposal: structured writer output bound to the exact snapshot digest. */
+export const pageContentProposals = pgTable(
+  "page_content_proposals",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    snapshotId: text("snapshot_id").notNull(),
+    snapshotVersion: integer("snapshot_version").notNull(),
+    snapshotDigest: text("snapshot_digest").notNull(),
+    slug: text("slug").notNull(),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    overrideApplied: boolean("override_applied").notNull().default(false),
+    overriddenChampion: text("overridden_champion"),
+    data: jsonb("data").notNull(),
+    proposalDigest: text("proposal_digest").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("page_content_proposals_project_version_unique").on(table.projectId, table.version),
+    index("page_content_proposals_project_idx").on(table.projectId, table.version),
+  ],
+);
+
+/** Deterministic QA report (factual + search + editorial) for a proposal. */
+export const contentQaReports = pgTable(
+  "content_qa_reports",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    proposalId: text("proposal_id").notNull(),
+    proposalVersion: integer("proposal_version").notNull(),
+    proposalDigest: text("proposal_digest").notNull(),
+    data: jsonb("data").notNull(),
+    reportDigest: text("report_digest").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("content_qa_reports_proposal_unique").on(table.proposalId),
+  ],
+);
+
+/** AcceptedPageContent: final human-approved, immutable, digested content. */
+export const acceptedPageContent = pgTable(
+  "accepted_page_content",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    slug: text("slug").notNull(),
+    proposalId: text("proposal_id").notNull(),
+    proposalVersion: integer("proposal_version").notNull(),
+    proposalDigest: text("proposal_digest").notNull(),
+    qaReportDigest: text("qa_report_digest").notNull(),
+    data: jsonb("data").notNull(),
+    contentDigest: text("content_digest").notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("accepted_page_content_project_version_unique").on(table.projectId, table.version),
+    unique("accepted_page_content_project_slug_unique").on(table.projectId, table.slug),
+    index("accepted_page_content_project_idx").on(table.projectId, table.version),
+  ],
+);
+
+export type WriterPolicyRecord = typeof writerPolicies.$inferSelect;
+export type InsertWriterPolicy = typeof writerPolicies.$inferInsert;
+export type ContentBriefRecord = typeof contentBriefs.$inferSelect;
+export type InsertContentBrief = typeof contentBriefs.$inferInsert;
+export type WriterPromptSnapshotRecord = typeof writerPromptSnapshots.$inferSelect;
+export type InsertWriterPromptSnapshot = typeof writerPromptSnapshots.$inferInsert;
+export type PageContentProposalRecord = typeof pageContentProposals.$inferSelect;
+export type InsertPageContentProposal = typeof pageContentProposals.$inferInsert;
+export type ContentQaReportRecord = typeof contentQaReports.$inferSelect;
+export type InsertContentQaReport = typeof contentQaReports.$inferInsert;
+export type AcceptedPageContentRecord = typeof acceptedPageContent.$inferSelect;
+export type InsertAcceptedPageContent = typeof acceptedPageContent.$inferInsert;

@@ -548,3 +548,215 @@ export interface SearchRunReadModel {
     };
   } | null;
 }
+
+// ---- Writer pipeline (Macro Run 4) ------------------------------------------
+
+export interface WriterPolicyView {
+  id: string;
+  version: number;
+  state: "draft" | "approved";
+  digest: string;
+  lineage: {
+    acceptedInputSnapshotId: string;
+    acceptedInputSnapshotVersion: number;
+    acceptedInputDigest: string;
+  };
+  rules: Record<string, unknown>;
+  stale: boolean;
+  staleReason: string | null;
+  approvedAt: string | null;
+  createdAt: string;
+}
+
+export interface ContentBriefView {
+  id: string;
+  version: number;
+  state: "draft" | "approved";
+  digest: string;
+  slug: string;
+  lineage: Record<string, unknown>;
+  pageTarget: {
+    slug: string;
+    title: string;
+    objective: string;
+    audience: string;
+    structureGuidance: string[];
+    internalLinkIntent: string[];
+    ctaIntent: string;
+  };
+  noGapLineageAcknowledged: boolean;
+  stale: boolean;
+  staleReason: string | null;
+  approvedAt: string | null;
+  createdAt: string;
+}
+
+export interface WriterSnapshotView {
+  id: string;
+  version: number;
+  state: "draft" | "approved";
+  digest: string;
+  briefId: string;
+  briefVersion: number;
+  briefDigest: string;
+  systemPrompt: string;
+  userPrompt: string;
+  maxOutputTokens: number;
+  stale: boolean;
+  staleReason: string | null;
+  approvedAt: string | null;
+  createdAt: string;
+}
+
+export interface WriterProposalView {
+  id: string;
+  version: number;
+  digest: string;
+  slug: string;
+  snapshotId: string;
+  snapshotVersion: number;
+  snapshotDigest: string;
+  provider: string;
+  model: string;
+  overrideApplied: boolean;
+  overriddenChampion: string | null;
+  data: {
+    title: string;
+    metaDescription: string;
+    introduction: string;
+    sections: Array<{ heading: string; body: string }>;
+    conclusion: string;
+    cta: string;
+    internalLinks: string[];
+  };
+  stale: boolean;
+  staleReason: string | null;
+  createdAt: string;
+}
+
+export interface WriterQaView {
+  reportId: string;
+  digest: string;
+  proposalId: string;
+  proposalDigest: string;
+  factual: Array<{ checkId: string; verdict: string; detail: string; evidence: Array<{ kind: string; ref: string; note?: string }> }>;
+  search: Array<{ checkId: string; verdict: string; detail: string; evidence: Array<{ kind: string; ref: string; note?: string }> }>;
+  editorial: Array<{ checkId: string; verdict: string; detail: string; evidence: Array<{ kind: string; ref: string; note?: string }> }>;
+  overall: string;
+}
+
+export interface AcceptedContentView {
+  id: string;
+  version: number;
+  slug: string;
+  digest: string;
+  proposalId: string;
+  proposalDigest: string;
+  qaReportDigest: string;
+  data: unknown;
+  acceptedAt: string;
+}
+
+export interface WriterWorkspace {
+  policy: { latest: WriterPolicyView | null; versions: Array<{ id: string; version: number; state: string; digest: string; createdAt: string }> };
+  brief: { latest: ContentBriefView | null; versions: Array<{ id: string; version: number; state: string; digest: string; slug: string; createdAt: string }> };
+  snapshot: { latest: WriterSnapshotView | null; versions: Array<{ id: string; version: number; state: string; digest: string; createdAt: string }> };
+  proposal: { latest: WriterProposalView | null; versions: Array<{ id: string; version: number; digest: string; slug: string; createdAt: string }> };
+  accepted: { latest: AcceptedContentView | null };
+  devModelOverride: {
+    active: boolean;
+    roles: Array<{ roleId: string; model: string; championModel: string }>;
+  };
+}
+
+export const writerApi = {
+  workspace: (projectId: string) =>
+    request<WriterWorkspace>(`/api/projects/${encodeURIComponent(projectId)}/writer/workspace`),
+
+  derivePolicyDraft: (projectId: string) =>
+    request<WriterPolicyView>(`/api/projects/${encodeURIComponent(projectId)}/writer/policy-draft`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+
+  approvePolicy: (
+    projectId: string,
+    input: { policyId: string; expectedVersion: number; expectedDigest: string },
+  ) =>
+    request<{ id: string; version: number; digest: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/writer/policy-approve`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+
+  saveBriefDraft: (
+    projectId: string,
+    input: {
+      pageTarget: {
+        slug: string;
+        title: string;
+        objective: string;
+        audience: string;
+        structureGuidance: string[];
+        internalLinkIntent: string[];
+        ctaIntent: string;
+      };
+      contentBriefKeyPoints: string[];
+      expectedRevision?: number;
+      noGapLineageAcknowledged?: boolean;
+    },
+  ) =>
+    request<{ id: string; version: number; digest: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/writer/brief-draft`,
+      { method: "PUT", body: JSON.stringify(input) },
+    ),
+
+  approveBrief: (
+    projectId: string,
+    input: {
+      briefId: string;
+      expectedVersion: number;
+      expectedDigest: string;
+      noGapLineageAcknowledged?: boolean;
+    },
+  ) =>
+    request<{ id: string; version: number; digest: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/writer/brief-approve`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+
+  compileSnapshot: (projectId: string) =>
+    request<WriterSnapshotView>(`/api/projects/${encodeURIComponent(projectId)}/writer/snapshot-compile`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+
+  approveSnapshot: (
+    projectId: string,
+    input: { snapshotId: string; expectedVersion: number; expectedDigest: string },
+  ) =>
+    request<{ id: string; version: number; digest: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/writer/snapshot-approve`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+
+  generate: (projectId: string, snapshotId: string) =>
+    request<WriterProposalView>(`/api/projects/${encodeURIComponent(projectId)}/writer/generate`, {
+      method: "POST",
+      body: JSON.stringify({ snapshotId }),
+    }),
+
+  runQa: (projectId: string) =>
+    request<WriterQaView>(`/api/projects/${encodeURIComponent(projectId)}/writer/qa`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+
+  acceptContent: (
+    projectId: string,
+    input: { proposalId: string; expectedProposalDigest: string },
+  ) =>
+    request<AcceptedContentView>(`/api/projects/${encodeURIComponent(projectId)}/writer/accept`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+};

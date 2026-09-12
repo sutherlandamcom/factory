@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS "asset_page_assignments" (
   "role" text NOT NULL,
   "assigned_at" timestamp with time zone DEFAULT now() NOT NULL,
   CONSTRAINT "asset_page_assignments_role_valid" CHECK ("role" IN ('hero', 'background', 'inline', 'chart', 'illustration', 'logo', 'supporting')),
-  CONSTRAINT "asset_page_assignments_slug_shape" CHECK ("page_slug" ~ '^[a-z0-9][a-z0-9-/]*$'),
+  CONSTRAINT "asset_page_assignments_slug_shape" CHECK ("page_slug" ~ '^[a-z0-9][a-z0-9/-]*$'),
   CONSTRAINT "asset_page_assignments_slot_unique" UNIQUE ("project_id", "page_slug", "role")
 );
 --> statement-breakpoint

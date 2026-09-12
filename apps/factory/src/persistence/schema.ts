@@ -1285,7 +1285,7 @@ export const assetPageAssignments = pgTable(
       "asset_page_assignments_role_valid",
       sql`${table.role} IN ('hero', 'background', 'inline', 'chart', 'illustration', 'logo', 'supporting')`,
     ),
-    check("asset_page_assignments_slug_shape", sql`${table.pageSlug} ~ '^[a-z0-9][a-z0-9-/]*$'`),
+    check("asset_page_assignments_slug_shape", sql`${table.pageSlug} ~ '^[a-z0-9][a-z0-9/-]*$'`),
     index("asset_page_assignments_project_idx").on(table.projectId),
   ],
 );

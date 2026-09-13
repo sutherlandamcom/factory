@@ -134,6 +134,13 @@
       "when": 1789580000000,
       "tag": "0018_visual_truth_policy_check_extension",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789600000000,
+      "tag": "0019_visual_concurrency_and_provider_mode",
+      "breakpoints": true
     }
   ]
 }

@@ -532,6 +532,7 @@ export {
   DESIGN_ERROR_CODES,
   parseDesignInputSnapshotData,
   parseDesignCandidateData,
+  designStalenessCodeSchema,
 } from "./design.js";
 export type {
   DesignArchetypeKind,
@@ -550,6 +551,8 @@ export type {
   DesignGenerationResult,
   DesignProvider,
   DesignErrorCode,
+  DesignStalenessCode,
+  DesignStaleness,
 } from "./design.js";
 
 export {

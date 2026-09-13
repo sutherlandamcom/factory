@@ -26,6 +26,7 @@ import { deterministicDigest } from "../intelligence/digest.js";
 import { AssetService } from "../assets/service.js";
 import type { AssetRow, AssetVersionRow } from "../assets/asset-store.js";
 import { DesignStore } from "../design/design-store.js";
+import type { DesignService, AcceptedDesignView, DesignCandidateView } from "../design/service.js";
 import type { AcceptedDesignArtifactRecord } from "../persistence/schema.js";
 import { VisualBudgetStore } from "./budget.js";
 import { createVisualCandidateStorage, type VisualCandidateStorage } from "./candidate-storage.js";
@@ -85,6 +86,35 @@ const MAX_DIMENSION = 8000;
 /** Conservative authorized reservation per provider request (USD micros). */
 const AUTHORIZED_RESERVATION_MICROS = 1_000_000; // $1.00 per request ceiling
 
+/**
+ * Verify mechanical slot requirements (P1-12):
+ * Dimensions must meet minDimensions and aspect ratio must match within 5% tolerance.
+ */
+export function verifySlotDimensions(
+  slot: VisualPlanSlot,
+  width: number,
+  height: number,
+): void {
+  if (width < slot.minDimensions.width || height < slot.minDimensions.height) {
+    throw new FactoryError(
+      "visual_acceptance_failed",
+      `Image dimensions (${width}x${height}) do not meet slot minimum dimensions (${slot.minDimensions.width}x${slot.minDimensions.height}).`,
+    );
+  }
+  const parts = slot.aspectRatio.split(":").map(Number);
+  if (parts.length === 2 && parts[0]! > 0 && parts[1]! > 0) {
+    const targetRatio = parts[0]! / parts[1]!;
+    const actualRatio = width / height;
+    const tolerance = 0.05;
+    if (Math.abs(actualRatio - targetRatio) / targetRatio > tolerance) {
+      throw new FactoryError(
+        "visual_acceptance_failed",
+        `Image aspect ratio (${actualRatio.toFixed(2)}) does not match slot target aspect ratio ${slot.aspectRatio} (${targetRatio.toFixed(2)}) within 5% tolerance.`,
+      );
+    }
+  }
+}
+
 export interface VisualServiceDeps {
   store: VisualStore;
   designStore: DesignStore;
@@ -94,6 +124,7 @@ export interface VisualServiceDeps {
   repoRoot?: string;
   storage?: VisualCandidateStorage;
   dailyLimitUsd?: number;
+  designService?: DesignService;
 }
 
 export interface VisualSlotView {
@@ -162,10 +193,17 @@ export interface VisualWorkspaceReadModel {
     id: string;
     version: number;
     setDigest: string;
+    providerMode: string;
     acceptedAt: string;
     slots: Array<{ slot: string; pageSlug: string; role: string; versionId: string; resolutionMode: string; truthClass: string }>;
   } | null;
   budget: { accountedTodayMicros: number; activeReservationMicros: number };
+  finalDesignPass?: {
+    required: boolean;
+    frozen: boolean;
+    acceptedDesignVersion: number | null;
+    designStalenessCode: string | null;
+  };
 }
 
 export class VisualService {
@@ -177,6 +215,11 @@ export class VisualService {
   private readonly storage: VisualCandidateStorage | null;
   private readonly repoRoot: string | undefined;
   private readonly dailyLimitUsd: number | undefined;
+  private readonly designService?: DesignService;
+  private readonly inFlightGenerations = new Map<
+    string,
+    Promise<{ request: VisualGenerationRequestRecord; reused: boolean; candidates: VisualAssetCandidateRecord[] }>
+  >();
   // P3-F4: preflight TTL cache — workspace reads must not issue provider
   // probes on every GET. Spend paths still fail closed on real request-time
   // provider failures (typed + classified), so a <=60s stale preflight read
@@ -193,6 +236,7 @@ export class VisualService {
     this.storage = deps.storage ?? null;
     this.repoRoot = deps.repoRoot;
     this.dailyLimitUsd = deps.dailyLimitUsd;
+    this.designService = deps.designService;
   }
 
   /** Cached provider preflight (60s TTL; one provider call per TTL window). */
@@ -216,6 +260,23 @@ export class VisualService {
     return createVisualCandidateStorage(root);
   }
 
+  /**
+   * P1-02: Structured transitive staleness enforcement.
+   * RUN7_ASSET_ASSIGNMENTS_ADDED is the expected Run 7 cascade and is permitted.
+   * All other upstream mutations (INPUT_CHANGED, CONTENT_CHANGED, ASSET_REMOVED_OR_CHANGED)
+   * must fail closed.
+   */
+  assertDesignAuthorityEligible(design: {
+    staleness: { code?: string | null; stale: boolean; reason: string | null };
+  }): void {
+    if (design.staleness.stale && design.staleness.code !== "RUN7_ASSET_ASSIGNMENTS_ADDED") {
+      throw new FactoryError(
+        "visual_design_not_eligible",
+        `The accepted design is stale versus current upstream authority (${design.staleness.code ?? "STALE"}): ${design.staleness.reason}. Re-derive and re-accept the design first.`,
+      );
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Plan derivation
   // -------------------------------------------------------------------------
@@ -230,22 +291,7 @@ export class VisualService {
     if (!latest) {
       throw new FactoryError("visual_design_not_eligible", "No accepted design artifact exists for this project; accept a design first.");
     }
-    if (latest.staleness.stale) {
-      // The "new asset assignments exist" staleness path is the DESIGNED
-      // Run 7 cascade: resolving visual slots adds assignments, which makes
-      // the accepted design stale so the final design pass can re-bind the
-      // resolved assets. Blocking plan derivation on that specific reason
-      // would make slot resolution impossible after the first slot is
-      // accepted. Every other staleness reason (inputs/content changed,
-      // assignment removed/replaced) still fails closed.
-      const reason = latest.staleness.reason ?? "";
-      if (!/^New asset assignments exist/.test(reason)) {
-        throw new FactoryError(
-          "visual_design_not_eligible",
-          `The accepted design is stale versus current upstream authority: ${reason} Re-derive and re-accept the design first.`,
-        );
-      }
-    }
+    this.assertDesignAuthorityEligible(latest);
     const designData = latest.artifact.data as DesignCandidateData;
     if (designData.providerMode === "fixture" && this.provider.providerMode === "live") {
       throw new FactoryError(
@@ -568,6 +614,7 @@ export class VisualService {
     if (!design || design.artifact.id !== plan.designArtifactId || design.artifact.version !== plan.designArtifactVersion) {
       throw new FactoryError("visual_plan_stale", "The accepted design changed; re-derive the visual plan.");
     }
+    this.assertDesignAuthorityEligible(design);
 
     const classification = await this.store.getClassification(plan.id, input.slot);
     if (!classification) {
@@ -626,6 +673,7 @@ export class VisualService {
       targetSize: snapshotData.targetSize,
       escalationReason,
     });
+
     // Dedup: identical request -> reuse existing candidates, zero spend.
     const existing = await this.store.findRequestByDigest(input.projectId, requestDigest);
     if (existing && existing.resultState === "succeeded") {
@@ -633,6 +681,12 @@ export class VisualService {
       if (candidates.length > 0) {
         return { request: existing, reused: true, candidates };
       }
+    }
+
+    const inFlightKey = `${input.projectId}:${requestDigest}`;
+    const inFlight = this.inFlightGenerations.get(inFlightKey);
+    if (inFlight) {
+      return inFlight;
     }
 
     // Budget reservation BEFORE any provider call (fail before spend).
@@ -647,135 +701,149 @@ export class VisualService {
       this.dailyLimitUsd,
     );
 
-    let request: VisualGenerationRequestRecord | null = null;
-    try {
-      request = await this.store.createRequest({
-        projectId: input.projectId,
-        slot: input.slot,
-        requestDigest,
-        promptSnapshotId: snapshot.id,
-        promptDigest: snapshot.promptDigest,
-        provider: this.provider.id,
-        providerMode: this.provider.providerMode,
-        model,
-        modelPolicyVersion: FACTORY_VISUAL_MODEL_POLICY_VERSION,
-        operation: mode === "ai_edit" ? "edit" : "generate",
-        escalationReason,
-      });
-      // A concurrent identical request may have won the insert; if so and it
-      // has candidates, reuse them (no second spend).
-      if (request.requestDigest !== requestDigest || (await this.store.listCandidatesForRequest(request.id)).length > 0 && request.id !== existing?.id) {
-        const deduped = await this.store.findRequestByDigest(input.projectId, requestDigest);
-        if (deduped && deduped.id !== request.id) {
-          await reservation.releaseUnexecuted();
-          const candidates = await this.store.listCandidatesForRequest(deduped.id);
-          if (candidates.length > 0) {
-            return { request: deduped, reused: true, candidates };
-          }
-          request = deduped;
-        }
+    const { request, owner } = await this.store.createRequest({
+      projectId: input.projectId,
+      slot: input.slot,
+      requestDigest,
+      promptSnapshotId: snapshot.id,
+      promptDigest: snapshot.promptDigest,
+      provider: this.provider.id,
+      providerMode: this.provider.providerMode,
+      model,
+      modelPolicyVersion: FACTORY_VISUAL_MODEL_POLICY_VERSION,
+      operation: mode === "ai_edit" ? "edit" : "generate",
+      escalationReason,
+    });
+
+    if (!owner) {
+      await reservation.releaseUnexecuted().catch(() => undefined);
+      const activeInFlight = this.inFlightGenerations.get(inFlightKey);
+      if (activeInFlight) {
+        return activeInFlight;
       }
+      let current = request;
+      const pollStart = Date.now();
+      while (current.resultState === "running" && Date.now() - pollStart < 60_000) {
+        await new Promise((r) => setTimeout(r, 200));
+        const found = await this.store.getRequest(input.projectId, current.id);
+        if (found) current = found;
+      }
+      if (current.resultState === "succeeded") {
+        const candidates = await this.store.listCandidatesForRequest(current.id);
+        return { request: current, reused: true, candidates };
+      }
+      if (current.resultState === "failed") {
+        throw new FactoryError(
+          current.failureCode ?? "visual_generation_failed",
+          "Concurrent generation request failed.",
+        );
+      }
+    }
 
-      // Build the provider request (parent bytes read from Run 5 storage).
-      const providerRequest: VisualProviderRequest = {
-        provider: "google-genai",
-        model,
-        operation: mode === "ai_edit" ? "edit" : "generate",
-        promptText: snapshotData.promptText,
-        promptDigest: snapshot.promptDigest,
-        requestDigest,
-        promptSnapshotId: snapshot.id,
-        targetAspectRatio: snapshotData.targetAspectRatio,
-        targetSize: snapshotData.targetSize,
-        sourceImages: await Promise.all(
-          sourceVersions.map(async (version) => {
-            const bytes = await this.assets.readOriginal(input.projectId, version.id);
-            return {
-              dataBase64: Buffer.from(bytes.bytes).toString("base64"),
-              mediaType: bytes.mediaType,
-              versionId: version.id,
-            };
-          }),
-        ),
-      };
-
-      const result =
-        mode === "ai_edit"
-          ? await this.provider.editImage(providerRequest)
-          : await this.provider.generateImage(providerRequest);
-
-      // Validate + persist every returned candidate.
-      const storage = await this.storageOrThrow();
-      const persisted: VisualAssetCandidateRecord[] = [];
-      for (const candidate of result.candidates) {
-        const qa = await validateCandidateBytes(candidate.bytes, candidate.mediaType);
-        const c2pa = await readC2paEvidence({ bytes: candidate.bytes, mediaType: qa.sniffedMediaType });
-        const digest = await storage.putCandidate(qa.validatedBytes ?? candidate.bytes);
-        const row = await this.store.createCandidate({
-          projectId: input.projectId,
-          requestId: request.id,
-          slot: input.slot,
-          candidateIndex: candidate.index,
-          binaryDigest: digest,
-          mediaType: qa.sniffedMediaType,
-          width: qa.width,
-          height: qa.height,
-          byteSize: qa.byteSize,
-          storageKey: storage.candidateKey(digest),
-          parentLineage: sourceVersions.map((version) => ({
-            versionId: version.id,
-            binaryDigest: version.binaryDigest,
-            governanceDigest: version.governanceDigest ?? "",
-          })),
+    const executeLeader = async (): Promise<{
+      request: VisualGenerationRequestRecord;
+      reused: boolean;
+      candidates: VisualAssetCandidateRecord[];
+    }> => {
+      try {
+        const providerRequest: VisualProviderRequest = {
+          provider: "google-genai",
+          model,
+          operation: mode === "ai_edit" ? "edit" : "generate",
+          promptText: snapshotData.promptText,
           promptDigest: snapshot.promptDigest,
-          c2pa: c2pa as unknown as Record<string, unknown>,
-          providerMetadata: result.providerUsage,
-          qa: {
-            sniffedMediaType: qa.sniffedMediaType,
-            decoded: true,
+          requestDigest,
+          promptSnapshotId: snapshot.id,
+          targetAspectRatio: snapshotData.targetAspectRatio,
+          targetSize: snapshotData.targetSize,
+          sourceImages: await Promise.all(
+            sourceVersions.map(async (version) => {
+              const bytes = await this.assets.readOriginal(input.projectId, version.id);
+              return {
+                dataBase64: Buffer.from(bytes.bytes).toString("base64"),
+                mediaType: bytes.mediaType,
+                versionId: version.id,
+              };
+            }),
+          ),
+        };
+
+        const result =
+          mode === "ai_edit"
+            ? await this.provider.editImage(providerRequest)
+            : await this.provider.generateImage(providerRequest);
+
+        const storage = await this.storageOrThrow();
+        const persisted: VisualAssetCandidateRecord[] = [];
+        for (const candidate of result.candidates) {
+          const qa = await validateCandidateBytes(candidate.bytes, candidate.mediaType);
+          const c2pa = await readC2paEvidence({ bytes: candidate.bytes, mediaType: qa.sniffedMediaType });
+          const digest = await storage.putCandidate(qa.validatedBytes ?? candidate.bytes);
+          const row = await this.store.createCandidate({
+            projectId: input.projectId,
+            requestId: request.id,
+            slot: input.slot,
+            candidateIndex: candidate.index,
+            binaryDigest: digest,
+            mediaType: qa.sniffedMediaType,
             width: qa.width,
             height: qa.height,
             byteSize: qa.byteSize,
-            withinLimits: true,
-          } satisfies VisualCandidateQa as unknown as Record<string, unknown>,
-        });
-        persisted.push(row);
-      }
+            storageKey: storage.candidateKey(digest),
+            parentLineage: sourceVersions.map((version) => ({
+              versionId: version.id,
+              binaryDigest: version.binaryDigest,
+              governanceDigest: version.governanceDigest ?? "",
+            })),
+            promptDigest: snapshot.promptDigest,
+            c2pa: c2pa as unknown as Record<string, unknown>,
+            providerMetadata: result.providerUsage,
+            qa: {
+              sniffedMediaType: qa.sniffedMediaType,
+              decoded: true,
+              width: qa.width,
+              height: qa.height,
+              byteSize: qa.byteSize,
+              withinLimits: true,
+            } satisfies VisualCandidateQa as unknown as Record<string, unknown>,
+          });
+          persisted.push(row);
+        }
 
-      // Account the reservation (usage telemetry when the provider exposes it).
-      const usage = result.providerUsage as { totalTokenCount?: number } | null;
-      await reservation.account(null);
-      void usage;
-      await this.store.completeRequest({
-        requestId: request.id,
-        providerRequestRef: result.providerRequestRef,
-        costMicros: null,
-        rawMetadata: result.providerUsage,
-      });
-      return { request, reused: false, candidates: persisted };
-    } catch (error) {
-      // Failure classification: persist the typed failure on the request
-      // (evidence), release the reservation only when provably pre-spend.
-      const code = error instanceof FactoryError ? error.code : "visual_provider_unavailable";
-      const preSpend =
-        code === "visual_budget_blocked" ||
-        code === "visual_prompt_not_approved" ||
-        code === "visual_truth_policy_violation" ||
-        code === "visual_classification_required" ||
-        code === "visual_plan_stale" ||
-        code === "visual_design_not_eligible";
-      if (preSpend) {
-        await reservation.releaseUnexecuted().catch(() => undefined);
-      } else {
-        await reservation.account(null).catch(() => undefined);
-      }
-      if (request) {
+        await reservation.account(null);
+        const completed = await this.store.completeRequest({
+          requestId: request.id,
+          providerRequestRef: result.providerRequestRef,
+          costMicros: null,
+          rawMetadata: result.providerUsage,
+        });
+        return { request: completed ?? request, reused: false, candidates: persisted };
+      } catch (error) {
+        const code = error instanceof FactoryError ? error.code : "visual_provider_unavailable";
+        const preSpend =
+          code === "visual_budget_blocked" ||
+          code === "visual_prompt_not_approved" ||
+          code === "visual_truth_policy_violation" ||
+          code === "visual_classification_required" ||
+          code === "visual_plan_stale" ||
+          code === "visual_design_not_eligible";
+        if (preSpend) {
+          await reservation.releaseUnexecuted().catch(() => undefined);
+        } else {
+          await reservation.account(null).catch(() => undefined);
+        }
         await this.store
           .failRequest({ requestId: request.id, failureCode: code, rawMetadata: null })
           .catch(() => undefined);
+        throw error;
+      } finally {
+        this.inFlightGenerations.delete(inFlightKey);
       }
-      throw error;
-    }
+    };
+
+    const promise = executeLeader();
+    this.inFlightGenerations.set(inFlightKey, promise);
+    return await promise;
   }
 
   // -------------------------------------------------------------------------
@@ -788,8 +856,14 @@ export class VisualService {
     planId: string;
     slot: string;
     versionId?: string;
-  }): Promise<{ version: AssetVersionRow; asset: AssetRow }> {
+  }): Promise<{ version: AssetVersionRow; asset: AssetRow; assignmentId: string }> {
     const plan = await this.getPlanOrThrow(input.projectId, input.planId);
+    const design = await this.designStore.latestAcceptedDesign(input.projectId);
+    if (!design || design.artifact.id !== plan.designArtifactId || design.artifact.version !== plan.designArtifactVersion) {
+      throw new FactoryError("visual_plan_stale", "The accepted design changed; re-derive the visual plan.");
+    }
+    this.assertDesignAuthorityEligible(design);
+
     const data = this.store.planData(plan);
     const slot = data.slots.find((s) => s.slot === input.slot);
     if (!slot) throw new FactoryError("visual_not_found", `Slot "${input.slot}" is not part of this plan.`);
@@ -809,7 +883,37 @@ export class VisualService {
     }
     const version = await this.getApprovedVersionOrThrow(input.projectId, versionId);
     const asset = await this.getAssetForVersion(input.projectId, version);
-    return { version, asset };
+
+    // Mechanical slot requirements (P1-12)
+    const original = await this.assets.readOriginal(input.projectId, version.id);
+    const meta = await sharp(Buffer.from(original.bytes), { failOn: "error" }).metadata();
+    const width = meta.width ?? 0;
+    const height = meta.height ?? 0;
+    verifySlotDimensions(slot, width, height);
+
+    // Assign to Run 5 pageSlug & role (P1-04)
+    let assignmentId: string;
+    const existing = await this.findAssignment(input.projectId, slot.pageSlug, slot.role);
+    if (existing && existing.versionId === version.id) {
+      assignmentId = existing.id;
+    } else if (existing) {
+      const replaced = await this.assets.replaceAssignment(input.projectId, existing.id, {
+        toVersionId: version.id,
+        expectedBinaryDigest: version.binaryDigest,
+      });
+      assignmentId = replaced.id;
+    } else {
+      const created = await this.assets.assignVersion(input.projectId, {
+        assetId: asset.id,
+        versionId: version.id,
+        pageSlug: slot.pageSlug,
+        role: slot.role,
+        expectedBinaryDigest: version.binaryDigest,
+      });
+      assignmentId = created.id;
+    }
+
+    return { version, asset, assignmentId };
   }
 
   /**
@@ -829,8 +933,14 @@ export class VisualService {
       grayscale?: boolean;
       brightness?: number;
     };
-  }): Promise<{ version: AssetVersionRow; asset: AssetRow; derivation: AssetDerivation }> {
+  }): Promise<{ version: AssetVersionRow; asset: AssetRow; derivation: AssetDerivation; assignmentId: string }> {
     const plan = await this.getPlanOrThrow(input.projectId, input.planId);
+    const design = await this.designStore.latestAcceptedDesign(input.projectId);
+    if (!design || design.artifact.id !== plan.designArtifactId || design.artifact.version !== plan.designArtifactVersion) {
+      throw new FactoryError("visual_plan_stale", "The accepted design changed; re-derive the visual plan.");
+    }
+    this.assertDesignAuthorityEligible(design);
+
     const data = this.store.planData(plan);
     const slot = data.slots.find((s) => s.slot === input.slot);
     if (!slot) throw new FactoryError("visual_not_found", `Slot "${input.slot}" is not part of this plan.`);
@@ -875,7 +985,13 @@ export class VisualService {
     if (input.transform.brightness != null) {
       pipeline = pipeline.modulate({ brightness: Math.min(Math.max(input.transform.brightness, 0.5), 1.5) });
     }
-    const outBytes = new Uint8Array(await pipeline.jpeg({ quality: 85, mozjpeg: true }).toBuffer());
+    const outBuffer = await pipeline.jpeg({ quality: 85, mozjpeg: true }).toBuffer();
+    const outMeta = await sharp(outBuffer).metadata();
+    const outWidth = outMeta.width ?? 0;
+    const outHeight = outMeta.height ?? 0;
+    verifySlotDimensions(slot, outWidth, outHeight);
+
+    const outBytes = new Uint8Array(outBuffer);
     if (outBytes.byteLength > MAX_PROVIDER_IMAGE_BYTES) {
       throw new FactoryError("visual_provider_output_invalid", "Transformed image exceeds the byte ceiling.");
     }
@@ -895,12 +1011,8 @@ export class VisualService {
       uploadedAt: new Date().toISOString(),
       derivation,
     };
-    // P2-F2: a deterministic transform that reproduces bytes already present
-    // in this project binds to the existing approved version (a transform is
-    // free of provider spend, but the same UNIQUE(project_id, binary_digest)
-    // collision would otherwise fail the resolution).
     const outDigest = sha256(outBytes);
-    const { asset, version } = await this.ingestOrBindExisting({
+    const { asset, version, boundExisting } = await this.ingestOrBindExisting({
       projectId: input.projectId,
       bytes: outBytes,
       digest: outDigest,
@@ -913,7 +1025,31 @@ export class VisualService {
         provenance,
       }),
     });
-    return { version, asset, derivation };
+
+    const approved = boundExisting ? version : await this.assets.approveVersion(input.projectId, version.id, version.binaryDigest);
+
+    let assignmentId: string;
+    const existing = await this.findAssignment(input.projectId, slot.pageSlug, slot.role);
+    if (existing && existing.versionId === approved.id) {
+      assignmentId = existing.id;
+    } else if (existing) {
+      const replaced = await this.assets.replaceAssignment(input.projectId, existing.id, {
+        toVersionId: approved.id,
+        expectedBinaryDigest: approved.binaryDigest,
+      });
+      assignmentId = replaced.id;
+    } else {
+      const created = await this.assets.assignVersion(input.projectId, {
+        assetId: asset.id,
+        versionId: approved.id,
+        pageSlug: slot.pageSlug,
+        role: slot.role,
+        expectedBinaryDigest: approved.binaryDigest,
+      });
+      assignmentId = created.id;
+    }
+
+    return { version: approved, asset, derivation, assignmentId };
   }
 
   /**
@@ -932,6 +1068,12 @@ export class VisualService {
     confirmTruthDowngrade?: boolean;
   }): Promise<{ version: AssetVersionRow; asset: AssetRow; assignmentId: string | null; truthClass: VisualTruthClass; resolutionMode: VisualResolutionMode; boundExisting: boolean }> {
     const plan = await this.getPlanOrThrow(input.projectId, input.planId);
+    const design = await this.designStore.latestAcceptedDesign(input.projectId);
+    if (!design || design.artifact.id !== plan.designArtifactId || design.artifact.version !== plan.designArtifactVersion) {
+      throw new FactoryError("visual_plan_stale", "The accepted design changed; re-derive the visual plan.");
+    }
+    this.assertDesignAuthorityEligible(design);
+
     const candidate = await this.store.getCandidate(input.projectId, input.candidateId);
     if (!candidate) throw new FactoryError("visual_not_found", "Candidate not found for this project.");
     if (candidate.slot !== input.slot) {
@@ -942,6 +1084,7 @@ export class VisualService {
     if (!planSlot) {
       throw new FactoryError("visual_not_found", `Slot "${input.slot}" is not part of this plan.`);
     }
+    verifySlotDimensions(planSlot, candidate.width, candidate.height);
     if (candidate.binaryDigest !== input.expectedBinaryDigest) {
       throw new FactoryError(
         "visual_acceptance_failed",
@@ -1106,6 +1249,12 @@ export class VisualService {
   /** Accept the full set: every plan slot must be resolved (Run 5 assignment). */
   async acceptSet(input: { projectId: string; planId: string }): Promise<AcceptedVisualAssetSetRecord> {
     const plan = await this.getPlanOrThrow(input.projectId, input.planId);
+    const design = await this.designStore.latestAcceptedDesign(input.projectId);
+    if (!design || design.artifact.id !== plan.designArtifactId || design.artifact.version !== plan.designArtifactVersion) {
+      throw new FactoryError("visual_plan_stale", "The accepted design changed; re-derive the visual plan.");
+    }
+    this.assertDesignAuthorityEligible(design);
+
     const data = this.store.planData(plan);
 
     // Every slot must have a resolved Run 5 assignment binding an approved
@@ -1119,7 +1268,10 @@ export class VisualService {
       binaryDigest: string;
       governanceDigest: string;
       resolutionMode: string;
-      truthClass: string;
+      truthClass: VisualTruthClass;
+      promptSnapshotId: string | null;
+      generationRequestId: string | null;
+      candidateId: string | null;
     }> = [];
     for (const slot of data.slots) {
       const classification = await this.store.getClassification(plan.id, slot.slot);
@@ -1139,9 +1291,15 @@ export class VisualService {
       const slotCandidates = await this.store.listCandidatesForSlot(input.projectId, slot.slot);
       const selected = slotCandidates.find((c) => c.state === "selected");
       let resolutionMode: VisualResolutionMode;
+      let promptSnapshotId: string | null = null;
+      let generationRequestId: string | null = null;
+      let candidateId: string | null = null;
       if (selected) {
         const request = await this.store.getRequest(input.projectId, selected.requestId);
         resolutionMode = request?.operation === "edit" ? "ai_edit" : "ai_generate";
+        promptSnapshotId = request?.promptSnapshotId ?? null;
+        generationRequestId = request?.id ?? null;
+        candidateId = selected.id;
       } else if (assignment.versionId === slot.existingVersionId) {
         resolutionMode = "reuse_real";
       } else {
@@ -1155,7 +1313,10 @@ export class VisualService {
         binaryDigest: assignment.binaryDigest,
         governanceDigest: assignment.versionDigest,
         resolutionMode,
-        truthClass: classification.truthClass,
+        truthClass: classification.truthClass as VisualTruthClass,
+        promptSnapshotId,
+        generationRequestId,
+        candidateId,
       });
     }
 
@@ -1166,33 +1327,76 @@ export class VisualService {
       return existing;
     }
 
-    const set = await this.store.createSet({
+    // Atomic transaction for set + all slot rows (P1-06) with providerMode (P1-03)
+    return await this.store.createAcceptedSetAtomic({
       projectId: input.projectId,
       planId: plan.id,
+      providerMode: this.provider.providerMode,
       designArtifactId: plan.designArtifactId,
       designArtifactVersion: plan.designArtifactVersion,
       designCandidateDigest: plan.designCandidateDigest,
       designInputDigest: plan.designInputDigest,
       setDigest,
+      slots: slotRows,
     });
-    for (const row of slotRows) {
-      await this.store.insertAcceptedSlotTx(this.store["db"] as never, {
-        setId: set.id,
-        projectId: input.projectId,
-        slot: row.slot,
-        pageSlug: row.pageSlug,
-        role: row.role,
-        resolvedVersionId: row.resolvedVersionId,
-        binaryDigest: row.binaryDigest,
-        governanceDigest: row.governanceDigest,
-        resolutionMode: row.resolutionMode,
-        truthClass: row.truthClass as VisualTruthClass,
-        promptSnapshotId: null,
-        generationRequestId: null,
-        candidateId: null,
-      });
+  }
+
+  /**
+   * Final Design Pass (P1-01): After all visual asset slots are resolved and the
+   * visual asset set is accepted, re-derive the design input snapshot (which
+   * now binds the newly resolved and approved real/generated assets from Run 5),
+   * invoke the DesignProvider to generate a new candidate with the actual assets,
+   * ready for final review and freeze.
+   */
+  async runFinalDesignPass(input: { projectId: string }): Promise<DesignCandidateView> {
+    const acceptedSet = await this.store.latestAcceptedSet(input.projectId);
+    if (!acceptedSet) {
+      throw new FactoryError(
+        "visual_acceptance_failed",
+        "An accepted visual asset set is required before running the final design pass.",
+      );
     }
-    return set;
+    if (this.provider.providerMode === "live" && acceptedSet.providerMode !== "live") {
+      throw new FactoryError(
+        "visual_acceptance_failed",
+        "Test fixture visual set cannot be used for a live final design pass.",
+      );
+    }
+    const latestDesign = await this.designStore.latestAcceptedDesign(input.projectId);
+    if (latestDesign && !latestDesign.staleness.stale) {
+      throw new FactoryError(
+        "visual_acceptance_failed",
+        `Final design is already frozen and up to date (version ${latestDesign.artifact.version}). No final design pass is needed.`,
+      );
+    }
+    if (!this.designService) {
+      throw new FactoryError("visual_not_configured", "DesignService dependency not provided to VisualService.");
+    }
+    await this.designService.deriveInputSnapshotDraft(input.projectId);
+    return await this.designService.generateCandidate({ projectId: input.projectId });
+  }
+
+  /**
+   * Accept the final design pass candidate to freeze design authority into
+   * AcceptedDesignArtifact v2 (UP_TO_DATE, referencing the final visual assets).
+   */
+  async acceptFinalDesign(input: {
+    projectId: string;
+    candidateId: string;
+    expectedCandidateDigest: string;
+    reviewNotes?: string | null;
+  }): Promise<AcceptedDesignView> {
+    const acceptedSet = await this.store.latestAcceptedSet(input.projectId);
+    if (!acceptedSet) {
+      throw new FactoryError(
+        "visual_acceptance_failed",
+        "An accepted visual asset set is required before accepting final design.",
+      );
+    }
+    if (!this.designService) {
+      throw new FactoryError("visual_not_configured", "DesignService dependency not provided to VisualService.");
+    }
+    return await this.designService.acceptCandidate(input);
   }
 
   // -------------------------------------------------------------------------
@@ -1213,7 +1417,7 @@ export class VisualService {
       if (!design || design.artifact.id !== plan.designArtifactId || design.artifact.version !== plan.designArtifactVersion) {
         stale = true;
         staleReason = "The accepted design changed since this plan was derived.";
-      } else if (design.staleness.stale) {
+      } else if (design.staleness.stale && design.staleness.code !== "RUN7_ASSET_ASSIGNMENTS_ADDED") {
         stale = true;
         staleReason = design.staleness.reason;
       }
@@ -1295,6 +1499,14 @@ export class VisualService {
         )
       : [];
 
+    const latestDesign = await this.designStore.latestAcceptedDesign(projectId);
+    const finalDesignPass = {
+      required: Boolean(acceptedSet && latestDesign?.staleness.code === "RUN7_ASSET_ASSIGNMENTS_ADDED"),
+      frozen: Boolean(acceptedSet && latestDesign && !latestDesign.staleness.stale),
+      acceptedDesignVersion: latestDesign?.artifact.version ?? null,
+      designStalenessCode: latestDesign?.staleness.code ?? null,
+    };
+
     return {
       schemaVersion: VISUAL_ASSETS_SCHEMA_VERSION,
       provider: { preflight, providerMode: this.provider.providerMode },
@@ -1319,6 +1531,7 @@ export class VisualService {
             id: acceptedSet.id,
             version: acceptedSet.version,
             setDigest: acceptedSet.setDigest,
+            providerMode: acceptedSet.providerMode,
             acceptedAt: acceptedSet.acceptedAt.toISOString(),
             slots: acceptedSlots.map((s) => ({
               slot: s.slot,
@@ -1331,6 +1544,7 @@ export class VisualService {
           }
         : null,
       budget: budgetSummary,
+      finalDesignPass,
     };
   }
 

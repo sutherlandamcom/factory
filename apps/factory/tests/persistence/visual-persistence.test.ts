@@ -151,7 +151,7 @@ async function setupVisualFixture(dbInst: Awaited<ReturnType<typeof setupMigrate
     storage: createVisualCandidateStorage(root),
   });
   const uploadAsset = async (seed: number) => {
-    const bytes = await sharp({ create: { width: 320, height: 200, channels: 3, background: { r: seed, g: 70, b: 90 } } }).jpeg().toBuffer();
+    const bytes = await sharp({ create: { width: 1600, height: 900, channels: 3, background: { r: seed, g: 70, b: 90 } } }).jpeg().toBuffer();
     return assets.uploadAsset(projectId, {
       filename: "fixture.jpg",
       kind: "photo",
@@ -519,9 +519,9 @@ test("PG: deterministic transform resolves without any provider spend and record
       planId: plan.id,
       slot: "hero.primary",
       sourceVersionId: approved.id,
-      transform: { maxWidth: 200, aspectRatioCrop: "16:9" },
+      transform: { maxWidth: 1280, aspectRatioCrop: "16:9" },
     });
-    assert.equal(resolved.version.approvalState, "pending"); // ingest, not yet approved
+    assert.equal(resolved.version.approvalState, "approved"); // P1-04 auto-approves deterministic transforms
     const provenance = resolved.version.provenance as { category: string; derivation?: { origin: string; parentVersionId: string; parentBinaryDigest: string; parentGovernanceDigest: string; transformation: string } };
     assert.equal(provenance.category, "derived");
     assert.equal(provenance.derivation?.origin, "deterministic_transform");
@@ -685,7 +685,7 @@ test("unit: C2PA evidence is honest for plain images (absent) and never fabricat
   const evidence = await readC2paEvidence({ bytes: new Uint8Array(jpeg), mediaType: "image/jpeg" });
   // A plain sharp JPEG carries no C2PA manifest: the honest result is absent
   // (or unavailable_with_reason if the native runtime cannot load) — never "validated".
-  assert.ok(evidence.status === "absent" || evidence.status === "unavailable_with_reason", `unexpected status ${evidence.status}`);
+  assert.ok(evidence.status === "absent" || evidence.status === "verification_unavailable", `unexpected status ${evidence.status}`);
 });
 
 // ---------------------------------------------------------------------------
@@ -789,4 +789,160 @@ test("unit: provider preflight is cached with a 60s TTL (P3-F4)", async () => {
   await visual.workspace(projectId);
   await visual.workspace(projectId);
   assert.equal(preflightCalls, 1, "three workspace reads within the TTL must issue ONE provider preflight");
+});
+
+test("PG: DB constraints enforce provider_mode and result_state (P1-03, P1-05)", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const { projectId } = await seedProject(dbInst, "vis-constraints");
+
+  // Minimal visual plan
+  await dbInst.db.execute(sql`
+    INSERT INTO visual_asset_plans (id, project_id, version, design_artifact_id, design_artifact_version, design_candidate_digest, design_input_digest, design_provider_mode, slots, plan_digest)
+    VALUES ('vap-c1', ${projectId}, 1, 'da-c1', 1, ${"a".repeat(64)}, ${"b".repeat(64)}, 'live', '[]'::jsonb, ${"c".repeat(64)})
+  `);
+
+  // Invalid provider_mode on accepted_visual_asset_sets must be rejected
+  await assert.rejects(
+    () => dbInst.db.execute(sql`
+      INSERT INTO accepted_visual_asset_sets (id, project_id, version, plan_id, provider_mode, design_artifact_id, design_artifact_version, design_candidate_digest, design_input_digest, set_digest)
+      VALUES ('avs-c1', ${projectId}, 1, 'vap-c1', 'invalid_mode', 'da-c1', 1, ${"a".repeat(64)}, ${"b".repeat(64)}, ${"d".repeat(64)})
+    `),
+    (err: unknown) => {
+      const code = (err as { code?: string } | null)?.code ?? (err as { cause?: { code?: string } } | null)?.cause?.code;
+      return code === "23514"; // check_violation
+    },
+    "provider_mode check must reject invalid modes",
+  );
+
+  // Valid provider_mode ('live' and 'fixture') are accepted
+  await dbInst.db.execute(sql`
+    INSERT INTO accepted_visual_asset_sets (id, project_id, version, plan_id, provider_mode, design_artifact_id, design_artifact_version, design_candidate_digest, design_input_digest, set_digest)
+    VALUES ('avs-c2', ${projectId}, 1, 'vap-c1', 'live', 'da-c1', 1, ${"a".repeat(64)}, ${"b".repeat(64)}, ${"d".repeat(64)})
+  `);
+
+  // Invalid result_state on visual_generation_requests must be rejected
+  await dbInst.db.execute(sql`
+    INSERT INTO visual_prompt_snapshots (id, project_id, plan_id, slot, operation, truth_class, data, prompt_digest)
+    VALUES ('vps-c1', ${projectId}, 'vap-c1', 'hero.primary', 'generate', 'illustrative', '{}'::jsonb, ${"1".repeat(64)})
+  `);
+
+  await assert.rejects(
+    () => dbInst.db.execute(sql`
+      INSERT INTO visual_generation_requests (id, project_id, slot, request_digest, prompt_snapshot_id, prompt_digest, provider, provider_mode, model, model_policy_version, operation, result_state)
+      VALUES ('vgr-c1', ${projectId}, 'hero.primary', ${"2".repeat(64)}, 'vps-c1', ${"1".repeat(64)}, 'google-genai', 'live', 'gemini-3.1-flash-image', 'v1', 'generate', 'cancelled')
+    `),
+    (err: unknown) => {
+      const code = (err as { code?: string } | null)?.code ?? (err as { cause?: { code?: string } } | null)?.cause?.code;
+      return code === "23514"; // check_violation
+    },
+    "result_state check must reject 'cancelled'",
+  );
+
+  // 'pending', 'running', 'succeeded', 'failed' must all be accepted
+  await dbInst.db.execute(sql`
+    INSERT INTO visual_generation_requests (id, project_id, slot, request_digest, prompt_snapshot_id, prompt_digest, provider, provider_mode, model, model_policy_version, operation, result_state)
+    VALUES ('vgr-c2', ${projectId}, 'hero.primary', ${"3".repeat(64)}, 'vps-c1', ${"1".repeat(64)}, 'google-genai', 'live', 'gemini-3.1-flash-image', 'v1', 'generate', 'running')
+  `);
+});
+
+test("PG: requireProductionVisualSet enforces live providerMode and set digest integrity (P1-03)", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const root = await mkdtemp(path.join(tmpdir(), "vis-req-prod-"));
+  const { projectId } = await seedProject(dbInst, "vis-req-prod");
+  const store = new VisualStore(dbInst.db);
+
+  // Minimal visual plan for FK
+  await dbInst.db.execute(sql`
+    INSERT INTO visual_asset_plans (id, project_id, version, design_artifact_id, design_artifact_version, design_candidate_digest, design_input_digest, design_provider_mode, slots, plan_digest)
+    VALUES ('vap-stub', ${projectId}, 1, 'da-stub', 1, ${"a".repeat(64)}, ${"b".repeat(64)}, 'live', '[]'::jsonb, ${"c".repeat(64)})
+  `);
+
+  // Upload an approved asset
+  const assetsModule = await import("../../src/assets/asset-store.js");
+  const assetServiceModule = await import("../../src/assets/service.js");
+  const assetStorageModule = await import("../../src/assets/storage.js");
+  const sharp = (await import("sharp")).default;
+  const assets = new assetServiceModule.AssetService({
+    store: new assetsModule.AssetStore(dbInst.db),
+    storage: assetStorageModule.createAssetStorage(root),
+  });
+  const bytes = await sharp({ create: { width: 1600, height: 900, channels: 3, background: { r: 10, g: 20, b: 30 } } }).jpeg().toBuffer();
+  const upload = await assets.uploadAsset(projectId, {
+    filename: "prod.jpg",
+    kind: "photo",
+    title: "Production photo",
+    rightsStatus: "operator_owned",
+    dataBase64: bytes.toString("base64"),
+  });
+  const approved = await assets.approveVersion(projectId, upload.version.id, upload.version.binaryDigest);
+
+  // 1. Fixture set: requireProductionVisualSet must fail closed
+  const fixtureSet = await store.createAcceptedSetAtomic({
+    projectId,
+    planId: "vap-stub",
+    providerMode: "fixture",
+    designArtifactId: "da-stub",
+    designArtifactVersion: 1,
+    designCandidateDigest: "a".repeat(64),
+    designInputDigest: "b".repeat(64),
+    slots: [
+      {
+        slot: "hero.primary",
+        pageSlug: "home",
+        role: "hero",
+        resolvedVersionId: approved.id,
+        binaryDigest: approved.binaryDigest,
+        governanceDigest: approved.governanceDigest!,
+        resolutionMode: "reuse_real",
+        truthClass: "documentary",
+      },
+    ],
+  });
+
+  await assert.rejects(
+    () => store.requireProductionVisualSet(projectId, fixtureSet.id, fixtureSet.setDigest),
+    (err: unknown) => isCode(err, "visual_acceptance_failed"),
+    "fixture set must be rejected for production use",
+  );
+
+  // 2. Live set: requireProductionVisualSet succeeds
+  const liveSet = await store.createAcceptedSetAtomic({
+    projectId,
+    planId: "vap-stub",
+    providerMode: "live",
+    designArtifactId: "da-stub",
+    designArtifactVersion: 1,
+    designCandidateDigest: "a".repeat(64),
+    designInputDigest: "b".repeat(64),
+    slots: [
+      {
+        slot: "hero.primary",
+        pageSlug: "home",
+        role: "hero",
+        resolvedVersionId: approved.id,
+        binaryDigest: approved.binaryDigest,
+        governanceDigest: approved.governanceDigest!,
+        resolutionMode: "reuse_real",
+        truthClass: "documentary",
+      },
+    ],
+  });
+
+  const verified = await store.requireProductionVisualSet(projectId, liveSet.id, liveSet.setDigest);
+  assert.equal(verified.set.id, liveSet.id);
+  assert.equal(verified.set.providerMode, "live");
+  assert.equal(verified.slots.length, 1);
+
+  // 3. Corrupt set digest: tampering slot digest must fail closed on verification
+  await dbInst.db.execute(sql`
+    UPDATE accepted_visual_asset_slots
+    SET binary_digest = ${"f".repeat(64)}
+    WHERE set_id = ${liveSet.id}
+  `);
+
+  await assert.rejects(
+    () => store.requireProductionVisualSet(projectId, liveSet.id, liveSet.setDigest),
+    (err: unknown) => isCode(err, "visual_acceptance_failed"),
+    "tampered slot digest must cause set digest verification to fail",
+  );
 });

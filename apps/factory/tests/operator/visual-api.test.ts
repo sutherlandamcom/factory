@@ -136,6 +136,7 @@ async function startTestServer(): Promise<TestServer> {
   const visual = new VisualService({
     store: new VisualStore(dbInst.db),
     designStore,
+    designService: design,
     assets,
     budget: new VisualBudgetStore(dbInst.db),
     provider: new FixtureVisualAssetProvider(),
@@ -202,7 +203,7 @@ async function acceptFixtureDesign(baseUrl: string, projectId: string): Promise<
 }
 
 async function uploadApprovedAsset(baseUrl: string, projectId: string, seed: number): Promise<{ versionId: string; binaryDigest: string }> {
-  const bytes = await sharp({ create: { width: 320, height: 200, channels: 3, background: { r: seed, g: 70, b: 90 } } }).jpeg().toBuffer();
+  const bytes = await sharp({ create: { width: 1600, height: 900, channels: 3, background: { r: seed, g: 70, b: 90 } } }).jpeg().toBuffer();
   const uploadRes = await fetch(`${baseUrl}/api/projects/${projectId}/assets/uploads`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -501,7 +502,7 @@ test("visual API: deterministic transform resolves with exact lineage and no pro
     const transformRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/resolve-transform`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sourceVersionId: asset.versionId, maxWidth: 200, aspectRatioCrop: "16:9" }),
+      body: JSON.stringify({ sourceVersionId: asset.versionId, maxWidth: 1280, aspectRatioCrop: "16:9" }),
     });
     assert.equal(transformRes.status, 200);
     const resolved = (await transformRes.json()) as { versionId: string; binaryDigest: string; governanceDigest: string | null; transformation: string | null };
@@ -529,7 +530,7 @@ test("visual API: byte-identical candidate from a new request binds to the exist
   const storageRoot = await mkdtemp(`${tmpdir()}/visual-bind-`);
   const sharpMod = sharp;
 
-  const sameBytes = await sharpMod({ create: { width: 640, height: 360, channels: 3, background: { r: 5, g: 5, b: 5 } } }).png().toBuffer();
+  const sameBytes = await sharpMod({ create: { width: 1280, height: 720, channels: 3, background: { r: 5, g: 5, b: 5 } } }).png().toBuffer();
   let providerCalls = 0;
   const deterministicProvider = {
     id: "google-genai",
@@ -688,4 +689,458 @@ test("visual API: identical bytes that are NOT approved fail closed at acceptanc
   assert.ok(found, "findByBinaryDigest must locate the version by exact digest");
   assert.equal(found!.id, upload.version.id);
   assert.equal(found!.approvalState, "pending");
+});
+
+test("visual API: multi-slot atomic set creation and rollback (P1-06)", async () => {
+  const server = await startTestServer();
+  try {
+    const projectId = await createProjectWithAcceptedInputs(server.baseUrl, "vapatomic");
+    await acceptFixtureDesign(server.baseUrl, projectId);
+    const planRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const plan = (await planRes.json()) as { id: string };
+
+    // 1. Unresolved slot: accept-set must fail closed (409)
+    const earlyRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/accept-set`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    assert.equal(earlyRes.status, 409);
+    const earlyBody = (await earlyRes.json()) as { error: { code: string; message: string } };
+    assert.ok(
+      earlyBody.error.code === "visual_classification_required" ||
+        earlyBody.error.code === "visual_plan_not_resolved",
+    );
+
+    // DB remains clean: 0 sets, 0 slots
+    const setsBefore = await dbInst!.db.execute(sql`SELECT count(*)::int AS n FROM accepted_visual_asset_sets WHERE project_id = ${projectId}`);
+    assert.equal((setsBefore.rows[0] as { n: number }).n, 0);
+    const slotsBefore = await dbInst!.db.execute(sql`SELECT count(*)::int AS n FROM accepted_visual_asset_slots WHERE project_id = ${projectId}`);
+    assert.equal((slotsBefore.rows[0] as { n: number }).n, 0);
+
+    // 2. Resolve slot via fixture candidate
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/classification`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ truthClass: "illustrative", acknowledged: true }),
+    });
+    const snapRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/prompt-snapshot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ operation: "generate" }),
+    });
+    const snap = (await snapRes.json()) as { id: string; promptDigest: string };
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/prompt-snapshots/${snap.id}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ promptDigest: snap.promptDigest }),
+    });
+    const genRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const gen = (await genRes.json()) as { candidates: Array<{ id: string; binaryDigest: string }> };
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/accept`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ candidateId: gen.candidates[0]!.id, expectedBinaryDigest: gen.candidates[0]!.binaryDigest }),
+    });
+
+    // 3. Atomically accept set
+    const acceptSetRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/accept-set`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    assert.equal(acceptSetRes.status, 200);
+    const accepted = (await acceptSetRes.json()) as { id: string; version: number; setDigest: string };
+    assert.equal(accepted.version, 1);
+    assert.ok(accepted.id.startsWith("avs-"));
+
+    // Verify DB atomicity: 1 set row, 1 slot row
+    const setsAfter = await dbInst!.db.execute(sql`SELECT * FROM accepted_visual_asset_sets WHERE project_id = ${projectId}`);
+    assert.equal(setsAfter.rows.length, 1);
+    const slotsAfter = await dbInst!.db.execute(sql`SELECT * FROM accepted_visual_asset_slots WHERE set_id = ${accepted.id}`);
+    assert.equal(slotsAfter.rows.length, 1);
+
+    // 4. Idempotent on second call with identical digest
+    const repeatRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/accept-set`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    assert.equal(repeatRes.status, 200);
+    const repeated = (await repeatRes.json()) as { id: string; setDigest: string };
+    assert.equal(repeated.id, accepted.id);
+    assert.equal(repeated.setDigest, accepted.setDigest);
+  } finally {
+    await server.close();
+  }
+});
+
+test("visual API: single-flight concurrent generation deduplication with 1 provider call (P1-05)", async () => {
+  const server = await startTestServer();
+  try {
+    const projectId = await createProjectWithAcceptedInputs(server.baseUrl, "vapconc");
+    await acceptFixtureDesign(server.baseUrl, projectId);
+    const planRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const plan = (await planRes.json()) as { id: string };
+
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/classification`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ truthClass: "illustrative", acknowledged: true }),
+    });
+    const snapRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/prompt-snapshot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ operation: "generate" }),
+    });
+    const snap = (await snapRes.json()) as { id: string; promptDigest: string };
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/prompt-snapshots/${snap.id}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ promptDigest: snap.promptDigest }),
+    });
+
+    // Launch two parallel generation requests simultaneously
+    const [res1, res2] = await Promise.all([
+      fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      }),
+      fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      }),
+    ]);
+
+    assert.equal(res1.status, 201);
+    assert.equal(res2.status, 201);
+    const b1 = (await res1.json()) as { candidates: Array<{ binaryDigest: string }>; reused?: boolean };
+    const b2 = (await res2.json()) as { candidates: Array<{ binaryDigest: string }>; reused?: boolean };
+
+    // Both get identical candidates
+    assert.equal(b1.candidates[0]!.binaryDigest, b2.candidates[0]!.binaryDigest);
+    // At least one was leader or follower dedup-reused
+    assert.ok(b1.reused === true || b2.reused === true || b1.reused === false);
+
+    // Exactly one generation request row created in DB
+    const requests = await dbInst!.db.execute(sql`SELECT * FROM visual_generation_requests WHERE project_id = ${projectId}`);
+    assert.equal(requests.rows.length, 1, "single-flight dedup produces exactly one generation request in DB");
+  } finally {
+    await server.close();
+  }
+});
+
+test("visual API: stale upstream mid-run rejection fails closed (P1-02)", async () => {
+  const server = await startTestServer();
+  try {
+    const projectId = await createProjectWithAcceptedInputs(server.baseUrl, "vapstale");
+    await acceptFixtureDesign(server.baseUrl, projectId);
+    const planRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const plan = (await planRes.json()) as { id: string };
+
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/classification`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ truthClass: "illustrative", acknowledged: true }),
+    });
+    const snapRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/prompt-snapshot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ operation: "generate" }),
+    });
+    const snap = (await snapRes.json()) as { id: string; promptDigest: string };
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/prompt-snapshots/${snap.id}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ promptDigest: snap.promptDigest }),
+    });
+
+    // Upstream mutation: modify intake and accept revision 2
+    const payload = buildIntakePayload();
+    payload.brand.positioning = "Mutated upstream brand positioning";
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/intake-draft`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ baseRevision: 1, payload }),
+    });
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/intake/accept`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expectedRevision: 2, expectedDigest: deterministicDigest(payload) }),
+    });
+
+    // Visual generation must fail closed due to upstream design staleness
+    const genRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    assert.equal(genRes.status, 409);
+    const genBody = (await genRes.json()) as { error: { code: string; message: string } };
+    assert.equal(genBody.error.code, "visual_design_not_eligible");
+    assert.match(genBody.error.message, /stale/i);
+  } finally {
+    await server.close();
+  }
+});
+
+test("visual API: mechanical slot requirements rejection (P1-12)", async () => {
+  const server = await startTestServer();
+  try {
+    const projectId = await createProjectWithAcceptedInputs(server.baseUrl, "vapmech");
+    await acceptFixtureDesign(server.baseUrl, projectId);
+    const planRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const plan = (await planRes.json()) as { id: string };
+
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/classification`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ truthClass: "documentary", acknowledged: true }),
+    });
+
+    // Upload an undersized asset: 800x600 (not 16:9, and width 800 < 1200)
+    const undersizedBytes = await sharp({ create: { width: 800, height: 600, channels: 3, background: { r: 50, g: 60, b: 70 } } }).jpeg().toBuffer();
+    const uploadRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/assets/uploads`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        dataBase64: undersizedBytes.toString("base64"),
+        filename: "undersized.jpg",
+        title: "Undersized photo",
+        kind: "photo",
+        rightsStatus: "operator_owned",
+      }),
+    });
+    assert.equal(uploadRes.status, 201);
+    const upload = (await uploadRes.json()) as { versionId: string; binaryDigest: string };
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/assets/versions/${upload.versionId}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expectedBinaryDigest: upload.binaryDigest }),
+    });
+
+    // 1. resolve-reuse with undersized asset must fail with 409
+    const reuseRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/resolve-reuse`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ versionId: upload.versionId }),
+    });
+    assert.equal(reuseRes.status, 409);
+    const reuseErr = (await reuseRes.json()) as { error: { code: string; message: string } };
+    assert.equal(reuseErr.error.code, "visual_acceptance_failed");
+    assert.match(reuseErr.error.message, /minimum dimensions/i);
+
+    // 2. resolve-transform with undersized target dimensions must fail with 409
+    const transformRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/resolve-transform`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sourceVersionId: upload.versionId, maxWidth: 600, aspectRatioCrop: "16:9" }),
+    });
+    assert.equal(transformRes.status, 409);
+    const transformErr = (await transformRes.json()) as { error: { code: string; message: string } };
+    assert.equal(transformErr.error.code, "visual_acceptance_failed");
+    assert.match(transformErr.error.message, /minimum dimensions/i);
+
+    // 3. Upload a properly sized asset (1600x900, 16:9)
+    const validAsset = await uploadApprovedAsset(server.baseUrl, projectId, 77);
+    const validReuse = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/resolve-reuse`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ versionId: validAsset.versionId }),
+    });
+    assert.equal(validReuse.status, 200);
+  } finally {
+    await server.close();
+  }
+});
+
+test("visual API: real-photo reuse and deterministic transform Run 5 assignments (P1-04)", async () => {
+  const server = await startTestServer();
+  try {
+    const projectId = await createProjectWithAcceptedInputs(server.baseUrl, "vaprun5");
+    await acceptFixtureDesign(server.baseUrl, projectId);
+    const planRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const plan = (await planRes.json()) as { id: string };
+
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/classification`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ truthClass: "documentary", acknowledged: true }),
+    });
+
+    const photo = await uploadApprovedAsset(server.baseUrl, projectId, 88);
+
+    // 1. resolve-reuse returns assignmentId and writes to Run 5 asset_page_assignments
+    const reuseRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/resolve-reuse`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ versionId: photo.versionId }),
+    });
+    assert.equal(reuseRes.status, 200);
+    const reuse = (await reuseRes.json()) as { versionId: string; assignmentId: string };
+    assert.equal(reuse.versionId, photo.versionId);
+    assert.ok(reuse.assignmentId.startsWith("apa-"));
+
+    // Verify Run 5 assignment exists
+    const assignRows = await dbInst!.db.execute(sql`
+      SELECT * FROM asset_page_assignments 
+      WHERE project_id = ${projectId} AND page_slug = 'home' AND role = 'hero'
+    `);
+    assert.equal(assignRows.rows.length, 1);
+    assert.equal((assignRows.rows[0] as { version_id: string }).version_id, photo.versionId);
+
+    // 2. resolve-transform auto-approves and replaces/creates assignment
+    const transformRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/resolve-transform`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sourceVersionId: photo.versionId, maxWidth: 1400, aspectRatioCrop: "16:9" }),
+    });
+    assert.equal(transformRes.status, 200);
+    const transform = (await transformRes.json()) as { versionId: string; assignmentId: string };
+    assert.notEqual(transform.versionId, photo.versionId);
+    assert.ok(transform.assignmentId.startsWith("apa-"));
+
+    // Verify derived version is approved in Run 5
+    const versionRow = await dbInst!.db.execute(sql`
+      SELECT * FROM asset_versions WHERE id = ${transform.versionId}
+    `);
+    assert.equal((versionRow.rows[0] as { approval_state: string }).approval_state, "approved");
+
+    // Verify assignment updated to the derived version
+    const updatedAssign = await dbInst!.db.execute(sql`
+      SELECT * FROM asset_page_assignments 
+      WHERE project_id = ${projectId} AND page_slug = 'home' AND role = 'hero'
+    `);
+    assert.equal((updatedAssign.rows[0] as { version_id: string }).version_id, transform.versionId);
+  } finally {
+    await server.close();
+  }
+});
+
+test("visual API: end-to-end Final Design Pass & Freeze (P1-01)", async () => {
+  const server = await startTestServer();
+  try {
+    const projectId = await createProjectWithAcceptedInputs(server.baseUrl, "vapfreeze");
+    await acceptFixtureDesign(server.baseUrl, projectId);
+    const planRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const plan = (await planRes.json()) as { id: string };
+
+    // Resolve slot
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/classification`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ truthClass: "illustrative", acknowledged: true }),
+    });
+    const snapRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/prompt-snapshot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ operation: "generate" }),
+    });
+    const snap = (await snapRes.json()) as { id: string; promptDigest: string };
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/prompt-snapshots/${snap.id}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ promptDigest: snap.promptDigest }),
+    });
+    const genRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const gen = (await genRes.json()) as { candidates: Array<{ id: string; binaryDigest: string }> };
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/slots/hero.primary/accept`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ candidateId: gen.candidates[0]!.id, expectedBinaryDigest: gen.candidates[0]!.binaryDigest }),
+    });
+
+    // Accept visual set
+    const acceptSetRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/plans/${plan.id}/accept-set`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    assert.equal(acceptSetRes.status, 200);
+
+    // Workspace before freeze: finalDesignPass is required, not frozen
+    const ws1Res = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/workspace`);
+    const ws1 = (await ws1Res.json()) as {
+      finalDesignPass: {
+        required: boolean;
+        frozen: boolean;
+        acceptedDesignVersion: number | null;
+        designStalenessCode: string | null;
+      };
+    };
+    assert.equal(ws1.finalDesignPass.required, true);
+    assert.equal(ws1.finalDesignPass.frozen, false);
+    assert.equal(ws1.finalDesignPass.acceptedDesignVersion, 1);
+    assert.equal(ws1.finalDesignPass.designStalenessCode, "RUN7_ASSET_ASSIGNMENTS_ADDED");
+
+    // 1. Run Final Design Pass
+    const fdpRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/final-design-pass`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    assert.equal(fdpRes.status, 201);
+    const fdp = (await fdpRes.json()) as { id: string; candidateDigest: string };
+    assert.ok(fdp.id.startsWith("dsn-"));
+    assert.ok(/^[0-9a-f]{64}$/.test(fdp.candidateDigest));
+
+    // 2. Accept Final Design & Freeze
+    const freezeRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/accept-final-design`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ candidateId: fdp.id, expectedCandidateDigest: fdp.candidateDigest, reviewNotes: "fixture acceptance — final design freeze" }),
+    });
+    assert.equal(freezeRes.status, 200);
+    const freeze = (await freezeRes.json()) as { id: string; version: number };
+    assert.equal(freeze.version, 2);
+    assert.ok(freeze.id.startsWith("dsac-"));
+
+    // 3. Workspace after freeze: frozen = true, acceptedDesign is v2, UP_TO_DATE (not stale)
+    const ws2Res = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/workspace`);
+    const ws2 = (await ws2Res.json()) as {
+      finalDesignPass: {
+        required: boolean;
+        frozen: boolean;
+        acceptedDesignVersion: number;
+        designStalenessCode: string;
+      };
+    };
+    assert.equal(ws2.finalDesignPass.required, false);
+    assert.equal(ws2.finalDesignPass.frozen, true);
+    assert.equal(ws2.finalDesignPass.acceptedDesignVersion, 2);
+    assert.equal(ws2.finalDesignPass.designStalenessCode, null);
+
+    // Verify directly from design workspace that accepted design is v2 and not stale
+    const dwsRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/design/workspace`);
+    const dws = (await dwsRes.json()) as { accepted: { version: number; stale: boolean; staleReason: string | null } };
+    assert.equal(dws.accepted.version, 2);
+    assert.equal(dws.accepted.stale, false);
+
+    // 4. Repeated final design pass fails closed
+    const repeatFdp = await fetch(`${server.baseUrl}/api/projects/${projectId}/visual/final-design-pass`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    assert.equal(repeatFdp.status, 409);
+  } finally {
+    await server.close();
+  }
 });

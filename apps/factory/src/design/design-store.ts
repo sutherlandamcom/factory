@@ -5,6 +5,8 @@ import {
   parseDesignInputSnapshotData,
   type DesignCandidateData,
   type DesignInputSnapshotData,
+  type DesignStaleness,
+  type DesignStalenessCode,
 } from "@factory/contracts";
 import type { FactoryDb } from "../persistence/db.js";
 import {
@@ -46,10 +48,7 @@ function designNotFound(message: string): FactoryError {
   return new FactoryError("design_not_found", message);
 }
 
-export interface DesignStaleness {
-  stale: boolean;
-  reason: string | null;
-}
+export type { DesignStaleness, DesignStalenessCode };
 
 export class DesignStore {
   constructor(private readonly db: FactoryDb) {}
@@ -283,9 +282,9 @@ export class DesignStore {
   ): Promise<DesignStaleness> {
     let data: DesignInputSnapshotData;
     try { data = parseDesignInputSnapshotData(snapshot.data); }
-    catch { return { stale: true, reason: "Design input snapshot lacks valid exact upstream lineage; re-derive it." }; }
+    catch { return { stale: true, reason: "Design input snapshot lacks valid exact upstream lineage; re-derive it.", code: "DESIGN_INPUT_SNAPSHOT_INVALID" }; }
     if (snapshot.projectId !== projectId || deterministicDigest(data) !== snapshot.inputDigest) {
-      return { stale: true, reason: "Design input snapshot identity/digest is invalid." };
+      return { stale: true, reason: "Design input snapshot identity/digest is invalid.", code: "DESIGN_INPUT_SNAPSHOT_INVALID" };
     }
 
     // 1. Accepted project inputs.
@@ -296,12 +295,13 @@ export class DesignStore {
       .orderBy(desc(projectInputSnapshots.version))
       .limit(1);
     if (!inputSnapshot) {
-      return { stale: true, reason: "The accepted project inputs no longer exist." };
+      return { stale: true, reason: "The accepted project inputs no longer exist.", code: "INPUT_REMOVED" };
     }
     if (inputSnapshot.id !== data.acceptedInputSnapshotId || inputSnapshot.digest !== data.acceptedInputDigest) {
       return {
         stale: true,
         reason: `Accepted project inputs changed (snapshot ${data.acceptedInputSnapshotVersion} -> ${inputSnapshot.version}).`,
+        code: "INPUT_CHANGED",
       };
     }
 
@@ -314,10 +314,10 @@ export class DesignStore {
     for (const ref of data.contentRefs) {
       const current = currentContent.get(ref.id);
       if (!current) {
-        return { stale: true, reason: `Accepted content "${ref.slug}" was removed.` };
+        return { stale: true, reason: `Accepted content "${ref.slug}" was removed.`, code: "CONTENT_REMOVED" };
       }
       if (current.contentDigest !== ref.contentDigest || current.slug !== ref.slug || current.version !== ref.version) {
-        return { stale: true, reason: `Accepted content "${ref.slug}" changed.` };
+        return { stale: true, reason: `Accepted content "${ref.slug}" changed.`, code: "CONTENT_CHANGED" };
       }
     }
     const boundContentIds = new Set(data.contentRefs.map((ref) => ref.id));
@@ -326,6 +326,7 @@ export class DesignStore {
       return {
         stale: true,
         reason: `New accepted content exists (${addedContent.map((r) => r.slug).join(", ")}).`,
+        code: "CONTENT_ADDED",
       };
     }
 
@@ -351,12 +352,12 @@ export class DesignStore {
     for (const ref of data.assetRefs) {
       const current = currentAssignments.get(`${ref.pageSlug}::${ref.role}`);
       if (!current) {
-        return { stale: true, reason: `Asset assignment ${ref.pageSlug}/${ref.role} was removed.` };
+        return { stale: true, reason: `Asset assignment ${ref.pageSlug}/${ref.role} was removed.`, code: "ASSET_ASSIGNMENT_REMOVED" };
       }
       if (!validAssignmentAuthority(current, projectId) ||
           current.binaryDigest !== ref.binaryDigest || current.versionId !== ref.versionId ||
           current.governanceDigest !== ref.governanceDigest) {
-        return { stale: true, reason: `Asset assignment ${ref.pageSlug}/${ref.role} changed.` };
+        return { stale: true, reason: `Asset assignment ${ref.pageSlug}/${ref.role} changed.`, code: "ASSET_ASSIGNMENT_CHANGED" };
       }
     }
     const boundAssignmentKeys = new Set(data.assetRefs.map((ref) => `${ref.pageSlug}::${ref.role}`));
@@ -367,10 +368,11 @@ export class DesignStore {
       return {
         stale: true,
         reason: `New asset assignments exist (${addedAssignments.map((r) => `${r.pageSlug}/${r.role}`).join(", ")}).`,
+        code: "RUN7_ASSET_ASSIGNMENTS_ADDED",
       };
     }
 
-    return { stale: false, reason: null };
+    return { stale: false, reason: null, code: null };
   }
 
   // ---- Design candidates -----------------------------------------------------
@@ -650,9 +652,9 @@ export class DesignStore {
   ): Promise<DesignStaleness> {
     let data: DesignInputSnapshotData;
     try { data = parseDesignInputSnapshotData(snapshot.data); }
-    catch { return { stale: true, reason: "Design input snapshot lacks valid exact upstream lineage; re-derive it." }; }
+    catch { return { stale: true, reason: "Design input snapshot lacks valid exact upstream lineage; re-derive it.", code: "DESIGN_INPUT_SNAPSHOT_INVALID" }; }
     if (snapshot.projectId !== projectId || deterministicDigest(data) !== snapshot.inputDigest) {
-      return { stale: true, reason: "Design input snapshot identity/digest is invalid." };
+      return { stale: true, reason: "Design input snapshot identity/digest is invalid.", code: "DESIGN_INPUT_SNAPSHOT_INVALID" };
     }
 
     const [inputSnapshot] = await tx
@@ -662,12 +664,13 @@ export class DesignStore {
       .orderBy(desc(projectInputSnapshots.version))
       .limit(1);
     if (!inputSnapshot) {
-      return { stale: true, reason: "The accepted project inputs no longer exist." };
+      return { stale: true, reason: "The accepted project inputs no longer exist.", code: "INPUT_REMOVED" };
     }
     if (inputSnapshot.id !== data.acceptedInputSnapshotId || inputSnapshot.digest !== data.acceptedInputDigest) {
       return {
         stale: true,
         reason: `Accepted project inputs changed (snapshot ${data.acceptedInputSnapshotVersion} -> ${inputSnapshot.version}).`,
+        code: "INPUT_CHANGED",
       };
     }
 
@@ -679,10 +682,10 @@ export class DesignStore {
     for (const ref of data.contentRefs) {
       const current = currentContent.get(ref.id);
       if (!current) {
-        return { stale: true, reason: `Accepted content "${ref.slug}" was removed.` };
+        return { stale: true, reason: `Accepted content "${ref.slug}" was removed.`, code: "CONTENT_REMOVED" };
       }
       if (current.contentDigest !== ref.contentDigest || current.slug !== ref.slug || current.version !== ref.version) {
-        return { stale: true, reason: `Accepted content "${ref.slug}" changed.` };
+        return { stale: true, reason: `Accepted content "${ref.slug}" changed.`, code: "CONTENT_CHANGED" };
       }
     }
     const boundContentIds = new Set(data.contentRefs.map((ref) => ref.id));
@@ -691,6 +694,7 @@ export class DesignStore {
       return {
         stale: true,
         reason: `New accepted content exists (${addedContent.map((r) => r.slug).join(", ")}).`,
+        code: "CONTENT_ADDED",
       };
     }
 
@@ -715,12 +719,12 @@ export class DesignStore {
     for (const ref of data.assetRefs) {
       const current = currentAssignments.get(`${ref.pageSlug}::${ref.role}`);
       if (!current) {
-        return { stale: true, reason: `Asset assignment ${ref.pageSlug}/${ref.role} was removed.` };
+        return { stale: true, reason: `Asset assignment ${ref.pageSlug}/${ref.role} was removed.`, code: "ASSET_ASSIGNMENT_REMOVED" };
       }
       if (!validAssignmentAuthority(current, projectId) ||
           current.binaryDigest !== ref.binaryDigest || current.versionId !== ref.versionId ||
           current.governanceDigest !== ref.governanceDigest) {
-        return { stale: true, reason: `Asset assignment ${ref.pageSlug}/${ref.role} changed.` };
+        return { stale: true, reason: `Asset assignment ${ref.pageSlug}/${ref.role} changed.`, code: "ASSET_ASSIGNMENT_CHANGED" };
       }
     }
     const boundAssignmentKeys = new Set(data.assetRefs.map((ref) => `${ref.pageSlug}::${ref.role}`));
@@ -731,10 +735,11 @@ export class DesignStore {
       return {
         stale: true,
         reason: `New asset assignments exist (${addedAssignments.map((r) => `${r.pageSlug}/${r.role}`).join(", ")}).`,
+        code: "RUN7_ASSET_ASSIGNMENTS_ADDED",
       };
     }
 
-    return { stale: false, reason: null };
+    return { stale: false, reason: null, code: null };
   }
 
   async latestAcceptedDesign(projectId: string): Promise<{

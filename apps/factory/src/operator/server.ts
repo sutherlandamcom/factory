@@ -375,6 +375,7 @@ export async function startOperatorServer(): Promise<http.Server> {
     assets,
     budget: new VisualBudgetStore(dbInstance.db),
     provider: visualProvider,
+    designService: design,
   });
   const deps: OperatorApiDeps = { store, intake, search, competitors, writer, assets, design, visual };
   const server = createOperatorServer(deps);

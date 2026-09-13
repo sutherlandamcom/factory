@@ -522,3 +522,28 @@ export function parseDesignInputSnapshotData(input: unknown): DesignInputSnapsho
 export function parseDesignCandidateData(input: unknown): DesignCandidateData {
   return designCandidateDataSchema.parse(input);
 }
+
+// ---------------------------------------------------------------------------
+// Design staleness classification (typed authority; Run 7 uses this)
+// ---------------------------------------------------------------------------
+
+export const designStalenessCodeSchema = z.enum([
+  "INPUT_CHANGED",
+  "INPUT_REMOVED",
+  "CONTENT_CHANGED",
+  "CONTENT_REMOVED",
+  "CONTENT_ADDED",
+  "ASSET_ASSIGNMENT_CHANGED",
+  "ASSET_ASSIGNMENT_REMOVED",
+  "RUN7_ASSET_ASSIGNMENTS_ADDED",
+  "DESIGN_INPUT_SNAPSHOT_REMOVED",
+  "DESIGN_INPUT_SNAPSHOT_INVALID",
+]);
+export type DesignStalenessCode = z.infer<typeof designStalenessCodeSchema>;
+
+export interface DesignStaleness {
+  stale: boolean;
+  reason: string | null;
+  code?: DesignStalenessCode | null;
+}
+

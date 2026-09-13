@@ -1651,7 +1651,7 @@ export const visualGenerationRequests = pgTable(
     check("visual_generation_requests_provider_valid", sql`${table.provider} IN ('google-genai')`),
     check("visual_generation_requests_provider_mode_valid", sql`${table.providerMode} IN ('live', 'fixture')`),
     check("visual_generation_requests_operation_valid", sql`${table.operation} IN ('edit', 'generate')`),
-    check("visual_generation_requests_result_state_valid", sql`${table.resultState} IN ('succeeded', 'failed')`),
+    check("visual_generation_requests_result_state_valid", sql`${table.resultState} IN ('pending', 'running', 'succeeded', 'failed')`),
     check(
       "visual_generation_requests_cost_non_negative",
       sql`${table.costMicros} IS NULL OR ${table.costMicros} >= 0`,
@@ -1731,6 +1731,7 @@ export const acceptedVisualAssetSets = pgTable(
     planId: text("plan_id")
       .notNull()
       .references(() => visualAssetPlans.id, { onDelete: "cascade" }),
+    providerMode: text("provider_mode").notNull().default("live"),
     designArtifactId: text("design_artifact_id").notNull(),
     designArtifactVersion: integer("design_artifact_version").notNull(),
     designCandidateDigest: text("design_candidate_digest").notNull(),
@@ -1742,6 +1743,7 @@ export const acceptedVisualAssetSets = pgTable(
     unique("accepted_visual_asset_sets_project_version_unique").on(table.projectId, table.version),
     check("accepted_visual_asset_sets_version_positive", sql`${table.version} >= 1`),
     check("accepted_visual_asset_sets_digest_shape", sql`${table.setDigest} ~ '^[0-9a-f]{64}$'`),
+    check("accepted_visual_asset_sets_provider_mode_valid", sql`${table.providerMode} IN ('live', 'fixture')`),
     index("accepted_visual_asset_sets_project_idx").on(table.projectId, table.version),
   ],
 );

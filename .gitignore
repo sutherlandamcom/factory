@@ -18,8 +18,8 @@ node_modules/
 # logs
 *.log
 
-# Factory runtime evidence (runs, patches, logs)
-/.factory/
+# Factory runtime evidence (runs, patches, logs) — any depth (root + apps/*)
+.factory/
 
 # Local agent tooling (plans, sessions)
 /.kilo/

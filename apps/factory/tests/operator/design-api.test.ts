@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { createOperatorApi } from "../../src/operator/api.js";
 import { createOperatorServer } from "../../src/operator/server.js";
@@ -38,11 +39,18 @@ class StubDesignProvider implements DesignProvider {
 
   async generateDesignSystem(): Promise<DesignGenerationResult> {
     this.generationCalls += 1;
+    // The stub's DESIGN.md bytes and their digest must be consistent: the
+    // service layer verifies the candidate's designMdDigest against the
+    // stored artifact bytes (content-addressed binding enforcement).
+    const designMdBytes = new TextEncoder().encode(
+      "---\nname: Stub\n\ncolors:\n  primary: \"#1A2E35\"\ntypography:\n  h1:\n    fontFamily: Source Serif 4\n    fontSize: 3rem\n---\n\n## Overview\nStub.\n",
+    );
+    const designMdDigest = createHash("sha256").update(designMdBytes).digest("hex");
     const candidate: DesignCandidateData = parseDesignCandidateData({
       schemaVersion: "design-v1",
       provider: "google-stitch",
       providerProjectName: "projects/stub",
-      designMdDigest: "d".repeat(64),
+      designMdDigest,
       designMdToolVersion: "@google/design.md 0.4.0",
       designMdLint: { errors: 0, warnings: 0, infos: 0 },
       tokens: {
@@ -81,9 +89,7 @@ class StubDesignProvider implements DesignProvider {
       rawArtifacts: [
         {
           kind: "design_md",
-          bytes: new TextEncoder().encode(
-            "---\nname: Stub\n\ncolors:\n  primary: \"#1A2E35\"\ntypography:\n  h1:\n    fontFamily: Source Serif 4\n    fontSize: 3rem\n---\n\n## Overview\nStub.\n",
-          ),
+          bytes: designMdBytes,
           mediaType: "text/markdown",
           providerRef: null,
         },
@@ -114,7 +120,7 @@ async function startTestServer(provider: StubDesignProvider): Promise<TestServer
   const store = new FactoryStore(dbInst.db);
   const intake = new ProjectIntakeStore(dbInst.db);
   const designStore = new DesignStore(dbInst.db);
-  const design = new DesignService({ store: designStore, provider });
+  const design = await DesignService.create({ store: designStore, provider });
   const server = createOperatorServer({
     store,
     intake,

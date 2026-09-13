@@ -352,7 +352,7 @@ export async function startOperatorServer(): Promise<http.Server> {
   // input): FACTORY_DESIGN_MODE=fixture wires the deterministic fixture
   // provider so E2E journeys never touch a paid provider.
   const designMode = process.env.FACTORY_DESIGN_MODE === "fixture" ? "fixture" : "production";
-  const design = new DesignService({
+  const design = await DesignService.create({
     store: designStore,
     provider: designMode === "fixture" ? new FixtureDesignProvider() : new StitchDesignProvider(),
   });

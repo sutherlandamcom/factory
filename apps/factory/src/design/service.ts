@@ -9,7 +9,7 @@ import {
 } from "@factory/contracts";
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
-import { createDesignArtifactStorage, type DesignArtifactStorage } from "./artifact-storage.js";
+import { createDesignArtifactStorageAsync, type DesignArtifactStorage } from "./artifact-storage.js";
 import { lintDesignMd } from "./design-md.js";
 import { DesignStore, type DesignStaleness } from "./design-store.js";
 import type { DesignInputSnapshotRecord, DesignCandidateRecord, AcceptedDesignArtifactRecord } from "../persistence/schema.js";
@@ -94,10 +94,21 @@ export class DesignService {
   private readonly provider: DesignProvider;
   private readonly storage: DesignArtifactStorage;
 
-  constructor(deps: DesignServiceDeps) {
+  /**
+   * Async factory: resolves the Git repository toplevel for artifact
+   * storage (gitignored `.factory/design/` at the repo root) unless an
+   * explicit storage/root is supplied (tests).
+   */
+  static async create(deps: DesignServiceDeps): Promise<DesignService> {
+    const storage =
+      deps.storage ?? (await createDesignArtifactStorageAsync(deps.repoRoot));
+    return new DesignService({ ...deps, storage });
+  }
+
+  private constructor(deps: DesignServiceDeps) {
     this.store = deps.store;
     this.provider = deps.provider;
-    this.storage = deps.storage ?? createDesignArtifactStorage(deps.repoRoot);
+    this.storage = deps.storage as DesignArtifactStorage;
   }
 
   // ---- Input snapshot ---------------------------------------------------------
@@ -171,30 +182,71 @@ export class DesignService {
       acceptedCopy: await this.resolveAcceptedCopy(input.projectId, snapshot.data as DesignInputSnapshotData),
     });
 
-    // Persist raw artifacts content-addressed BEFORE the candidate row so a
-    // candidate never references missing evidence.
-    const artifactDigests = new Map<string, string>();
-    for (const artifact of result.rawArtifacts) {
-      const digest = await this.storage.putArtifact(artifact.kind, artifact.bytes);
-      artifactDigests.set(`${artifact.kind}:${artifact.providerRef ?? ""}`, digest);
+    // DESIGN.md lint: structural validation of the artifact payload BEFORE
+    // any persistence (lint-failure orphans are impossible by ordering).
+    const designMdArtifact = result.rawArtifacts.find((a) => a.kind === "design_md");
+    if (!designMdArtifact) {
+      throw new FactoryError(
+        "design_provider_output_invalid",
+        "Provider returned no DESIGN.md artifact; the generation result is incomplete.",
+      );
+    }
+    const lint = lintDesignMd(new TextDecoder().decode(designMdArtifact.bytes));
+    if (lint.errors > 0) {
+      throw new FactoryError(
+        "design_md_invalid",
+        `DESIGN.md validation failed with ${lint.errors} error(s); the candidate is rejected before persistence.`,
+      );
     }
 
-    // DESIGN.md lint: structural validation of the artifact payload.
-    const designMdArtifact = result.rawArtifacts.find((a) => a.kind === "design_md");
-    if (designMdArtifact) {
-      const lint = lintDesignMd(new TextDecoder().decode(designMdArtifact.bytes));
-      if (lint.errors > 0) {
-        throw new FactoryError(
-          "design_md_invalid",
-          `DESIGN.md validation failed with ${lint.errors} error(s); the candidate is rejected before persistence.`,
-        );
+    // Content-addressed binding enforcement: store ALL raw artifacts first
+    // (content-addressed puts are idempotent), then verify the candidate's
+    // recorded digests against the digests of the bytes actually stored.
+    // A provider implementation that binds a candidate to wrong/missing
+    // evidence fails closed here (the DesignProvider boundary is a public
+    // seam; the trusted layer verifies, it does not trust).
+    const storedByRef = new Map<string, string>();
+    for (const artifact of result.rawArtifacts) {
+      const digest = await this.storage.putArtifact(artifact.kind, artifact.bytes);
+      storedByRef.set(`${artifact.kind}:${artifact.providerRef ?? ""}`, digest);
+    }
+    const storedDesignMdDigest = storedByRef.get("design_md:");
+    if (storedDesignMdDigest !== result.candidate.designMdDigest) {
+      throw new FactoryError(
+        "design_provider_output_invalid",
+        "DESIGN.md digest mismatch: the candidate binds a digest that does not match the stored artifact bytes.",
+      );
+    }
+    for (const screen of result.candidate.screens) {
+      if (screen.htmlDigest) {
+        if (!(await this.storage.hasArtifact("screen_html", screen.htmlDigest))) {
+          throw new FactoryError(
+            "design_provider_output_invalid",
+            `Screen "${screen.id}" binds an htmlDigest that was never stored.`,
+          );
+        }
+      }
+      if (screen.screenshotDigest) {
+        if (!(await this.storage.hasArtifact("screen_screenshot", screen.screenshotDigest))) {
+          throw new FactoryError(
+            "design_provider_output_invalid",
+            `Screen "${screen.id}" binds a screenshotDigest that was never stored.`,
+          );
+        }
       }
     }
+
+    // Record the REAL lint result on the candidate (never a hard-coded
+    // zero) so recorded validation evidence is truthful.
+    const candidateData: DesignCandidateData = {
+      ...result.candidate,
+      designMdLint: { errors: lint.errors, warnings: lint.warnings, infos: lint.infos },
+    };
 
     const candidate = await this.store.createCandidate({
       projectId: input.projectId,
       inputSnapshot: snapshot,
-      data: result.candidate,
+      data: candidateData,
     });
     return this.toCandidateView(candidate);
   }

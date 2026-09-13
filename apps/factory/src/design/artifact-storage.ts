@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { createHash } from "node:crypto";
+import { resolveRepositoryRoot } from "../repo-root.js";
 import { FactoryError } from "../executor/errors.js";
 
 /**
@@ -61,7 +62,34 @@ function assertHexDigest(digest: string, label: string): void {
 }
 
 export function createDesignArtifactStorage(repoRoot?: string): DesignArtifactStorage {
-  const root = path.resolve(repoRoot ?? process.cwd(), DESIGN_ROOT_SEGMENT, DESIGN_DIR);
+  // Root is the GIT TOPLEVEL (like the accepted Run 5 asset storage), not
+  // process.cwd(): pnpm executes scripts with the package directory as cwd,
+  // so a cwd-derived root would relocate artifacts per invocation context
+  // and strand DB-referenced digests. resolveRepositoryRoot is async; the
+  // root is resolved lazily on first use and cached.
+  let cachedRoot: string | null = repoRoot ? path.resolve(repoRoot) : null;
+  const resolveRoot = (): string => {
+    if (cachedRoot) return cachedRoot;
+    throw new FactoryError(
+      "design_provider_output_invalid",
+      "Design artifact storage root not initialized; construct via createDesignArtifactStorageAsync or pass an explicit repoRoot.",
+    );
+  };
+  return buildStorage(resolveRoot);
+}
+
+/**
+ * Async construction used by the service layer: resolves the Git repository
+ * toplevel once (read-only git operation) and caches it for the storage
+ * lifetime.
+ */
+export async function createDesignArtifactStorageAsync(repoRoot?: string): Promise<DesignArtifactStorage> {
+  const root = path.resolve(repoRoot ?? (await resolveRepositoryRoot()), DESIGN_ROOT_SEGMENT, DESIGN_DIR);
+  return buildStorage(() => root);
+}
+
+function buildStorage(resolveRoot: () => string): DesignArtifactStorage {
+  const root = resolveRoot();
 
   const artifactKey = (kind: DesignArtifactKind, digest: string): string => {
     assertHexDigest(digest, "artifact digest");

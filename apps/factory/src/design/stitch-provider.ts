@@ -11,6 +11,11 @@ import {
   type DesignProviderPreflight,
 } from "@factory/contracts";
 import { FactoryError } from "../executor/errors.js";
+import { validateUrlResolved } from "../competitors/ssrf-guard.js";
+
+/** Artifact download bounds: redirect hops and byte ceiling (fail closed). */
+const MAX_ARTIFACT_REDIRECTS = 3;
+const MAX_ARTIFACT_BYTES = 32 * 1024 * 1024;
 
 /**
  * GOOGLE STITCH DESIGN PROVIDER — thin Factory adapter over the OFFICIAL
@@ -246,7 +251,7 @@ export function buildArchetypePrompt(input: {
     responsiveBehavior: string;
     trustPresentation: string;
   };
-  brand: { facts: string[]; positioning: string; tone: string };
+  brand: { facts: string[]; positioning: string; tone: string; visualIdentityNotes?: string };
   audience: { segments: string[]; needs: string[] };
   pageContent: Array<{ slug: string; title: string; introduction: string; sections: Array<{ heading: string; body: string }>; conclusion: string; cta: string }>;
   references: { learn: string[]; avoid: string[]; preferredPerception: string };
@@ -257,8 +262,11 @@ export function buildArchetypePrompt(input: {
     `Design a professional ${input.archetypeKind} page for an institutional advisory/investment brand.`,
   );
   parts.push(`Archetype purpose: ${input.archetype.purpose}`);
-  parts.push(`Brand positioning: ${input.archetype.primaryCta ? "" : ""}${input.brand.positioning}`);
+  parts.push(`Brand positioning: ${input.brand.positioning}`);
   parts.push(`Brand tone: ${input.brand.tone}`);
+  if (input.brand.visualIdentityNotes) {
+    parts.push(`Operator visual identity notes (accepted input — honor these): ${input.brand.visualIdentityNotes}`);
+  }
   if (input.brand.facts.length > 0) {
     parts.push(`Verified brand facts (do NOT invent additional facts or claims): ${input.brand.facts.join("; ")}`);
   }
@@ -572,7 +580,7 @@ export class StitchDesignProvider implements DesignProvider {
         screens,
         archetypes,
         rationale:
-          "Site-level design system generated from accepted brand facts, audience, references/anti-references and UX requirements. Archetypes: " +
+          "Site-level design system seeded from accepted brand facts, audience, references/anti-references and UX requirements. Token values are the Factory seed the provider generation is guided by (provider design-system asset recorded separately as evidence). Archetypes: " +
           archetypes.map((a) => a.kind).join(", ") +
           ".",
         providerSessionId: lastSessionId ?? undefined,
@@ -640,28 +648,69 @@ export class StitchDesignProvider implements DesignProvider {
 
   /** Download a provider artifact (HTML/screenshot) over HTTPS only. */
   private async downloadArtifact(url: string): Promise<Uint8Array> {
-    let parsed: URL;
+    let firstUrl: URL;
     try {
-      parsed = new URL(url);
+      firstUrl = new URL(url);
     } catch {
       throw stitchError("design_provider_output_invalid", "Stitch artifact URL is not a valid URL.");
     }
-    if (parsed.protocol !== "https:") {
-      throw stitchError("design_provider_output_invalid", "Stitch artifact URL must use HTTPS.");
+    // Provider-controlled URLs are UNTRUSTED. Apply the repository's accepted
+    // SSRF policy (Run 3/4.1 ssrf-guard): HTTPS-only, per-hop resolution
+    // validation with manual redirects — a public URL that redirects to a
+    // private host fails closed.
+    let currentUrl = firstUrl;
+    for (let hop = 0; hop <= MAX_ARTIFACT_REDIRECTS; hop++) {
+      const check = await validateUrlResolved(currentUrl.toString());
+      if (!check.ok) {
+        throw stitchError(
+          "design_provider_output_invalid",
+          `Stitch artifact URL rejected by safety policy: ${check.reason ?? "forbidden target"}.`,
+        );
+      }
+      let response: Response;
+      try {
+        response = await fetch(currentUrl, {
+          redirect: "manual",
+          signal: AbortSignal.timeout(60_000),
+        });
+      } catch (error) {
+        throw stitchError(
+          "design_provider_unavailable",
+          `Stitch artifact download failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      if (response.status >= 300 && response.status < 400) {
+        await response.arrayBuffer().catch(() => undefined);
+        const location = response.headers.get("location");
+        if (!location) {
+          throw stitchError("design_provider_unavailable", "Stitch artifact redirect without Location header.");
+        }
+        let nextUrl: URL;
+        try {
+          nextUrl = new URL(location, currentUrl);
+        } catch {
+          throw stitchError("design_provider_output_invalid", "Stitch artifact redirect Location is not a valid URL.");
+        }
+        if (nextUrl.protocol !== "https:") {
+          throw stitchError("design_provider_output_invalid", "Stitch artifact redirect must remain HTTPS.");
+        }
+        currentUrl = nextUrl;
+        continue;
+      }
+      if (!response.ok) {
+        throw stitchError(
+          "design_provider_unavailable",
+          `Stitch artifact download failed with HTTP ${response.status}.`,
+        );
+      }
+      const buffer = await response.arrayBuffer();
+      // Bounded artifact ceiling (fail closed on runaway payloads).
+      if (buffer.byteLength > MAX_ARTIFACT_BYTES) {
+        throw stitchError("design_provider_output_invalid", "Stitch artifact exceeds the 32 MiB ceiling.");
+      }
+      return new Uint8Array(buffer);
     }
-    const response = await fetch(parsed, { signal: AbortSignal.timeout(60_000) });
-    if (!response.ok) {
-      throw stitchError(
-        "design_provider_unavailable",
-        `Stitch artifact download failed with HTTP ${response.status}.`,
-      );
-    }
-    const buffer = await response.arrayBuffer();
-    // Bounded artifact ceiling (fail closed on runaway payloads).
-    if (buffer.byteLength > 32 * 1024 * 1024) {
-      throw stitchError("design_provider_output_invalid", "Stitch artifact exceeds the 32 MiB ceiling.");
-    }
-    return new Uint8Array(buffer);
+    throw stitchError("design_provider_unavailable", "Stitch artifact redirect limit exceeded.");
   }
 }
 

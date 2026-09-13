@@ -775,9 +775,9 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         }
 
         // GET artifact bytes: /projects/:id/design/artifacts/:digest
-        // Provider HTML is served with X-Frame-Options sandboxing headers and
-        // a Content-Security-Policy that disables scripts — the Dashboard
-        // renders it ONLY inside a sandboxed iframe (fail closed).
+        // Provider HTML is UNTRUSTED external content: served with a
+        // script-free, form-free, self-framed-only CSP + nosniff. The
+        // Dashboard renders it ONLY inside a sandboxed iframe (fail closed).
         if (req.method === "GET" && segments.length === 5 && segments[3] === "artifacts") {
           const digest = segments[4]!;
           if (!/^[0-9a-f]{64}$/.test(digest)) {
@@ -789,7 +789,8 @@ export function createOperatorApi(deps: OperatorApiDeps) {
             "Content-Type": artifact.mediaType,
             "Content-Length": String(artifact.bytes.byteLength),
             "X-Content-Type-Options": "nosniff",
-            "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'",
+            "Content-Security-Policy":
+              "default-src 'none'; img-src data:; style-src 'unsafe-inline'; frame-ancestors 'self'; form-action 'none'",
             "Cache-Control": "private, no-store",
           });
           res.end(Buffer.from(artifact.bytes));

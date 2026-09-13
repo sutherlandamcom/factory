@@ -157,29 +157,60 @@ export class DesignStore {
     }
     if (latest) {
       const nextVersion = latest.version + 1;
+      try {
+        const [row] = await this.db
+          .insert(designInputSnapshots)
+          .values({
+            id: `dsi-${randomUUID()}`,
+            projectId: input.projectId,
+            version: nextVersion,
+            data,
+            inputDigest,
+          })
+          .returning();
+        return row!;
+      } catch (error) {
+        // Two concurrent derivations can race the version allocation into
+        // UNIQUE(project_id, version). Fail closed with the typed conflict
+        // instead of a raw 500 (Run 5 QA precedent). drizzle-orm 0.45.x
+        // wraps driver errors in DrizzleQueryError: the PostgreSQL code
+        // lives on error.cause.code, not error.code.
+        const pgCode =
+          (error as { code?: string } | null)?.code ??
+          (error as { cause?: { code?: string } | null } | null)?.cause?.code;
+        if (pgCode === "23505") {
+          throw new FactoryError(
+            "design_approval_failed",
+            "Concurrent design input derivation conflict; re-derive the snapshot.",
+          );
+        }
+        throw error;
+      }
+    }
+    try {
       const [row] = await this.db
         .insert(designInputSnapshots)
         .values({
           id: `dsi-${randomUUID()}`,
           projectId: input.projectId,
-          version: nextVersion,
+          version: 1,
           data,
           inputDigest,
         })
         .returning();
       return row!;
+    } catch (error) {
+      const pgCode =
+        (error as { code?: string } | null)?.code ??
+        (error as { cause?: { code?: string } | null } | null)?.cause?.code;
+      if (pgCode === "23505") {
+        throw new FactoryError(
+          "design_approval_failed",
+          "Concurrent design input derivation conflict; re-derive the snapshot.",
+        );
+      }
+      throw error;
     }
-    const [row] = await this.db
-      .insert(designInputSnapshots)
-      .values({
-        id: `dsi-${randomUUID()}`,
-        projectId: input.projectId,
-        version: 1,
-        data,
-        inputDigest,
-      })
-      .returning();
-    return row!;
   }
 
   async latestInputSnapshot(projectId: string): Promise<DesignInputSnapshotRecord | null> {
@@ -432,23 +463,40 @@ export class DesignStore {
       const id = `dsac-${randomUUID()}`;
       const candidateData = parseDesignCandidateData(candidate.data);
 
-      const [accepted] = await tx
-        .insert(acceptedDesignArtifacts)
-        .values({
-          id,
-          projectId: input.projectId,
-          version: nextVersion,
-          candidateId: candidate.id,
-          candidateDigest: candidate.candidateDigest,
-          inputSnapshotId: candidate.inputSnapshotId,
-          inputSnapshotVersion: candidate.inputSnapshotVersion,
-          inputDigest: candidate.inputDigest,
-          provider: candidate.provider,
-          providerProjectName: candidate.providerProjectName,
-          designMdDigest: candidateData.designMdDigest,
-          data: candidate.data,
-        })
-        .returning();
+      let accepted: AcceptedDesignArtifactRecord | undefined;
+      try {
+        [accepted] = await tx
+          .insert(acceptedDesignArtifacts)
+          .values({
+            id,
+            projectId: input.projectId,
+            version: nextVersion,
+            candidateId: candidate.id,
+            candidateDigest: candidate.candidateDigest,
+            inputSnapshotId: candidate.inputSnapshotId,
+            inputSnapshotVersion: candidate.inputSnapshotVersion,
+            inputDigest: candidate.inputDigest,
+            provider: candidate.provider,
+            providerProjectName: candidate.providerProjectName,
+            designMdDigest: candidateData.designMdDigest,
+            data: candidate.data,
+          })
+          .returning();
+      } catch (error) {
+        // Two concurrent acceptances can race the max-version allocation
+        // into UNIQUE(project_id, version). Fail closed with the typed
+        // acceptance conflict instead of a raw 500 (Run 5 QA precedent).
+        const pgCode =
+          (error as { code?: string } | null)?.code ??
+          (error as { cause?: { code?: string } | null } | null)?.cause?.code;
+        if (pgCode === "23505") {
+          throw new FactoryError(
+            "design_approval_failed",
+            "Concurrent acceptance conflict on the design version sequence; retry the acceptance.",
+          );
+        }
+        throw error;
+      }
 
       await tx
         .update(designCandidates)

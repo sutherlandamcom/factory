@@ -93,6 +93,54 @@ function conflictError(message: string): FactoryError {
 export class AssetStore {
   constructor(private readonly db: FactoryDb) {}
 
+  /**
+   * One relational authority operation after CAS publication. Serialize
+   * uploads for a project before resolving a logical identity (including
+   * its first insert), then allocate the immutable version under that lock.
+   * The unique binary/version constraints remain the final conflict guard.
+   * Any failure rolls back the asset, version and all derivative metadata;
+   * unreferenced CAS objects confer no authority and may remain on disk.
+   */
+  async insertUpload(input: {
+    asset: { projectId: string; kind: string; title: string };
+    version: Omit<Parameters<AssetStore["insertVersion"]>[0], "projectId" | "assetId" | "version">;
+    derivatives: Array<Omit<Parameters<AssetStore["insertDerivative"]>[0], "projectId" | "versionId">>;
+  }): Promise<{ asset: AssetRow; version: AssetVersionRow; derivatives: DerivativeRow[] }> {
+    try {
+      return await this.db.transaction(async (tx) => {
+        // A namespaced transaction lock also covers the absent-row case.
+        // Hash collisions merely serialize unrelated projects; never bypass.
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(1428570005, hashtext(${input.asset.projectId}))`);
+        const store = new AssetStore(tx);
+        const [existing] = await tx.select().from(assets).where(and(
+          eq(assets.projectId, input.asset.projectId),
+          eq(assets.kind, input.asset.kind),
+          eq(assets.title, input.asset.title),
+        )).orderBy(assets.createdAt, assets.id).limit(1);
+        const asset = existing ?? await store.createAsset(input.asset);
+        const version = await store.insertVersion({
+          ...input.version,
+          projectId: asset.projectId,
+          assetId: asset.id,
+          version: await store.nextVersionForAsset(asset.id),
+        });
+        const derivatives: DerivativeRow[] = [];
+        for (const derivative of input.derivatives) {
+          derivatives.push(await store.insertDerivative({
+            ...derivative, projectId: asset.projectId, versionId: version.id,
+          }));
+        }
+        return { asset, version, derivatives };
+      });
+    } catch (error) {
+      const code = (error as { code?: string; cause?: { code?: string } } | null);
+      if (code?.code === "23505" || code?.cause?.code === "23505") {
+        throw conflictError("Upload metadata conflicts with an existing immutable version or derivative.");
+      }
+      throw error;
+    }
+  }
+
   async createAsset(input: { projectId: string; kind: string; title: string }): Promise<AssetRow> {
     const id = `asst-${randomUUID()}`;
     const [row] = await this.db

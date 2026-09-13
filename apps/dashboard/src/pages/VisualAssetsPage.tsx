@@ -205,8 +205,22 @@ export function VisualAssetsPage({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      {ws.plan && ws.slots.length > 0 && (
+      {ws.plan && ws.slots.length > 0 && !ws.acceptedSet && (
         <div className="space-y-4">
+          {ws.slots.every((s) => s.resolved) && (
+            <button
+              className="rounded bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
+              disabled={busy}
+              onClick={() =>
+                run(async () => {
+                  const set = await visualApi.acceptSet(projectId, ws.plan!.id);
+                  return `Accepted Visual Asset Set v${set.version} (${shortDigest(set.setDigest)}). The accepted design is now intentionally stale — run the final design pass to freeze.`;
+                })
+              }
+            >
+              Accept visual asset set
+            </button>
+          )}
           {ws.slots.map((slot) => (
             <VisualSlotCard
               key={slot.slot}
@@ -316,7 +330,13 @@ function VisualSlotCard({
         <div className="mt-3 rounded bg-gray-50 p-2 text-xs">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium">Prompt snapshot</span>
-            <span className="text-gray-500">{slot.promptSnapshot.operation} · {shortDigest(slot.promptSnapshot.digest)}</span>
+            <span
+              className="font-mono text-gray-500"
+              data-prompt-digest={slot.promptSnapshot.digest}
+              title={`Full prompt digest: ${slot.promptSnapshot.digest}`}
+            >
+              {slot.promptSnapshot.operation} · {shortDigest(slot.promptSnapshot.digest)}
+            </span>
             <span className={`inline-block rounded border px-2 py-0.5 font-medium ${slot.promptSnapshot.approvalState === "approved" ? "border-green-300 bg-green-100 text-green-800" : "border-amber-300 bg-amber-100 text-amber-800"}`}>
               {slot.promptSnapshot.approvalState}
             </span>
@@ -329,6 +349,14 @@ function VisualSlotCard({
                 value={promptDigestInput}
                 onChange={(e) => setPromptDigestInput(e.target.value)}
               />
+              <button
+                type="button"
+                className="rounded border px-2 py-1 text-xs font-mono text-gray-600 hover:bg-gray-100"
+                title="Copy the exact prompt digest"
+                onClick={() => void navigator.clipboard?.writeText(slot.promptSnapshot!.digest).catch(() => undefined)}
+              >
+                copy
+              </button>
               <button
                 className="rounded bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
                 disabled={busy}
@@ -508,30 +536,5 @@ function VisualSlotCard({
         </div>
       )}
     </div>
-  );
-}
-
-/** Set acceptance button lives at workspace level (needs every slot resolved). */
-export function VisualSetAcceptBar({ projectId, planId, allResolved, busy, run }: {
-  projectId: string;
-  planId: string | null;
-  allResolved: boolean;
-  busy: boolean;
-  run: (fn: () => Promise<string | void>) => Promise<void>;
-}) {
-  if (!planId || !allResolved) return null;
-  return (
-    <button
-      className="rounded bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
-      disabled={busy}
-      onClick={() =>
-        run(async () => {
-          const set = await visualApi.acceptSet(projectId, planId);
-          return `Accepted Visual Asset Set v${set.version} (${shortDigest(set.setDigest)}). The accepted design is now intentionally stale — run the final design pass to freeze.`;
-        })
-      }
-    >
-      Accept visual asset set
-    </button>
   );
 }

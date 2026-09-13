@@ -328,6 +328,22 @@ export class AssetService {
     });
   }
 
+  /**
+   * Run 7 seam: record exact derivation provenance on a PENDING version
+   * before approval (derived/generated outputs only; fail closed otherwise).
+   */
+  async recordDerivationProvenance(projectId: string, versionId: string, input: {
+    expectedBinaryDigest: string;
+    provenance: AssetProvenance;
+  }): Promise<AssetVersionRow> {
+    return await this.store.recordDerivationProvenance({
+      projectId,
+      versionId,
+      expectedBinaryDigest: input.expectedBinaryDigest,
+      provenance: input.provenance,
+    });
+  }
+
   async approveVersion(
     projectId: string,
     versionId: string,

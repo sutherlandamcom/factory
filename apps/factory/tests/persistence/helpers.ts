@@ -66,6 +66,14 @@ export async function resetTestDatabase(dbInst: FactoryDatabaseInstance): Promis
   // Truncate all tables in dependency order
   await dbInst.db.execute(sql`
     TRUNCATE TABLE
+      accepted_visual_asset_slots,
+      accepted_visual_asset_sets,
+      visual_asset_candidates,
+      visual_generation_requests,
+      visual_prompt_snapshots,
+      visual_slot_classifications,
+      visual_asset_plans,
+      visual_budget_reservations,
       project_asset_settings,
       asset_page_assignments,
       asset_derivatives,

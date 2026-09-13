@@ -22,7 +22,9 @@ import {
   assetSettingsSchema,
   assetUploadSchema,
   assetVersionMetadataSchema,
+  visualTruthClassSchema,
 } from "@factory/contracts";
+import type { VisualService } from "../visual/service.js";
 
 export interface OperatorApiDeps {
   readonly store: FactoryStore;
@@ -37,6 +39,8 @@ export interface OperatorApiDeps {
   readonly assets?: AssetService;
   /** Design pipeline v0 (Macro Run 6); optional for backward compatibility. */
   readonly design?: DesignService;
+  /** Visual asset pipeline v0 (Macro Run 7); optional for backward compatibility. */
+  readonly visual?: VisualService;
 }
 
 const projectKeySchema = z
@@ -182,6 +186,59 @@ const designCandidateActionSchema = z
     candidateId: z.string().trim().min(1).max(128),
     expectedCandidateDigest: z.string().trim().regex(/^[0-9a-f]{64}$/),
     reviewNotes: z.string().trim().max(2000).optional(),
+  })
+  .strict();
+
+const visualClassificationBodySchema = z
+  .object({
+    truthClass: visualTruthClassSchema,
+    acknowledged: z.literal(true),
+  })
+  .strict();
+
+const visualPromptCompileSchema = z
+  .object({
+    operation: z.enum(["edit", "generate"]),
+    sourceVersionId: z.string().trim().regex(/^asv-[0-9a-f-]{36}$/).optional(),
+  })
+  .strict();
+
+const visualPromptApproveSchema = z
+  .object({
+    promptDigest: z.string().trim().regex(/^[0-9a-f]{64}$/),
+  })
+  .strict();
+
+const visualGenerateSchema = z
+  .object({
+    sourceVersionId: z.string().trim().regex(/^asv-[0-9a-f-]{36}$/).optional(),
+    escalationReason: z
+      .enum(["composition_complexity", "brand_consistency", "text_rendering", "reference_composition", "quality_floor_failure"])
+      .optional(),
+  })
+  .strict();
+
+const visualReuseSchema = z
+  .object({
+    versionId: z.string().trim().regex(/^asv-[0-9a-f-]{36}$/).optional(),
+  })
+  .strict();
+
+const visualTransformSchema = z
+  .object({
+    sourceVersionId: z.string().trim().regex(/^asv-[0-9a-f-]{36}$/),
+    maxWidth: z.number().int().min(1).max(8000).optional(),
+    aspectRatioCrop: z.enum(["16:9", "3:2", "4:3", "1:1"]).optional(),
+    grayscale: z.boolean().optional(),
+    brightness: z.number().min(0.5).max(1.5).optional(),
+  })
+  .strict();
+
+const visualAcceptCandidateSchema = z
+  .object({
+    candidateId: z.string().trim().min(1).max(128),
+    expectedBinaryDigest: z.string().trim().regex(/^[0-9a-f]{64}$/),
+    confirmTruthDowngrade: z.boolean().optional(),
   })
   .strict();
 
@@ -795,6 +852,217 @@ export function createOperatorApi(deps: OperatorApiDeps) {
           });
           res.end(Buffer.from(artifact.bytes));
           return;
+        }
+
+        return sendError(res, "not_found", "Unknown endpoint.");
+      }
+
+      // ---- Visual Assets (Macro Run 7) ----
+      // /projects/:id/visual/... — final visual asset resolution over the
+      // accepted design + Run 5 asset authority. Governance is entirely
+      // server-side (truth gates, prompt approval, fail-before-spend,
+      // request dedup); the Dashboard is a thin operator surface.
+      if (segments[2] === "visual" && deps.visual) {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        const visual = deps.visual;
+
+        // GET workspace: full read model.
+        if (req.method === "GET" && segments.length === 4 && segments[3] === "workspace") {
+          return sendJson(res, 200, await visual.workspace(project.id));
+        }
+
+        // POST plan: derive the visual plan from the current accepted design.
+        if (req.method === "POST" && segments.length === 4 && segments[3] === "plan") {
+          if (body.trim()) parseJsonBody(body);
+          const plan = await visual.derivePlan({ projectId: project.id });
+          return sendJson(res, 201, { id: plan.id, version: plan.version, planDigest: plan.planDigest });
+        }
+
+        // PUT classification: /projects/:id/visual/plans/:planId/slots/:slot/classification
+        if (
+          req.method === "PUT" &&
+          segments.length === 8 &&
+          segments[3] === "plans" &&
+          segments[5] === "slots" &&
+          segments[7] === "classification"
+        ) {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(visualClassificationBodySchema, parsed);
+          await visual.confirmClassification({
+            projectId: project.id,
+            planId: segments[4]!,
+            slot: segments[6]!,
+            truthClass: input.truthClass,
+          });
+          return sendJson(res, 200, { ok: true });
+        }
+
+        // POST prompt-snapshot: /projects/:id/visual/plans/:planId/slots/:slot/prompt-snapshot
+        if (
+          req.method === "POST" &&
+          segments.length === 8 &&
+          segments[3] === "plans" &&
+          segments[5] === "slots" &&
+          segments[7] === "prompt-snapshot"
+        ) {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(visualPromptCompileSchema, parsed);
+          const snapshot = await visual.compilePromptSnapshot({
+            projectId: project.id,
+            planId: segments[4]!,
+            slot: segments[6]!,
+            operation: input.operation,
+            sourceVersionId: input.sourceVersionId,
+          });
+          return sendJson(res, 201, { id: snapshot.id, promptDigest: snapshot.promptDigest, approvalState: snapshot.approvalState });
+        }
+
+        // POST prompt approve: /projects/:id/visual/prompt-snapshots/:snapshotId/approve
+        if (
+          req.method === "POST" &&
+          segments.length === 6 &&
+          segments[3] === "prompt-snapshots" &&
+          segments[5] === "approve"
+        ) {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(visualPromptApproveSchema, parsed);
+          const snapshot = await visual.approvePromptSnapshot({
+            projectId: project.id,
+            snapshotId: segments[4]!,
+            expectedPromptDigest: input.promptDigest,
+          });
+          return sendJson(res, 200, { id: snapshot.id, approvalState: snapshot.approvalState, promptDigest: snapshot.promptDigest });
+        }
+
+        // POST generate: /projects/:id/visual/plans/:planId/slots/:slot/generate
+        if (
+          req.method === "POST" &&
+          segments.length === 8 &&
+          segments[3] === "plans" &&
+          segments[5] === "slots" &&
+          segments[7] === "generate"
+        ) {
+          const parsed = body.trim() ? parseJsonBody(body) : {};
+          const input = parseOr400(visualGenerateSchema, parsed);
+          const result = await visual.generateForSlot({
+            projectId: project.id,
+            planId: segments[4]!,
+            slot: segments[6]!,
+            sourceVersionId: input.sourceVersionId,
+            escalationReason: input.escalationReason ?? null,
+          });
+          return sendJson(res, 201, {
+            requestId: result.request.id,
+            reused: result.reused,
+            model: result.request.model,
+            providerMode: result.request.providerMode,
+            candidates: result.candidates.map((c) => ({
+              id: c.id,
+              candidateIndex: c.candidateIndex,
+              binaryDigest: c.binaryDigest,
+              mediaType: c.mediaType,
+              width: c.width,
+              height: c.height,
+              state: c.state,
+            })),
+          });
+        }
+
+        // POST reuse: /projects/:id/visual/plans/:planId/slots/:slot/resolve-reuse
+        if (
+          req.method === "POST" &&
+          segments.length === 8 &&
+          segments[3] === "plans" &&
+          segments[5] === "slots" &&
+          segments[7] === "resolve-reuse"
+        ) {
+          const parsed = body.trim() ? parseJsonBody(body) : {};
+          const input = parseOr400(visualReuseSchema, parsed);
+          const resolved = await visual.resolveReuse({
+            projectId: project.id,
+            planId: segments[4]!,
+            slot: segments[6]!,
+            versionId: input.versionId,
+          });
+          return sendJson(res, 200, {
+            versionId: resolved.version.id,
+            binaryDigest: resolved.version.binaryDigest,
+            governanceDigest: resolved.version.governanceDigest,
+            assetId: resolved.asset.id,
+          });
+        }
+
+        // POST deterministic transform: /projects/:id/visual/plans/:planId/slots/:slot/resolve-transform
+        if (
+          req.method === "POST" &&
+          segments.length === 8 &&
+          segments[3] === "plans" &&
+          segments[5] === "slots" &&
+          segments[7] === "resolve-transform"
+        ) {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(visualTransformSchema, parsed);
+          const resolved = await visual.resolveDeterministicTransform({
+            projectId: project.id,
+            planId: segments[4]!,
+            slot: segments[6]!,
+            sourceVersionId: input.sourceVersionId,
+            transform: {
+              maxWidth: input.maxWidth,
+              aspectRatioCrop: input.aspectRatioCrop,
+              grayscale: input.grayscale,
+              brightness: input.brightness,
+            },
+          });
+          return sendJson(res, 200, {
+            versionId: resolved.version.id,
+            binaryDigest: resolved.version.binaryDigest,
+            governanceDigest: resolved.version.governanceDigest,
+            assetId: resolved.asset.id,
+            transformation: resolved.derivation.transformation ?? null,
+          });
+        }
+
+        // POST accept candidate: /projects/:id/visual/plans/:planId/slots/:slot/accept
+        if (
+          req.method === "POST" &&
+          segments.length === 8 &&
+          segments[3] === "plans" &&
+          segments[5] === "slots" &&
+          segments[7] === "accept"
+        ) {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(visualAcceptCandidateSchema, parsed);
+          const accepted = await visual.acceptCandidate({
+            projectId: project.id,
+            planId: segments[4]!,
+            slot: segments[6]!,
+            candidateId: input.candidateId,
+            expectedBinaryDigest: input.expectedBinaryDigest,
+            confirmTruthDowngrade: input.confirmTruthDowngrade,
+          });
+          return sendJson(res, 200, {
+            versionId: accepted.version.id,
+            binaryDigest: accepted.version.binaryDigest,
+            governanceDigest: accepted.version.governanceDigest,
+            assetId: accepted.asset.id,
+            assignmentId: accepted.assignmentId,
+            truthClass: accepted.truthClass,
+          });
+        }
+
+        // POST accept set: /projects/:id/visual/plans/:planId/accept-set
+        if (req.method === "POST" && segments.length === 6 && segments[3] === "plans" && segments[5] === "accept-set") {
+          if (body.trim()) parseJsonBody(body);
+          const set = await visual.acceptSet({ projectId: project.id, planId: segments[4]! });
+          return sendJson(res, 200, { id: set.id, version: set.version, setDigest: set.setDigest });
+        }
+
+        // GET candidate bytes: /projects/:id/visual/candidates/:candidateId/bytes
+        if (req.method === "GET" && segments.length === 6 && segments[3] === "candidates" && segments[5] === "bytes") {
+          const bytes = await visual.readCandidateBytes(project.id, segments[4]!);
+          return sendBytes(res, bytes.mediaType, bytes.bytes);
         }
 
         return sendError(res, "not_found", "Unknown endpoint.");

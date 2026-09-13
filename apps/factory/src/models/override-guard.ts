@@ -24,7 +24,7 @@ export function isGovernedEnvironment(env: Record<string, string | undefined>): 
 /** Provider-mode fixture variables that are forbidden in gated live-proof paths. */
 export function activeFixtureModes(env: Record<string, string | undefined>): string[] {
   const fixtureVars: string[] = [];
-  for (const key of ["FACTORY_SEARCH_MODE", "FACTORY_COMPETITOR_MODE", "FACTORY_WRITER_MODE"]) {
+  for (const key of ["FACTORY_SEARCH_MODE", "FACTORY_COMPETITOR_MODE", "FACTORY_WRITER_MODE", "FACTORY_DESIGN_MODE", "FACTORY_VISUAL_MODE"]) {
     if (env[key] === "fixture") fixtureVars.push(key);
   }
   return fixtureVars;

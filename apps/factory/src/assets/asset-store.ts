@@ -290,6 +290,50 @@ export class AssetStore {
   }
 
   /**
+   * Record derivation provenance on a PENDING version (Run 7 seam). The
+   * provenance category must be `derived` or `generated` (Run 7 outputs);
+   * operator-upload rows are never touched. Approved/rejected versions are
+   * immutable — this fails closed on any terminal state.
+   */
+  async recordDerivationProvenance(input: {
+    projectId: string;
+    versionId: string;
+    expectedBinaryDigest: string;
+    provenance: AssetProvenance;
+  }): Promise<AssetVersionRow> {
+    return await this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .select()
+        .from(assetVersions)
+        .where(and(eq(assetVersions.projectId, input.projectId), eq(assetVersions.id, input.versionId)))
+        .for("update");
+      if (!row) throw versionNotFound();
+      if (row.binaryDigest !== input.expectedBinaryDigest) {
+        throw approvalError("Provenance record rejected: expectedBinaryDigest does not match the stored version.");
+      }
+      if (row.approvalState !== "pending") {
+        throw new FactoryError(
+          "asset_version_immutable",
+          "Approved/rejected asset versions are immutable; provenance must be recorded before approval.",
+        );
+      }
+      const category = (input.provenance as { category?: string }).category;
+      if (category !== "derived" && category !== "generated") {
+        throw new FactoryError(
+          "asset_upload_invalid",
+          "Derivation provenance recording requires category 'derived' or 'generated'.",
+        );
+      }
+      const [updated] = await tx
+        .update(assetVersions)
+        .set({ provenance: input.provenance })
+        .where(and(eq(assetVersions.id, row.id), eq(assetVersions.approvalState, "pending")))
+        .returning();
+      return updated!;
+    });
+  }
+
+  /**
    * Terminal approval binding the exact binary digest. The governance
    * digest is computed FROM THE ROW LOCKED INSIDE THIS TRANSACTION, so the
    * recorded digest always describes the exact governance surface that was

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import sharp from "sharp";
 import { fileTypeFromBuffer } from "file-type";
 import {
@@ -529,15 +530,15 @@ export class VisualService {
     }
 
     // Design currency re-check at execution time (fail before spend).
+    // The identity check (same artifact id + version) is authoritative here:
+    // an accepted design's staleness against CURRENT upstream is expected to
+    // flip the moment Run 7 resolves a slot (new assignments exist), which
+    // is the designed staleness cascade — not a reason to block generation.
+    // Re-derivation of the DESIGN is the final-freeze step, not a gate for
+    // resolving its own slots.
     const design = await this.designStore.latestAcceptedDesign(input.projectId);
     if (!design || design.artifact.id !== plan.designArtifactId || design.artifact.version !== plan.designArtifactVersion) {
       throw new FactoryError("visual_plan_stale", "The accepted design changed; re-derive the visual plan.");
-    }
-    if (design.staleness.stale) {
-      throw new FactoryError(
-        "visual_plan_stale",
-        `The accepted design is stale: ${design.staleness.reason} Re-derive the design and plan.`,
-      );
     }
 
     const classification = await this.store.getClassification(plan.id, input.slot);
@@ -557,10 +558,11 @@ export class VisualService {
     }
 
     const snapshot = await this.store.latestPromptSnapshotForSlot(input.projectId, input.slot);
-    if (!snapshot || snapshot.operation !== mode) {
+    const expectedOperation = mode === "ai_edit" ? "edit" : "generate";
+    if (!snapshot || snapshot.operation !== expectedOperation) {
       throw new FactoryError(
         "visual_prompt_not_approved",
-        `Compile a ${mode} prompt snapshot for this slot first.`,
+        `Compile a ${expectedOperation} prompt snapshot for this slot first.`,
       );
     }
 
@@ -861,7 +863,7 @@ export class VisualService {
     };
     const provenance: AssetProvenance = {
       category: "derived",
-      originalFilename: `${parent.originalFilename} (derived: ${derivation.transformation})`,
+      originalFilename: `derived-${input.slot}-${parent.binaryDigest.slice(0, 12)}.jpg`,
       uploadedAt: new Date().toISOString(),
       derivation,
     };
@@ -889,7 +891,7 @@ export class VisualService {
     candidateId: string;
     expectedBinaryDigest: string;
     confirmTruthDowngrade?: boolean;
-  }): Promise<{ version: AssetVersionRow; asset: AssetRow; assignmentId: string | null; truthClass: VisualTruthClass }> {
+  }): Promise<{ version: AssetVersionRow; asset: AssetRow; assignmentId: string | null; truthClass: VisualTruthClass; resolutionMode: VisualResolutionMode }> {
     const plan = await this.getPlanOrThrow(input.projectId, input.planId);
     const candidate = await this.store.getCandidate(input.projectId, input.candidateId);
     if (!candidate) throw new FactoryError("visual_not_found", "Candidate not found for this project.");
@@ -971,7 +973,7 @@ export class VisualService {
     if (mode === "ai_generate") {
       const ingest = await this.assets.uploadAsset(input.projectId, {
         dataBase64: Buffer.from(bytes).toString("base64"),
-        filename: provenance.originalFilename,
+        filename: `visual-${input.slot}.png`,
         kind: "photo",
         title: `Visual ${input.slot} (${candidate.binaryDigest.slice(0, 12)})`,
         rightsStatus: "operator_owned",
@@ -980,15 +982,11 @@ export class VisualService {
       });
       asset = ingest.asset;
       version = ingest.version;
-      // Enrich the ingested version's provenance with exact derivation
-      // lineage (pre-approval metadata update path).
-      const enriched = await this.assets.updateVersionMetadata(input.projectId, version.id, {
-        rightsStatus: "operator_owned",
-        rightsNote: `AI-generated via ${request.provider}/${request.model}; prompt snapshot ${request.promptSnapshotId}; request ${request.id}`,
-        altIntent: `AI-generated imagery for slot ${input.slot} (truth: ${truthClass})`,
+      // Record exact derivation lineage on the pending version (Run 7 seam).
+      await this.assets.recordDerivationProvenance(input.projectId, version.id, {
         expectedBinaryDigest: version.binaryDigest,
+        provenance,
       });
-      void enriched;
     } else {
       // AI edit: ingest as a derived version of the exact parent asset.
       const parent = await this.getApprovedVersionOrThrow(input.projectId, derivation.parentVersionId);
@@ -1037,7 +1035,7 @@ export class VisualService {
       truthClass,
     });
 
-    return { version: approved, asset, assignmentId, truthClass };
+    return { version: approved, asset, assignmentId, truthClass, resolutionMode: mode };
   }
 
   /** Accept the full set: every plan slot must be resolved (Run 5 assignment). */
@@ -1059,6 +1057,10 @@ export class VisualService {
       truthClass: string;
     }> = [];
     for (const slot of data.slots) {
+      const classification = await this.store.getClassification(plan.id, slot.slot);
+      if (!classification) {
+        throw new FactoryError("visual_classification_required", `Slot ${slot.slot} has no confirmed classification.`);
+      }
       const assignment = assignments.find((a) => a.pageSlug === slot.pageSlug && a.role === slot.role);
       if (!assignment) {
         throw new FactoryError(
@@ -1066,9 +1068,19 @@ export class VisualService {
           `Slot ${slot.slot} (${slot.pageSlug}/${slot.role}) has no accepted resolution; accept every slot before accepting the set.`,
         );
       }
-      const classification = await this.store.getClassification(plan.id, slot.slot);
-      if (!classification) {
-        throw new FactoryError("visual_classification_required", `Slot ${slot.slot} has no confirmed classification.`);
+      // Resolution mode: reflect what ACTUALLY happened. A selected
+      // candidate's request operation is authoritative for ai paths;
+      // reuse/deterministic paths are inferred from the version lineage.
+      const slotCandidates = await this.store.listCandidatesForSlot(input.projectId, slot.slot);
+      const selected = slotCandidates.find((c) => c.state === "selected");
+      let resolutionMode: VisualResolutionMode;
+      if (selected) {
+        const request = await this.store.getRequest(input.projectId, selected.requestId);
+        resolutionMode = request?.operation === "edit" ? "ai_edit" : "ai_generate";
+      } else if (assignment.versionId === slot.existingVersionId) {
+        resolutionMode = "reuse_real";
+      } else {
+        resolutionMode = "deterministic_transform";
       }
       slotRows.push({
         slot: slot.slot,
@@ -1077,7 +1089,7 @@ export class VisualService {
         resolvedVersionId: assignment.versionId,
         binaryDigest: assignment.binaryDigest,
         governanceDigest: assignment.versionDigest,
-        resolutionMode: deriveResolutionMode(slot, assignment.versionId),
+        resolutionMode,
         truthClass: classification.truthClass,
       });
     }
@@ -1275,6 +1287,11 @@ export class VisualService {
     return plan;
   }
 
+  /** Test/isolation seam: project-scoped plan lookup with typed not-found. */
+  async getPlanOrThrowPublic(projectId: string, planId: string): Promise<VisualAssetPlanRecord> {
+    return await this.getPlanOrThrow(projectId, planId);
+  }
+
   private async getApprovedVersionOrThrow(projectId: string, versionId: string): Promise<AssetVersionRow> {
     const version = await this.assets["store"].getVersion(projectId, versionId);
     if (!version) throw new FactoryError("asset_version_not_found", "Asset version not found for this project.");
@@ -1323,7 +1340,14 @@ export class VisualService {
       rightsNote: `Derived from approved version ${input.parentVersion.id} (sha256 ${input.parentVersion.binaryDigest.slice(0, 12)}…) via ${input.provenance.derivation?.origin ?? "deterministic_transform"}`,
       altIntent: input.parentVersion.altIntent ?? undefined,
     });
-    return { asset: ingest.asset, version: ingest.version };
+    // Record exact derivation lineage on the pending version (Run 7 seam),
+    // then re-read so the returned row reflects the recorded provenance.
+    await this.assets.recordDerivationProvenance(input.projectId, ingest.version.id, {
+      expectedBinaryDigest: ingest.version.binaryDigest,
+      provenance: input.provenance,
+    });
+    const version = await this.assets["store"].getVersion(input.projectId, ingest.version.id);
+    return { asset: ingest.asset, version: version! };
   }
 }
 
@@ -1386,8 +1410,6 @@ async function validateCandidateBytes(bytes: Uint8Array, declaredMediaType: stri
 
 function sha256(bytes: Uint8Array): string {
   // Deterministic hex SHA-256 over exact bytes (same authority as storage).
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { createHash } = require("node:crypto") as typeof import("node:crypto");
   return createHash("sha256").update(bytes).digest("hex");
 }
 
@@ -1476,10 +1498,4 @@ function candidateParentGovernanceDigest(candidate: VisualAssetCandidateRecord):
   return lineage[0]?.governanceDigest ?? null;
 }
 
-function deriveResolutionMode(
-  slot: VisualPlanSlot,
-  resolvedVersionId: string,
-): VisualResolutionMode {
-  if (slot.existingVersionId === resolvedVersionId) return "reuse_real";
-  return slot.proposedStrategy === "ai_generate" ? "ai_generate" : slot.proposedStrategy;
-}
+

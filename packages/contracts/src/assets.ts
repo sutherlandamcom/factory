@@ -110,13 +110,17 @@ export type AssetProvenance = z.infer<typeof assetProvenanceSchema>;
 
 export const assetUploadSchema = z
   .object({
-    /** Raw base64 (standard alphabet, padding allowed) of the exact bytes. */
+    /** Raw base64 (standard alphabet, padding allowed); length must be valid mod 4. */
     dataBase64: z
       .string()
       .trim()
       .min(1)
       .max(48_000_000)
-      .regex(/^[A-Za-z0-9+/]+={0,2}$/, "dataBase64 must be standard base64"),
+      .refine((value) => {
+        if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return false;
+        // Standard base64 length is always ≡ 0 mod 4 (padding included).
+        return value.length % 4 === 0;
+      }, "dataBase64 must be standard base64 with valid padding"),
     /** Declared filename — display/provenance only, never a storage path. */
     filename: boundedText(300),
     kind: assetKindSchemaV2,
@@ -234,3 +238,9 @@ export function parseAssetVersionMetadataInput(value: unknown): AssetVersionMeta
 export function parseAssetAssignInput(value: unknown): AssetAssignInput {
   return assetAssignSchema.parse(value);
 }
+
+// ---------------------------------------------------------------------------
+// Base64 strictness regression (QA remediation): `len % 4 === 1` inputs were
+// previously accepted by the charset regex and silently truncated by
+// Buffer.from; the length refinement now rejects them at the boundary.
+// ---------------------------------------------------------------------------

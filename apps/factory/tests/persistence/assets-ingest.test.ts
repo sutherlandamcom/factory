@@ -426,3 +426,11 @@ test("ingest: writeFile helper is not used for storage paths (import audit)", as
   assert.ok(!src.includes("path.join("), "service must never build filesystem paths itself");
   assert.ok(!src.includes("input.filename)"), "filename must not flow into path construction");
 });
+
+test("ingest: base64 with invalid padding length (len % 4 == 1) is rejected at the contract boundary", () => {
+  // 5 chars: valid charset, but length % 4 == 1 — previously accepted.
+  assert.throws(() => parseAssetUploadInput({ ...VALID_UPLOAD, dataBase64: "AAAAA" }));
+  // Valid padded lengths still parse.
+  assert.doesNotThrow(() => parseAssetUploadInput({ ...VALID_UPLOAD, dataBase64: "AAAA" }));
+  assert.doesNotThrow(() => parseAssetUploadInput({ ...VALID_UPLOAD, dataBase64: "AAA=" }));
+});

@@ -366,31 +366,34 @@ export class AssetService {
     versionId: string,
     expectedBinaryDigest: string,
   ): Promise<AssetVersionRow> {
-    const version = await this.store.approveVersion({ projectId, versionId, expectedBinaryDigest });
     // Governance digest: immutable snapshot of the approved governance
     // surface (identity + provenance + rights). Distinct from the binary
-    // digest; computed once at approval time and never recomputed.
+    // digest. It is computed from the CURRENT stored row and recorded inside
+    // the same approval transaction (atomic: an approved row always carries
+    // its governance digest; the digest can never be rewritten afterwards).
+    const current = await this.store.getVersion(projectId, versionId);
+    if (!current) throw new FactoryError("asset_version_not_found", "Asset version not found for this project.");
     const governanceDigest = deterministicDigest({
       schemaVersion: ASSETS_SCHEMA_VERSION,
-      versionId: version.id,
-      binaryDigest: version.binaryDigest,
-      mediaType: version.mediaType,
-      byteSize: version.byteSize,
-      width: version.width,
-      height: version.height,
-      provenance: version.provenance,
+      versionId: current.id,
+      binaryDigest: current.binaryDigest,
+      mediaType: current.mediaType,
+      byteSize: current.byteSize,
+      width: current.width,
+      height: current.height,
+      provenance: current.provenance,
       rights: {
-        status: version.rightsStatus,
-        note: version.rightsNote,
-        altIntent: version.altIntent,
+        status: current.rightsStatus,
+        note: current.rightsNote,
+        altIntent: current.altIntent,
       },
     });
-    await this.store.recordGovernanceDigest({
+    return await this.store.approveVersion({
       projectId,
-      versionId: version.id,
+      versionId,
+      expectedBinaryDigest,
       governanceDigest,
     });
-    return { ...version, governanceDigest };
   }
 
   async rejectVersion(

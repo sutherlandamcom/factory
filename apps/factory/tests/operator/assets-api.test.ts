@@ -216,6 +216,12 @@ test("API: full asset workflow through the real HTTP boundary", async () => {
     assert.equal(ws2.assignments[0]!.binaryDigest, upload.binaryDigest);
     assert.equal(ws2.assignments[0]!.replacementAvailable, false);
 
+    // 6b. Derivative bytes served through the client-shaped route.
+    const webDerivative = upload.derivatives.find((d: { kind: string }) => d.kind === "web")!;
+    const derivRes = await request(h.port, { path: `/api/projects/${projectId}/assets/derivatives/${webDerivative.id}` });
+    assert.equal(derivRes.status, 200);
+    assert.equal(derivRes.headers["content-type"], "image/jpeg");
+
     // 7. Original bytes served with the correct media type.
     const bytesRes = await request(h.port, { path: `/api/projects/${projectId}/assets/versions/${upload.versionId}/original` });
     assert.equal(bytesRes.status, 200);

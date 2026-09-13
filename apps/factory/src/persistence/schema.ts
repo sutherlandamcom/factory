@@ -1295,13 +1295,22 @@ export const assetPageAssignments = pgTable(
  * 'generated'/'mixed' does NOT activate any provider — Run 5 has no
  * generated-imagery path.
  */
-export const projectAssetSettings = pgTable("project_asset_settings", {
-  projectId: text("project_id")
-    .primaryKey()
-    .references(() => projects.id, { onDelete: "cascade" }),
-  imageryStrategy: text("imagery_strategy").notNull().default("none"),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
+export const projectAssetSettings = pgTable(
+  "project_asset_settings",
+  {
+    projectId: text("project_id")
+      .primaryKey()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    imageryStrategy: text("imagery_strategy").notNull().default("none"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check(
+      "project_asset_settings_imagery_strategy_valid",
+      sql`${table.imageryStrategy} IN ('none', 'operator', 'generated', 'mixed')`,
+    ),
+  ],
+);
 
 export type AssetRecord = typeof assets.$inferSelect;
 export type InsertAsset = typeof assets.$inferInsert;

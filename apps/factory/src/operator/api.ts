@@ -522,7 +522,7 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         }
 
         // GET derivative bytes: /projects/:id/assets/derivatives/:derivativeId
-        if (req.method === "GET" && segments.length === 6 && segments[3] === "derivatives") {
+        if (req.method === "GET" && segments.length === 5 && segments[3] === "derivatives") {
           const bytes = await assets.readDerivative(project.id, segments[4]!);
           return sendBytes(res, bytes.mediaType, bytes.bytes);
         }

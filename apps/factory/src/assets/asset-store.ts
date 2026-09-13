@@ -149,7 +149,9 @@ export class AssetStore {
         (error as { code?: string } | null)?.code ??
         (error as { cause?: { code?: string } | null } | null)?.cause?.code;
       if (pgCode === "23505") {
-        throw conflictError("This project already contains a version with identical bytes.");
+        throw conflictError(
+          "Upload conflict: this project already contains a version with identical bytes, or a concurrent upload claimed the next version number; retry the upload.",
+        );
       }
       throw error;
     }
@@ -239,7 +241,9 @@ export class AssetStore {
   }
 
   /**
-   * Terminal approval binding the exact binary digest. Idempotent when the
+   * Terminal approval binding the exact binary digest, with the governance
+   * digest computed and recorded INSIDE the same transaction (atomic: an
+   * approved row always carries its governance digest). Idempotent when the
    * stored digest already matches; a digest mismatch on an approved version
    * fails closed (never re-approves different bytes).
    */
@@ -247,6 +251,7 @@ export class AssetStore {
     projectId: string;
     versionId: string;
     expectedBinaryDigest: string;
+    governanceDigest: string;
   }): Promise<AssetVersionRow> {
     return await this.db.transaction(async (tx) => {
       const [row] = await tx
@@ -267,7 +272,7 @@ export class AssetStore {
       }
       const [updated] = await tx
         .update(assetVersions)
-        .set({ approvalState: "approved", approvedAt: new Date() })
+        .set({ approvalState: "approved", approvedAt: new Date(), governanceDigest: input.governanceDigest })
         .where(and(eq(assetVersions.id, row.id), eq(assetVersions.approvalState, "pending")))
         .returning();
       return updated!;
@@ -390,20 +395,36 @@ export class AssetStore {
           `Slot ${input.pageSlug}/${input.role} is already assigned; use explicit replacement to move it.`,
         );
       }
-      const [row] = await tx
-        .insert(assetPageAssignments)
-        .values({
-          id: `apa-${randomUUID()}`,
-          projectId: input.projectId,
-          assetId: input.assetId,
-          versionId: version.id,
-          versionDigest: version.governanceDigest ?? version.binaryDigest,
-          binaryDigest: version.binaryDigest,
-          pageSlug: input.pageSlug,
-          role: input.role,
-        })
-        .returning();
-      return row!;
+      try {
+        const [row] = await tx
+          .insert(assetPageAssignments)
+          .values({
+            id: `apa-${randomUUID()}`,
+            projectId: input.projectId,
+            assetId: input.assetId,
+            versionId: version.id,
+            versionDigest: version.governanceDigest ?? version.binaryDigest,
+            binaryDigest: version.binaryDigest,
+            pageSlug: input.pageSlug,
+            role: input.role,
+          })
+          .returning();
+        return row!;
+      } catch (error) {
+        // Two concurrent assignments racing the same empty slot hit the
+        // UNIQUE(project, page, role) constraint (23505): fail closed with
+        // the typed slot conflict instead of a raw 500. drizzle-orm wraps
+        // driver errors; the PostgreSQL code lives on error.cause.code.
+        const pgCode =
+          (error as { code?: string } | null)?.code ??
+          (error as { cause?: { code?: string } | null } | null)?.cause?.code;
+        if (pgCode === "23505") {
+          throw conflictError(
+            `Slot ${input.pageSlug}/${input.role} was just claimed by a concurrent assignment; use explicit replacement to move it.`,
+          );
+        }
+        throw error;
+      }
     });
   }
 
@@ -470,27 +491,6 @@ export class AssetStore {
         .returning();
       return updated!;
     });
-  }
-
-  /**
-   * Record the immutable governance digest at approval time. Only allowed on
-   * a pending->approved transition row (approval state already terminal).
-   */
-  async recordGovernanceDigest(input: {
-    projectId: string;
-    versionId: string;
-    governanceDigest: string;
-  }): Promise<void> {
-    await this.db
-      .update(assetVersions)
-      .set({ governanceDigest: input.governanceDigest })
-      .where(
-        and(
-          eq(assetVersions.projectId, input.projectId),
-          eq(assetVersions.id, input.versionId),
-          eq(assetVersions.approvalState, "approved"),
-        ),
-      );
   }
 
   async listAssignments(projectId: string): Promise<AssignmentRow[]> {    return await this.db

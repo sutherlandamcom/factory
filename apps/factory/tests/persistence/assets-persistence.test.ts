@@ -425,3 +425,55 @@ test("lifecycle: version digest bytes are stable across derivative recomputation
     await cleanup();
   }
 });
+
+test("QA remediation: concurrent same-slot assignment race yields the typed conflict (no raw 500)", async () => {
+  const { service, cleanup } = await makeService();
+  try {
+    const projectId = await createProject(`lc-race-${Date.now()}`);
+    const v1 = await service.uploadAsset(projectId, { ...UPLOAD, dataBase64: Buffer.from(await jpegBytes(80, 60, 40)).toString("base64") });
+    await service.approveVersion(projectId, v1.version.id, v1.version.binaryDigest);
+    // Two concurrent assignments to the same empty slot: exactly one wins,
+    // the loser gets the typed conflict (previously a raw 23505 -> 500).
+    const results = await Promise.allSettled([
+      service.assignVersion(projectId, {
+        assetId: v1.asset.id,
+        versionId: v1.version.id,
+        pageSlug: "racepage",
+        role: "hero",
+        expectedBinaryDigest: v1.version.binaryDigest,
+      }),
+      service.assignVersion(projectId, {
+        assetId: v1.asset.id,
+        versionId: v1.version.id,
+        pageSlug: "racepage",
+        role: "hero",
+        expectedBinaryDigest: v1.version.binaryDigest,
+      }),
+    ]);
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    assert.equal(fulfilled.length, 1, "exactly one assignment wins");
+    assert.equal(rejected.length, 1, "the loser is rejected");
+    const reason = (rejected[0] as PromiseRejectedResult).reason;
+    assert.ok(reason instanceof FactoryError && reason.code === "asset_assignment_conflict", "typed conflict, not raw 23505");
+  } finally {
+    await cleanup();
+  }
+});
+
+test("QA remediation: governance digest is write-once and atomic with approval", async () => {
+  const { service, cleanup } = await makeService();
+  try {
+    const projectId = await createProject(`lc-govwrite-${Date.now()}`);
+    const uploaded = await service.uploadAsset(projectId, { ...UPLOAD, dataBase64: Buffer.from(await jpegBytes(80, 60, 41)).toString("base64") });
+    const approved = await service.approveVersion(projectId, uploaded.version.id, uploaded.version.binaryDigest);
+    const originalDigest = approved.governanceDigest!;
+    assert.ok(originalDigest, "approval returns the recorded governance digest");
+    // Re-approval (idempotent path) must return the SAME digest — the write-
+    // once guard forbids any recomputation/rewrite after approval.
+    const again = await service.approveVersion(projectId, uploaded.version.id, uploaded.version.binaryDigest);
+    assert.equal(again.governanceDigest, originalDigest, "governance digest must never change after approval");
+  } finally {
+    await cleanup();
+  }
+});

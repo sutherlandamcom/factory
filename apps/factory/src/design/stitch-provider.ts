@@ -48,6 +48,15 @@ export const STITCH_ACCESS_TOKEN_ENV_ALT = "GOOGLE_OAUTH_ACCESS_TOKEN";
 
 export const STITCH_PROVIDER_ID = "google-stitch";
 
+/**
+ * Truthful DESIGN.md validation identity: the DESIGN.md artifact is
+ * validated by the Factory INTERNAL deterministic validator
+ * (src/design/design-md.ts lintDesignMd), NOT by official Google
+ * @google/design.md tooling. Never record an official-tool version unless
+ * that exact tool actually executed for the recorded evidence.
+ */
+export const DESIGN_MD_TOOL_VERSION = "factory-design-md-lint-v1";
+
 /** Minimum tool surface the adapter requires (official Stitch MCP tools). */
 const REQUIRED_STITCH_TOOLS = [
   "create_project",
@@ -234,10 +243,11 @@ export function buildStitchDesignSystem(candidate: {
 
 /**
  * Compose the bounded generation prompt for one archetype. The prompt
- * carries ONLY accepted authority: exact accepted copy (which the provider
- * must present verbatim), brand facts, references/anti-references, asset
- * slots, and structural UX requirements. It never asks the provider to
- * invent business facts.
+ * carries ONLY accepted authority: the representative page's exact accepted
+ * copy (which the provider must present verbatim), brand facts,
+ * references/anti-references, page-exact asset slots, and structural UX
+ * requirements. It never asks the provider to invent business facts and
+ * never receives another page's copy.
  */
 export function buildArchetypePrompt(input: {
   archetypeKind: string;
@@ -245,7 +255,18 @@ export function buildArchetypePrompt(input: {
     purpose: string;
     sectionPatterns: string[];
     contentRequirements: string[];
-    assetSlots: Array<{ slot: string; requirement: string; placeholder: boolean }>;
+    assetSlots: Array<{
+      slot: string;
+      requirement: string;
+      pageSlug: string;
+      role: string;
+      requiredRole: string;
+      boundAssetVersionId?: string;
+      boundBinaryDigest?: string;
+      providerConsumed: boolean;
+      placeholder: boolean;
+      unresolvedReason?: string;
+    }>;
     primaryCta: string | null;
     secondaryCta: string | null;
     responsiveBehavior: string;
@@ -253,7 +274,7 @@ export function buildArchetypePrompt(input: {
   };
   brand: { facts: string[]; positioning: string; tone: string; visualIdentityNotes?: string };
   audience: { segments: string[]; needs: string[] };
-  pageContent: Array<{ slug: string; title: string; introduction: string; sections: Array<{ heading: string; body: string }>; conclusion: string; cta: string }>;
+  representativePage: { slug: string; title: string; introduction: string; sections: Array<{ heading: string; body: string }>; conclusion: string; cta: string } | null;
   references: { learn: string[]; avoid: string[]; preferredPerception: string };
   uxRequirements: string[];
 }): string {
@@ -283,10 +304,17 @@ export function buildArchetypePrompt(input: {
   parts.push(`Section structure: ${input.archetype.sectionPatterns.join(" -> ")}`);
   parts.push(`Content requirements: ${input.archetype.contentRequirements.join("; ")}`);
   if (input.archetype.assetSlots.length > 0) {
-    const slotTexts = input.archetype.assetSlots.map(
-      (slot) => `${slot.slot}: ${slot.requirement}${slot.placeholder ? " (use a neutral labeled placeholder — final imagery is supplied later)" : ""}`,
-    );
-    parts.push(`Asset slots (placeholders are explicit; do not fabricate photographic content): ${slotTexts.join("; ")}`);
+    const slotTexts = input.archetype.assetSlots.map((slot) => {
+      const bound = slot.boundBinaryDigest
+        ? slot.providerConsumed
+          ? ` (the EXACT approved asset version ${slot.boundAssetVersionId} [sha256 ${slot.boundBinaryDigest.slice(0, 12)}…] for page "${slot.pageSlug}" role "${slot.role}" is supplied to this generation — use it, do not substitute imagery)`
+          : ` (reserved for approved asset version ${slot.boundAssetVersionId} [sha256 ${slot.boundBinaryDigest.slice(0, 12)}…] of page "${slot.pageSlug}" role "${slot.role}" — the bytes were NOT supplied to this generation; use a neutral labeled placeholder for that exact slot and do not borrow imagery from other pages)`
+        : slot.placeholder
+          ? ` (use a neutral labeled placeholder — no approved asset exists for page "${slot.pageSlug}" role "${slot.role}"; do not borrow imagery from other pages)`
+          : "";
+      return `${slot.slot} [page ${slot.pageSlug} / role ${slot.role}]: ${slot.requirement}${bound}`;
+    });
+    parts.push(`Asset slots (page-exact lineage; placeholders are explicit; do not fabricate photographic content): ${slotTexts.join("; ")}`);
   }
   if (input.archetype.primaryCta) {
     parts.push(`Primary CTA: ${input.archetype.primaryCta}`);
@@ -297,19 +325,18 @@ export function buildArchetypePrompt(input: {
   parts.push(`Responsive behavior: ${input.archetype.responsiveBehavior}`);
   parts.push(`Trust presentation: ${input.archetype.trustPresentation}`);
   parts.push(`UX requirements: ${input.uxRequirements.join("; ")}`);
-  if (input.pageContent.length > 0) {
+  if (input.representativePage) {
+    const page = input.representativePage;
     parts.push(
-      "ACCEPTED COPY (present this text EXACTLY as written — do not rewrite, shorten, expand, or improve it):",
+      "ACCEPTED COPY for the representative page of this archetype (present this text EXACTLY as written — do not rewrite, shorten, expand, or improve it). This is the ONLY accepted copy for this archetype; do not import copy from other pages:",
     );
-    for (const page of input.pageContent) {
-      parts.push(`Page "${page.title}" (slug: ${page.slug}):`);
-      parts.push(`Introduction: ${page.introduction}`);
-      for (const section of page.sections) {
-        parts.push(`Section "${section.heading}": ${section.body}`);
-      }
-      parts.push(`Conclusion: ${page.conclusion}`);
-      parts.push(`Call to action text: ${page.cta}`);
+    parts.push(`Page "${page.title}" (slug: ${page.slug}):`);
+    parts.push(`Introduction: ${page.introduction}`);
+    for (const section of page.sections) {
+      parts.push(`Section "${section.heading}": ${section.body}`);
     }
+    parts.push(`Conclusion: ${page.conclusion}`);
+    parts.push(`Call to action text: ${page.cta}`);
   }
   parts.push(
     "Accessibility: WCAG 2.2 AA contrast, visible focus, semantic heading order. Performance: no hero videos, no heavy carousels, no layout-shifting animation.",
@@ -386,6 +413,12 @@ export class StitchDesignProvider implements DesignProvider {
     const input = request.inputSnapshot;
     const client = this.createClient();
 
+    // Factory design seed: operator-approved generation constraints. The
+    // seed is INPUT to generation, never provider-derived authority; the
+    // candidate records it as designSeed and records provider-returned
+    // design evidence separately.
+    const seed = request.designSeed;
+
     try {
       // 1. Create the provider project (Factory names it deterministically).
       const projectTitle = `factory-${request.projectId.slice(0, 8)}-design`;
@@ -394,19 +427,19 @@ export class StitchDesignProvider implements DesignProvider {
       const providerProjectName = this.expectString(project["name"], "project name");
       const projectId = providerProjectName.replace(/^projects\//, "");
 
-      // 2. Create the design system from Factory-owned tokens. The provider
+      // 2. Create the design system FROM THE FACTORY SEED. The provider
       //    derives the concrete palette from the seed + neutrals; Factory
       //    records the provider's returned design system asset as evidence.
       const designSystem = buildStitchDesignSystem({
         colors: {
-          primary: "#1A2E35",
-          secondary: "#4A5A62",
-          accent: "#B8422E",
-          neutral: "#F7F5F2",
+          primary: seed.colors.primary,
+          secondary: seed.colors.secondary,
+          accent: seed.colors.accent,
+          neutral: seed.colors.neutral,
         },
         typography: {
-          headingFont: "Source Serif 4",
-          bodyFont: "Public Sans",
+          headingFont: seed.typography.headingFont,
+          bodyFont: seed.typography.bodyFont,
         },
       });
       const dsResult = await this.callTool(client, "create_design_system", {
@@ -416,8 +449,12 @@ export class StitchDesignProvider implements DesignProvider {
       const dsObject = this.expectObject(dsResult, "create_design_system");
       const dsAsset = typeof dsObject["name"] === "string" ? dsObject["name"] : null;
 
-      // 3. Generate one screen per archetype (desktop). Accepted copy for
-      //    matching slugs is embedded verbatim; the provider must not alter it.
+      // 3. Generate one screen per archetype. Each archetype receives ONLY
+      //    its representative page's accepted copy (page-exact routing);
+      //    asset slots bind exact page+role assignments. The homepage
+      //    archetype additionally gets ONE mobile screen so responsive
+      //    review has real provider evidence (desktop + mobile) without
+      //    duplicating paid screens for every archetype.
       const rawArtifacts: DesignGenerationResult["rawArtifacts"] = [];
       const screens: DesignCandidateData["screens"] = [];
       const archetypes: DesignCandidateData["archetypes"] = [];
@@ -427,10 +464,6 @@ export class StitchDesignProvider implements DesignProvider {
         references: input.references,
         uxRequirements: input.uxRequirements,
       };
-      // Full accepted copy bodies are resolved by the trusted service layer
-      // from AcceptedPageContent (copy authority). The provider receives
-      // them verbatim under a strict no-rewrite instruction.
-      const acceptedPages = request.acceptedCopy;
 
       let lastSessionId: string | null = null;
       for (const kind of input.archetypes) {
@@ -439,7 +472,7 @@ export class StitchDesignProvider implements DesignProvider {
           archetypeKind: kind,
           archetype,
           ...promptBase,
-          pageContent: acceptedPages,
+          representativePage: request.acceptedCopyByArchetype[kind] ?? null,
         });
         const genResult = await this.callTool(client, "generate_screen_from_text", {
           projectId,
@@ -450,93 +483,61 @@ export class StitchDesignProvider implements DesignProvider {
         if (typeof gen["sessionId"] === "string" && gen["sessionId"].length > 0) {
           lastSessionId = gen["sessionId"];
         }
-        const components = Array.isArray(gen["outputComponents"]) ? gen["outputComponents"] : [];
-        let screenName: string | null = null;
-        let screenTitle: string = kind;
-        let deviceType: string = "DESKTOP";
-        for (const component of components) {
-          if (!component || typeof component !== "object") continue;
-          const design = (component as Record<string, unknown>)["design"];
-          if (!design || typeof design !== "object") continue;
-          const screensList = (design as Record<string, unknown>)["screens"];
-          if (!Array.isArray(screensList)) continue;
-          for (const screen of screensList) {
-            if (!screen || typeof screen !== "object") continue;
-            const s = screen as Record<string, unknown>;
-            if (typeof s["name"] === "string") {
-              screenName = s["name"];
-              if (typeof s["title"] === "string") screenTitle = s["title"];
-              if (typeof s["deviceType"] === "string") deviceType = s["deviceType"];
-              break;
-            }
-          }
-          if (screenName) break;
-        }
-        if (!screenName) {
-          throw stitchError(
-            "design_provider_output_invalid",
-            `Stitch generation for archetype "${kind}" returned no screen.`,
-          );
-        }
-
-        // 4. Fetch the screen detail (HTML + screenshot download URLs).
-        const screenResult = await this.callTool(client, "get_screen", { name: screenName });
-        const screen = this.expectObject(screenResult, "get_screen");
-        const htmlFile = screen["htmlCode"] as Record<string, unknown> | undefined;
-        const screenshotFile = screen["screenshot"] as Record<string, unknown> | undefined;
-        let htmlDigest: string | undefined;
-        let screenshotDigest: string | undefined;
-        const htmlUrl = typeof htmlFile?.["downloadUrl"] === "string" ? htmlFile["downloadUrl"] : null;
-        const shotUrl =
-          typeof screenshotFile?.["downloadUrl"] === "string" ? screenshotFile["downloadUrl"] : null;
-
-        if (htmlUrl) {
-          const bytes = await this.downloadArtifact(htmlUrl);
-          htmlDigest = sha256HexBytes(bytes);
-          rawArtifacts.push({ kind: "screen_html", bytes, mediaType: "text/html", providerRef: screenName });
-        }
-        if (shotUrl) {
-          const bytes = await this.downloadArtifact(shotUrl);
-          screenshotDigest = sha256HexBytes(bytes);
-          rawArtifacts.push({ kind: "screen_screenshot", bytes, mediaType: "image/png", providerRef: screenName });
-        }
-
+        const desktopScreen = await this.extractScreen(gen, kind);
         screens.push({
+          ...(await this.fetchScreenArtifacts(client, desktopScreen, rawArtifacts)),
           id: `screen-${screens.length + 1}`,
-          providerScreenName: screenName,
-          title: screenTitle,
-          deviceType: normalizeDeviceType(deviceType),
-          archetype: kind,
-          ...(htmlDigest ? { htmlDigest } : {}),
-          ...(screenshotDigest ? { screenshotDigest } : {}),
         });
+
+        // One MOBILE homepage screen: meaningful responsive review evidence
+        // (desktop + mobile inspectable) at bounded provider spend.
+        if (kind === "homepage") {
+          const mobileGen = await this.callTool(client, "generate_screen_from_text", {
+            projectId,
+            prompt,
+            deviceType: "MOBILE",
+          });
+          const mobileObj = this.expectObject(mobileGen, "generate_screen_from_text (mobile)");
+          if (typeof mobileObj["sessionId"] === "string" && mobileObj["sessionId"].length > 0) {
+            lastSessionId = mobileObj["sessionId"];
+          }
+          const mobileScreen = await this.extractScreen(mobileObj, kind);
+          screens.push({
+            ...(await this.fetchScreenArtifacts(client, mobileScreen, rawArtifacts)),
+            id: `screen-${screens.length + 1}`,
+          });
+        }
+
         archetypes.push({
           ...archetype,
           kind,
-          providerScreenNames: [screenName],
+          providerScreenNames: screens
+            .filter((s) => s.archetype === kind)
+            .map((s) => s.providerScreenName),
           primaryCta: archetype.primaryCta ?? "",
           secondaryCta: archetype.secondaryCta ?? "",
           assetSlots: archetype.assetSlots.map((slot) =>
             slot.placeholder
-              ? { slot: slot.slot, requirement: slot.requirement, placeholder: true as const }
-              : {
-                  slot: slot.slot,
-                  requirement: slot.requirement,
-                  placeholder: true as const,
-                  boundAssetVersionId: input.assetRefs.find((ref) => ref.role === "hero")?.versionId,
-                  boundBinaryDigest: input.assetRefs.find((ref) => ref.role === "hero")?.binaryDigest,
-                },
+              ? { ...slot, placeholder: true as const }
+              : { ...slot, placeholder: true as const },
           ),
         });
       }
 
-      // 5. Build DESIGN.md from the Factory-owned token set (the authority
-      //    record; the provider's design system asset is evidence).
+      // 4. Build DESIGN.md from the Factory seed (the seed is the generation
+      //    constraint record; provider evidence is recorded separately).
       const designMd = buildDesignMd({
-        colors: { primary: "#1A2E35", secondary: "#4A5A62", accent: "#B8422E", neutral: "#F7F5F2" },
-        typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans" },
-        rationale:
-          "Institutional advisory identity: deep ink primary, warm limestone neutral, single terracotta interaction accent. Serif headlines convey research authority; humanist sans body preserves readability.",
+        colors: {
+          primary: seed.colors.primary,
+          secondary: seed.colors.secondary ?? "",
+          accent: seed.colors.accent ?? "",
+          neutral: seed.colors.neutral ?? "",
+        },
+        typography: {
+          headingFont: seed.typography.headingFont,
+          bodyFont: seed.typography.bodyFont,
+        },
+        rationale: seed.rationale,
       });
       const designMdDigest = sha256HexBytes(new TextEncoder().encode(designMd));
       rawArtifacts.push({
@@ -549,25 +550,34 @@ export class StitchDesignProvider implements DesignProvider {
       const candidate: DesignCandidateData = parseDesignCandidateData({
         schemaVersion: "design-v1",
         provider: "google-stitch",
+        providerMode: "live",
         providerProjectName,
         ...(dsAsset ? { providerDesignSystemAsset: dsAsset } : {}),
         designMdDigest,
-        designMdToolVersion: "@google/design.md 0.4.0",
+        designMdToolVersion: DESIGN_MD_TOOL_VERSION,
         designMdLint: { errors: 0, warnings: 0, infos: 0 },
+        designSeed: {
+          colors: seed.colors,
+          typography: seed.typography,
+          rationale: seed.rationale,
+        },
+        providerEvidence: {
+          ...(dsAsset ? { designSystemAsset: dsAsset } : {}),
+        },
         tokens: {
           colors: {
-            primary: "#1A2E35",
-            secondary: "#4A5A62",
-            accent: "#B8422E",
-            neutral: "#F7F5F2",
+            primary: seed.colors.primary,
+            secondary: seed.colors.secondary,
+            accent: seed.colors.accent,
+            neutral: seed.colors.neutral,
             background: "#FFFFFF",
-            surface: "#F7F5F2",
-            textPrimary: "#1A2E35",
-            textSecondary: "#4A5A62",
+            surface: seed.colors.neutral,
+            textPrimary: seed.colors.primary,
+            textSecondary: seed.colors.secondary,
           },
           typography: {
-            headingFont: "Source Serif 4",
-            bodyFont: "Public Sans",
+            headingFont: seed.typography.headingFont,
+            bodyFont: seed.typography.bodyFont,
             scaleNotes: "display 3rem/1.2, h2 2rem/1.3, h3 1.5rem/1.4, body 1rem/1.6, label 0.75rem caps",
           },
           spacing: { xs: "4px", sm: "8px", md: "16px", lg: "32px", xl: "64px", xxl: "128px" },
@@ -580,7 +590,7 @@ export class StitchDesignProvider implements DesignProvider {
         screens,
         archetypes,
         rationale:
-          "Site-level design system seeded from accepted brand facts, audience, references/anti-references and UX requirements. Token values are the Factory seed the provider generation is guided by (provider design-system asset recorded separately as evidence). Archetypes: " +
+          "Site-level design system seeded from accepted brand facts, audience, references/anti-references and UX requirements. Token values are the Factory SEED the provider generation is guided by; provider-returned design evidence is recorded separately (providerEvidence). The DESIGN.md was validated by the Factory internal deterministic validator, not official Google tooling. Archetypes: " +
           archetypes.map((a) => a.kind).join(", ") +
           ".",
         providerSessionId: lastSessionId ?? undefined,
@@ -602,6 +612,78 @@ export class StitchDesignProvider implements DesignProvider {
     } finally {
       await client.close?.();
     }
+  }
+
+  /** Extract the first normalized screen from a generation result (fail closed when absent). */
+  private async extractScreen(
+    gen: Record<string, unknown>,
+    kind: DesignCandidateData["archetypes"][number]["kind"],
+  ): Promise<DesignCandidateData["screens"][number]> {
+    const components = Array.isArray(gen["outputComponents"]) ? gen["outputComponents"] : [];
+    let screenName: string | null = null;
+    let screenTitle: string = kind;
+    let deviceType: string = "DESKTOP";
+    for (const component of components) {
+      if (!component || typeof component !== "object") continue;
+      const design = (component as Record<string, unknown>)["design"];
+      if (!design || typeof design !== "object") continue;
+      const screensList = (design as Record<string, unknown>)["screens"];
+      if (!Array.isArray(screensList)) continue;
+      for (const screen of screensList) {
+        if (!screen || typeof screen !== "object") continue;
+        const s = screen as Record<string, unknown>;
+        if (typeof s["name"] === "string") {
+          screenName = s["name"];
+          if (typeof s["title"] === "string") screenTitle = s["title"];
+          if (typeof s["deviceType"] === "string") deviceType = s["deviceType"];
+          break;
+        }
+      }
+      if (screenName) break;
+    }
+    if (!screenName) {
+      throw stitchError(
+        "design_provider_output_invalid",
+        `Stitch generation for archetype "${kind}" returned no screen.`,
+      );
+    }
+    return {
+      id: "",
+      providerScreenName: screenName,
+      title: screenTitle,
+      deviceType: normalizeDeviceType(deviceType),
+      archetype: kind,
+    };
+  }
+
+  /** Fetch screen HTML/screenshot artifacts and record their digests. */
+  private async fetchScreenArtifacts(
+    client: StitchMcpClientLike,
+    screen: DesignCandidateData["screens"][number],
+    rawArtifacts: DesignGenerationResult["rawArtifacts"],
+  ): Promise<DesignCandidateData["screens"][number]> {
+    const screenResult = await this.callTool(client, "get_screen", { name: screen.providerScreenName });
+    const screenObj = this.expectObject(screenResult, "get_screen");
+    const htmlFile = screenObj["htmlCode"] as Record<string, unknown> | undefined;
+    const screenshotFile = screenObj["screenshot"] as Record<string, unknown> | undefined;
+    const htmlUrl = typeof htmlFile?.["downloadUrl"] === "string" ? htmlFile["downloadUrl"] : null;
+    const shotUrl =
+      typeof screenshotFile?.["downloadUrl"] === "string" ? screenshotFile["downloadUrl"] : null;
+
+    const out: DesignCandidateData["screens"][number] = { ...screen, id: "" };
+    if (htmlUrl) {
+      const bytes = await this.downloadArtifact(htmlUrl);
+      const htmlDigest = sha256HexBytes(bytes);
+      rawArtifacts.push({ kind: "screen_html", bytes, mediaType: "text/html", providerRef: screen.providerScreenName });
+      out.htmlDigest = htmlDigest;
+    }
+    if (shotUrl) {
+      const bytes = await this.downloadArtifact(shotUrl);
+      const screenshotDigest = sha256HexBytes(bytes);
+      rawArtifacts.push({ kind: "screen_screenshot", bytes, mediaType: "image/png", providerRef: screen.providerScreenName });
+      out.screenshotDigest = screenshotDigest;
+    }
+    return out;
   }
 
   private async callTool(
@@ -823,18 +905,67 @@ interface ArchetypeTemplate {
   purpose: string;
   sectionPatterns: string[];
   contentRequirements: string[];
-  assetSlots: Array<{ slot: string; requirement: string; placeholder: boolean }>;
+  assetSlots: Array<{
+    slot: string;
+    requirement: string;
+    pageSlug: string;
+    role: string;
+    requiredRole: "hero" | "background" | "inline" | "chart" | "illustration" | "logo" | "supporting";
+    boundAssetVersionId?: string;
+    boundBinaryDigest?: string;
+    providerConsumed: boolean;
+    placeholder: boolean;
+    unresolvedReason?: string;
+  }>;
   primaryCta: string | null;
   secondaryCta: string | null;
   responsiveBehavior: string;
   trustPresentation: string;
 }
 
+/**
+ * Page-exact asset resolution: a slot binds ONLY an assignment for the
+ * archetype's own representative page AND matching role. A project-global
+ * role lookup (e.g. "any hero") is forbidden — an unrelated homepage hero
+ * must never satisfy a service supporting slot.
+ */
+function resolveSlotAsset(
+  input: DesignInputSnapshotData,
+  pageSlug: string,
+  role: string,
+): { versionId: string; binaryDigest: string } | null {
+  const ref = input.assetRefs.find((candidate) => candidate.pageSlug === pageSlug && candidate.role === role);
+  return ref ? { versionId: ref.versionId, binaryDigest: ref.binaryDigest } : null;
+}
+
 function archetypeFor(
   kind: DesignCandidateData["archetypes"][number]["kind"],
   input: DesignInputSnapshotData,
 ): ArchetypeTemplate {
-  const hasHeroAsset = input.assetRefs.some((ref) => ref.role === "hero");
+  // The homepage archetype's representative page (explicit routing). When
+  // no explicit binding exists for an archetype (e.g. the archetype was
+  // selected without a matching representative), the slot page falls back
+  // to the homepage representative — the slot ALWAYS records an explicit
+  // page identity, never an empty one.
+  const homepageRepresentative =
+    input.representativePages.find((r) => r.archetype === "homepage")?.slug ??
+    input.contentRefs[0]?.slug ??
+    "home";
+  const serviceRepresentative =
+    input.representativePages.find((r) => r.archetype === "service")?.slug ?? homepageRepresentative;
+  const locationRepresentative =
+    input.representativePages.find((r) => r.archetype === "location")?.slug ?? homepageRepresentative;
+
+  const homepageHero = homepageRepresentative
+    ? resolveSlotAsset(input, homepageRepresentative, "hero")
+    : null;
+  const serviceSupporting = serviceRepresentative
+    ? resolveSlotAsset(input, serviceRepresentative, "supporting") ?? resolveSlotAsset(input, serviceRepresentative, "hero")
+    : null;
+  const locationGallery = locationRepresentative
+    ? resolveSlotAsset(input, locationRepresentative, "background") ?? resolveSlotAsset(input, locationRepresentative, "hero")
+    : null;
+
   const base = {
     primaryCta: "Primary conversion action from accepted content",
     secondaryCta: "Secondary contact/information action",
@@ -843,6 +974,49 @@ function archetypeFor(
     trustPresentation:
       "Author identity, publication date, methodology and sources have explicit, visible presentation areas; facts, estimates and assumptions remain visually distinguishable.",
   };
+
+  const buildSlot = (
+    slot: string,
+    requirementWith: string,
+    requirementWithout: string,
+    pageSlug: string,
+    role: ArchetypeTemplate["assetSlots"][number]["requiredRole"],
+    bound: { versionId: string; binaryDigest: string } | null,
+    consumedByProvider: boolean,
+  ): ArchetypeTemplate["assetSlots"][number] => {
+    if (bound) {
+      return {
+        slot,
+        requirement: requirementWith,
+        pageSlug,
+        role,
+        requiredRole: role,
+        boundAssetVersionId: bound.versionId,
+        boundBinaryDigest: bound.binaryDigest,
+        // Truthful consumption state: the LIVE Stitch adapter currently has
+        // no verified mechanism to upload an approved local asset into the
+        // generation. The slot records the exact bound version but
+        // providerConsumed stays FALSE until a supported mechanism actually
+        // delivers the asset bytes to the provider (§15 evidence rule).
+        providerConsumed: consumedByProvider,
+        placeholder: true,
+        unresolvedReason: consumedByProvider
+          ? undefined
+          : "Approved asset exists for this exact page/role; the provider has no supported mechanism to consume the local asset, so the slot stays a labeled placeholder pending Run 7.",
+      };
+    }
+    return {
+      slot,
+      requirement: requirementWithout,
+      pageSlug,
+      role,
+      requiredRole: role,
+      providerConsumed: false,
+      placeholder: true,
+      unresolvedReason: `No approved asset assignment exists for page "${pageSlug}" role "${role}".`,
+    };
+  };
+
   switch (kind) {
     case "homepage":
       return {
@@ -855,11 +1029,15 @@ function archetypeFor(
           "Evidence/credential area distinct from marketing copy",
         ],
         assetSlots: [
-          {
-            slot: "hero.primary",
-            requirement: hasHeroAsset ? "Approved hero photography" : "Neutral hero visual placeholder pending Run 7",
-            placeholder: !hasHeroAsset,
-          },
+          buildSlot(
+            "hero.primary",
+            "Approved hero photography for the homepage",
+            "Neutral hero visual placeholder pending Run 7",
+            homepageRepresentative,
+            "hero",
+            homepageHero,
+            false,
+          ),
         ],
       };
     case "service":
@@ -873,11 +1051,15 @@ function archetypeFor(
           "FAQ area for common questions",
         ],
         assetSlots: [
-          {
-            slot: "service.supporting",
-            requirement: hasHeroAsset ? "Approved supporting imagery" : "Neutral supporting placeholder pending Run 7",
-            placeholder: !hasHeroAsset,
-          },
+          buildSlot(
+            "service.supporting",
+            "Approved supporting imagery for the representative service page",
+            "Neutral supporting placeholder pending Run 7",
+            serviceRepresentative,
+            "supporting",
+            serviceSupporting,
+            false,
+          ),
         ],
       };
     case "location":
@@ -891,11 +1073,15 @@ function archetypeFor(
           "Contact path visible",
         ],
         assetSlots: [
-          {
-            slot: "location.gallery",
-            requirement: hasHeroAsset ? "Approved location photography" : "Neutral location placeholder pending Run 7",
-            placeholder: !hasHeroAsset,
-          },
+          buildSlot(
+            "location.gallery",
+            "Approved location photography for the representative location page",
+            "Neutral location placeholder pending Run 7",
+            locationRepresentative,
+            "background",
+            locationGallery,
+            false,
+          ),
         ],
       };
     case "editorial":
@@ -910,11 +1096,15 @@ function archetypeFor(
           "Long-form readable body measure",
         ],
         assetSlots: [
-          {
-            slot: "author.portrait",
-            requirement: "Author portrait placeholder pending operator asset",
-            placeholder: true,
-          },
+          buildSlot(
+            "author.portrait",
+            "Author portrait",
+            "Author portrait placeholder pending operator asset",
+            homepageRepresentative,
+            "illustration",
+            null,
+            false,
+          ),
         ],
         primaryCta: "Related service engagement path",
       };
@@ -929,11 +1119,15 @@ function archetypeFor(
           "No visual exaggeration of certainty or performance",
         ],
         assetSlots: [
-          {
-            slot: "advisory.chart",
-            requirement: "Chart/illustration placeholder pending final data visualization",
-            placeholder: true,
-          },
+          buildSlot(
+            "advisory.chart",
+            "Chart/illustration",
+            "Chart/illustration placeholder pending final data visualization",
+            homepageRepresentative,
+            "chart",
+            null,
+            false,
+          ),
         ],
       };
   }

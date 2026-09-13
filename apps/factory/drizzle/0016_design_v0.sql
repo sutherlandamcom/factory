@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS "design_candidates" (
   "input_snapshot_version" integer NOT NULL,
   "input_digest" text NOT NULL,
   "provider" text NOT NULL,
+  "provider_mode" text NOT NULL,
   "provider_project_name" text NOT NULL,
   "data" jsonb NOT NULL,
   "candidate_digest" text NOT NULL,
@@ -64,6 +65,7 @@ CREATE TABLE IF NOT EXISTS "accepted_design_artifacts" (
   "input_snapshot_version" integer NOT NULL,
   "input_digest" text NOT NULL,
   "provider" text NOT NULL,
+  "provider_mode" text NOT NULL,
   "provider_project_name" text NOT NULL,
   "design_md_digest" text NOT NULL,
   "data" jsonb NOT NULL,
@@ -73,7 +75,26 @@ CREATE TABLE IF NOT EXISTS "accepted_design_artifacts" (
   CONSTRAINT "accepted_design_artifacts_candidate_digest_shape" CHECK ("candidate_digest" ~ '^[0-9a-f]{64}$'),
   CONSTRAINT "accepted_design_artifacts_input_digest_shape" CHECK ("input_digest" ~ '^[0-9a-f]{64}$'),
   CONSTRAINT "accepted_design_artifacts_design_md_digest_shape" CHECK ("design_md_digest" ~ '^[0-9a-f]{64}$'),
-  CONSTRAINT "accepted_design_artifacts_provider_valid" CHECK ("provider" IN ('google-stitch'))
+  CONSTRAINT "accepted_design_artifacts_provider_valid" CHECK ("provider" IN ('google-stitch')),
+  CONSTRAINT "accepted_design_artifacts_provider_mode_valid" CHECK ("provider_mode" IN ('live', 'fixture'))
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "accepted_design_artifacts_project_idx" ON "accepted_design_artifacts" USING btree ("project_id", "version");
+--> statement-breakpoint
+-- Durable artifact-reference manifest: proves which project/candidate owns
+-- or references which raw artifact digest. Content-addressed storage stays
+-- globally deduplicated; AUTHORIZATION is project-scoped through this table
+-- (a digest alone is never an authorization mechanism).
+CREATE TABLE IF NOT EXISTS "design_artifact_refs" (
+  "id" text PRIMARY KEY,
+  "project_id" text NOT NULL REFERENCES "projects"("id") ON DELETE CASCADE,
+  "candidate_id" text NOT NULL REFERENCES "design_candidates"("id") ON DELETE CASCADE,
+  "artifact_kind" text NOT NULL,
+  "artifact_digest" text NOT NULL,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  CONSTRAINT "design_artifact_refs_candidate_digest_unique" UNIQUE ("candidate_id", "artifact_kind", "artifact_digest"),
+  CONSTRAINT "design_artifact_refs_digest_shape" CHECK ("artifact_digest" ~ '^[0-9a-f]{64}$'),
+  CONSTRAINT "design_artifact_refs_kind_valid" CHECK ("artifact_kind" IN ('design_md', 'screen_html', 'screen_screenshot', 'provider_response'))
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "design_artifact_refs_project_digest_idx" ON "design_artifact_refs" USING btree ("project_id", "artifact_digest");

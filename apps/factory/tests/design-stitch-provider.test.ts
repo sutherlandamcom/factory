@@ -39,6 +39,9 @@ function validInputSnapshot(): DesignInputSnapshotData {
     uxRequirements: ["Mobile-first responsive layout"],
     contentRefs: [],
     assetRefs: [],
+    representativePages: [
+      { archetype: "homepage", slug: "home", contentDigest: "b".repeat(64) },
+    ],
     archetypes: ["homepage", "service"],
   });
 }
@@ -100,16 +103,29 @@ function generationRequest(): DesignGenerationRequest {
     inputSnapshot: validInputSnapshot(),
     inputSnapshotId: "dsi-test",
     projectId: "proj-test",
-    acceptedCopy: [
-      {
-        slug: "roof-repair",
-        title: "Roof Repair",
-        introduction: "EXACT INTRO TEXT",
-        sections: [{ heading: "Process", body: "EXACT BODY TEXT" }],
-        conclusion: "EXACT CONCLUSION",
-        cta: "EXACT CTA",
+    acceptedCopyByArchetype: {
+      homepage: {
+        slug: "home",
+        title: "Home",
+        introduction: "EXACT HOME INTRO",
+        sections: [{ heading: "Process", body: "EXACT HOME BODY" }],
+        conclusion: "EXACT HOME CONCLUSION",
+        cta: "EXACT HOME CTA",
       },
-    ],
+      service: {
+        slug: "services/roof-repair",
+        title: "Roof Repair",
+        introduction: "EXACT SERVICE INTRO",
+        sections: [{ heading: "Process", body: "EXACT SERVICE BODY" }],
+        conclusion: "EXACT SERVICE CONCLUSION",
+        cta: "EXACT SERVICE CTA",
+      },
+    },
+    designSeed: {
+      colors: { primary: "#1A2E35", secondary: "#4A5A62", accent: "#B8422E", neutral: "#F7F5F2" },
+      typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans", scaleNotes: "" },
+      rationale: "Institutional advisory identity.",
+    },
   };
 }
 
@@ -167,8 +183,15 @@ test("generation: happy path creates project, design system, and one screen per 
       { design: { screens: [{ name: "projects/123/screens/home", title: "Home", deviceType: "DESKTOP" }] } },
     ],
     sessionId: "sess-1",
-  }); // generate homepage
+  }); // generate homepage (desktop)
   mock.queue(screenResult("projects/123/screens/home")); // get_screen home
+  mock.queue({
+    outputComponents: [
+      { design: { screens: [{ name: "projects/123/screens/home-mobile", title: "Home mobile", deviceType: "MOBILE" }] } },
+    ],
+    sessionId: "sess-1m",
+  }); // generate homepage (mobile)
+  mock.queue(screenResult("projects/123/screens/home-mobile")); // get_screen home-mobile
   mock.queue({
     outputComponents: [
       { design: { screens: [{ name: "projects/123/screens/service", title: "Service", deviceType: "DESKTOP" }] } },
@@ -183,7 +206,8 @@ test("generation: happy path creates project, design system, and one screen per 
   });
   const result = await provider.generateDesignSystem(generationRequest());
 
-  // Correct tools called in order.
+  // Correct tools called in order (homepage desktop + homepage mobile +
+  // service desktop, each followed by get_screen).
   assert.deepEqual(
     mock.calls.map((c) => c.name),
     [
@@ -193,18 +217,37 @@ test("generation: happy path creates project, design system, and one screen per 
       "get_screen",
       "generate_screen_from_text",
       "get_screen",
+      "generate_screen_from_text",
+      "get_screen",
     ],
   );
-  // The generation prompt embeds authority-binding instructions and the
-  // exact accepted copy.
+  // The homepage prompt embeds authority-binding instructions and ONLY the
+  // homepage representative page's accepted copy (page-exact routing).
   const homePrompt = String(mock.calls[2]!.args["prompt"]);
   assert.ok(homePrompt.includes("do not rewrite, shorten, expand, or improve it"));
-  assert.ok(homePrompt.includes("EXACT INTRO TEXT"));
+  assert.ok(homePrompt.includes("EXACT HOME INTRO"));
+  assert.ok(homePrompt.includes("EXACT HOME BODY"));
+  assert.ok(!homePrompt.includes("EXACT SERVICE INTRO"), "homepage prompt must NOT contain service copy");
+  assert.ok(!homePrompt.includes("EXACT SERVICE BODY"), "homepage prompt must NOT contain service body copy");
+  // The service prompt contains ONLY the service representative page.
+  const servicePrompt = String(mock.calls[6]!.args["prompt"]);
+  assert.ok(servicePrompt.includes("EXACT SERVICE INTRO"));
+  assert.ok(servicePrompt.includes("EXACT SERVICE BODY"));
+  assert.ok(!servicePrompt.includes("EXACT HOME INTRO"), "service prompt must NOT contain homepage copy");
+  assert.ok(!servicePrompt.includes("EXACT HOME BODY"), "service prompt must NOT contain homepage body copy");
   assert.ok(homePrompt.includes("Generic template look"));
+  // The homepage mobile generation reuses the same prompt with MOBILE device.
+  assert.equal(mock.calls[4]!.args["deviceType"], "MOBILE");
+  assert.equal(String(mock.calls[4]!.args["prompt"]), homePrompt, "mobile homepage uses the same accepted copy");
   // Candidate validates against the contract and binds lineage.
   assert.equal(result.candidate.provider, "google-stitch");
+  assert.equal(result.candidate.providerMode, "live");
+  assert.equal(result.candidate.designMdToolVersion, "factory-design-md-lint-v1");
   assert.equal(result.candidate.providerProjectName, "projects/123");
-  assert.equal(result.candidate.screens.length, 2);
+  // Desktop + mobile homepage screens + service desktop screen.
+  assert.equal(result.candidate.screens.length, 3);
+  assert.equal(result.candidate.screens.filter((s) => s.archetype === "homepage").length, 2);
+  assert.ok(result.candidate.screens.some((s) => s.deviceType === "MOBILE"), "a mobile homepage screen exists for responsive review");
   assert.deepEqual(result.candidate.archetypes.map((a) => a.kind), ["homepage", "service"]);
   assert.equal(result.candidate.providerSessionId, "sess-2");
   // DESIGN.md artifact is produced.

@@ -9,7 +9,7 @@ import {
 } from "@factory/contracts";
 import { deterministicDigest } from "../src/intelligence/digest.js";
 import { lintDesignMd, diffDesignMdTokens } from "../src/design/design-md.js";
-import { buildDesignMd, buildArchetypePrompt, mapFontToStitchEnum } from "../src/design/stitch-provider.js";
+import { buildDesignMd, buildArchetypePrompt, mapFontToStitchEnum, DESIGN_MD_TOOL_VERSION } from "../src/design/stitch-provider.js";
 import { createDesignArtifactStorage, sha256HexBytes } from "../src/design/artifact-storage.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -62,6 +62,9 @@ function validInputSnapshotData(): DesignInputSnapshotData {
         role: "hero",
       },
     ],
+    representativePages: [
+      { archetype: "homepage", slug: "home", contentDigest: "b".repeat(64) },
+    ],
     archetypes: ["homepage", "service"],
   });
 }
@@ -70,10 +73,17 @@ function validCandidateData(): DesignCandidateData {
   return parseDesignCandidateData({
     schemaVersion: "design-v1",
     provider: "google-stitch",
+    providerMode: "fixture",
     providerProjectName: "projects/123",
     designMdDigest: "d".repeat(64),
-    designMdToolVersion: "@google/design.md 0.4.0",
+    designMdToolVersion: "factory-design-md-lint-v1",
     designMdLint: { errors: 0, warnings: 0, infos: 0 },
+    designSeed: {
+      colors: { primary: "#1A2E35" },
+      typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans" },
+      rationale: "Seed rationale",
+    },
+    providerEvidence: {},
     tokens: {
       colors: { primary: "#1A2E35" },
       typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans" },
@@ -96,7 +106,18 @@ function validCandidateData(): DesignCandidateData {
         providerScreenNames: ["projects/123/screens/abc"],
         sectionPatterns: ["hero", "evidence", "cta"],
         contentRequirements: ["Primary CTA visible"],
-        assetSlots: [{ slot: "hero.primary", requirement: "Hero placeholder", placeholder: true }],
+        assetSlots: [
+          {
+            slot: "hero.primary",
+            requirement: "Hero placeholder",
+            pageSlug: "home",
+            role: "hero",
+            requiredRole: "hero",
+            providerConsumed: false,
+            placeholder: true,
+            unresolvedReason: "No approved asset assignment for home/hero.",
+          },
+        ],
         primaryCta: "Request assessment",
         secondaryCta: "",
         responsiveBehavior: "Mobile-first stack",
@@ -191,7 +212,17 @@ test("archetype prompt: embeds accepted copy verbatim instruction and anti-refer
       purpose: "Trust-first entry",
       sectionPatterns: ["hero", "evidence", "cta"],
       contentRequirements: ["Primary CTA visible"],
-      assetSlots: [{ slot: "hero.primary", requirement: "Hero", placeholder: true }],
+      assetSlots: [
+      {
+        slot: "hero.primary",
+        requirement: "Hero",
+        pageSlug: "home",
+        role: "hero",
+        requiredRole: "hero",
+        providerConsumed: false,
+        placeholder: true,
+      },
+    ],
       primaryCta: "Request assessment",
       secondaryCta: null,
       responsiveBehavior: "Mobile-first",
@@ -199,16 +230,14 @@ test("archetype prompt: embeds accepted copy verbatim instruction and anti-refer
     },
     brand: { facts: ["Family-owned"], positioning: "High-altitude expertise", tone: "Plain-spoken" },
     audience: { segments: ["Owners"], needs: ["Durability"] },
-    pageContent: [
-      {
-        slug: "roof-repair",
-        title: "Roof Repair",
-        introduction: "EXACT INTRO TEXT",
-        sections: [{ heading: "Process", body: "EXACT BODY TEXT" }],
-        conclusion: "EXACT CONCLUSION",
-        cta: "EXACT CTA",
-      },
-    ],
+    representativePage: {
+      slug: "home",
+      title: "Home",
+      introduction: "EXACT INTRO TEXT",
+      sections: [{ heading: "Process", body: "EXACT BODY TEXT" }],
+      conclusion: "EXACT CONCLUSION",
+      cta: "EXACT CTA",
+    },
     references: { learn: ["Restraint"], avoid: ["Cheap template look"], preferredPerception: "Institutional" },
     uxRequirements: ["Mobile-first"],
   });
@@ -251,4 +280,267 @@ test("artifact storage: storage key escapes are refused", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "design-artifacts-"));
   const storage = createDesignArtifactStorage(dir);
   assert.throws(() => storage.artifactKey("design_md", "../../etc/passwd"), /hex/);
+});
+
+// ---------------------------------------------------------------------------
+// QA remediation: page-exact content routing + asset slot lineage (§25)
+// ---------------------------------------------------------------------------
+
+test("archetype prompt: homepage receives ONLY homepage copy; unrelated copy excluded", () => {
+  const prompt = buildArchetypePrompt({
+    archetypeKind: "homepage",
+    archetype: {
+      purpose: "Trust-first entry",
+      sectionPatterns: ["hero", "evidence", "cta"],
+      contentRequirements: ["Primary CTA visible"],
+      assetSlots: [],
+      primaryCta: "Request assessment",
+      secondaryCta: null,
+      responsiveBehavior: "Mobile-first",
+      trustPresentation: "Author/date areas",
+    },
+    brand: { facts: ["Family-owned"], positioning: "High-altitude expertise", tone: "Plain-spoken" },
+    audience: { segments: ["Owners"], needs: ["Durability"] },
+    representativePage: {
+      slug: "home",
+      title: "Home",
+      introduction: "HOMEPAGE INTRO MARKER",
+      sections: [{ heading: "Why us", body: "HOMEPAGE BODY MARKER" }],
+      conclusion: "HOMEPAGE CONCLUSION MARKER",
+      cta: "HOMEPAGE CTA MARKER",
+    },
+    references: { learn: [], avoid: [], preferredPerception: "" },
+    uxRequirements: [],
+  });
+  assert.ok(prompt.includes("HOMEPAGE INTRO MARKER"));
+  assert.ok(prompt.includes("HOMEPAGE BODY MARKER"));
+  assert.ok(prompt.includes("HOMEPAGE CONCLUSION MARKER"));
+  assert.ok(prompt.includes("HOMEPAGE CTA MARKER"));
+  assert.ok(!prompt.includes("SERVICE"), "homepage prompt must not contain service copy markers");
+});
+
+test("archetype prompt: service prompt contains ONLY the selected service page", () => {
+  const prompt = buildArchetypePrompt({
+    archetypeKind: "service",
+    archetype: {
+      purpose: "Service detail",
+      sectionPatterns: ["page-header", "faq", "cta"],
+      contentRequirements: ["Service definition matches accepted content exactly"],
+      assetSlots: [],
+      primaryCta: "Request",
+      secondaryCta: null,
+      responsiveBehavior: "Mobile-first",
+      trustPresentation: "Trust areas",
+    },
+    brand: { facts: [], positioning: "P", tone: "T" },
+    audience: { segments: [], needs: [] },
+    representativePage: {
+      slug: "services/roof-repair",
+      title: "Roof Repair",
+      introduction: "SERVICE PAGE INTRO MARKER",
+      sections: [{ heading: "Process", body: "SERVICE PAGE BODY MARKER" }],
+      conclusion: "SERVICE PAGE CONCLUSION MARKER",
+      cta: "SERVICE PAGE CTA MARKER",
+    },
+    references: { learn: [], avoid: [], preferredPerception: "" },
+    uxRequirements: [],
+  });
+  assert.ok(prompt.includes("SERVICE PAGE INTRO MARKER"));
+  assert.ok(prompt.includes("SERVICE PAGE BODY MARKER"));
+  assert.ok(prompt.includes("services/roof-repair"));
+  assert.ok(!prompt.includes("HOMEPAGE"), "service prompt must not contain homepage copy");
+  assert.ok(!prompt.includes("EDITORIAL"), "service prompt must not contain editorial copy");
+});
+
+test("archetype prompt: no representative page -> structural slots only, no copy section", () => {
+  const prompt = buildArchetypePrompt({
+    archetypeKind: "editorial",
+    archetype: {
+      purpose: "Research article",
+      sectionPatterns: ["article-header", "sources"],
+      contentRequirements: [],
+      assetSlots: [],
+      primaryCta: null,
+      secondaryCta: null,
+      responsiveBehavior: "Mobile-first",
+      trustPresentation: "Author areas",
+    },
+    brand: { facts: [], positioning: "P", tone: "T" },
+    audience: { segments: [], needs: [] },
+    representativePage: null,
+    references: { learn: [], avoid: [], preferredPerception: "" },
+    uxRequirements: [],
+  });
+  assert.ok(!prompt.includes("ACCEPTED COPY"), "no copy section when no representative page is bound");
+});
+
+test("asset slot lineage: homepage hero binds ONLY homepage+hero; service slot cannot bind homepage hero", () => {
+  // Build an input snapshot where ONLY the homepage has a hero assignment.
+  const snapshot = parseDesignInputSnapshotData({
+    schemaVersion: "design-v1",
+    acceptedInputSnapshotId: "pis-test-1",
+    acceptedInputSnapshotVersion: 1,
+    acceptedInputDigest: "a".repeat(64),
+    brand: { facts: [], positioning: "P", tone: "T", visualIdentityNotes: "" },
+    audience: { segments: [], needs: [], decisionContext: "" },
+    references: { referenceUrls: [], antiReferenceUrls: [], learn: [], avoid: [], preferredPerception: "" },
+    uxRequirements: [],
+    contentRefs: [
+      { id: "wacc-1", version: 1, slug: "home", contentDigest: "b".repeat(64) },
+      { id: "wacc-2", version: 1, slug: "services/roof-repair", contentDigest: "e".repeat(64) },
+    ],
+    assetRefs: [
+      {
+        versionId: "asv-11111111-1111-4111-8111-111111111111",
+        binaryDigest: "c".repeat(64),
+        pageSlug: "home",
+        role: "hero",
+      },
+    ],
+    representativePages: [
+      { archetype: "homepage", slug: "home", contentDigest: "b".repeat(64) },
+      { archetype: "service", slug: "services/roof-repair", contentDigest: "e".repeat(64) },
+    ],
+    archetypes: ["homepage", "service"],
+  });
+  const homePrompt = buildArchetypePrompt({
+    archetypeKind: "homepage",
+    archetype: {
+      purpose: "p",
+      sectionPatterns: [],
+      contentRequirements: [],
+      assetSlots: [
+        {
+          slot: "hero.primary",
+          requirement: "Hero",
+          pageSlug: "home",
+          role: "hero",
+          requiredRole: "hero",
+          boundAssetVersionId: "asv-11111111-1111-4111-8111-111111111111",
+          boundBinaryDigest: "c".repeat(64),
+          providerConsumed: false,
+          placeholder: true,
+        },
+      ],
+      primaryCta: null,
+      secondaryCta: null,
+      responsiveBehavior: "r",
+      trustPresentation: "t",
+    },
+    brand: { facts: [], positioning: "P", tone: "T" },
+    audience: { segments: [], needs: [] },
+    representativePage: null,
+    references: { learn: [], avoid: [], preferredPerception: "" },
+    uxRequirements: [],
+  });
+  // The homepage slot references the exact bound version.
+  assert.ok(homePrompt.includes("asv-11111111-1111-4111-8111-111111111111"));
+
+  // The service slot (page services/roof-repair, role supporting) has NO
+  // assignment for that exact page+role: it must stay a labeled placeholder
+  // and must NOT reference the homepage hero version.
+  const serviceSlot = {
+    slot: "service.supporting",
+    requirement: "Supporting imagery",
+    pageSlug: "services/roof-repair",
+    role: "supporting",
+    requiredRole: "supporting" as const,
+    providerConsumed: false,
+    placeholder: true as const,
+    unresolvedReason: 'No approved asset assignment exists for page "services/roof-repair" role "supporting".',
+  };
+  const servicePrompt = buildArchetypePrompt({
+    archetypeKind: "service",
+    archetype: {
+      purpose: "p",
+      sectionPatterns: [],
+      contentRequirements: [],
+      assetSlots: [serviceSlot],
+      primaryCta: null,
+      secondaryCta: null,
+      responsiveBehavior: "r",
+      trustPresentation: "t",
+    },
+    brand: { facts: [], positioning: "P", tone: "T" },
+    audience: { segments: [], needs: [] },
+    representativePage: null,
+    references: { learn: [], avoid: [], preferredPerception: "" },
+    uxRequirements: [],
+  });
+  assert.ok(!servicePrompt.includes("asv-11111111"), "service slot must NOT bind the homepage hero version");
+  assert.ok(servicePrompt.includes("do not borrow imagery from other pages"));
+});
+
+test("provider evidence: fixture and live provider identities cannot be confused", () => {
+  const fixtureCandidate = parseDesignCandidateData({
+    schemaVersion: "design-v1",
+    provider: "google-stitch",
+    providerMode: "fixture",
+    providerProjectName: "fixture/projects/e2e",
+    designMdDigest: "d".repeat(64),
+    designMdToolVersion: "factory-design-md-lint-v1",
+    designMdLint: { errors: 0, warnings: 0, infos: 0 },
+    designSeed: {
+      colors: { primary: "#1A2E35" },
+      typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans" },
+      rationale: "seed",
+    },
+    providerEvidence: {},
+    tokens: {
+      colors: { primary: "#1A2E35" },
+      typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans" },
+      spacing: { md: "16px" },
+      rounded: { md: "8px" },
+    },
+    screens: [
+      {
+        id: "screen-1",
+        providerScreenName: "fixture/projects/e2e/screens/home-1",
+        title: "Homepage",
+        deviceType: "DESKTOP",
+        archetype: "homepage",
+      },
+    ],
+    archetypes: [
+      {
+        kind: "homepage",
+        purpose: "p",
+        providerScreenNames: ["fixture/projects/e2e/screens/home-1"],
+        sectionPatterns: ["hero"],
+        contentRequirements: [],
+        assetSlots: [],
+        primaryCta: "",
+        secondaryCta: "",
+        responsiveBehavior: "r",
+        trustPresentation: "t",
+      },
+    ],
+    rationale: "fixture",
+  });
+  assert.equal(fixtureCandidate.providerMode, "fixture");
+
+  // A candidate claiming providerMode "live" is a distinct durable value:
+  // the two can never be conflated through the contract.
+  const liveCandidate = parseDesignCandidateData({
+    ...JSON.parse(JSON.stringify(fixtureCandidate)),
+    providerMode: "live",
+    providerProjectName: "projects/real",
+    rationale: "live",
+  });
+  assert.equal(liveCandidate.providerMode, "live");
+  assert.notEqual(fixtureCandidate.providerMode, liveCandidate.providerMode);
+
+  // Unknown modes fail closed.
+  assert.throws(() =>
+    parseDesignCandidateData({
+      ...JSON.parse(JSON.stringify(fixtureCandidate)),
+      providerMode: "simulated",
+    }),
+  );
+});
+
+test("DESIGN.md tool identity: candidates record the Factory validator, never unexecuted Google tooling", () => {
+  // The contract accepts any bounded string, but the shipped providers MUST
+  // record the truthful identity. Verify the exported constant.
+  assert.equal(DESIGN_MD_TOOL_VERSION, "factory-design-md-lint-v1");
 });

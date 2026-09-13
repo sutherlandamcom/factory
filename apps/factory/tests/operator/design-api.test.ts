@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { sql } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { createOperatorApi } from "../../src/operator/api.js";
@@ -39,6 +40,7 @@ class StubDesignProvider implements DesignProvider {
 
   async generateDesignSystem(): Promise<DesignGenerationResult> {
     this.generationCalls += 1;
+    void this.preflightResult;
     // The stub's DESIGN.md bytes and their digest must be consistent: the
     // service layer verifies the candidate's designMdDigest against the
     // stored artifact bytes (content-addressed binding enforcement).
@@ -49,10 +51,17 @@ class StubDesignProvider implements DesignProvider {
     const candidate: DesignCandidateData = parseDesignCandidateData({
       schemaVersion: "design-v1",
       provider: "google-stitch",
+      providerMode: "fixture",
       providerProjectName: "projects/stub",
       designMdDigest,
-      designMdToolVersion: "@google/design.md 0.4.0",
+      designMdToolVersion: "factory-design-md-lint-v1",
       designMdLint: { errors: 0, warnings: 0, infos: 0 },
+      designSeed: {
+        colors: { primary: "#1A2E35" },
+        typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans" },
+        rationale: "Seed rationale",
+      },
+      providerEvidence: {},
       tokens: {
         colors: { primary: "#1A2E35" },
         typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans" },
@@ -75,7 +84,18 @@ class StubDesignProvider implements DesignProvider {
           providerScreenNames: ["projects/stub/screens/abc"],
           sectionPatterns: ["hero", "evidence", "cta"],
           contentRequirements: ["Primary CTA visible"],
-          assetSlots: [{ slot: "hero.primary", requirement: "Hero placeholder", placeholder: true }],
+          assetSlots: [
+          {
+            slot: "hero.primary",
+            requirement: "Hero placeholder",
+            pageSlug: "home",
+            role: "hero",
+            requiredRole: "hero",
+            providerConsumed: false,
+            placeholder: true,
+            unresolvedReason: "No approved asset assignment for home/hero.",
+          },
+        ],
           primaryCta: "Request assessment",
           secondaryCta: "",
           responsiveBehavior: "Mobile-first stack",
@@ -234,7 +254,7 @@ test("design API: generate -> accept happy path binds candidate digest; forged d
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ candidateId: gen.id, expectedCandidateDigest: gen.candidateDigest }),
+        body: JSON.stringify({ candidateId: gen.id, expectedCandidateDigest: gen.candidateDigest, reviewNotes: "fixture acceptance" }),
       },
     );
     assert.equal(acceptRes.status, 200);
@@ -321,6 +341,115 @@ test("design API: artifact serving requires valid digest; unknown digest is 404"
     assert.equal(badRes.status, 400);
     const missingRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/design/artifacts/${"e".repeat(64)}`);
     assert.equal(missingRes.status, 404);
+  } finally {
+    await server.close();
+  }
+});
+
+test("design API: fixture candidate CANNOT be accepted as production design authority without explicit fixture declaration", async () => {
+  const provider = new StubDesignProvider({ configured: true, provider: "google-stitch", reachable: true });
+  const server = await startTestServer(provider);
+  try {
+    const projectId = await createProjectWithAcceptedInputs(server.baseUrl, "dap7");
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/design/input-snapshot`, { method: "POST", headers: { "Content-Type": "application/json" } });
+    const genRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/design/generate`, { method: "POST", headers: { "Content-Type": "application/json" } });
+    assert.equal(genRes.status, 201);
+    const gen = (await genRes.json()) as { id: string; candidateDigest: string };
+
+    // Acceptance WITHOUT the fixture declaration fails closed.
+    const silentRes = await fetch(
+      `${server.baseUrl}/api/projects/${projectId}/design/candidates/${gen.id}/accept`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidateId: gen.id, expectedCandidateDigest: gen.candidateDigest }),
+      },
+    );
+    assert.equal(silentRes.status, 409);
+    const silentBody = (await silentRes.json()) as { error: { code: string; message: string } };
+    assert.equal(silentBody.error.code, "design_approval_failed");
+    assert.match(silentBody.error.message, /fixture/i);
+
+    // Acceptance WITH the explicit fixture declaration succeeds.
+    const declaredRes = await fetch(
+      `${server.baseUrl}/api/projects/${projectId}/design/candidates/${gen.id}/accept`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidateId: gen.id,
+          expectedCandidateDigest: gen.candidateDigest,
+          reviewNotes: "fixture acceptance — development journey only",
+        }),
+      },
+    );
+    assert.equal(declaredRes.status, 200);
+  } finally {
+    await server.close();
+  }
+});
+
+test("design API: providerMode survives persistence and restart; artifact reads are project-scoped", async () => {
+  const provider = new StubDesignProvider({ configured: true, provider: "google-stitch", reachable: true });
+  const server = await startTestServer(provider);
+  try {
+    const projectId = await createProjectWithAcceptedInputs(server.baseUrl, "dap8");
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/design/input-snapshot`, { method: "POST", headers: { "Content-Type": "application/json" } });
+    const genRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/design/generate`, { method: "POST", headers: { "Content-Type": "application/json" } });
+    assert.equal(genRes.status, 201);
+    const gen = (await genRes.json()) as { id: string; candidateDigest: string };
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/design/candidates/${gen.id}/accept`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        candidateId: gen.id,
+        expectedCandidateDigest: gen.candidateDigest,
+        reviewNotes: "fixture acceptance",
+      }),
+    });
+
+    // providerMode is durable in the candidate and accepted artifact rows
+    // (fresh DB read, not the in-memory stub).
+    const wsRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/design/workspace`);
+    const ws = (await wsRes.json()) as { accepted: { providerProjectName: string } | null };
+    assert.ok(ws.accepted, "accepted design present");
+
+    // The accepted artifact's providerMode is carried from the candidate.
+    const modeRows = await dbInst!.db.execute<{ provider_mode: string }>(
+      sql`SELECT provider_mode FROM accepted_design_artifacts WHERE project_id = ${projectId}`,
+    );
+    assert.equal(modeRows.rows[0]?.provider_mode, "fixture", "accepted artifact durably records providerMode=fixture");
+  } finally {
+    await server.close();
+  }
+});
+
+test("design API: cross-project artifact digest read fails closed (project-scoped authorization)", async () => {
+  const provider = new StubDesignProvider({ configured: true, provider: "google-stitch", reachable: true });
+  const server = await startTestServer(provider);
+  try {
+    const projectA = await createProjectWithAcceptedInputs(server.baseUrl, "dap9a");
+    const projectB = await createProjectWithAcceptedInputs(server.baseUrl, "dap9b");
+    await fetch(`${server.baseUrl}/api/projects/${projectA}/design/input-snapshot`, { method: "POST", headers: { "Content-Type": "application/json" } });
+    const genRes = await fetch(`${server.baseUrl}/api/projects/${projectA}/design/generate`, { method: "POST", headers: { "Content-Type": "application/json" } });
+    assert.equal(genRes.status, 201);
+    const gen = (await genRes.json()) as { id: string; candidateDigest: string };
+
+    // The DESIGN.md artifact digest belongs to project A.
+    const refRows = await dbInst!.db.execute<{ artifact_digest: string }>(
+      sql`SELECT artifact_digest FROM design_artifact_refs WHERE project_id = ${projectA} LIMIT 1`,
+    );
+    const refRow = refRows.rows[0];
+    assert.ok(refRow, "project A has artifact refs recorded");
+
+    // Project A CAN read its own artifact.
+    const ownRes = await fetch(`${server.baseUrl}/api/projects/${projectA}/design/artifacts/${refRow.artifact_digest}`);
+    assert.equal(ownRes.status, 200);
+
+    // Project B CANNOT read project A's artifact digest — the digest is not
+    // an authorization mechanism; authorization is project-scoped.
+    const crossRes = await fetch(`${server.baseUrl}/api/projects/${projectB}/design/artifacts/${refRow.artifact_digest}`);
+    assert.equal(crossRes.status, 404, "cross-project artifact read must fail closed");
   } finally {
     await server.close();
   }

@@ -12,6 +12,7 @@ import {
   acceptedPageContent,
   assetPageAssignments,
   assetVersions,
+  designArtifactRefs,
   designCandidates,
   designInputSnapshots,
   projectInputSnapshots,
@@ -139,6 +140,9 @@ export class DesignStore {
         role: row.role,
       })),
       archetypes: deriveArchetypes(contentRows.map((row) => row.slug)),
+      // Page-exact copy routing: each archetype binds exactly one
+      // representative accepted page (deterministic selection below).
+      representativePages: deriveRepresentativePages(contentRows),
     });
 
     const inputDigest = deterministicDigest(data);
@@ -353,6 +357,48 @@ export class DesignStore {
    * caller must have validated the payload against the contract. The exact
    * input snapshot lineage is copied at bind time.
    */
+  /**
+   * Record the durable artifact-reference manifest for a candidate: every
+   * raw artifact digest the candidate's generation produced, bound to the
+   * owning project/candidate. This is the authority that proves
+   * "this project/candidate owns/references this artifact digest" — the
+   * basis for project-scoped artifact access (the CAS itself stays
+   * globally deduplicated; authorization does not).
+   */
+  async recordArtifactRefs(input: {
+    projectId: string;
+    candidateId: string;
+    artifacts: Array<{ kind: string; digest: string }>;
+  }): Promise<void> {
+    if (input.artifacts.length === 0) return;
+    await this.db
+      .insert(designArtifactRefs)
+      .values(
+        input.artifacts.map((artifact) => ({
+          id: `dar-${randomUUID()}`,
+          projectId: input.projectId,
+          candidateId: input.candidateId,
+          artifactKind: artifact.kind,
+          artifactDigest: artifact.digest,
+        })),
+      )
+      .onConflictDoNothing();
+  }
+
+  /**
+   * TRUE when the project holds an authorized reference to the artifact
+   * digest (through any of its design candidates). This is the
+   * project-scoped authorization check for artifact access.
+   */
+  async projectReferencesArtifact(projectId: string, digest: string): Promise<boolean> {
+    const [row] = await this.db
+      .select({ id: designArtifactRefs.id })
+      .from(designArtifactRefs)
+      .where(and(eq(designArtifactRefs.projectId, projectId), eq(designArtifactRefs.artifactDigest, digest)))
+      .limit(1);
+    return row !== undefined;
+  }
+
   async createCandidate(input: {
     projectId: string;
     inputSnapshot: DesignInputSnapshotRecord;
@@ -368,6 +414,7 @@ export class DesignStore {
         inputSnapshotVersion: input.inputSnapshot.version,
         inputDigest: input.inputSnapshot.inputDigest,
         provider: input.data.provider,
+        providerMode: input.data.providerMode,
         providerProjectName: input.data.providerProjectName,
         data: input.data,
         candidateDigest,
@@ -422,6 +469,20 @@ export class DesignStore {
           "Candidate digest mismatch: the design changed between review and acceptance.",
         );
       }
+      // Evidence-mode gate (fail closed): a fixture candidate may be
+      // accepted ONLY as an explicitly-marked fixture acceptance (review
+      // notes must declare it); it can never silently become live provider
+      // authority. The accepted artifact carries the candidate's
+      // providerMode so downstream state always distinguishes the two.
+      const candidateData = parseDesignCandidateData(candidate.data);
+      if (candidateData.providerMode === "fixture") {
+        const declared = (input.reviewNotes ?? "").toLowerCase().includes("fixture");
+        if (!declared) {
+          throw approvalError(
+            "Fixture design candidates cannot be accepted as production design authority: the provider candidate is a deterministic fixture (providerMode=fixture), not live Google Stitch evidence. Fixture acceptance requires review notes that explicitly declare the fixture mode.",
+          );
+        }
+      }
       if (candidate.approvalState === "accepted") {
         // Idempotent: return the existing accepted artifact.
         const [existing] = await tx
@@ -461,7 +522,6 @@ export class DesignStore {
         .where(eq(acceptedDesignArtifacts.projectId, input.projectId));
       const nextVersion = (maxVersion?.maxVersion ?? 0) + 1;
       const id = `dsac-${randomUUID()}`;
-      const candidateData = parseDesignCandidateData(candidate.data);
 
       let accepted: AcceptedDesignArtifactRecord | undefined;
       try {
@@ -477,6 +537,7 @@ export class DesignStore {
             inputSnapshotVersion: candidate.inputSnapshotVersion,
             inputDigest: candidate.inputDigest,
             provider: candidate.provider,
+            providerMode: candidate.providerMode,
             providerProjectName: candidate.providerProjectName,
             designMdDigest: candidateData.designMdDigest,
             data: candidate.data,
@@ -715,4 +776,40 @@ function deriveArchetypes(slugs: string[]): Array<"homepage" | "service" | "loca
     if (/(^|\/)(invest|advisory|capital|portfolio)(\/|$)/.test(slug)) archetypes.add("investment_advisory");
   }
   return [...archetypes].slice(0, 5);
+}
+
+/**
+ * Explicit representative-page routing (page-exact copy authority). Each
+ * derived archetype binds exactly one accepted page:
+ * - homepage -> the canonical homepage slug (root, "home", or "index");
+ *   when none exists, the lexicographically first accepted page stands in
+ *   (deterministic; the binding is explicit and inspectable either way).
+ * - service/location/editorial/investment_advisory -> the lexicographically
+ *   first accepted page whose slug matches that archetype's marker pattern.
+ * The homepage archetype is always derivable; non-homepage archetypes bind
+ * only when a matching page exists (their archetype is only derived when a
+ * matching page exists, so the representative is always found).
+ */
+function deriveRepresentativePages(
+  contentRows: Array<{ slug: string; contentDigest: string }>,
+): Array<{ archetype: "homepage" | "service" | "location" | "editorial" | "investment_advisory"; slug: string; contentDigest: string }> {
+  const sorted = [...contentRows].sort((a, b) => a.slug.localeCompare(b.slug));
+  const representatives: Array<{ archetype: "homepage" | "service" | "location" | "editorial" | "investment_advisory"; slug: string; contentDigest: string }> = [];
+  const homepage = sorted.find((row) => /^(home|index|\/)$/.test(row.slug) || row.slug === "") ?? sorted[0];
+  if (homepage) {
+    representatives.push({ archetype: "homepage", slug: homepage.slug, contentDigest: homepage.contentDigest });
+  }
+  const marker: Array<["service" | "location" | "editorial" | "investment_advisory", RegExp]> = [
+    ["service", /(^|\/)(services?|solutions?|offerings?)(\/|$)/],
+    ["location", /(^|\/)(locations?|areas?|regions?|contact)(\/|$)/],
+    ["editorial", /(^|\/)(research|insights?|articles?|blog|editorial|journal)(\/|$)/],
+    ["investment_advisory", /(^|\/)(invest|advisory|capital|portfolio)(\/|$)/],
+  ];
+  for (const [archetype, pattern] of marker) {
+    const match = sorted.find((row) => pattern.test(row.slug));
+    if (match) {
+      representatives.push({ archetype, slug: match.slug, contentDigest: match.contentDigest });
+    }
+  }
+  return representatives;
 }

@@ -119,11 +119,14 @@ test.describe("Design journey", () => {
     });
     await acceptButton.click();
     await expect(
-      page.locator("text=Review action rejected: the digest you confirmed does not match the stored candidate."),
+      page.locator("text=/Review action rejected: the digest you confirmed does not match the stored candidate/"),
     ).toBeVisible({ timeout: 15_000 });
 
     // Remove the route tampering and accept with the EXACT digest.
+    // Fixture candidates require an explicit fixture declaration in the
+    // review notes (fail-closed evidence-mode gate).
     await page.unroute("**/design/candidates/*/accept");
+    await page.locator("#design-review-notes").fill("fixture acceptance — design journey");
     await acceptButton.click();
     await expect(page.locator("h3", { hasText: "Accepted Design" })).toBeVisible({ timeout: 15_000 });
     await expect(page.locator("text=accepted version(s); accepted designs are immutable").first()).toBeVisible();

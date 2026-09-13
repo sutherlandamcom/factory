@@ -783,7 +783,7 @@ export function createOperatorApi(deps: OperatorApiDeps) {
           if (!/^[0-9a-f]{64}$/.test(digest)) {
             return sendError(res, "validation_error", "Artifact digest must be a lowercase SHA-256 hex digest.");
           }
-          const artifact = await design.readArtifact(digest);
+          const artifact = await design.readArtifact(project.id, digest);
           if (!artifact) return sendError(res, "not_found", "Design artifact not found.");
           res.writeHead(200, {
             "Content-Type": artifact.mediaType,

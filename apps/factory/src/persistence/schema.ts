@@ -1381,6 +1381,8 @@ export const designCandidates = pgTable(
     inputSnapshotVersion: integer("input_snapshot_version").notNull(),
     inputDigest: text("input_digest").notNull(),
     provider: text("provider").notNull(),
+    /** Durable evidence mode: live provider execution vs deterministic fixture. */
+    providerMode: text("provider_mode").notNull(),
     providerProjectName: text("provider_project_name").notNull(),
     data: jsonb("data").notNull(),
     candidateDigest: text("candidate_digest").notNull(),
@@ -1409,6 +1411,10 @@ export const designCandidates = pgTable(
       "design_candidates_provider_valid",
       sql`${table.provider} IN ('google-stitch')`,
     ),
+    check(
+      "design_candidates_provider_mode_valid",
+      sql`${table.providerMode} IN ('live', 'fixture')`,
+    ),
     index("design_candidates_project_idx").on(table.projectId, table.createdAt),
     index("design_candidates_input_idx").on(table.inputSnapshotId),
   ],
@@ -1436,6 +1442,8 @@ export const acceptedDesignArtifacts = pgTable(
     inputSnapshotVersion: integer("input_snapshot_version").notNull(),
     inputDigest: text("input_digest").notNull(),
     provider: text("provider").notNull(),
+    /** Durable evidence mode carried from the accepted candidate. */
+    providerMode: text("provider_mode").notNull(),
     providerProjectName: text("provider_project_name").notNull(),
     designMdDigest: text("design_md_digest").notNull(),
     data: jsonb("data").notNull(),
@@ -1451,7 +1459,42 @@ export const acceptedDesignArtifacts = pgTable(
       "accepted_design_artifacts_provider_valid",
       sql`${table.provider} IN ('google-stitch')`,
     ),
+    check(
+      "accepted_design_artifacts_provider_mode_valid",
+      sql`${table.providerMode} IN ('live', 'fixture')`,
+    ),
     index("accepted_design_artifacts_project_idx").on(table.projectId, table.version),
+  ],
+);
+
+/**
+ * Durable artifact-reference manifest: proves which project/candidate owns
+ * or references which raw artifact digest. Content-addressed storage stays
+ * globally deduplicated; AUTHORIZATION is project-scoped through this table
+ * (a digest alone is never an authorization mechanism).
+ */
+export const designArtifactRefs = pgTable(
+  "design_artifact_refs",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    candidateId: text("candidate_id")
+      .notNull()
+      .references(() => designCandidates.id, { onDelete: "cascade" }),
+    artifactKind: text("artifact_kind").notNull(),
+    artifactDigest: text("artifact_digest").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("design_artifact_refs_candidate_digest_unique").on(table.candidateId, table.artifactKind, table.artifactDigest),
+    check("design_artifact_refs_digest_shape", sql`${table.artifactDigest} ~ '^[0-9a-f]{64}$'`),
+    check(
+      "design_artifact_refs_kind_valid",
+      sql`${table.artifactKind} IN ('design_md', 'screen_html', 'screen_screenshot', 'provider_response')`,
+    ),
+    index("design_artifact_refs_project_digest_idx").on(table.projectId, table.artifactDigest),
   ],
 );
 

@@ -981,6 +981,8 @@ export interface DesignInputSnapshotView {
 export interface DesignCandidateView {
   id: string;
   provider: string;
+  /** Durable evidence mode: live provider execution vs deterministic fixture. */
+  providerMode: string;
   providerProjectName: string;
   inputSnapshotId: string;
   inputSnapshotVersion: number;
@@ -1003,6 +1005,8 @@ export interface AcceptedDesignView {
   inputSnapshotVersion: number;
   inputDigest: string;
   provider: string;
+  /** Durable evidence mode carried from the accepted candidate. */
+  providerMode: string;
   providerProjectName: string;
   designMdDigest: string;
   data: DesignCandidateDataView;

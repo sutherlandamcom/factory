@@ -22,7 +22,7 @@ const DESIGN_ERROR_COPY: Record<string, string> = {
   design_provider_unavailable: "Stitch generation failed; check provider status and retry.",
   design_provider_output_invalid: "Provider output failed validation; nothing was accepted.",
   design_md_invalid: "DESIGN.md failed validation; the candidate was rejected before persistence.",
-  design_approval_failed: "Review action rejected: the digest you confirmed does not match the stored candidate.",
+  design_approval_failed: "Review action rejected: the digest you confirmed does not match the stored candidate, or the acceptance is not permitted for this candidate's evidence mode (fixture candidates require an explicit fixture declaration in the review notes).",
   design_immutable: "Accepted design is immutable; generate a new candidate instead.",
   design_not_found: "Design artifact not found for this project.",
   design_budget_blocked: "Provider spend blocked by budget policy.",
@@ -180,6 +180,35 @@ export function DesignPage({ projectId }: DesignPageProps) {
             >
               Re-derive input snapshot
             </button>
+            {(() => {
+              const data = workspace.latestInputSnapshot?.data as {
+                contentRefs?: Array<{ slug: string }>;
+                assetRefs?: Array<{ pageSlug: string; role: string }>;
+                representativePages?: Array<{ archetype: string; slug: string }>;
+              } | null;
+              if (!data) return null;
+              return (
+                <div className="space-y-1 text-xs text-gray-600">
+                  {data.representativePages && data.representativePages.length > 0 && (
+                    <div>
+                      Representative pages:{" "}
+                      {data.representativePages.map((r) => `${r.archetype} → ${r.slug}`).join(", ")}
+                    </div>
+                  )}
+                  {data.contentRefs && data.contentRefs.length > 0 && (
+                    <div>
+                      Accepted content: {data.contentRefs.map((c) => c.slug).join(", ")}
+                    </div>
+                  )}
+                  {data.assetRefs && data.assetRefs.length > 0 && (
+                    <div>
+                      Approved asset assignments:{" "}
+                      {data.assetRefs.map((a) => `${a.pageSlug} / ${a.role}`).join(", ")}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         ) : (
           <div className="space-y-2">
@@ -225,6 +254,20 @@ export function DesignPage({ projectId }: DesignPageProps) {
               <StateBadge state={latestCandidate.approvalState} />
               <StalenessBadge stale={latestCandidate.stale} reason={latestCandidate.staleReason} />
               <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs">{shortDigest(latestCandidate.candidateDigest)}</code>
+              <span
+                className={
+                  latestCandidate.providerMode === "fixture"
+                    ? "rounded bg-amber-100 px-1.5 py-0.5 text-xs font-semibold text-amber-800"
+                    : "rounded bg-green-100 px-1.5 py-0.5 text-xs font-semibold text-green-800"
+                }
+                title={
+                  latestCandidate.providerMode === "fixture"
+                    ? "Deterministic fixture candidate — NOT live Google Stitch evidence"
+                    : "Live Google Stitch provider execution"
+                }
+              >
+                {latestCandidate.providerMode === "fixture" ? "FIXTURE" : "LIVE"}
+              </span>
               <span className="text-xs text-gray-500">provider: {latestCandidate.providerProjectName}</span>
             </div>
             <div className="text-xs text-gray-500">
@@ -305,7 +348,9 @@ export function DesignPage({ projectId }: DesignPageProps) {
               DESIGN.md
             </a>
             <span className="text-gray-500">
-              provider lineage: {latestCandidate.provider} · {latestCandidate.providerProjectName}
+              provider lineage: {latestCandidate.provider} ·{" "}
+              {latestCandidate.providerMode === "fixture" ? "FIXTURE (not live Stitch evidence)" : "LIVE"} ·{" "}
+              {latestCandidate.providerProjectName}
               {latestCandidate.data.providerSessionId ? ` · session ${latestCandidate.data.providerSessionId}` : ""}
             </span>
           </div>
@@ -362,6 +407,20 @@ export function DesignPage({ projectId }: DesignPageProps) {
           <div className="space-y-1 text-sm text-gray-700">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-medium">v{workspace.accepted.version}</span>
+              <span
+                className={
+                  workspace.accepted.providerMode === "fixture"
+                    ? "rounded bg-amber-100 px-1.5 py-0.5 text-xs font-semibold text-amber-800"
+                    : "rounded bg-green-100 px-1.5 py-0.5 text-xs font-semibold text-green-800"
+                }
+                title={
+                  workspace.accepted.providerMode === "fixture"
+                    ? "Accepted from a deterministic fixture candidate — NOT live Google Stitch evidence"
+                    : "Accepted from live Google Stitch provider evidence"
+                }
+              >
+                {workspace.accepted.providerMode === "fixture" ? "FIXTURE" : "LIVE"}
+              </span>
               <StalenessBadge stale={workspace.accepted.stale} reason={workspace.accepted.staleReason} />
               <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs">
                 {shortDigest(workspace.accepted.candidateDigest)}

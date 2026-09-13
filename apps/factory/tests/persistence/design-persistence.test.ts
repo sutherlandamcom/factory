@@ -39,10 +39,17 @@ function candidateData(): DesignCandidateData {
   return parseDesignCandidateData({
     schemaVersion: "design-v1",
     provider: "google-stitch",
+    providerMode: "fixture",
     providerProjectName: "projects/fixture",
     designMdDigest: "d".repeat(64),
-    designMdToolVersion: "@google/design.md 0.4.0",
+    designMdToolVersion: "factory-design-md-lint-v1",
     designMdLint: { errors: 0, warnings: 0, infos: 0 },
+    designSeed: {
+      colors: { primary: "#1A2E35" },
+      typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans" },
+      rationale: "Seed rationale",
+    },
+    providerEvidence: {},
     tokens: {
       colors: { primary: "#1A2E35" },
       typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans" },
@@ -65,7 +72,18 @@ function candidateData(): DesignCandidateData {
         providerScreenNames: ["projects/fixture/screens/abc"],
         sectionPatterns: ["hero", "evidence", "cta"],
         contentRequirements: ["Primary CTA visible"],
-        assetSlots: [{ slot: "hero.primary", requirement: "Hero placeholder", placeholder: true }],
+        assetSlots: [
+          {
+            slot: "hero.primary",
+            requirement: "Hero placeholder",
+            pageSlug: "home",
+            role: "hero",
+            requiredRole: "hero",
+            providerConsumed: false,
+            placeholder: true,
+            unresolvedReason: "No approved asset assignment for home/hero.",
+          },
+        ],
         primaryCta: "Request assessment",
         secondaryCta: "",
         responsiveBehavior: "Mobile-first stack",
@@ -155,7 +173,7 @@ test("PG: candidate persists immutably and acceptance binds exact digest", async
         projectId: seed.projectId,
         candidateId: candidate.id,
         expectedCandidateDigest: "f".repeat(64),
-        reviewNotes: null,
+        reviewNotes: "fixture acceptance",
       }),
       (e: unknown) => isCode(e, "design_approval_failed"),
     );
@@ -164,7 +182,7 @@ test("PG: candidate persists immutably and acceptance binds exact digest", async
       projectId: seed.projectId,
       candidateId: candidate.id,
       expectedCandidateDigest: candidate.candidateDigest,
-      reviewNotes: "Approved in review",
+      reviewNotes: "fixture acceptance — approved in review",
     });
     assert.equal(accepted.version, 1);
     assert.equal(accepted.candidateDigest, candidate.candidateDigest);
@@ -176,7 +194,7 @@ test("PG: candidate persists immutably and acceptance binds exact digest", async
       projectId: seed.projectId,
       candidateId: candidate.id,
       expectedCandidateDigest: candidate.candidateDigest,
-      reviewNotes: null,
+      reviewNotes: "fixture acceptance — idempotent re-acceptance",
     });
     assert.equal(again.id, accepted.id);
 
@@ -219,7 +237,7 @@ test("PG: rejected candidate can never become accepted; cross-project access fai
         projectId: seedA.projectId,
         candidateId: candidate.id,
         expectedCandidateDigest: candidate.candidateDigest,
-        reviewNotes: null,
+        reviewNotes: "fixture acceptance",
       }),
       (e: unknown) => isCode(e, "design_approval_failed"),
     );
@@ -230,7 +248,7 @@ test("PG: rejected candidate can never become accepted; cross-project access fai
         projectId: seedB.projectId,
         candidateId: candidate.id,
         expectedCandidateDigest: candidate.candidateDigest,
-        reviewNotes: null,
+        reviewNotes: "fixture acceptance",
       }),
       (e: unknown) => isCode(e, "design_not_found"),
     );
@@ -269,7 +287,7 @@ test("PG: stale candidate acceptance is rejected when upstream inputs moved", as
         projectId: seed.projectId,
         candidateId: candidate.id,
         expectedCandidateDigest: candidate.candidateDigest,
-        reviewNotes: null,
+        reviewNotes: "fixture acceptance",
       }),
       (e: unknown) => isCode(e, "design_input_stale"),
     );
@@ -293,7 +311,7 @@ test("PG: accepted design staleness tracks upstream content mutation; restart du
       projectId: seed.projectId,
       candidateId: candidate.id,
       expectedCandidateDigest: candidate.candidateDigest,
-      reviewNotes: null,
+      reviewNotes: "fixture acceptance",
     });
     const latest1 = await designStore.latestAcceptedDesign(seed.projectId);
     assert.ok(latest1);
@@ -338,7 +356,7 @@ test("PG: accepted design version allocation increments per project", async () =
       projectId: seed.projectId,
       candidateId: c1.id,
       expectedCandidateDigest: c1.candidateDigest,
-      reviewNotes: null,
+      reviewNotes: "fixture acceptance",
     });
     assert.equal(a1.version, 1);
     // New candidate (different rationale) after a NEW input snapshot version.
@@ -357,7 +375,7 @@ test("PG: accepted design version allocation increments per project", async () =
       projectId: seed.projectId,
       candidateId: c2.id,
       expectedCandidateDigest: c2.candidateDigest,
-      reviewNotes: null,
+      reviewNotes: "fixture acceptance",
     });
     assert.equal(a2.version, 2);
     const all = await designStore.listAcceptedDesigns(seed.projectId);

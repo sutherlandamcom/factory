@@ -58,7 +58,29 @@ export const designArchetypeKindSchema = z.enum([
 ]);
 export type DesignArchetypeKind = z.infer<typeof designArchetypeKindSchema>;
 
-/** Explicit unresolved design slots for assets Run 7 will resolve. */
+/**
+ * Explicit representative-page binding: which accepted page stands in for
+ * each design archetype. Copy routing is page-exact — an archetype prompt
+ * receives ONLY its representative page's accepted copy, never the whole
+ * project content set.
+ */
+export const designRepresentativePageSchema = z
+  .object({
+    archetype: designArchetypeKindSchema,
+    /** AcceptedPageContent slug bound as this archetype's representative. */
+    slug: z.string().trim().min(1).max(120),
+    /** Exact contentDigest of the bound page at snapshot time. */
+    contentDigest: designDigestSchema,
+  })
+  .strict();
+export type DesignRepresentativePage = z.infer<typeof designRepresentativePageSchema>;
+
+/**
+ * One design asset slot with exact page/role lineage. Asset resolution is
+ * NEVER project-global: a slot binds (pageSlug, role) — an unrelated
+ * homepage hero cannot satisfy a service supporting slot without an
+ * explicit authoritative assignment for that exact page+role.
+ */
 export const designAssetSlotSchema = z
   .object({
     /** Slot identity, e.g. "hero.primary", "location.gallery", "author.portrait". */
@@ -70,19 +92,38 @@ export const designAssetSlotSchema = z
       .regex(/^[a-z0-9][a-z0-9.-]*$/, "slot must be lowercase dotted identity"),
     /** What the slot is for (human-readable requirement). */
     requirement: boundedText(500),
-    /** Bound approved asset version when one already exists (Run 5). */
+    /** The representative page this slot belongs to (exact lineage). */
+    pageSlug: z.string().trim().min(1).max(120),
+    /** The asset role this slot requires on that page (e.g. "hero"). */
+    role: z.string().trim().min(1).max(60),
+    /** Required asset kind/role type for the slot. */
+    requiredRole: z.enum(["hero", "background", "inline", "chart", "illustration", "logo", "supporting"]),
+    /** Bound approved asset version when one exists (exact page+role assignment). */
     boundAssetVersionId: z
       .string()
       .trim()
       .max(128)
       .regex(/^asv-[0-9a-f-]{36}$/)
       .optional(),
-    /** Exact digest of the bound version (bind-time copy, staleness anchor). */
+    /** Exact binary digest of the bound version (bind-time copy). */
     boundBinaryDigest: designDigestSchema.optional(),
-    /** Placeholder handling until Run 7 resolves the slot. */
+    /** Exact governance digest of the bound version (bind-time copy). */
+    boundGovernanceDigest: designDigestSchema.optional(),
+    /**
+     * TRUE only when the provider actually received/consumed the real asset.
+     * A slot may be bound (Factory knows the asset) without being consumed
+     * (the provider never saw it) — these states are never conflated.
+     */
+    providerConsumed: z.boolean(),
+    /** Placeholder handling until the slot is resolved by the provider. */
     placeholder: z.literal(true),
+    /** Why the slot is unresolved, when it is (typed, bounded reason). */
+    unresolvedReason: z.string().trim().max(300).optional(),
   })
-  .strict();
+  .strict()
+  .refine((slot) => slot.providerConsumed === false || (slot.boundAssetVersionId !== undefined && slot.boundBinaryDigest !== undefined), {
+    message: "providerConsumed=true requires a bound asset version and binary digest",
+  });
 export type DesignAssetSlot = z.infer<typeof designAssetSlotSchema>;
 
 /**
@@ -196,6 +237,14 @@ export const designInputSnapshotDataSchema = z
     contentRefs: z.array(designUpstreamContentRefSchema).max(50),
     /** Approved asset versions bound at snapshot time (Run 5 authority). */
     assetRefs: z.array(designUpstreamAssetRefSchema).max(100),
+    /**
+     * Explicit representative-page routing: each archetype binds exactly one
+     * accepted page. Generation prompts receive only the representative
+     * page's copy (page-exact authority routing). MAY be empty when the
+     * project has no accepted page content yet — generation then runs with
+     * structural slots only and no accepted copy is sent to the provider.
+     */
+    representativePages: z.array(designRepresentativePageSchema).max(5),
     /** Archetypes this generation must produce. */
     archetypes: z.array(designArchetypeKindSchema).min(1).max(5),
   })
@@ -280,11 +329,22 @@ export const designCandidateDataSchema = z
     schemaVersion: z.literal(DESIGN_SCHEMA_VERSION),
     /** Provider identity. Run 6 implements exactly one provider. */
     provider: z.literal("google-stitch"),
+    /**
+     * Evidence mode: live provider execution vs deterministic fixture.
+     * Durable and machine-checkable — a fixture candidate can NEVER
+     * masquerade as live Stitch output (this field is persisted with the
+     * candidate and survives restarts).
+     */
+    providerMode: z.enum(["live", "fixture"]),
     providerProjectName: z.string().trim().min(1).max(300),
     providerDesignSystemAsset: optionalBoundedText(300),
     /** DESIGN.md artifact digest (content-addressed raw artifact). */
     designMdDigest: designDigestSchema,
-    /** DESIGN.md parser/tool version used for validation (§12 versioning rule). */
+    /**
+     * The EXACT validator/tool identity that actually ran on the DESIGN.md
+     * artifact. Never claim official Google tooling unless that exact
+     * tool/version executed for the recorded evidence.
+     */
     designMdToolVersion: z.string().trim().min(1).max(100),
     /** Lint summary (errors/warnings/infos counts; findings stored raw). */
     designMdLint: z
@@ -292,6 +352,31 @@ export const designCandidateDataSchema = z
         errors: z.number().int().min(0),
         warnings: z.number().int().min(0),
         infos: z.number().int().min(0),
+      })
+      .strict(),
+    /**
+     * The Factory/operator-approved design seed (generation constraints).
+     * Recorded separately from provider output so the seed is never
+     * misrepresented as provider-derived design authority.
+     */
+    designSeed: z
+      .object({
+        colors: designTokenColorsSchema,
+        typography: designTokenTypographySchema,
+        rationale: optionalBoundedText(2000),
+      })
+      .strict(),
+    /**
+     * Provider design evidence: what the provider actually returned/derived.
+     * Empty/absent fields mean the provider did not return that evidence —
+     * never backfill from the seed.
+     */
+    providerEvidence: z
+      .object({
+        /** Provider design-system asset reference when the provider created one. */
+        designSystemAsset: optionalBoundedText(300),
+        /** Raw provider design data when the provider returned structured design output. */
+        rawDesignData: z.record(z.string().trim().max(100), z.unknown()).optional(),
       })
       .strict(),
     tokens: designSystemTokensSchema,
@@ -342,19 +427,33 @@ export interface DesignGenerationRequest {
   inputSnapshotId: string;
   projectId: string;
   /**
-   * Full accepted copy bodies for the bound content refs (resolved by the
-   * trusted service layer from AcceptedPageContent). The provider prompt
-   * embeds this copy verbatim with a strict no-rewrite instruction. Absent
-   * bodies (empty strings) are presented as structural slots only.
+   * Page-exact accepted copy routing: for each archetype, ONLY the
+   * representative page's accepted copy (resolved by the trusted service
+   * layer from AcceptedPageContent, digest-verified). The provider prompt
+   * for an archetype embeds exactly this page's copy verbatim with a strict
+   * no-rewrite instruction — never the whole project content set.
    */
-  acceptedCopy: Array<{
-    slug: string;
-    title: string;
-    introduction: string;
-    sections: Array<{ heading: string; body: string }>;
-    conclusion: string;
-    cta: string;
-  }>;
+  acceptedCopyByArchetype: Partial<Record<DesignArchetypeKind, DesignGenerationAcceptedPage>>;
+  /**
+   * The Factory/operator design seed (approved generation constraints).
+   * Recorded as seed authority; provider output is evidence, never the
+   * seed itself.
+   */
+  designSeed: {
+    colors: DesignTokenColors;
+    typography: DesignTokenTypography;
+    rationale: string;
+  };
+}
+
+/** One representative page's full accepted copy body. */
+export interface DesignGenerationAcceptedPage {
+  slug: string;
+  title: string;
+  introduction: string;
+  sections: Array<{ heading: string; body: string }>;
+  conclusion: string;
+  cta: string;
 }
 
 export interface DesignGenerationResult {

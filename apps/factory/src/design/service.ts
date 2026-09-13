@@ -41,6 +41,7 @@ export interface DesignInputSnapshotView {
 export interface DesignCandidateView {
   id: string;
   provider: string;
+  providerMode: string;
   providerProjectName: string;
   inputSnapshotId: string;
   inputSnapshotVersion: number;
@@ -63,6 +64,7 @@ export interface AcceptedDesignView {
   inputSnapshotVersion: number;
   inputDigest: string;
   provider: string;
+  providerMode: string;
   providerProjectName: string;
   designMdDigest: string;
   data: DesignCandidateData;
@@ -88,6 +90,28 @@ export interface DesignServiceDeps {
   repoRoot?: string;
   storage?: DesignArtifactStorage;
 }
+
+/**
+ * The Factory design seed (operator-approved generation constraints). The
+ * seed is INPUT to provider generation — it is recorded on candidates as
+ * designSeed and is never presented as provider-derived design authority.
+ * Provider output/evidence lives in providerEvidence separately.
+ */
+export const FACTORY_DESIGN_SEED = {
+  colors: {
+    primary: "#1A2E35",
+    secondary: "#4A5A62",
+    accent: "#B8422E",
+    neutral: "#F7F5F2",
+  },
+  typography: {
+    headingFont: "Source Serif 4",
+    bodyFont: "Public Sans",
+    scaleNotes: "display 3rem/1.2, h2 2rem/1.3, h3 1.5rem/1.4, body 1rem/1.6, label 0.75rem caps",
+  },
+  rationale:
+    "Institutional advisory identity: deep ink primary, warm limestone neutral, single terracotta interaction accent. Serif headlines convey research authority; humanist sans body preserves readability.",
+} as const;
 
 export class DesignService {
   private readonly store: DesignStore;
@@ -175,11 +199,13 @@ export class DesignService {
       );
     }
 
+    const snapshotData = snapshot.data as DesignInputSnapshotData;
     const result: DesignGenerationResult = await this.provider.generateDesignSystem({
-      inputSnapshot: snapshot.data as DesignInputSnapshotData,
+      inputSnapshot: snapshotData,
       inputSnapshotId: snapshot.id,
       projectId: input.projectId,
-      acceptedCopy: await this.resolveAcceptedCopy(input.projectId, snapshot.data as DesignInputSnapshotData),
+      acceptedCopyByArchetype: await this.resolveAcceptedCopyByArchetype(input.projectId, snapshotData),
+      designSeed: FACTORY_DESIGN_SEED,
     });
 
     // DESIGN.md lint: structural validation of the artifact payload BEFORE
@@ -209,8 +235,7 @@ export class DesignService {
     for (const artifact of result.rawArtifacts) {
       const digest = await this.storage.putArtifact(artifact.kind, artifact.bytes);
       storedByRef.set(`${artifact.kind}:${artifact.providerRef ?? ""}`, digest);
-    }
-    const storedDesignMdDigest = storedByRef.get("design_md:");
+    }    const storedDesignMdDigest = storedByRef.get("design_md:");
     if (storedDesignMdDigest !== result.candidate.designMdDigest) {
       throw new FactoryError(
         "design_provider_output_invalid",
@@ -248,24 +273,40 @@ export class DesignService {
       inputSnapshot: snapshot,
       data: candidateData,
     });
+
+    // Durable artifact-reference manifest: every raw artifact digest is
+    // bound to the owning project/candidate. This is the authorization
+    // basis for project-scoped artifact reads (§21/§22).
+    await this.store.recordArtifactRefs({
+      projectId: input.projectId,
+      candidateId: candidate.id,
+      artifacts: await Promise.all(
+        result.rawArtifacts.map(async (artifact) => ({
+          kind: artifact.kind,
+          digest: await this.storage.putArtifact(artifact.kind, artifact.bytes).then((d) => d),
+        })),
+      ),
+    });
     return this.toCandidateView(candidate);
   }
 
   /**
-   * Resolve full accepted copy bodies for the input snapshot's content refs
-   * from AcceptedPageContent (copy authority). The digest of each row is
-   * re-verified against the snapshot binding before inclusion — a mutated
-   * row never silently enters a generation prompt.
+   * Resolve page-exact accepted copy routing: for each archetype in the
+   * snapshot's representativePages binding, ONLY that representative page's
+   * accepted copy body is resolved from AcceptedPageContent (copy
+   * authority). Each row's digest is re-verified against the snapshot
+   * binding before inclusion — a mutated row never silently enters a
+   * generation prompt, and an archetype never receives another page's copy.
    */
-  private async resolveAcceptedCopy(
+  private async resolveAcceptedCopyByArchetype(
     projectId: string,
     snapshotData: DesignInputSnapshotData,
-  ): Promise<DesignGenerationRequest["acceptedCopy"]> {
+  ): Promise<DesignGenerationRequest["acceptedCopyByArchetype"]> {
     const rows = await this.store.getAcceptedContentForProject(projectId);
     const byDigest = new Map(rows.filter((r) => r.contentDigest).map((r) => [r.contentDigest, r]));
-    const copy: DesignGenerationRequest["acceptedCopy"] = [];
-    for (const ref of snapshotData.contentRefs) {
-      const row = byDigest.get(ref.contentDigest);
+    const byArchetype: DesignGenerationRequest["acceptedCopyByArchetype"] = {};
+    for (const representative of snapshotData.representativePages) {
+      const row = byDigest.get(representative.contentDigest);
       if (!row) continue; // digest no longer matches current authority; skip
       const data = row.data as {
         title?: string;
@@ -274,16 +315,16 @@ export class DesignService {
         conclusion?: string;
         cta?: string;
       };
-      copy.push({
-        slug: ref.slug,
-        title: data.title ?? ref.slug,
+      byArchetype[representative.archetype] = {
+        slug: representative.slug,
+        title: data.title ?? representative.slug,
         introduction: data.introduction ?? "",
         sections: data.sections ?? [],
         conclusion: data.conclusion ?? "",
         cta: data.cta ?? "",
-      });
+      };
     }
-    return copy;
+    return byArchetype;
   }
 
   // ---- Review ---------------------------------------------------------------------
@@ -359,8 +400,14 @@ export class DesignService {
     };
   }
 
-  /** Read a raw artifact by digest (preview serving; HTML is served sandboxed). */
-  async readArtifact(digest: string): Promise<{ bytes: Uint8Array; mediaType: string } | null> {
+  /** Read a raw artifact by digest WITH project authorization (preview serving). */
+  async readArtifact(projectId: string, digest: string): Promise<{ bytes: Uint8Array; mediaType: string } | null> {
+    // Authorization is project-scoped: the requested project must reference
+    // the digest through one of its design candidates or accepted designs.
+    // A 256-bit digest is NOT an authorization mechanism — cross-project
+    // requests fail closed even though the CAS is globally deduplicated.
+    const authorized = await this.store.projectReferencesArtifact(projectId, digest);
+    if (!authorized) return null;
     return await this.storage.getArtifactByDigest(digest);
   }
 
@@ -393,6 +440,7 @@ export class DesignService {
     return {
       id: row.id,
       provider: row.provider,
+      providerMode: parseDesignCandidateData(row.data).providerMode,
       providerProjectName: row.providerProjectName,
       inputSnapshotId: row.inputSnapshotId,
       inputSnapshotVersion: row.inputSnapshotVersion,
@@ -420,6 +468,7 @@ export class DesignService {
       inputSnapshotVersion: row.inputSnapshotVersion,
       inputDigest: row.inputDigest,
       provider: row.provider,
+      providerMode: parseDesignCandidateData(row.data).providerMode,
       providerProjectName: row.providerProjectName,
       designMdDigest: row.designMdDigest,
       data: parseDesignCandidateData(row.data),

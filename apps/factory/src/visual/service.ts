@@ -215,10 +215,20 @@ export class VisualService {
       throw new FactoryError("visual_design_not_eligible", "No accepted design artifact exists for this project; accept a design first.");
     }
     if (latest.staleness.stale) {
-      throw new FactoryError(
-        "visual_design_not_eligible",
-        `The accepted design is stale versus current upstream authority: ${latest.staleness.reason} Re-derive and re-accept the design first.`,
-      );
+      // The "new asset assignments exist" staleness path is the DESIGNED
+      // Run 7 cascade: resolving visual slots adds assignments, which makes
+      // the accepted design stale so the final design pass can re-bind the
+      // resolved assets. Blocking plan derivation on that specific reason
+      // would make slot resolution impossible after the first slot is
+      // accepted. Every other staleness reason (inputs/content changed,
+      // assignment removed/replaced) still fails closed.
+      const reason = latest.staleness.reason ?? "";
+      if (!/^New asset assignments exist/.test(reason)) {
+        throw new FactoryError(
+          "visual_design_not_eligible",
+          `The accepted design is stale versus current upstream authority: ${reason} Re-derive and re-accept the design first.`,
+        );
+      }
     }
     const designData = latest.artifact.data as DesignCandidateData;
     if (designData.providerMode === "fixture" && this.provider.providerMode === "live") {

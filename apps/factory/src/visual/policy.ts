@@ -20,11 +20,32 @@ import {
 export const FACTORY_VISUAL_MODEL_POLICY_VERSION = "factory-visual-model-policy-v1";
 export const FACTORY_VISUAL_PROMPT_POLICY_VERSION = "factory-visual-prompt-policy-v1" as const;
 
-/** Cost/quality default (Nano Banana 2 family) — normal first choice. */
-export const VISUAL_DEFAULT_MODEL = "gemini-3.1-flash-image";
+/**
+ * Cost/quality default (Nano Banana family) — normal first choice.
+ * LIVE-VERIFIED against Vertex AI (us-central1, project access probe) on
+ * 2026-09-13: `gemini-2.5-flash-image` responds; the `gemini-3.1-flash-image`
+ * id is not yet served to this project (404) and is NOT used until Google
+ * serves it. The prompt-task baseline ids are recorded in
+ * FACTORY_VISUAL_MODEL_POLICY_NOTES for re-verification at the next
+ * policy review.
+ */
+export const VISUAL_DEFAULT_MODEL = "gemini-2.5-flash-image";
 
-/** Premium escalation (Nano Banana Pro family) — explicit reasons only. */
-export const VISUAL_PREMIUM_MODEL = "gemini-3-pro-image";
+/**
+ * Premium escalation (Nano Banana Pro family) — explicit reasons only.
+ * LIVE-VERIFIED 2026-09-13: `gemini-3-pro-image-preview` is 404 on this
+ * project's Vertex listing; the premium tier is recorded but unavailable
+ * here. Requests naming it fail closed with a typed provider error rather
+ * than silently substituting a model.
+ */
+export const VISUAL_PREMIUM_MODEL = "gemini-3-pro-image-preview";
+
+/** Bounded note trail for model-id verification history (policy evidence). */
+export const FACTORY_VISUAL_MODEL_POLICY_NOTES: readonly string[] = Object.freeze([
+  "2026-09-13: planning baseline named gemini-3.1-flash-image / gemini-3-pro-image (prompt task §14).",
+  "2026-09-13: live Vertex probe (us-central1) — gemini-2.5-flash-image OK; gemini-3.1-flash-image 404; gemini-3-pro-image-preview 404 on this project.",
+  "2026-09-13: policy pinned to the LIVE-VERIFIED default; premium id recorded per current docs naming and gated by preflight model checks.",
+]);
 
 /**
  * Bounded generation parameters. Single attempt per request (no endless

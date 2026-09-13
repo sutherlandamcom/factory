@@ -642,7 +642,7 @@ test("unit: request digest is stable and input-sensitive; set digest is slot-ord
     sourceAssets: [{ versionId: "asv-1", binaryDigest: "c".repeat(64), governanceDigest: "d".repeat(64) }],
     provider: "google-genai",
     providerMode: "fixture",
-    model: "gemini-3.1-flash-image",
+    model: "gemini-2.5-flash-image",
     operation: "generate",
     targetAspectRatio: "16:9",
     targetSize: "1K",
@@ -652,7 +652,7 @@ test("unit: request digest is stable and input-sensitive; set digest is slot-ord
   const d2 = visualRequestDigest({ ...base });
   assert.equal(d1, d2);
   // A changed input changes the digest.
-  assert.notEqual(d1, visualRequestDigest({ ...base, model: "gemini-3-pro-image" }));
+  assert.notEqual(d1, visualRequestDigest({ ...base, model: "gemini-3-pro-image-preview" }));
   assert.notEqual(d1, visualRequestDigest({ ...base, escalationReason: "brand_consistency" }));
   // Source order does not matter (sorted internally).
   const reordered = visualRequestDigest({

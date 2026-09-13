@@ -181,6 +181,8 @@ export const designUpstreamAssetRefSchema = z
       .max(128)
       .regex(/^asv-[0-9a-f-]{36}$/),
     binaryDigest: designDigestSchema,
+    /** Exact accepted Run 5 rights/provenance authority; never the bytes digest. */
+    governanceDigest: designDigestSchema,
     pageSlug: z.string().trim().min(1).max(120),
     role: z.string().trim().min(1).max(60),
   })

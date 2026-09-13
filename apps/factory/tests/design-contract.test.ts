@@ -9,7 +9,7 @@ import {
 } from "@factory/contracts";
 import { deterministicDigest } from "../src/intelligence/digest.js";
 import { lintDesignMd, diffDesignMdTokens } from "../src/design/design-md.js";
-import { buildDesignMd, buildArchetypePrompt, mapFontToStitchEnum, DESIGN_MD_TOOL_VERSION } from "../src/design/stitch-provider.js";
+import { archetypeFor, buildDesignMd, buildArchetypePrompt, mapFontToStitchEnum, DESIGN_MD_TOOL_VERSION } from "../src/design/stitch-provider.js";
 import { createDesignArtifactStorage, sha256HexBytes } from "../src/design/artifact-storage.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -58,6 +58,7 @@ function validInputSnapshotData(): DesignInputSnapshotData {
       {
         versionId: "asv-11111111-1111-4111-8111-111111111111",
         binaryDigest: "c".repeat(64),
+        governanceDigest: "e".repeat(64),
         pageSlug: "roof-repair",
         role: "hero",
       },
@@ -393,6 +394,7 @@ test("asset slot lineage: homepage hero binds ONLY homepage+hero; service slot c
       {
         versionId: "asv-11111111-1111-4111-8111-111111111111",
         binaryDigest: "c".repeat(64),
+        governanceDigest: "e".repeat(64),
         pageSlug: "home",
         role: "hero",
       },
@@ -542,5 +544,59 @@ test("provider evidence: fixture and live provider identities cannot be confused
 test("DESIGN.md tool identity: candidates record the Factory validator, never unexecuted Google tooling", () => {
   // The contract accepts any bounded string, but the shipped providers MUST
   // record the truthful identity. Verify the exported constant.
-  assert.equal(DESIGN_MD_TOOL_VERSION, "factory-design-md-lint-v1");
+  assert.equal(DESIGN_MD_TOOL_VERSION, "@google/design.md@0.4.0+factory-design-requirements-v1");
+});
+
+
+test("actual archetype construction: exact page/role asset lineage matrix", () => {
+  const base = validInputSnapshotData();
+  base.representativePages = [
+    { archetype: "homepage", slug: "home", contentDigest: "a".repeat(64) },
+    { archetype: "service", slug: "services/foo", contentDigest: "b".repeat(64) },
+    { archetype: "location", slug: "locations/chamonix", contentDigest: "c".repeat(64) },
+  ];
+  const ref = (pageSlug: string, role: string, n = "1") => ({
+    versionId: `asv-${n.repeat(8)}-${n.repeat(4)}-4${n.repeat(3)}-8${n.repeat(3)}-${n.repeat(12)}`,
+    binaryDigest: n.repeat(64), governanceDigest: "e".repeat(64), pageSlug, role,
+  });
+  const cases = [
+    { label: "exact service", kind: "service", refs: [ref("services/foo", "supporting")], binds: true },
+    { label: "same page wrong role", kind: "service", refs: [ref("services/foo", "hero")], binds: false },
+    { label: "right role wrong page", kind: "service", refs: [ref("home", "supporting")], binds: false },
+    { label: "another service", kind: "service", refs: [ref("services/bar", "supporting")], binds: false },
+    { label: "multiple choices", kind: "service", refs: [ref("home", "supporting", "2"), ref("services/foo", "hero", "3"), ref("services/foo", "supporting")], binds: true },
+    { label: "location wrong role", kind: "location", refs: [ref("locations/chamonix", "hero")], binds: false },
+    { label: "location exact", kind: "location", refs: [ref("locations/chamonix", "background")], binds: true },
+    { label: "no assignment", kind: "service", refs: [], binds: false },
+  ] as const;
+  for (const c of cases) {
+    const slot = archetypeFor(c.kind, { ...base, assetRefs: [...c.refs] }).assetSlots[0]!;
+    assert.equal(Boolean(slot.boundAssetVersionId), c.binds, c.label);
+    assert.equal(slot.providerConsumed, false, c.label);
+    assert.equal(slot.placeholder, true, c.label);
+    assert.ok(slot.unresolvedReason, c.label);
+    if (c.binds) {
+      assert.equal(slot.boundBinaryDigest, "1".repeat(64), c.label);
+      assert.equal(slot.boundGovernanceDigest, "e".repeat(64), c.label);
+      assert.notEqual(slot.boundBinaryDigest, slot.boundGovernanceDigest);
+    } else {
+      assert.equal(slot.boundBinaryDigest, undefined, c.label);
+      assert.equal(slot.boundGovernanceDigest, undefined, c.label);
+    }
+  }
+  const missingRepresentative = archetypeFor("service", {
+    ...base, representativePages: base.representativePages.filter((r) => r.archetype !== "service"),
+    assetRefs: [ref("home", "supporting")],
+  }).assetSlots[0]!;
+  assert.equal(missingRepresentative.boundAssetVersionId, undefined);
+  assert.notEqual(missingRepresentative.pageSlug, "home");
+});
+
+test("DESIGN.md: official lint runs deterministically and Factory requires resolved authority", () => {
+  const md = buildDesignMd({ colors: { primary: "#1A2E35", secondary: "#4A5A62", accent: "#B8422E", neutral: "#F7F5F2" }, typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans" }, rationale: "Test." });
+  assert.deepEqual(lintDesignMd(md), lintDesignMd(md));
+  assert.ok(lintDesignMd(md).findings.some((f) => f.rule === "token-summary"), "official rule actually executed");
+  for (const invalid of ["---\nname: [\n---\n", "---\nname: Missing color\n---\n", "---\ncolors:\n  primary: '#123456'\n---\n", "---\nname: Unresolved\ncolors:\n  primary: '{colors.missing}'\n---\n"]) {
+    assert.ok(lintDesignMd(invalid).errors > 0);
+  }
 });

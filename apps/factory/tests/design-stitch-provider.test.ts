@@ -242,7 +242,7 @@ test("generation: happy path creates project, design system, and one screen per 
   // Candidate validates against the contract and binds lineage.
   assert.equal(result.candidate.provider, "google-stitch");
   assert.equal(result.candidate.providerMode, "live");
-  assert.equal(result.candidate.designMdToolVersion, "factory-design-md-lint-v1");
+  assert.equal(result.candidate.designMdToolVersion, "@google/design.md@0.4.0+factory-design-requirements-v1");
   assert.equal(result.candidate.providerProjectName, "projects/123");
   // Desktop + mobile homepage screens + service desktop screen.
   assert.equal(result.candidate.screens.length, 3);

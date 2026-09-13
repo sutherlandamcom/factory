@@ -1,3 +1,4 @@
+import { lintDesignMd, DESIGN_MD_TOOL_VERSION } from "./design-md.js";
 import { Client } from "@modelcontextprotocol/client";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { createHash } from "node:crypto";
@@ -48,14 +49,7 @@ export const STITCH_ACCESS_TOKEN_ENV_ALT = "GOOGLE_OAUTH_ACCESS_TOKEN";
 
 export const STITCH_PROVIDER_ID = "google-stitch";
 
-/**
- * Truthful DESIGN.md validation identity: the DESIGN.md artifact is
- * validated by the Factory INTERNAL deterministic validator
- * (src/design/design-md.ts lintDesignMd), NOT by official Google
- * @google/design.md tooling. Never record an official-tool version unless
- * that exact tool actually executed for the recorded evidence.
- */
-export const DESIGN_MD_TOOL_VERSION = "factory-design-md-lint-v1";
+export { DESIGN_MD_TOOL_VERSION } from "./design-md.js";
 
 /** Minimum tool surface the adapter requires (official Stitch MCP tools). */
 const REQUIRED_STITCH_TOOLS = [
@@ -263,6 +257,7 @@ export function buildArchetypePrompt(input: {
       requiredRole: string;
       boundAssetVersionId?: string;
       boundBinaryDigest?: string;
+    boundGovernanceDigest?: string;
       providerConsumed: boolean;
       placeholder: boolean;
       unresolvedReason?: string;
@@ -539,6 +534,7 @@ export class StitchDesignProvider implements DesignProvider {
         },
         rationale: seed.rationale,
       });
+      const lint = lintDesignMd(designMd);
       const designMdDigest = sha256HexBytes(new TextEncoder().encode(designMd));
       rawArtifacts.push({
         kind: "design_md",
@@ -555,7 +551,7 @@ export class StitchDesignProvider implements DesignProvider {
         ...(dsAsset ? { providerDesignSystemAsset: dsAsset } : {}),
         designMdDigest,
         designMdToolVersion: DESIGN_MD_TOOL_VERSION,
-        designMdLint: { errors: 0, warnings: 0, infos: 0 },
+        designMdLint: { errors: lint.errors, warnings: lint.warnings, infos: lint.infos },
         designSeed: {
           colors: seed.colors,
           typography: seed.typography,
@@ -590,7 +586,7 @@ export class StitchDesignProvider implements DesignProvider {
         screens,
         archetypes,
         rationale:
-          "Site-level design system seeded from accepted brand facts, audience, references/anti-references and UX requirements. Token values are the Factory SEED the provider generation is guided by; provider-returned design evidence is recorded separately (providerEvidence). The DESIGN.md was validated by the Factory internal deterministic validator, not official Google tooling. Archetypes: " +
+          "Site-level design system seeded from accepted brand facts, audience, references/anti-references and UX requirements. Token values are the Factory SEED the provider generation is guided by; provider-returned design evidence is recorded separately (providerEvidence). The DESIGN.md was validated by pinned official @google/design.md tooling plus Factory accepted-artifact requirements. Archetypes: " +
           archetypes.map((a) => a.kind).join(", ") +
           ".",
         providerSessionId: lastSessionId ?? undefined,
@@ -913,6 +909,7 @@ interface ArchetypeTemplate {
     requiredRole: "hero" | "background" | "inline" | "chart" | "illustration" | "logo" | "supporting";
     boundAssetVersionId?: string;
     boundBinaryDigest?: string;
+    boundGovernanceDigest?: string;
     providerConsumed: boolean;
     placeholder: boolean;
     unresolvedReason?: string;
@@ -933,37 +930,28 @@ function resolveSlotAsset(
   input: DesignInputSnapshotData,
   pageSlug: string,
   role: string,
-): { versionId: string; binaryDigest: string } | null {
+): { versionId: string; binaryDigest: string; governanceDigest: string } | null {
   const ref = input.assetRefs.find((candidate) => candidate.pageSlug === pageSlug && candidate.role === role);
-  return ref ? { versionId: ref.versionId, binaryDigest: ref.binaryDigest } : null;
+  return ref ? { versionId: ref.versionId, binaryDigest: ref.binaryDigest, governanceDigest: ref.governanceDigest } : null;
 }
 
-function archetypeFor(
+export function archetypeFor(
   kind: DesignCandidateData["archetypes"][number]["kind"],
   input: DesignInputSnapshotData,
 ): ArchetypeTemplate {
-  // The homepage archetype's representative page (explicit routing). When
-  // no explicit binding exists for an archetype (e.g. the archetype was
-  // selected without a matching representative), the slot page falls back
-  // to the homepage representative — the slot ALWAYS records an explicit
-  // page identity, never an empty one.
-  const homepageRepresentative =
-    input.representativePages.find((r) => r.archetype === "homepage")?.slug ??
-    input.contentRefs[0]?.slug ??
-    "home";
-  const serviceRepresentative =
-    input.representativePages.find((r) => r.archetype === "service")?.slug ?? homepageRepresentative;
-  const locationRepresentative =
-    input.representativePages.find((r) => r.archetype === "location")?.slug ?? homepageRepresentative;
+  // Missing representative identity stays unresolved; never borrow a page.
+  const homepageRepresentative = input.representativePages.find((r) => r.archetype === "homepage")?.slug;
+  const serviceRepresentative = input.representativePages.find((r) => r.archetype === "service")?.slug;
+  const locationRepresentative = input.representativePages.find((r) => r.archetype === "location")?.slug;
 
   const homepageHero = homepageRepresentative
     ? resolveSlotAsset(input, homepageRepresentative, "hero")
     : null;
   const serviceSupporting = serviceRepresentative
-    ? resolveSlotAsset(input, serviceRepresentative, "supporting") ?? resolveSlotAsset(input, serviceRepresentative, "hero")
+    ? resolveSlotAsset(input, serviceRepresentative, "supporting")
     : null;
   const locationGallery = locationRepresentative
-    ? resolveSlotAsset(input, locationRepresentative, "background") ?? resolveSlotAsset(input, locationRepresentative, "hero")
+    ? resolveSlotAsset(input, locationRepresentative, "background")
     : null;
 
   const base = {
@@ -981,7 +969,7 @@ function archetypeFor(
     requirementWithout: string,
     pageSlug: string,
     role: ArchetypeTemplate["assetSlots"][number]["requiredRole"],
-    bound: { versionId: string; binaryDigest: string } | null,
+    bound: { versionId: string; binaryDigest: string; governanceDigest: string } | null,
     consumedByProvider: boolean,
   ): ArchetypeTemplate["assetSlots"][number] => {
     if (bound) {
@@ -993,6 +981,7 @@ function archetypeFor(
         requiredRole: role,
         boundAssetVersionId: bound.versionId,
         boundBinaryDigest: bound.binaryDigest,
+        boundGovernanceDigest: bound.governanceDigest,
         // Truthful consumption state: the LIVE Stitch adapter currently has
         // no verified mechanism to upload an approved local asset into the
         // generation. The slot records the exact bound version but
@@ -1033,7 +1022,7 @@ function archetypeFor(
             "hero.primary",
             "Approved hero photography for the homepage",
             "Neutral hero visual placeholder pending Run 7",
-            homepageRepresentative,
+            homepageRepresentative ?? "unresolved-homepage",
             "hero",
             homepageHero,
             false,
@@ -1055,7 +1044,7 @@ function archetypeFor(
             "service.supporting",
             "Approved supporting imagery for the representative service page",
             "Neutral supporting placeholder pending Run 7",
-            serviceRepresentative,
+            serviceRepresentative ?? "unresolved-service",
             "supporting",
             serviceSupporting,
             false,
@@ -1077,7 +1066,7 @@ function archetypeFor(
             "location.gallery",
             "Approved location photography for the representative location page",
             "Neutral location placeholder pending Run 7",
-            locationRepresentative,
+            locationRepresentative ?? "unresolved-location",
             "background",
             locationGallery,
             false,
@@ -1100,7 +1089,7 @@ function archetypeFor(
             "author.portrait",
             "Author portrait",
             "Author portrait placeholder pending operator asset",
-            homepageRepresentative,
+            input.representativePages.find((r) => r.archetype === kind)?.slug ?? `unresolved-${kind}`,
             "illustration",
             null,
             false,
@@ -1123,7 +1112,7 @@ function archetypeFor(
             "advisory.chart",
             "Chart/illustration",
             "Chart/illustration placeholder pending final data visualization",
-            homepageRepresentative,
+            input.representativePages.find((r) => r.archetype === kind)?.slug ?? `unresolved-${kind}`,
             "chart",
             null,
             false,

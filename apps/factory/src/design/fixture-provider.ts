@@ -1,3 +1,4 @@
+import { lintDesignMd } from "./design-md.js";
 import type {
   DesignCandidateData,
   DesignGenerationRequest,
@@ -40,6 +41,7 @@ export class FixtureDesignProvider implements DesignProvider {
       typography: { headingFont: seed.typography.headingFont, bodyFont: seed.typography.bodyFont },
       rationale: seed.rationale,
     });
+    const lint = lintDesignMd(designMd);
     const designMdDigest = await sha256Of(designMd);
 
     const screens: DesignCandidateData["screens"] = [];
@@ -93,6 +95,7 @@ export class FixtureDesignProvider implements DesignProvider {
             ? {
                 boundAssetVersionId: bound.versionId,
                 boundBinaryDigest: bound.binaryDigest,
+                boundGovernanceDigest: bound.governanceDigest,
                 unresolvedReason:
                   "Approved asset exists for this exact page/role; the fixture does not transmit bytes to any provider, so providerConsumed stays false.",
               }
@@ -123,7 +126,7 @@ export class FixtureDesignProvider implements DesignProvider {
       providerProjectName: "fixture/projects/e2e",
       designMdDigest,
       designMdToolVersion: DESIGN_MD_TOOL_VERSION,
-      designMdLint: { errors: 0, warnings: 0, infos: 0 },
+      designMdLint: { errors: lint.errors, warnings: lint.warnings, infos: lint.infos },
       designSeed: {
         colors: seed.colors,
         typography: seed.typography,

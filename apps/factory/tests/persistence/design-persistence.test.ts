@@ -384,3 +384,114 @@ test("PG: accepted design version allocation increments per project", async () =
     await dbInst.close();
   }
 });
+
+test("PG: Run 5 governance lineage survives candidate/acceptance, rejects forgery, and stales on replacement", async () => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  const { eq } = await import("drizzle-orm");
+  const { acceptedPageContent, assetPageAssignments } = await import("../../src/persistence/schema.js");
+  const { AssetStore } = await import("../../src/assets/asset-store.js");
+  const { AssetService } = await import("../../src/assets/service.js");
+  const { createAssetStorage } = await import("../../src/assets/storage.js");
+  const { DesignService } = await import("../../src/design/service.js");
+  const { FixtureDesignProvider } = await import("../../src/design/fixture-provider.js");
+  const sharp = (await import("sharp")).default;
+  const dbInst = await setupMigratedTestDatabase();
+  const root = await mkdtemp(path.join(tmpdir(), "design-lineage-"));
+  try {
+    const { projectId } = await seedProject(dbInst, "design-exact-lineage");
+    // Deliberately shared digest proves routing depends on page identity too.
+    for (const [index, slug] of ["home", "services/foo"].entries()) {
+      await dbInst.db.insert(acceptedPageContent).values({
+        id: `accepted-${index}`, projectId, version: index + 1, slug,
+        proposalId: `proposal-${index}`, proposalVersion: 1,
+        proposalDigest: "a".repeat(64), qaReportDigest: "b".repeat(64),
+        contentDigest: "c".repeat(64), data: { title: slug, introduction: `Copy for ${slug}`, sections: [], conclusion: "", cta: "Contact" },
+      });
+    }
+    const assets = new AssetService({ store: new AssetStore(dbInst.db), storage: createAssetStorage(root) });
+    async function upload(seed: number) {
+      const bytes = await sharp({ create: { width: 32, height: 32, channels: 3, background: { r: seed, g: 70, b: 90 } } }).jpeg().toBuffer();
+      const result = await assets.uploadAsset(projectId, { filename: "fixture.jpg", kind: "photo", title: "Synthetic test pixels", rightsStatus: "operator_owned", dataBase64: bytes.toString("base64") });
+      const approved = await assets.approveVersion(projectId, result.version.id, result.version.binaryDigest);
+      return { ...result, approved };
+    }
+    const first = await upload(30);
+    const assignment = await assets.assignVersion(projectId, {
+      assetId: first.asset.id, versionId: first.version.id, pageSlug: "services/foo", role: "supporting", expectedBinaryDigest: first.version.binaryDigest,
+    });
+    const store = new DesignStore(dbInst.db);
+    const snapshot = await store.deriveInputSnapshotDraft({ projectId });
+    const snapshotData = snapshot.data as import("@factory/contracts").DesignInputSnapshotData;
+    assert.equal(snapshotData.assetRefs[0]!.governanceDigest, first.approved.governanceDigest);
+    assert.equal(snapshotData.assetRefs[0]!.governanceDigest, assignment.versionDigest);
+    assert.equal(snapshotData.assetRefs[0]!.binaryDigest, first.version.binaryDigest);
+    assert.notEqual(snapshotData.assetRefs[0]!.binaryDigest, snapshotData.assetRefs[0]!.governanceDigest);
+    const fixture = new FixtureDesignProvider();
+    let corrupt = false;
+    let received: import("@factory/contracts").DesignGenerationRequest | undefined;
+    const service = await DesignService.create({ store, repoRoot: root, provider: {
+      id: fixture.id, preflight: () => fixture.preflight(),
+      async generateDesignSystem(request) {
+        received = request;
+        const result = await fixture.generateDesignSystem(request);
+        if (corrupt) result.candidate.archetypes.find((a) => a.kind === "service")!.assetSlots[0]!.boundGovernanceDigest = "f".repeat(64);
+        return result;
+      },
+    } });
+    const candidate = await service.generateCandidate({ projectId });
+    assert.equal(received!.acceptedCopyByArchetype.homepage!.introduction, "Copy for home");
+    assert.equal(received!.acceptedCopyByArchetype.service!.introduction, "Copy for services/foo");
+    const slot = candidate.data.archetypes.find((a) => a.kind === "service")!.assetSlots[0]!;
+    assert.equal(slot.boundGovernanceDigest, assignment.versionDigest);
+    assert.equal(slot.boundBinaryDigest, first.version.binaryDigest);
+    const forged = structuredClone(candidate.data);
+    forged.archetypes.find((a) => a.kind === "service")!.assetSlots[0]!.boundGovernanceDigest = "f".repeat(64);
+    assert.notEqual(deterministicDigest(forged), candidate.candidateDigest);
+    const countBefore = (await store.listCandidates(projectId)).length;
+    corrupt = true;
+    await assert.rejects(service.generateCandidate({ projectId }), (e) => isCode(e, "design_approval_failed"));
+    assert.equal((await store.listCandidates(projectId)).length, countBefore, "forged lineage never persists");
+    const accepted = await service.acceptCandidate({ projectId, candidateId: candidate.id, expectedCandidateDigest: candidate.candidateDigest, reviewNotes: "fixture only; deterministic authority test" });
+    assert.equal(accepted.data.archetypes.find((a) => a.kind === "service")!.assetSlots[0]!.boundGovernanceDigest, assignment.versionDigest);
+    const restarted = new DesignStore(dbInst.db);
+    assert.equal((await restarted.latestAcceptedDesign(projectId))!.artifact.providerMode, "fixture");
+    await assert.rejects(restarted.requireProductionDesign(projectId, accepted.id, accepted.candidateDigest), (e) => isCode(e, "design_approval_failed"));
+    // Forged assignment governance cannot be accepted as current upstream.
+    await dbInst.db.update(assetPageAssignments).set({ versionDigest: "f".repeat(64) }).where(eq(assetPageAssignments.id, assignment.id));
+    assert.equal((await restarted.inputSnapshotStaleness(projectId, snapshot)).stale, true);
+    await assert.rejects(restarted.deriveInputSnapshotDraft({ projectId }), (e) => isCode(e, "design_input_stale"));
+    await dbInst.db.update(assetPageAssignments).set({ versionDigest: assignment.versionDigest }).where(eq(assetPageAssignments.id, assignment.id));
+    assert.equal((await restarted.inputSnapshotStaleness(projectId, snapshot)).stale, false);
+    const second = await upload(50);
+    await assets.replaceAssignment(projectId, assignment.id, { toVersionId: second.version.id, expectedBinaryDigest: second.version.binaryDigest });
+    assert.equal((await restarted.inputSnapshotStaleness(projectId, snapshot)).stale, true);
+    const stale = (await restarted.latestAcceptedDesign(projectId))!;
+    assert.equal(stale.staleness.stale, true);
+    assert.deepEqual(stale.artifact.data, accepted.data, "upstream replacement never mutates accepted design");
+  } finally { await dbInst.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("PG: exact production authority gate rejects fixtures, wrong project/digest and stale live-classified test records", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  try {
+    const { projectId } = await seedProject(dbInst, "design-production-gate");
+    const store = new DesignStore(dbInst.db);
+    const snapshot = await store.deriveInputSnapshotDraft({ projectId });
+    // Synthetic record tests the gate only; NOT live provider/human evidence.
+    const data = { ...candidateData(), providerMode: "live" as const };
+    const candidate = await store.createCandidate({ projectId, inputSnapshot: snapshot, data });
+    const accepted = await store.acceptCandidate({ projectId, candidateId: candidate.id, expectedCandidateDigest: candidate.candidateDigest, reviewNotes: "Synthetic gate test, not live evidence" });
+    assert.equal((await new DesignStore(dbInst.db).requireProductionDesign(projectId, accepted.id, accepted.candidateDigest)).id, accepted.id);
+    await assert.rejects(store.requireProductionDesign("other-project", accepted.id, accepted.candidateDigest), (e) => isCode(e, "design_not_found"));
+    await assert.rejects(store.requireProductionDesign(projectId, accepted.id, "f".repeat(64)), (e) => isCode(e, "design_approval_failed"));
+    const intake = new ProjectIntakeStore(dbInst.db);
+    const draft = (await intake.getDraft(projectId))!;
+    const payload = buildIntakePayload();
+    payload.brand.positioning = "Updated accepted input";
+    await intake.saveDraft({ projectId, baseRevision: draft.revision, payload });
+    await intake.accept({ projectId, expectedRevision: draft.revision + 1, expectedDigest: deterministicDigest(payload) });
+    await assert.rejects(store.requireProductionDesign(projectId, accepted.id, accepted.candidateDigest), (e) => isCode(e, "design_input_stale"));
+  } finally { await dbInst.close(); }
+});

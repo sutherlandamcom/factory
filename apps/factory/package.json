@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@factory/contracts": "workspace:*",
+    "@google/design.md": "0.4.0",
     "@modelcontextprotocol/client": "2.0.0",
     "drizzle-orm": "0.45.2",
     "file-type": "21.0.0",

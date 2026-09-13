@@ -10,7 +10,7 @@ import {
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
 import { createDesignArtifactStorageAsync, type DesignArtifactStorage } from "./artifact-storage.js";
-import { lintDesignMd } from "./design-md.js";
+import { lintDesignMd, DESIGN_MD_TOOL_VERSION } from "./design-md.js";
 import { DesignStore, type DesignStaleness } from "./design-store.js";
 import type { DesignInputSnapshotRecord, DesignCandidateRecord, AcceptedDesignArtifactRecord } from "../persistence/schema.js";
 
@@ -265,6 +265,7 @@ export class DesignService {
     // zero) so recorded validation evidence is truthful.
     const candidateData: DesignCandidateData = {
       ...result.candidate,
+      designMdToolVersion: DESIGN_MD_TOOL_VERSION,
       designMdLint: { errors: lint.errors, warnings: lint.warnings, infos: lint.infos },
     };
 
@@ -303,11 +304,13 @@ export class DesignService {
     snapshotData: DesignInputSnapshotData,
   ): Promise<DesignGenerationRequest["acceptedCopyByArchetype"]> {
     const rows = await this.store.getAcceptedContentForProject(projectId);
-    const byDigest = new Map(rows.filter((r) => r.contentDigest).map((r) => [r.contentDigest, r]));
+
     const byArchetype: DesignGenerationRequest["acceptedCopyByArchetype"] = {};
     for (const representative of snapshotData.representativePages) {
-      const row = byDigest.get(representative.contentDigest);
-      if (!row) continue; // digest no longer matches current authority; skip
+      const ref = snapshotData.contentRefs.find((ref) => ref.slug === representative.slug && ref.contentDigest === representative.contentDigest);
+      const row = ref && rows.find((row) => row.id === ref.id && row.version === ref.version &&
+        row.slug === representative.slug && row.contentDigest === representative.contentDigest);
+      if (!row) throw new FactoryError("design_input_stale", "Representative page identity/digest no longer matches accepted content.");
       const data = row.data as {
         title?: string;
         introduction?: string;

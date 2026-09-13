@@ -429,6 +429,9 @@ export function DesignPage({ projectId }: DesignPageProps) {
                 accepted {new Date(workspace.accepted.acceptedAt).toLocaleString()}
               </span>
             </div>
+            {workspace.accepted.providerMode === "fixture" && (
+              <p className="text-amber-800">Test fixture acceptance only. Ineligible for production design authority.</p>
+            )}
             <div className="text-xs text-gray-500">
               Bound upstream: input snapshot {workspace.accepted.inputSnapshotVersion} (
               {shortDigest(workspace.accepted.inputDigest)}) · provider {workspace.accepted.providerProjectName}

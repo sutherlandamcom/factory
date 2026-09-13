@@ -127,6 +127,13 @@
       "when": 1789500000000,
       "tag": "0017_visual_assets_v0",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789580000000,
+      "tag": "0018_visual_truth_policy_check_extension",
+      "breakpoints": true
     }
   ]
 }

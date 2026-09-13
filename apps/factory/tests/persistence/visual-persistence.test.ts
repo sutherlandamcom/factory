@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { sql } from "drizzle-orm";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -685,4 +686,107 @@ test("unit: C2PA evidence is honest for plain images (absent) and never fabricat
   // A plain sharp JPEG carries no C2PA manifest: the honest result is absent
   // (or unavailable_with_reason if the native runtime cannot load) — never "validated".
   assert.ok(evidence.status === "absent" || evidence.status === "unavailable_with_reason", `unexpected status ${evidence.status}`);
+});
+
+// ---------------------------------------------------------------------------
+// Run 7 QA remediation (P2-F1): the durable DB CHECK must mirror the FULL
+// contract truth-policy matrix, verified by raw SQL (bypassing all app code).
+// ---------------------------------------------------------------------------
+
+test("PG: accepted-slot CHECK rejects data_visualization + ai_edit via raw SQL (P2-F1)", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const sharp = (await import("sharp")).default;
+  const { projectId } = await seedProject(dbInst, "vchk1");
+  const root = await mkdtemp(path.join(tmpdir(), "visual-chk-"));
+
+  // Minimal approved Run 5 version to satisfy FKs.
+  const assetsModule = await import("../../src/assets/asset-store.js");
+  const assetServiceModule = await import("../../src/assets/service.js");
+  const assetStorageModule = await import("../../src/assets/storage.js");
+  const assets = new assetServiceModule.AssetService({
+    store: new assetsModule.AssetStore(dbInst.db),
+    storage: assetStorageModule.createAssetStorage(root),
+  });
+  const bytes = await sharp({ create: { width: 16, height: 16, channels: 3, background: { r: 1, g: 2, b: 3 } } }).jpeg().toBuffer();
+  const upload = await assets.uploadAsset(projectId, {
+    filename: "chk.jpg",
+    kind: "photo",
+    title: "CHECK probe source",
+    rightsStatus: "operator_owned",
+    dataBase64: bytes.toString("base64"),
+  });
+  await assets.approveVersion(projectId, upload.version.id, upload.version.binaryDigest);
+
+  // Minimal accepted set/slot scaffolding (raw rows, bypassing app services).
+  await dbInst.db.execute(sql`
+    INSERT INTO visual_asset_plans (id, project_id, version, design_artifact_id, design_artifact_version, design_candidate_digest, design_input_digest, design_provider_mode, slots, plan_digest)
+    VALUES ('vap-chk', ${projectId}, 1, 'da-chk', 1, ${"a".repeat(64)}, ${"b".repeat(64)}, 'live', '[]'::jsonb, ${"c".repeat(64)})
+  `);
+  await dbInst.db.execute(sql`
+    INSERT INTO accepted_visual_asset_sets (id, project_id, version, plan_id, design_artifact_id, design_artifact_version, design_candidate_digest, design_input_digest, set_digest)
+    VALUES ('avs-chk', ${projectId}, 1, 'vap-chk', 'da-chk', 1, ${"a".repeat(64)}, ${"b".repeat(64)}, ${"d".repeat(64)})
+  `);
+
+  const insertSlot = (mode: string, truth: string, id: string) =>
+    sql`
+      INSERT INTO accepted_visual_asset_slots (id, set_id, project_id, slot, page_slug, role, resolved_version_id, binary_digest, governance_digest, resolution_mode, truth_class)
+      VALUES (${id}, 'avs-chk', ${projectId}, 's.' || ${id}, 'home', 'hero', ${upload.version.id}, ${"e".repeat(64)}, ${"f".repeat(64)}, ${mode}, ${truth})
+    `;
+
+  // Forbidden combination (the P2-F1 gap): must be rejected by the CHECK.
+  await assert.rejects(
+    () => dbInst.db.execute(insertSlot("ai_edit", "data_visualization", "avsl-chk-1")),
+    (err: unknown) => {
+      const code = (err as { code?: string } | null)?.code ?? (err as { cause?: { code?: string } } | null)?.cause?.code;
+      return code === "23514"; // check_violation
+    },
+    "data_visualization + ai_edit must be rejected at the DB level",
+  );
+
+  // Regression: previously enforced combinations remain rejected/accepted.
+  await assert.rejects(
+    () => dbInst.db.execute(insertSlot("ai_generate", "documentary", "avsl-chk-2")),
+    () => true,
+    "documentary + ai_generate must remain rejected",
+  );
+  await dbInst.db.execute(insertSlot("ai_generate", "illustrative", "avsl-chk-3"));
+  await dbInst.db.execute(insertSlot("ai_edit", "documentary_edited", "avsl-chk-4"));
+  await dbInst.db.execute(insertSlot("reuse_real", "documentary", "avsl-chk-5"));
+});
+
+test("unit: provider preflight is cached with a 60s TTL (P3-F4)", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const root = await mkdtemp(path.join(tmpdir(), "visual-pf-"));
+  const { projectId } = await seedProject(dbInst, "vpfcache");
+  let preflightCalls = 0;
+  const countingProvider = {
+    id: "google-genai",
+    providerMode: "fixture" as const,
+    async preflight() {
+      preflightCalls++;
+      return { configured: true as const, provider: "google-genai", reachable: true, verifiedModels: ["stub"] };
+    },
+    async generateImage() { throw new Error("not used in this test"); },
+    async editImage() { throw new Error("not used in this test"); },
+  };
+  const assetsModule = await import("../../src/assets/asset-store.js");
+  const assetServiceModule = await import("../../src/assets/service.js");
+  const assetStorageModule = await import("../../src/assets/storage.js");
+  const assets = new assetServiceModule.AssetService({
+    store: new assetsModule.AssetStore(dbInst.db),
+    storage: assetStorageModule.createAssetStorage(root),
+  });
+  const visual = new VisualService({
+    store: new VisualStore(dbInst.db),
+    designStore: new DesignStore(dbInst.db),
+    assets,
+    budget: new VisualBudgetStore(dbInst.db),
+    provider: countingProvider as never,
+    repoRoot: root,
+    storage: createVisualCandidateStorage(root),
+  });
+  await visual.workspace(projectId);
+  await visual.workspace(projectId);
+  await visual.workspace(projectId);
+  assert.equal(preflightCalls, 1, "three workspace reads within the TTL must issue ONE provider preflight");
 });

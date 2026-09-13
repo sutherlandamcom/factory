@@ -222,6 +222,21 @@ export class AssetStore {
     return row ?? null;
   }
 
+  /**
+   * Find a version in this project by its exact binary digest (read-only
+   * lookup; the UNIQUE(project_id, binary_digest) constraint guarantees at
+   * most one row). Used by Run 7 to BIND byte-identical outputs to the
+   * existing approved version instead of failing on a duplicate upload.
+   */
+  async findByBinaryDigest(projectId: string, binaryDigest: string): Promise<AssetVersionRow | null> {
+    const [row] = await this.db
+      .select()
+      .from(assetVersions)
+      .where(and(eq(assetVersions.projectId, projectId), eq(assetVersions.binaryDigest, binaryDigest)))
+      .limit(1);
+    return row ?? null;
+  }
+
   async getLatestVersion(projectId: string, assetId: string): Promise<AssetVersionRow | null> {
     const [row] = await this.db
       .select()

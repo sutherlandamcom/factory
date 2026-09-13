@@ -177,6 +177,12 @@ export class VisualService {
   private readonly storage: VisualCandidateStorage | null;
   private readonly repoRoot: string | undefined;
   private readonly dailyLimitUsd: number | undefined;
+  // P3-F4: preflight TTL cache — workspace reads must not issue provider
+  // probes on every GET. Spend paths still fail closed on real request-time
+  // provider failures (typed + classified), so a <=60s stale preflight read
+  // never turns a failure into spend.
+  private static readonly PREFLIGHT_TTL_MS = 60_000;
+  private preflightCache: { at: number; value: VisualAssetProviderPreflight } | null = null;
 
   constructor(deps: VisualServiceDeps) {
     this.store = deps.store;
@@ -187,6 +193,16 @@ export class VisualService {
     this.storage = deps.storage ?? null;
     this.repoRoot = deps.repoRoot;
     this.dailyLimitUsd = deps.dailyLimitUsd;
+  }
+
+  /** Cached provider preflight (60s TTL; one provider call per TTL window). */
+  private async cachedPreflight(): Promise<VisualAssetProviderPreflight> {
+    if (this.preflightCache && Date.now() - this.preflightCache.at < VisualService.PREFLIGHT_TTL_MS) {
+      return this.preflightCache.value;
+    }
+    const value = await this.provider.preflight();
+    this.preflightCache = { at: Date.now(), value };
+    return value;
   }
 
   static async create(deps: Omit<VisualServiceDeps, "storage">): Promise<VisualService> {
@@ -506,8 +522,10 @@ export class VisualService {
       }
     }
 
-    // 4. Provider configured.
-    const preflight = await this.provider.preflight();
+    // 4. Provider configured (60s TTL cache; a real request-time provider
+    // failure is still typed and classified — the cache never turns a
+    // provider failure into spend).
+    const preflight = await this.cachedPreflight();
     if (!preflight.configured) {
       throw new FactoryError("visual_provider_not_configured", preflight.reason);
     }
@@ -877,12 +895,23 @@ export class VisualService {
       uploadedAt: new Date().toISOString(),
       derivation,
     };
-    const { asset, version } = await this.ingestDerivedVersion({
+    // P2-F2: a deterministic transform that reproduces bytes already present
+    // in this project binds to the existing approved version (a transform is
+    // free of provider spend, but the same UNIQUE(project_id, binary_digest)
+    // collision would otherwise fail the resolution).
+    const outDigest = sha256(outBytes);
+    const { asset, version } = await this.ingestOrBindExisting({
       projectId: input.projectId,
-      parentAsset: parentAsset,
-      parentVersion: parent,
       bytes: outBytes,
+      digest: outDigest,
       provenance,
+      ingest: () => this.ingestDerivedVersion({
+        projectId: input.projectId,
+        parentAsset: parentAsset,
+        parentVersion: parent,
+        bytes: outBytes,
+        provenance,
+      }),
     });
     return { version, asset, derivation };
   }
@@ -901,7 +930,7 @@ export class VisualService {
     candidateId: string;
     expectedBinaryDigest: string;
     confirmTruthDowngrade?: boolean;
-  }): Promise<{ version: AssetVersionRow; asset: AssetRow; assignmentId: string | null; truthClass: VisualTruthClass; resolutionMode: VisualResolutionMode }> {
+  }): Promise<{ version: AssetVersionRow; asset: AssetRow; assignmentId: string | null; truthClass: VisualTruthClass; resolutionMode: VisualResolutionMode; boundExisting: boolean }> {
     const plan = await this.getPlanOrThrow(input.projectId, input.planId);
     const candidate = await this.store.getCandidate(input.projectId, input.candidateId);
     if (!candidate) throw new FactoryError("visual_not_found", "Candidate not found for this project.");
@@ -978,47 +1007,73 @@ export class VisualService {
     };
     // For ai_generate there is no Run 5 parent asset; synthesize a logical
     // asset identity via the Run 5 upload path instead of hand-inserting.
+    // P2-F2: byte-identical output from a different request binds to the
+    // existing approved version instead of failing after the spend.
     let asset: AssetRow;
     let version: AssetVersionRow;
+    let boundExisting = false;
     if (mode === "ai_generate") {
-      const ingest = await this.assets.uploadAsset(input.projectId, {
-        dataBase64: Buffer.from(bytes).toString("base64"),
-        filename: `visual-${input.slot}.png`,
-        kind: "photo",
-        title: `Visual ${input.slot} (${candidate.binaryDigest.slice(0, 12)})`,
-        rightsStatus: "operator_owned",
-        rightsNote: `AI-generated via ${request.provider}/${request.model}; prompt snapshot ${request.promptSnapshotId}`,
-        altIntent: `AI-generated imagery for slot ${input.slot}`,
-      });
-      asset = ingest.asset;
-      version = ingest.version;
-      // Record exact derivation lineage on the pending version (Run 7 seam).
-      await this.assets.recordDerivationProvenance(input.projectId, version.id, {
-        expectedBinaryDigest: version.binaryDigest,
+      const bound = await this.ingestOrBindExisting({
+        projectId: input.projectId,
+        bytes,
+        digest: candidate.binaryDigest,
         provenance,
+        ingest: async () => {
+          const ingest = await this.assets.uploadAsset(input.projectId, {
+            dataBase64: Buffer.from(bytes).toString("base64"),
+            filename: `visual-${input.slot}.png`,
+            kind: "photo",
+            title: `Visual ${input.slot} (${candidate.binaryDigest.slice(0, 12)})`,
+            rightsStatus: "operator_owned",
+            rightsNote: `AI-generated via ${request.provider}/${request.model}; prompt snapshot ${request.promptSnapshotId}`,
+            altIntent: `AI-generated imagery for slot ${input.slot}`,
+          });
+          // Record exact derivation lineage on the pending version (Run 7 seam).
+          await this.assets.recordDerivationProvenance(input.projectId, ingest.version.id, {
+            expectedBinaryDigest: ingest.version.binaryDigest,
+            provenance,
+          });
+          return ingest;
+        },
       });
+      asset = bound.asset;
+      version = bound.version;
+      boundExisting = bound.boundExisting;
     } else {
       // AI edit: ingest as a derived version of the exact parent asset.
       const parent = await this.getApprovedVersionOrThrow(input.projectId, derivation.parentVersionId);
       const parentAsset = await this.getAssetForVersion(input.projectId, parent);
-      const ingest = await this.ingestDerivedVersion({
+      const bound = await this.ingestOrBindExisting({
         projectId: input.projectId,
-        parentAsset,
-        parentVersion: parent,
         bytes,
+        digest: candidate.binaryDigest,
         provenance,
+        ingest: () => this.ingestDerivedVersion({
+          projectId: input.projectId,
+          parentAsset,
+          parentVersion: parent,
+          bytes,
+          provenance,
+        }),
       });
-      asset = ingest.asset;
-      version = ingest.version;
+      asset = bound.asset;
+      version = bound.version;
+      boundExisting = bound.boundExisting;
     }
 
     // Approve the new version through the Run 5 authority (binds digests).
-    const approved = await this.assets.approveVersion(input.projectId, version.id, version.binaryDigest);
+    // A bound existing version is already approved; re-approval is skipped.
+    const approved = boundExisting ? version : await this.assets.approveVersion(input.projectId, version.id, version.binaryDigest);
 
     // Create/replace the Run 5 page assignment through AssetService.
+    // P2-F2: when binding to an existing approved version that the
+    // assignment already points at, replacement would be a Run 5 no-op
+    // conflict — the assignment is already exactly right, so reuse it.
     let assignmentId: string | null = null;
     const existing = await this.findAssignment(input.projectId, planSlot.pageSlug, planSlot.role);
-    if (existing) {
+    if (existing && existing.versionId === approved.id) {
+      assignmentId = existing.id;
+    } else if (existing) {
       const replaced = await this.assets.replaceAssignment(input.projectId, existing.id, {
         toVersionId: approved.id,
         expectedBinaryDigest: approved.binaryDigest,
@@ -1045,7 +1100,7 @@ export class VisualService {
       truthClass,
     });
 
-    return { version: approved, asset, assignmentId, truthClass, resolutionMode: mode };
+    return { version: approved, asset, assignmentId, truthClass, resolutionMode: mode, boundExisting };
   }
 
   /** Accept the full set: every plan slot must be resolved (Run 5 assignment). */
@@ -1145,7 +1200,7 @@ export class VisualService {
   // -------------------------------------------------------------------------
 
   async workspace(projectId: string): Promise<VisualWorkspaceReadModel> {
-    const preflight = await this.provider.preflight();
+    const preflight = await this.cachedPreflight();
     const plan = await this.store.latestPlan(projectId);
     const acceptedSet = await this.store.latestAcceptedSet(projectId);
     const acceptedSlots = acceptedSet ? await this.store.listAcceptedSlots(acceptedSet.id) : [];
@@ -1358,6 +1413,42 @@ export class VisualService {
     });
     const version = await this.assets["store"].getVersion(input.projectId, ingest.version.id);
     return { asset: ingest.asset, version: version! };
+  }
+
+  /**
+   * Run 7 QA remediation (P2-F2): byte-identical output from a DIFFERENT
+   * request digest must BIND to the existing approved version instead of
+   * failing on the Run 5 UNIQUE(project_id, binary_digest) constraint after
+   * a real provider spend.
+   *
+   * Semantics:
+   * - no existing version with these bytes -> normal ingest path;
+   * - existing APPROVED version with these bytes -> bind to it (no new
+   *   version row; the candidate row already carries the full derivation
+   *   lineage as evidence, so nothing is lost and nothing is mutated);
+   * - existing NOT-approved version with these bytes -> fail closed (binding
+   *   to unapproved bytes would bypass the Run 5 approval authority).
+   */
+  private async ingestOrBindExisting(input: {
+    projectId: string;
+    bytes: Uint8Array;
+    digest: string;
+    provenance: AssetProvenance;
+    ingest: () => Promise<{ asset: AssetRow; version: AssetVersionRow }>;
+  }): Promise<{ asset: AssetRow; version: AssetVersionRow; boundExisting: boolean }> {
+    const existing = await this.assets.findByBinaryDigest(input.projectId, input.digest);
+    if (existing) {
+      if (existing.approvalState !== "approved") {
+        throw new FactoryError(
+          "visual_acceptance_failed",
+          "Identical bytes already exist in this project but are not approved; approve or reject the existing version first.",
+        );
+      }
+      const asset = await this.getAssetForVersion(input.projectId, existing);
+      return { asset, version: existing, boundExisting: true };
+    }
+    const ingested = await input.ingest();
+    return { ...ingested, boundExisting: false };
   }
 }
 

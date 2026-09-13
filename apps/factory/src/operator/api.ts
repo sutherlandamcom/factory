@@ -1049,6 +1049,7 @@ export function createOperatorApi(deps: OperatorApiDeps) {
             assetId: accepted.asset.id,
             assignmentId: accepted.assignmentId,
             truthClass: accepted.truthClass,
+            boundExisting: accepted.boundExisting,
           });
         }
 

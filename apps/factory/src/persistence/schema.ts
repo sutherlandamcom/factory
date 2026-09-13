@@ -1119,3 +1119,388 @@ export type ContentQaReportRecord = typeof contentQaReports.$inferSelect;
 export type InsertContentQaReport = typeof contentQaReports.$inferInsert;
 export type AcceptedPageContentRecord = typeof acceptedPageContent.$inferSelect;
 export type InsertAcceptedPageContent = typeof acceptedPageContent.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Assets: Asset Foundation + Operator Photography (Macro Run 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Stable logical asset identity within a project (e.g. "Chamonix homepage
+ * hero photograph"). An Asset is NOT the mutable latest bytes: versions
+ * carry the actual immutable bytes records.
+ */
+export const assets = pgTable(
+  "assets",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    title: text("title").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check(
+      "assets_kind_valid",
+      sql`${table.kind} IN ('logo', 'photo', 'illustration', 'chart', 'icon')`,
+    ),
+    index("assets_project_idx").on(table.projectId, table.createdAt),
+  ],
+);
+
+/**
+ * Immutable representation of exact uploaded bytes. Once created a row is
+ * never mutated except the two terminal state transitions
+ * pending -> approved | rejected (approval binds the exact binary digest).
+ * Assignments bind version_id + digests, so newer versions can never move
+ * an existing assignment silently.
+ */
+export const assetVersions = pgTable(
+  "asset_versions",
+  {
+    id: text("id").primaryKey(),
+    assetId: text("asset_id")
+      .notNull()
+      .references(() => assets.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    binaryDigest: text("binary_digest").notNull(),
+    mediaType: text("media_type").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    width: integer("width"),
+    height: integer("height"),
+    storageKey: text("storage_key").notNull(),
+    originalFilename: text("original_filename").notNull(),
+    provenance: jsonb("provenance").notNull(),
+    rightsStatus: text("rights_status").notNull(),
+    rightsNote: text("rights_note"),
+    altIntent: text("alt_intent"),
+    approvalState: text("approval_state").notNull().default("pending"),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    rejectedAt: timestamp("rejected_at", { withTimezone: true }),
+    governanceDigest: text("governance_digest"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("asset_versions_asset_version_unique").on(table.assetId, table.version),
+    unique("asset_versions_project_binary_digest_unique").on(table.projectId, table.binaryDigest),
+    check("asset_versions_version_positive", sql`${table.version} >= 1`),
+    check("asset_versions_byte_size_positive", sql`${table.byteSize} >= 1`),
+    check(
+      "asset_versions_media_type_valid",
+      sql`${table.mediaType} IN ('image/jpeg', 'image/png', 'image/webp')`,
+    ),
+    check(
+      "asset_versions_rights_status_valid",
+      sql`${table.rightsStatus} IN ('operator_owned', 'licensed', 'public_domain', 'unknown')`,
+    ),
+    check(
+      "asset_versions_approval_state_valid",
+      sql`${table.approvalState} IN ('pending', 'approved', 'rejected')`,
+    ),
+    check(
+      "asset_versions_state_timestamps_valid",
+      sql`(
+        (${table.approvalState} = 'pending' AND ${table.approvedAt} IS NULL AND ${table.rejectedAt} IS NULL)
+        OR (${table.approvalState} = 'approved' AND ${table.approvedAt} IS NOT NULL AND ${table.rejectedAt} IS NULL)
+        OR (${table.approvalState} = 'rejected' AND ${table.approvedAt} IS NULL AND ${table.rejectedAt} IS NOT NULL)
+      )`,
+    ),
+    check(
+      "asset_versions_provenance_category_valid",
+      sql`${table.provenance} ->> 'category' IN ('operator_upload', 'generated', 'imported')`,
+    ),
+    // Governance invariant: an approved version ALWAYS carries its
+    // governance digest (binary and governance digests are distinct
+    // authorities; substitution is forbidden at the store layer too).
+    check(
+      "asset_versions_approved_governance_digest_required",
+      sql`${table.approvalState} <> 'approved' OR ${table.governanceDigest} IS NOT NULL`,
+    ),
+    index("asset_versions_asset_idx").on(table.assetId, table.version),
+    index("asset_versions_project_idx").on(table.projectId),
+  ],
+);
+
+/**
+ * Deterministic responsive derivatives (web/thumb) of an exact version.
+ * Identity is content-addressed; rows are immutable.
+ */
+export const assetDerivatives = pgTable(
+  "asset_derivatives",
+  {
+    id: text("id").primaryKey(),
+    versionId: text("version_id")
+      .notNull()
+      .references(() => assetVersions.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    mediaType: text("media_type").notNull(),
+    width: integer("width").notNull(),
+    height: integer("height").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    binaryDigest: text("binary_digest").notNull(),
+    storageKey: text("storage_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("asset_derivatives_version_kind_unique").on(table.versionId, table.kind),
+    check("asset_derivatives_kind_valid", sql`${table.kind} IN ('web', 'thumb')`),
+    check("asset_derivatives_width_positive", sql`${table.width} >= 1`),
+    check("asset_derivatives_height_positive", sql`${table.height} >= 1`),
+    check("asset_derivatives_byte_size_positive", sql`${table.byteSize} >= 1`),
+    check(
+      "asset_derivatives_media_type_valid",
+      sql`${table.mediaType} IN ('image/jpeg', 'image/png', 'image/webp')`,
+    ),
+    index("asset_derivatives_version_idx").on(table.versionId),
+  ],
+);
+
+/**
+ * Page/slot assignment binding the EXACT approved version (id + digests
+ * copied at bind time). One assignment per (project, page, role); moving to
+ * a newer version is always an explicit operator action.
+ */
+export const assetPageAssignments = pgTable(
+  "asset_page_assignments",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    assetId: text("asset_id")
+      .notNull()
+      .references(() => assets.id, { onDelete: "cascade" }),
+    versionId: text("version_id")
+      .notNull()
+      .references(() => assetVersions.id, { onDelete: "restrict" }),
+    versionDigest: text("version_digest").notNull(),
+    binaryDigest: text("binary_digest").notNull(),
+    pageSlug: text("page_slug").notNull(),
+    role: text("role").notNull(),
+    assignedAt: timestamp("assigned_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("asset_page_assignments_slot_unique").on(table.projectId, table.pageSlug, table.role),
+    check(
+      "asset_page_assignments_role_valid",
+      sql`${table.role} IN ('hero', 'background', 'inline', 'chart', 'illustration', 'logo', 'supporting')`,
+    ),
+    check("asset_page_assignments_slug_shape", sql`${table.pageSlug} ~ '^[a-z0-9][a-z0-9/-]*$'`),
+    index("asset_page_assignments_project_idx").on(table.projectId),
+  ],
+);
+
+/**
+ * Project-level imagery strategy (Constitution vocabulary). Declaring
+ * 'generated'/'mixed' does NOT activate any provider — Run 5 has no
+ * generated-imagery path.
+ */
+export const projectAssetSettings = pgTable(
+  "project_asset_settings",
+  {
+    projectId: text("project_id")
+      .primaryKey()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    imageryStrategy: text("imagery_strategy").notNull().default("none"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check(
+      "project_asset_settings_imagery_strategy_valid",
+      sql`${table.imageryStrategy} IN ('none', 'operator', 'generated', 'mixed')`,
+    ),
+  ],
+);
+
+export type AssetRecord = typeof assets.$inferSelect;
+export type InsertAsset = typeof assets.$inferInsert;
+export type AssetVersionRecord = typeof assetVersions.$inferSelect;
+export type InsertAssetVersion = typeof assetVersions.$inferInsert;
+export type AssetDerivativeRecord = typeof assetDerivatives.$inferSelect;
+export type InsertAssetDerivative = typeof assetDerivatives.$inferInsert;
+export type AssetPageAssignmentRecord = typeof assetPageAssignments.$inferSelect;
+export type InsertAssetPageAssignment = typeof assetPageAssignments.$inferInsert;
+export type ProjectAssetSettingsRecord = typeof projectAssetSettings.$inferSelect;
+export type InsertProjectAssetSettings = typeof projectAssetSettings.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Design: Google Stitch Design Provider (Macro Run 6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Immutable, authority-bound design generation input. Every material
+ * upstream dependency (accepted project inputs, accepted page content,
+ * approved asset versions) is bound by id + version + exact digest at
+ * snapshot time so any design artifact can answer "which exact content,
+ * facts, and assets produced this design?" and so upstream mutation makes
+ * dependent artifacts stale.
+ */
+export const designInputSnapshots = pgTable(
+  "design_input_snapshots",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    data: jsonb("data").notNull(),
+    inputDigest: text("input_digest").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("design_input_snapshots_project_version_unique").on(table.projectId, table.version),
+    check("design_input_snapshots_version_positive", sql`${table.version} >= 1`),
+    check("design_input_snapshots_digest_shape", sql`${table.inputDigest} ~ '^[0-9a-f]{64}$'`),
+    index("design_input_snapshots_project_idx").on(table.projectId, table.version),
+  ],
+);
+
+/**
+ * A provider generation result (candidate). Candidates are immutable
+ * evidence: acceptance never mutates them; a rejected candidate stays
+ * inspectable. Approval state transitions pending -> accepted | rejected
+ * bind the exact candidate digest.
+ */
+export const designCandidates = pgTable(
+  "design_candidates",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    inputSnapshotId: text("input_snapshot_id")
+      .notNull()
+      .references(() => designInputSnapshots.id, { onDelete: "cascade" }),
+    inputSnapshotVersion: integer("input_snapshot_version").notNull(),
+    inputDigest: text("input_digest").notNull(),
+    provider: text("provider").notNull(),
+    /** Durable evidence mode: live provider execution vs deterministic fixture. */
+    providerMode: text("provider_mode").notNull(),
+    providerProjectName: text("provider_project_name").notNull(),
+    data: jsonb("data").notNull(),
+    candidateDigest: text("candidate_digest").notNull(),
+    approvalState: text("approval_state").notNull().default("pending"),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    rejectedAt: timestamp("rejected_at", { withTimezone: true }),
+    reviewNotes: text("review_notes"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check(
+      "design_candidates_approval_state_valid",
+      sql`${table.approvalState} IN ('pending', 'accepted', 'rejected')`,
+    ),
+    check("design_candidates_digest_shape", sql`${table.candidateDigest} ~ '^[0-9a-f]{64}$'`),
+    check("design_candidates_input_digest_shape", sql`${table.inputDigest} ~ '^[0-9a-f]{64}$'`),
+    check(
+      "design_candidates_state_timestamps_valid",
+      sql`(
+        (${table.approvalState} = 'pending' AND ${table.acceptedAt} IS NULL AND ${table.rejectedAt} IS NULL)
+        OR (${table.approvalState} = 'accepted' AND ${table.acceptedAt} IS NOT NULL AND ${table.rejectedAt} IS NULL)
+        OR (${table.approvalState} = 'rejected' AND ${table.acceptedAt} IS NULL AND ${table.rejectedAt} IS NOT NULL)
+      )`,
+    ),
+    check(
+      "design_candidates_provider_valid",
+      sql`${table.provider} IN ('google-stitch')`,
+    ),
+    check(
+      "design_candidates_provider_mode_valid",
+      sql`${table.providerMode} IN ('live', 'fixture')`,
+    ),
+    index("design_candidates_project_idx").on(table.projectId, table.createdAt),
+    index("design_candidates_input_idx").on(table.inputSnapshotId),
+  ],
+);
+
+/**
+ * The immutable accepted design artifact. Created ONLY by explicit human
+ * acceptance of an exact candidate (id + digest). Bind-time digests are
+ * copied from the candidate so downstream staleness never silently tracks
+ * mutable "latest" state.
+ */
+export const acceptedDesignArtifacts = pgTable(
+  "accepted_design_artifacts",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    candidateId: text("candidate_id")
+      .notNull()
+      .references(() => designCandidates.id, { onDelete: "restrict" }),
+    candidateDigest: text("candidate_digest").notNull(),
+    inputSnapshotId: text("input_snapshot_id").notNull(),
+    inputSnapshotVersion: integer("input_snapshot_version").notNull(),
+    inputDigest: text("input_digest").notNull(),
+    provider: text("provider").notNull(),
+    /** Durable evidence mode carried from the accepted candidate. */
+    providerMode: text("provider_mode").notNull(),
+    providerProjectName: text("provider_project_name").notNull(),
+    designMdDigest: text("design_md_digest").notNull(),
+    data: jsonb("data").notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("accepted_design_artifacts_project_version_unique").on(table.projectId, table.version),
+    check("accepted_design_artifacts_version_positive", sql`${table.version} >= 1`),
+    check("accepted_design_artifacts_candidate_digest_shape", sql`${table.candidateDigest} ~ '^[0-9a-f]{64}$'`),
+    check("accepted_design_artifacts_input_digest_shape", sql`${table.inputDigest} ~ '^[0-9a-f]{64}$'`),
+    check("accepted_design_artifacts_design_md_digest_shape", sql`${table.designMdDigest} ~ '^[0-9a-f]{64}$'`),
+    check(
+      "accepted_design_artifacts_provider_valid",
+      sql`${table.provider} IN ('google-stitch')`,
+    ),
+    check(
+      "accepted_design_artifacts_provider_mode_valid",
+      sql`${table.providerMode} IN ('live', 'fixture')`,
+    ),
+    index("accepted_design_artifacts_project_idx").on(table.projectId, table.version),
+  ],
+);
+
+/**
+ * Durable artifact-reference manifest: proves which project/candidate owns
+ * or references which raw artifact digest. Content-addressed storage stays
+ * globally deduplicated; AUTHORIZATION is project-scoped through this table
+ * (a digest alone is never an authorization mechanism).
+ */
+export const designArtifactRefs = pgTable(
+  "design_artifact_refs",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    candidateId: text("candidate_id")
+      .notNull()
+      .references(() => designCandidates.id, { onDelete: "cascade" }),
+    artifactKind: text("artifact_kind").notNull(),
+    artifactDigest: text("artifact_digest").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("design_artifact_refs_candidate_digest_unique").on(table.candidateId, table.artifactKind, table.artifactDigest),
+    check("design_artifact_refs_digest_shape", sql`${table.artifactDigest} ~ '^[0-9a-f]{64}$'`),
+    check(
+      "design_artifact_refs_kind_valid",
+      sql`${table.artifactKind} IN ('design_md', 'screen_html', 'screen_screenshot', 'provider_response')`,
+    ),
+    index("design_artifact_refs_project_digest_idx").on(table.projectId, table.artifactDigest),
+  ],
+);
+
+export type DesignInputSnapshotRecord = typeof designInputSnapshots.$inferSelect;
+export type InsertDesignInputSnapshot = typeof designInputSnapshots.$inferInsert;
+export type DesignCandidateRecord = typeof designCandidates.$inferSelect;
+export type InsertDesignCandidate = typeof designCandidates.$inferInsert;
+export type AcceptedDesignArtifactRecord = typeof acceptedDesignArtifacts.$inferSelect;
+export type InsertAcceptedDesignArtifact = typeof acceptedDesignArtifacts.$inferInsert;

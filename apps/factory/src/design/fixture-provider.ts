@@ -1,0 +1,220 @@
+import { lintDesignMd } from "./design-md.js";
+import type {
+  DesignCandidateData,
+  DesignGenerationRequest,
+  DesignGenerationResult,
+  DesignProvider,
+  DesignProviderPreflight,
+} from "@factory/contracts";
+import { parseDesignCandidateData } from "@factory/contracts";
+import { buildDesignMd, DESIGN_MD_TOOL_VERSION } from "./stitch-provider.js";
+
+/**
+ * FIXTURE DESIGN PROVIDER — dev/test provider-mode adapter (trusted server
+ * config only: FACTORY_DESIGN_MODE=fixture). Produces a deterministic valid
+ * candidate WITHOUT any paid provider call or network access.
+ *
+ * Evidence integrity (§19): the fixture records providerMode "fixture" in
+ * the durable candidate payload — a machine-checkable dimension that
+ * survives persistence/restart. It can never masquerade as live Stitch
+ * output: candidate acceptance policy can reject fixture candidates from
+ * production acceptance, and reports surface the mode explicitly.
+ */
+export const FIXTURE_PROVIDER_MODE = "fixture" as const;
+
+export class FixtureDesignProvider implements DesignProvider {
+  readonly id = "google-stitch-fixture";
+
+  async preflight(): Promise<DesignProviderPreflight> {
+    return { configured: true, provider: "google-stitch", reachable: true };
+  }
+
+  async generateDesignSystem(request: DesignGenerationRequest): Promise<DesignGenerationResult> {
+    const seed = request.designSeed;
+    const designMd = buildDesignMd({
+      colors: {
+        primary: seed.colors.primary,
+        secondary: seed.colors.secondary ?? "",
+        accent: seed.colors.accent ?? "",
+        neutral: seed.colors.neutral ?? "",
+      },
+      typography: { headingFont: seed.typography.headingFont, bodyFont: seed.typography.bodyFont },
+      rationale: seed.rationale,
+    });
+    const lint = lintDesignMd(designMd);
+    const designMdDigest = await sha256Of(designMd);
+
+    const screens: DesignCandidateData["screens"] = [];
+    const archetypeViews: DesignCandidateData["archetypes"] = [];
+    let index = 1;
+    for (const kind of request.inputSnapshot.archetypes) {
+      const representative = request.inputSnapshot.representativePages.find((r) => r.archetype === kind);
+      const screenName = `fixture/projects/e2e/screens/${kind}-${index}`;
+      screens.push({
+        id: `screen-${index}`,
+        providerScreenName: screenName,
+        title: `Fixture ${kind}`,
+        deviceType: "DESKTOP",
+        archetype: kind,
+        htmlDigest: await sha256Of(fixtureHtml(kind)),
+        screenshotDigest: undefined,
+      });
+      // One MOBILE homepage screen (responsive review evidence parity with
+      // the live adapter, at zero fixture cost).
+      if (kind === "homepage") {
+        screens.push({
+          id: `screen-${screens.length + 1}`,
+          providerScreenName: `${screenName}-mobile`,
+          title: `Fixture ${kind} (mobile)`,
+          deviceType: "MOBILE",
+          archetype: kind,
+          htmlDigest: await sha256Of(fixtureHtml(kind, "mobile")),
+          screenshotDigest: undefined,
+        });
+      }
+      // Page-exact asset slots: bind ONLY the assignment for the
+      // representative page + matching role (never project-global lookup).
+      const assetSlots: DesignCandidateData["archetypes"][number]["assetSlots"] = [];
+      if (representative) {
+        const slotRole =
+          kind === "homepage" ? "hero" : kind === "service" ? "supporting" : kind === "location" ? "background" : "illustration";
+        const slotName =
+          kind === "homepage" ? "hero.primary" : kind === "service" ? "service.supporting" : kind === "location" ? "location.gallery" : "author.portrait";
+        const bound = request.inputSnapshot.assetRefs.find(
+          (ref) => ref.pageSlug === representative.slug && ref.role === slotRole,
+        );
+        assetSlots.push({
+          slot: slotName,
+          requirement: bound
+            ? `Approved asset for ${representative.slug}/${slotRole}`
+            : `Neutral ${slotName} placeholder`,
+          pageSlug: representative.slug,
+          role: slotRole,
+          requiredRole: slotRole as "hero" | "supporting" | "background" | "illustration",
+          ...(bound
+            ? {
+                boundAssetVersionId: bound.versionId,
+                boundBinaryDigest: bound.binaryDigest,
+                boundGovernanceDigest: bound.governanceDigest,
+                unresolvedReason:
+                  "Approved asset exists for this exact page/role; the fixture does not transmit bytes to any provider, so providerConsumed stays false.",
+              }
+            : { unresolvedReason: `No approved asset assignment for ${representative.slug}/${slotRole}.` }),
+          providerConsumed: false,
+          placeholder: true,
+        });
+      }
+      archetypeViews.push({
+        kind,
+        purpose: `Fixture ${kind} archetype`,
+        providerScreenNames: screens.filter((s) => s.archetype === kind).map((s) => s.providerScreenName),
+        sectionPatterns: ["hero", "evidence", "cta"],
+        contentRequirements: ["Accepted copy presented verbatim"],
+        assetSlots,
+        primaryCta: "Primary action",
+        secondaryCta: "",
+        responsiveBehavior: "Mobile-first fixture behavior",
+        trustPresentation: "Author/date/source areas visible",
+      });
+      index += 1;
+    }
+
+    const candidate = parseDesignCandidateData({
+      schemaVersion: "design-v1",
+      provider: "google-stitch",
+      providerMode: FIXTURE_PROVIDER_MODE,
+      providerProjectName: "fixture/projects/e2e",
+      designMdDigest,
+      designMdToolVersion: DESIGN_MD_TOOL_VERSION,
+      designMdLint: { errors: lint.errors, warnings: lint.warnings, infos: lint.infos },
+      designSeed: {
+        colors: seed.colors,
+        typography: seed.typography,
+        rationale: seed.rationale,
+      },
+      providerEvidence: {},
+      tokens: {
+        colors: {
+          primary: seed.colors.primary,
+          secondary: seed.colors.secondary,
+          accent: seed.colors.accent,
+          neutral: seed.colors.neutral,
+          background: "#FFFFFF",
+          surface: seed.colors.neutral,
+          textPrimary: seed.colors.primary,
+          textSecondary: seed.colors.secondary,
+        },
+        typography: {
+          headingFont: seed.typography.headingFont,
+          bodyFont: seed.typography.bodyFont,
+          scaleNotes: "fixture scale",
+        },
+        spacing: { sm: "8px", md: "16px", lg: "32px" },
+        rounded: { sm: "4px", md: "8px" },
+        ctaHierarchy: "Primary solid accent; secondary outlined",
+        navigationLanguage: "Fixture navigation language",
+        imageryTreatment: "Placeholders explicitly labeled",
+        sectionRhythm: "Fixture rhythm",
+      },
+      screens,
+      archetypes: archetypeViews,
+      rationale: "Deterministic fixture candidate (FACTORY_DESIGN_MODE=fixture; providerMode=fixture).",
+      providerSessionId: "fixture-session-1",
+    });
+
+    return {
+      candidate,
+      rawArtifacts: [
+        {
+          kind: "design_md",
+          bytes: new TextEncoder().encode(designMd),
+          mediaType: "text/markdown",
+          providerRef: null,
+        },
+        ...screens.map((screen) => ({
+          kind: "screen_html" as const,
+          bytes: new TextEncoder().encode(fixtureHtml(screen.archetype, screen.deviceType === "MOBILE" ? "mobile" : "desktop")),
+          mediaType: "text/html",
+          providerRef: screen.providerScreenName,
+        })),
+        {
+          kind: "provider_response",
+          bytes: new TextEncoder().encode(JSON.stringify({ fixture: true, providerMode: "fixture", project: "fixture/projects/e2e" })),
+          mediaType: "application/json",
+          providerRef: "fixture/projects/e2e",
+        },
+      ],
+      providerProjectName: "fixture/projects/e2e",
+      providerSessionId: "fixture-session-1",
+    };
+  }
+}
+
+/** Deterministic, script-free fixture HTML for sandboxed preview rendering. */
+function fixtureHtml(kind: string, device: "desktop" | "mobile" = "desktop"): string {
+  const maxWidth = device === "mobile" ? "420px" : "720px";
+  return `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture ${kind} (${device})</title>
+<style>
+  body { font-family: sans-serif; margin: 0; color: #1A2E35; background: #F7F5F2; }
+  header { background: #1A2E35; color: #fff; padding: 16px; }
+  main { padding: 24px; max-width: ${maxWidth}; margin: 0 auto; }
+  .cta { background: #B8422E; color: #fff; padding: 10px 16px; border-radius: 4px; display: inline-block; }
+  .placeholder { border: 2px dashed #4A5A62; padding: 24px; text-align: center; color: #4A5A62; }
+</style></head>
+<body>
+<header><strong>Fixture ${kind} (${device})</strong></header>
+<main>
+  <h1>Fixture ${kind} archetype</h1>
+  <div class="placeholder">hero.primary — placeholder (Run 7 resolves)</div>
+  <p>Accepted copy would be presented verbatim here.</p>
+  <a class="cta" href="#">Primary action</a>
+</main>
+</body></html>`;
+}
+
+async function sha256Of(text: string): Promise<string> {
+  const { createHash } = await import("node:crypto");
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}

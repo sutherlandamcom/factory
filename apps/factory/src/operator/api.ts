@@ -12,7 +12,17 @@ import { getProjectOperatorWorkspace } from "./workspace.js";
 import type { SearchIntelligenceService } from "../search/service.js";
 import type { CompetitorContentGapService } from "../competitors/service.js";
 import type { WriterService } from "../writer/service.js";
+import type { AssetService } from "../assets/service.js";
+import type { DesignService } from "../design/service.js";
 import { activeModelOverrides } from "../models/policy.js";
+import {
+  assetApprovalSchema,
+  assetAssignSchema,
+  assetReplaceSchema,
+  assetSettingsSchema,
+  assetUploadSchema,
+  assetVersionMetadataSchema,
+} from "@factory/contracts";
 
 export interface OperatorApiDeps {
   readonly store: FactoryStore;
@@ -23,6 +33,10 @@ export interface OperatorApiDeps {
   readonly competitors?: CompetitorContentGapService;
   /** Writer pipeline v0 (Macro Run 4); optional for backward compatibility. */
   readonly writer?: WriterService;
+  /** Assets v0 (Macro Run 5); optional for backward-compatible construction. */
+  readonly assets?: AssetService;
+  /** Design pipeline v0 (Macro Run 6); optional for backward compatibility. */
+  readonly design?: DesignService;
 }
 
 const projectKeySchema = z
@@ -163,9 +177,28 @@ const writerAcceptSchema = z
   })
   .strict();
 
+const designCandidateActionSchema = z
+  .object({
+    candidateId: z.string().trim().min(1).max(128),
+    expectedCandidateDigest: z.string().trim().regex(/^[0-9a-f]{64}$/),
+    reviewNotes: z.string().trim().max(2000).optional(),
+  })
+  .strict();
+
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(body));
+}
+
+/** Serve exact asset bytes (GET only; immutable content-addressed objects). */
+function sendBytes(res: http.ServerResponse, mediaType: string, bytes: Uint8Array): void {
+  res.writeHead(200, {
+    "Content-Type": mediaType,
+    "Content-Length": String(bytes.byteLength),
+    "Cache-Control": "public, max-age=31536000, immutable",
+    "X-Content-Type-Options": "nosniff",
+  });
+  res.end(Buffer.from(bytes));
 }
 
 /**
@@ -430,6 +463,111 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         return sendJson(res, 200, detail);
       }
 
+      // ---- Assets (Macro Run 5) ----------------------------------------------
+
+      if (segments.length >= 4 && segments[0] === "projects" && segments[2] === "assets") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.assets) return sendError(res, "not_found", "Assets are not available.");
+        const assets = deps.assets;
+
+        // GET workspace: full read model (assets, versions, assignments, strategy).
+        if (req.method === "GET" && segments.length === 4 && segments[3] === "workspace") {
+          return sendJson(res, 200, await assets.workspace(project.id));
+        }
+
+        // POST upload: raised-cap JSON body; full server-side byte validation.
+        if (req.method === "POST" && segments.length === 4 && segments[3] === "uploads") {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(assetUploadSchema, parsed);
+          const result = await assets.uploadAsset(project.id, input);
+          return sendJson(res, 201, {
+            assetId: result.asset.id,
+            versionId: result.version.id,
+            version: result.version.version,
+            binaryDigest: result.version.binaryDigest,
+            mediaType: result.version.mediaType,
+            byteSize: result.version.byteSize,
+            width: result.version.width,
+            height: result.version.height,
+            derivatives: result.derivatives.map((d) => ({ id: d.id, kind: d.kind, width: d.width, height: d.height })),
+          });
+        }
+
+        // PUT settings: imagery strategy.
+        if (req.method === "PUT" && segments.length === 4 && segments[3] === "settings") {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(assetSettingsSchema, parsed);
+          const strategy = await assets.setImageryStrategy(project.id, input.imageryStrategy);
+          return sendJson(res, 200, { imageryStrategy: strategy });
+        }
+
+        // GET original bytes: /projects/:id/assets/versions/:versionId/original
+        if (req.method === "GET" && segments.length === 6 && segments[3] === "versions" && segments[5] === "original") {
+          const bytes = await assets.readOriginal(project.id, segments[4]!);
+          return sendBytes(res, bytes.mediaType, bytes.bytes);
+        }
+
+        // PUT metadata: /projects/:id/assets/versions/:versionId/metadata
+        if (req.method === "PUT" && segments.length === 6 && segments[3] === "versions" && segments[5] === "metadata") {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(assetVersionMetadataSchema, parsed);
+          const version = await assets.updateVersionMetadata(project.id, segments[4]!, input);
+          return sendJson(res, 200, { id: version.id, rightsStatus: version.rightsStatus, altIntent: version.altIntent });
+        }
+
+        // POST approve/reject: /projects/:id/assets/versions/:versionId/{approve,reject}
+        if (req.method === "POST" && segments.length === 6 && segments[3] === "versions" && (segments[5] === "approve" || segments[5] === "reject")) {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(assetApprovalSchema, parsed);
+          const version =
+            segments[5] === "approve"
+              ? await assets.approveVersion(project.id, segments[4]!, input.expectedBinaryDigest)
+              : await assets.rejectVersion(project.id, segments[4]!, input.expectedBinaryDigest);
+          return sendJson(res, 200, {
+            id: version.id,
+            approvalState: version.approvalState,
+            binaryDigest: version.binaryDigest,
+            governanceDigest: version.governanceDigest,
+          });
+        }
+
+        // GET derivative bytes: /projects/:id/assets/derivatives/:derivativeId
+        if (req.method === "GET" && segments.length === 5 && segments[3] === "derivatives") {
+          const bytes = await assets.readDerivative(project.id, segments[4]!);
+          return sendBytes(res, bytes.mediaType, bytes.bytes);
+        }
+
+        // POST assignment: /projects/:id/assets/assignments
+        if (req.method === "POST" && segments.length === 4 && segments[3] === "assignments") {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(assetAssignSchema, parsed);
+          const assignment = await assets.assignVersion(project.id, input);
+          return sendJson(res, 201, {
+            id: assignment.id,
+            assetId: assignment.assetId,
+            versionId: assignment.versionId,
+            pageSlug: assignment.pageSlug,
+            role: assignment.role,
+            binaryDigest: assignment.binaryDigest,
+          });
+        }
+
+        // POST explicit replacement: /projects/:id/assets/assignments/:assignmentId/replace
+        if (req.method === "POST" && segments.length === 6 && segments[3] === "assignments" && segments[5] === "replace") {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(assetReplaceSchema, parsed);
+          const assignment = await assets.replaceAssignment(project.id, segments[4]!, input);
+          return sendJson(res, 200, {
+            id: assignment.id,
+            versionId: assignment.versionId,
+            binaryDigest: assignment.binaryDigest,
+          });
+        }
+
+        return sendError(res, "not_found", "Unknown endpoint.");
+      }
+
       // ---- Writer pipeline (Macro Run 4) ------------------------------------
 
       if (req.method === "GET" && segments.length === 4 && segments[0] === "projects" && segments[2] === "writer" && segments[3] === "workspace") {
@@ -551,6 +689,115 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         const input = parseOr400(writerAcceptSchema, parsed);
         const accepted = await deps.writer.acceptContent({ projectId: project.id, ...input });
         return sendJson(res, 201, accepted);
+      }
+
+      // ---- Design pipeline (Macro Run 6) ------------------------------------
+
+      if (segments.length >= 4 && segments[0] === "projects" && segments[2] === "design") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.design) return sendError(res, "not_found", "Design is not available.");
+        const design = deps.design;
+
+        // GET workspace: full read model (provider preflight, snapshots,
+        // candidates, accepted design + staleness).
+        if (req.method === "GET" && segments.length === 4 && segments[3] === "workspace") {
+          return sendJson(res, 200, await design.workspace(project.id));
+        }
+
+        // POST input-snapshot: derive the authority-bound design input snapshot.
+        if (req.method === "POST" && segments.length === 4 && segments[3] === "input-snapshot") {
+          if (body.trim()) parseJsonBody(body);
+          const view = await design.deriveInputSnapshotDraft(project.id);
+          return sendJson(res, 201, {
+            id: view.id,
+            version: view.version,
+            inputDigest: view.inputDigest,
+            stale: view.stale,
+            staleReason: view.staleReason,
+          });
+        }
+
+        // POST generate: run the governed provider generation from the LATEST
+        // input snapshot (trusted preflight runs server-side first).
+        if (req.method === "POST" && segments.length === 4 && segments[3] === "generate") {
+          if (body.trim()) parseJsonBody(body);
+          const view = await design.generateCandidate({ projectId: project.id });
+          return sendJson(res, 201, {
+            id: view.id,
+            candidateDigest: view.candidateDigest,
+            provider: view.provider,
+            providerProjectName: view.providerProjectName,
+            approvalState: view.approvalState,
+            screens: view.data.screens.map((s) => ({ id: s.id, title: s.title, deviceType: s.deviceType })),
+          });
+        }
+
+        // POST accept/reject: /projects/:id/design/candidates/:candidateId/{accept,reject}
+        if (
+          req.method === "POST" &&
+          segments.length === 6 &&
+          segments[3] === "candidates" &&
+          (segments[5] === "accept" || segments[5] === "reject")
+        ) {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(designCandidateActionSchema, parsed);
+          if (input.candidateId !== segments[4]!) {
+            return sendError(res, "validation_error", "candidateId must match the URL path candidate.");
+          }
+          if (segments[5] === "accept") {
+            const accepted = await design.acceptCandidate({
+              projectId: project.id,
+              candidateId: segments[4]!,
+              expectedCandidateDigest: input.expectedCandidateDigest,
+              reviewNotes: input.reviewNotes ?? null,
+            });
+            return sendJson(res, 200, {
+              id: accepted.id,
+              version: accepted.version,
+              candidateDigest: accepted.candidateDigest,
+              inputDigest: accepted.inputDigest,
+              designMdDigest: accepted.designMdDigest,
+              acceptedAt: accepted.acceptedAt,
+            });
+          }
+          const rejected = await design.rejectCandidate({
+            projectId: project.id,
+            candidateId: segments[4]!,
+            expectedCandidateDigest: input.expectedCandidateDigest,
+            reviewNotes: input.reviewNotes ?? null,
+          });
+          return sendJson(res, 200, {
+            id: rejected.id,
+            approvalState: rejected.approvalState,
+            reviewNotes: rejected.reviewNotes,
+          });
+        }
+
+        // GET artifact bytes: /projects/:id/design/artifacts/:digest
+        // Provider HTML is UNTRUSTED external content: served with a
+        // script-free, form-free, self-framed-only CSP + nosniff. The
+        // Dashboard renders it ONLY inside a sandboxed iframe (fail closed).
+        if (req.method === "GET" && segments.length === 5 && segments[3] === "artifacts") {
+          const digest = segments[4]!;
+          if (!/^[0-9a-f]{64}$/.test(digest)) {
+            return sendError(res, "validation_error", "Artifact digest must be a lowercase SHA-256 hex digest.");
+          }
+          const artifact = await design.readArtifact(project.id, digest);
+          if (!artifact) return sendError(res, "not_found", "Design artifact not found.");
+          res.writeHead(200, {
+            "Content-Type": artifact.mediaType,
+            "Content-Length": String(artifact.bytes.byteLength),
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy":
+              "default-src 'none'; img-src data:; style-src 'unsafe-inline'; frame-ancestors 'self'; form-action 'none'",
+            "Cache-Control": "private, no-store",
+          });
+          res.end(Buffer.from(artifact.bytes));
+          return;
+        }
+
+        return sendError(res, "not_found", "Unknown endpoint.");
       }
 
       return sendError(res, "not_found", "Unknown endpoint.");

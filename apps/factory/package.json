@@ -12,17 +12,21 @@
     "db:migrate": "tsx src/index.ts db migrate",
     "db:check": "tsx src/index.ts db check",
     "test:persistence": "tsx --test --test-concurrency=1 tests/persistence/*.test.ts",
-    "test:operator": "tsx --test tests/operator/*.test.ts"
+    "test:operator": "tsx --test --test-concurrency=1 tests/operator/*.test.ts"
   },
   "dependencies": {
     "@factory/contracts": "workspace:*",
+    "@google/design.md": "0.4.0",
+    "@modelcontextprotocol/client": "2.0.0",
     "drizzle-orm": "0.45.2",
+    "file-type": "21.0.0",
     "ipaddr.js": "2.5.0",
     "node-html-parser": "^9.0.3",
     "pg": "8.23.0",
     "retext": "9.0.0",
     "retext-english": "5.0.0",
-    "retext-readability": "8.0.0"
+    "retext-readability": "8.0.0",
+    "sharp": "0.35.4"
   },
   "devDependencies": {
     "@playwright/test": "~1.61.1",

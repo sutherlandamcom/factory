@@ -1,0 +1,613 @@
+{
+  "id": "7f3a2c1e-9b4d-4e6a-8f5c-1d2e3f4a5b6c",
+  "prevId": "d78115c9-866d-4e5e-8d60-496b3af3242e",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.accepted_design_artifacts": {
+      "name": "accepted_design_artifacts",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "candidate_id": {
+          "name": "candidate_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "candidate_digest": {
+          "name": "candidate_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "input_snapshot_id": {
+          "name": "input_snapshot_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "input_snapshot_version": {
+          "name": "input_snapshot_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "input_digest": {
+          "name": "input_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_project_name": {
+          "name": "provider_project_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "design_md_digest": {
+          "name": "design_md_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "data": {
+          "name": "data",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "accepted_at": {
+          "name": "accepted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "provider_mode": {
+          "name": "provider_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "accepted_design_artifacts_project_idx": {
+          "name": "accepted_design_artifacts_project_idx",
+          "columns": [
+            {
+              "expression": "",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "accepted_design_artifacts_project_id_projects_id_fk": {
+          "name": "accepted_design_artifacts_project_id_projects_id_fk",
+          "tableFrom": "accepted_design_artifacts",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "accepted_design_artifacts_candidate_id_design_candidates_id_fk": {
+          "name": "accepted_design_artifacts_candidate_id_design_candidates_id_fk",
+          "tableFrom": "accepted_design_artifacts",
+          "tableTo": "design_candidates",
+          "columnsFrom": [
+            "candidate_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "accepted_design_artifacts_project_version_unique": {
+          "name": "accepted_design_artifacts_project_version_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "project_id",
+            "version"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "accepted_design_artifacts_version_positive": {
+          "name": "accepted_design_artifacts_version_positive",
+          "value": "\"version\" >= 1"
+        },
+        "accepted_design_artifacts_candidate_digest_shape": {
+          "name": "accepted_design_artifacts_candidate_digest_shape",
+          "value": "\"candidate_digest\" ~ '^[0-9a-f]{64}$'"
+        },
+        "accepted_design_artifacts_input_digest_shape": {
+          "name": "accepted_design_artifacts_input_digest_shape",
+          "value": "\"input_digest\" ~ '^[0-9a-f]{64}$'"
+        },
+        "accepted_design_artifacts_design_md_digest_shape": {
+          "name": "accepted_design_artifacts_design_md_digest_shape",
+          "value": "\"design_md_digest\" ~ '^[0-9a-f]{64}$'"
+        },
+        "accepted_design_artifacts_provider_valid": {
+          "name": "accepted_design_artifacts_provider_valid",
+          "value": "\"provider\" IN ('google-stitch')"
+        },
+        "accepted_design_artifacts_provider_mode_valid": {
+          "name": "accepted_design_artifacts_provider_mode_valid",
+          "value": "\"provider_mode\" IN ('live', 'fixture')"
+        }
+      }
+    },
+    "public.design_candidates": {
+      "name": "design_candidates",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "input_snapshot_id": {
+          "name": "input_snapshot_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "input_snapshot_version": {
+          "name": "input_snapshot_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "input_digest": {
+          "name": "input_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_project_name": {
+          "name": "provider_project_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "data": {
+          "name": "data",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "candidate_digest": {
+          "name": "candidate_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "approval_state": {
+          "name": "approval_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "accepted_at": {
+          "name": "accepted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rejected_at": {
+          "name": "rejected_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "review_notes": {
+          "name": "review_notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "provider_mode": {
+          "name": "provider_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "design_candidates_project_idx": {
+          "name": "design_candidates_project_idx",
+          "columns": [
+            {
+              "expression": "",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "design_candidates_input_idx": {
+          "name": "design_candidates_input_idx",
+          "columns": [
+            {
+              "expression": "",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "design_candidates_project_id_projects_id_fk": {
+          "name": "design_candidates_project_id_projects_id_fk",
+          "tableFrom": "design_candidates",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "design_candidates_input_snapshot_id_design_input_snapshots_id_fk": {
+          "name": "design_candidates_input_snapshot_id_design_input_snapshots_id_fk",
+          "tableFrom": "design_candidates",
+          "tableTo": "design_input_snapshots",
+          "columnsFrom": [
+            "input_snapshot_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "design_candidates_approval_state_valid": {
+          "name": "design_candidates_approval_state_valid",
+          "value": "\"approval_state\" IN ('pending', 'accepted', 'rejected')"
+        },
+        "design_candidates_digest_shape": {
+          "name": "design_candidates_digest_shape",
+          "value": "\"candidate_digest\" ~ '^[0-9a-f]{64}$'"
+        },
+        "design_candidates_input_digest_shape": {
+          "name": "design_candidates_input_digest_shape",
+          "value": "\"input_digest\" ~ '^[0-9a-f]{64}$'"
+        },
+        "design_candidates_state_timestamps_valid": {
+          "name": "design_candidates_state_timestamps_valid",
+          "value": "(\n    (\n      (\"approval_state\" = 'pending' AND \"accepted_at\" IS NULL AND \"rejected_at\" IS NULL)\n      OR (\"approval_state\" = 'accepted' AND \"accepted_at\" IS NOT NULL AND \"rejected_at\" IS NULL)\n      OR (\"approval_state\" = 'rejected' AND \"accepted_at\" IS NULL AND \"rejected_at\" IS NOT NULL)\n    )\n  )"
+        },
+        "design_candidates_provider_valid": {
+          "name": "design_candidates_provider_valid",
+          "value": "\"provider\" IN ('google-stitch')"
+        },
+        "design_candidates_provider_mode_valid": {
+          "name": "design_candidates_provider_mode_valid",
+          "value": "\"provider_mode\" IN ('live', 'fixture')"
+        }
+      }
+    },
+    "public.design_input_snapshots": {
+      "name": "design_input_snapshots",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "data": {
+          "name": "data",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "input_digest": {
+          "name": "input_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "design_input_snapshots_project_idx": {
+          "name": "design_input_snapshots_project_idx",
+          "columns": [
+            {
+              "expression": "",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "design_input_snapshots_project_id_projects_id_fk": {
+          "name": "design_input_snapshots_project_id_projects_id_fk",
+          "tableFrom": "design_input_snapshots",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "design_input_snapshots_project_version_unique": {
+          "name": "design_input_snapshots_project_version_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "project_id",
+            "version"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "design_input_snapshots_version_positive": {
+          "name": "design_input_snapshots_version_positive",
+          "value": "\"version\" >= 1"
+        },
+        "design_input_snapshots_digest_shape": {
+          "name": "design_input_snapshots_digest_shape",
+          "value": "\"input_digest\" ~ '^[0-9a-f]{64}$'"
+        }
+      }
+    },
+    "public.design_artifact_refs": {
+      "name": "design_artifact_refs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "candidate_id": {
+          "name": "candidate_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "artifact_kind": {
+          "name": "artifact_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "artifact_digest": {
+          "name": "artifact_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "design_artifact_refs_project_digest_idx": {
+          "name": "design_artifact_refs_project_digest_idx",
+          "columns": [
+            {
+              "expression": "",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "design_artifact_refs_project_id_projects_id_fk": {
+          "name": "design_artifact_refs_project_id_projects_id_fk",
+          "tableFrom": "design_artifact_refs",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "design_artifact_refs_candidate_id_design_candidates_id_fk": {
+          "name": "design_artifact_refs_candidate_id_design_candidates_id_fk",
+          "tableFrom": "design_artifact_refs",
+          "tableTo": "design_candidates",
+          "columnsFrom": [
+            "candidate_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "design_artifact_refs_candidate_digest_unique": {
+          "name": "design_artifact_refs_candidate_digest_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "candidate_id",
+            "artifact_kind",
+            "artifact_digest"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "design_artifact_refs_digest_shape": {
+          "name": "design_artifact_refs_digest_shape",
+          "value": "\"artifact_digest\" ~ '^[0-9a-f]{64}$'"
+        },
+        "design_artifact_refs_kind_valid": {
+          "name": "design_artifact_refs_kind_valid",
+          "value": "\"artifact_kind\" IN ('design_md', 'screen_html', 'screen_screenshot', 'provider_response')"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

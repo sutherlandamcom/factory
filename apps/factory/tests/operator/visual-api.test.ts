@@ -105,7 +105,6 @@ async function startTestServer(): Promise<TestServer> {
   const designStore = new DesignStore(dbInst.db);
   const design = await DesignService.create({ store: designStore, provider: {
     id: "google-stitch",
-    providerMode: "fixture",
     async preflight() {
       return { configured: true, provider: "google-stitch", reachable: true };
     },

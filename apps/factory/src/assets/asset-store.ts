@@ -222,6 +222,21 @@ export class AssetStore {
     return row ?? null;
   }
 
+  /**
+   * Find a version in this project by its exact binary digest (read-only
+   * lookup; the UNIQUE(project_id, binary_digest) constraint guarantees at
+   * most one row). Used by Run 7 to BIND byte-identical outputs to the
+   * existing approved version instead of failing on a duplicate upload.
+   */
+  async findByBinaryDigest(projectId: string, binaryDigest: string): Promise<AssetVersionRow | null> {
+    const [row] = await this.db
+      .select()
+      .from(assetVersions)
+      .where(and(eq(assetVersions.projectId, projectId), eq(assetVersions.binaryDigest, binaryDigest)))
+      .limit(1);
+    return row ?? null;
+  }
+
   async getLatestVersion(projectId: string, assetId: string): Promise<AssetVersionRow | null> {
     const [row] = await this.db
       .select()
@@ -283,6 +298,50 @@ export class AssetStore {
           rightsNote: input.rightsNote,
           altIntent: input.altIntent,
         })
+        .where(and(eq(assetVersions.id, row.id), eq(assetVersions.approvalState, "pending")))
+        .returning();
+      return updated!;
+    });
+  }
+
+  /**
+   * Record derivation provenance on a PENDING version (Run 7 seam). The
+   * provenance category must be `derived` or `generated` (Run 7 outputs);
+   * operator-upload rows are never touched. Approved/rejected versions are
+   * immutable — this fails closed on any terminal state.
+   */
+  async recordDerivationProvenance(input: {
+    projectId: string;
+    versionId: string;
+    expectedBinaryDigest: string;
+    provenance: AssetProvenance;
+  }): Promise<AssetVersionRow> {
+    return await this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .select()
+        .from(assetVersions)
+        .where(and(eq(assetVersions.projectId, input.projectId), eq(assetVersions.id, input.versionId)))
+        .for("update");
+      if (!row) throw versionNotFound();
+      if (row.binaryDigest !== input.expectedBinaryDigest) {
+        throw approvalError("Provenance record rejected: expectedBinaryDigest does not match the stored version.");
+      }
+      if (row.approvalState !== "pending") {
+        throw new FactoryError(
+          "asset_version_immutable",
+          "Approved/rejected asset versions are immutable; provenance must be recorded before approval.",
+        );
+      }
+      const category = (input.provenance as { category?: string }).category;
+      if (category !== "derived" && category !== "generated") {
+        throw new FactoryError(
+          "asset_upload_invalid",
+          "Derivation provenance recording requires category 'derived' or 'generated'.",
+        );
+      }
+      const [updated] = await tx
+        .update(assetVersions)
+        .set({ provenance: input.provenance })
         .where(and(eq(assetVersions.id, row.id), eq(assetVersions.approvalState, "pending")))
         .returning();
       return updated!;

@@ -1504,3 +1504,347 @@ export type DesignCandidateRecord = typeof designCandidates.$inferSelect;
 export type InsertDesignCandidate = typeof designCandidates.$inferInsert;
 export type AcceptedDesignArtifactRecord = typeof acceptedDesignArtifacts.$inferSelect;
 export type InsertAcceptedDesignArtifact = typeof acceptedDesignArtifacts.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Visual Assets: Final Asset Resolution (Macro Run 7)
+// ---------------------------------------------------------------------------
+
+/**
+ * Versioned VisualAssetPlan derived from an exact accepted design artifact.
+ * Immutable once written; re-derivation with changed upstream creates the
+ * next version. Slots carry truth-class PROPOSALS — the operator's
+ * confirmation lives in visual_slot_classifications.
+ */
+export const visualAssetPlans = pgTable(
+  "visual_asset_plans",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    designArtifactId: text("design_artifact_id").notNull(),
+    designArtifactVersion: integer("design_artifact_version").notNull(),
+    designCandidateDigest: text("design_candidate_digest").notNull(),
+    designInputDigest: text("design_input_digest").notNull(),
+    designProviderMode: text("design_provider_mode").notNull(),
+    slots: jsonb("slots").notNull(),
+    planDigest: text("plan_digest").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("visual_asset_plans_project_version_unique").on(table.projectId, table.version),
+    check("visual_asset_plans_version_positive", sql`${table.version} >= 1`),
+    check("visual_asset_plans_digest_shape", sql`${table.planDigest} ~ '^[0-9a-f]{64}$'`),
+    check(
+      "visual_asset_plans_provider_mode_valid",
+      sql`${table.designProviderMode} IN ('live', 'fixture')`,
+    ),
+    index("visual_asset_plans_project_idx").on(table.projectId, table.version),
+  ],
+);
+
+/**
+ * Operator-confirmed truth classification per (plan, slot). This is the
+ * classification AUTHORITY: the plan's proposal is advisory until a row
+ * exists here. Re-confirmation overwrites the slot's classification
+ * (pre-provider-execution only; accepted slots are immutable).
+ */
+export const visualSlotClassifications = pgTable(
+  "visual_slot_classifications",
+  {
+    id: text("id").primaryKey(),
+    planId: text("plan_id")
+      .notNull()
+      .references(() => visualAssetPlans.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    slot: text("slot").notNull(),
+    truthClass: text("truth_class").notNull(),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("visual_slot_classifications_plan_slot_unique").on(table.planId, table.slot),
+    check(
+      "visual_slot_classifications_truth_class_valid",
+      sql`${table.truthClass} IN ('documentary', 'documentary_edited', 'illustrative', 'decorative', 'data_visualization')`,
+    ),
+  ],
+);
+
+/**
+ * Immutable prompt snapshot (human-approved before any spend). The digest is
+ * computed over the exact snapshot payload; approval binds it. Never mutated.
+ */
+export const visualPromptSnapshots = pgTable(
+  "visual_prompt_snapshots",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    planId: text("plan_id")
+      .notNull()
+      .references(() => visualAssetPlans.id, { onDelete: "cascade" }),
+    slot: text("slot").notNull(),
+    operation: text("operation").notNull(),
+    truthClass: text("truth_class").notNull(),
+    data: jsonb("data").notNull(),
+    promptDigest: text("prompt_digest").notNull(),
+    approvalState: text("approval_state").notNull().default("pending"),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check("visual_prompt_snapshots_digest_shape", sql`${table.promptDigest} ~ '^[0-9a-f]{64}$'`),
+    check("visual_prompt_snapshots_operation_valid", sql`${table.operation} IN ('edit', 'generate')`),
+    check(
+      "visual_prompt_snapshots_approval_state_valid",
+      sql`${table.approvalState} IN ('pending', 'approved')`,
+    ),
+    check(
+      "visual_prompt_snapshots_approved_at_valid",
+      sql`(${table.approvalState} = 'pending' AND ${table.approvedAt} IS NULL)
+          OR (${table.approvalState} = 'approved' AND ${table.approvedAt} IS NOT NULL)`,
+    ),
+    index("visual_prompt_snapshots_project_idx").on(table.projectId, table.promptDigest),
+  ],
+);
+
+/**
+ * Provider generation request with request-digest dedup: the same exact
+ * (slot, design digest, prompt digest, source digests, provider, model,
+ * params) maps to the same request_digest, and a repeat never re-spends.
+ */
+export const visualGenerationRequests = pgTable(
+  "visual_generation_requests",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    slot: text("slot").notNull(),
+    requestDigest: text("request_digest").notNull(),
+    promptSnapshotId: text("prompt_snapshot_id")
+      .notNull()
+      .references(() => visualPromptSnapshots.id, { onDelete: "cascade" }),
+    promptDigest: text("prompt_digest").notNull(),
+    provider: text("provider").notNull(),
+    providerMode: text("provider_mode").notNull(),
+    model: text("model").notNull(),
+    modelPolicyVersion: text("model_policy_version").notNull(),
+    operation: text("operation").notNull(),
+    escalationReason: text("escalation_reason"),
+    providerRequestRef: text("provider_request_ref"),
+    resultState: text("result_state").notNull(),
+    costMicros: integer("cost_micros"),
+    rawMetadata: jsonb("raw_metadata"),
+    failureCode: text("failure_code"),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    unique("visual_generation_requests_project_digest_unique").on(table.projectId, table.requestDigest),
+    check("visual_generation_requests_digest_shape", sql`${table.requestDigest} ~ '^[0-9a-f]{64}$'`),
+    check("visual_generation_requests_prompt_digest_shape", sql`${table.promptDigest} ~ '^[0-9a-f]{64}$'`),
+    check("visual_generation_requests_provider_valid", sql`${table.provider} IN ('google-genai')`),
+    check("visual_generation_requests_provider_mode_valid", sql`${table.providerMode} IN ('live', 'fixture')`),
+    check("visual_generation_requests_operation_valid", sql`${table.operation} IN ('edit', 'generate')`),
+    check("visual_generation_requests_result_state_valid", sql`${table.resultState} IN ('succeeded', 'failed')`),
+    check(
+      "visual_generation_requests_cost_non_negative",
+      sql`${table.costMicros} IS NULL OR ${table.costMicros} >= 0`,
+    ),
+    check(
+      "visual_generation_requests_escalation_reason_valid",
+      sql`${table.escalationReason} IS NULL OR ${table.escalationReason} IN (
+        'composition_complexity', 'brand_consistency', 'text_rendering', 'reference_composition', 'quality_floor_failure'
+      )`,
+    ),
+    index("visual_generation_requests_project_idx").on(table.projectId, table.slot),
+  ],
+);
+
+/**
+ * Immutable provider-output candidate: byte-validated, content-addressed
+ * (`.factory/visual/candidates/`), with exact parent lineage, C2PA read
+ * result and QA evidence. Provider output is NEVER an AssetVersion until
+ * human acceptance routes it through the Run 5 authority.
+ */
+export const visualAssetCandidates = pgTable(
+  "visual_asset_candidates",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    requestId: text("request_id")
+      .notNull()
+      .references(() => visualGenerationRequests.id, { onDelete: "cascade" }),
+    slot: text("slot").notNull(),
+    candidateIndex: integer("candidate_index").notNull(),
+    binaryDigest: text("binary_digest").notNull(),
+    mediaType: text("media_type").notNull(),
+    width: integer("width").notNull(),
+    height: integer("height").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    storageKey: text("storage_key").notNull(),
+    parentLineage: jsonb("parent_lineage").notNull(),
+    promptDigest: text("prompt_digest").notNull(),
+    c2pa: jsonb("c2pa").notNull(),
+    providerMetadata: jsonb("provider_metadata"),
+    qa: jsonb("qa").notNull(),
+    state: text("state").notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("visual_asset_candidates_request_index_unique").on(table.requestId, table.candidateIndex),
+    check("visual_asset_candidates_digest_shape", sql`${table.binaryDigest} ~ '^[0-9a-f]{64}$'`),
+    check("visual_asset_candidates_prompt_digest_shape", sql`${table.promptDigest} ~ '^[0-9a-f]{64}$'`),
+    check(
+      "visual_asset_candidates_media_type_valid",
+      sql`${table.mediaType} IN ('image/jpeg', 'image/png', 'image/webp')`,
+    ),
+    check(
+      "visual_asset_candidates_dimensions_positive",
+      sql`${table.width} >= 1 AND ${table.height} >= 1 AND ${table.byteSize} >= 1`,
+    ),
+    check("visual_asset_candidates_state_valid", sql`${table.state} IN ('pending', 'selected', 'rejected')`),
+    index("visual_asset_candidates_project_idx").on(table.projectId, table.slot),
+  ],
+);
+
+/**
+ * The immutable AcceptedVisualAssetSet: version/digest-bound final visual
+ * authority for one plan (one accepted design lineage). Slots bind the
+ * EXACT resolved AssetVersion (id + both digests copied at accept time).
+ */
+export const acceptedVisualAssetSets = pgTable(
+  "accepted_visual_asset_sets",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    planId: text("plan_id")
+      .notNull()
+      .references(() => visualAssetPlans.id, { onDelete: "cascade" }),
+    designArtifactId: text("design_artifact_id").notNull(),
+    designArtifactVersion: integer("design_artifact_version").notNull(),
+    designCandidateDigest: text("design_candidate_digest").notNull(),
+    designInputDigest: text("design_input_digest").notNull(),
+    setDigest: text("set_digest").notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("accepted_visual_asset_sets_project_version_unique").on(table.projectId, table.version),
+    check("accepted_visual_asset_sets_version_positive", sql`${table.version} >= 1`),
+    check("accepted_visual_asset_sets_digest_shape", sql`${table.setDigest} ~ '^[0-9a-f]{64}$'`),
+    index("accepted_visual_asset_sets_project_idx").on(table.projectId, table.version),
+  ],
+);
+
+/**
+ * Per-slot final resolution inside an accepted set. The documentary
+ * CHECK enforces the hard truth policy at the DB layer: ai_generate can
+ * never carry documentary/documentary_edited/data_visualization truth.
+ */
+export const acceptedVisualAssetSlots = pgTable(
+  "accepted_visual_asset_slots",
+  {
+    id: text("id").primaryKey(),
+    setId: text("set_id")
+      .notNull()
+      .references(() => acceptedVisualAssetSets.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    slot: text("slot").notNull(),
+    pageSlug: text("page_slug").notNull(),
+    role: text("role").notNull(),
+    resolvedVersionId: text("resolved_version_id")
+      .notNull()
+      .references(() => assetVersions.id, { onDelete: "restrict" }),
+    binaryDigest: text("binary_digest").notNull(),
+    governanceDigest: text("governance_digest").notNull(),
+    resolutionMode: text("resolution_mode").notNull(),
+    truthClass: text("truth_class").notNull(),
+    promptSnapshotId: text("prompt_snapshot_id").references(() => visualPromptSnapshots.id, {
+      onDelete: "set null",
+    }),
+    generationRequestId: text("generation_request_id").references(() => visualGenerationRequests.id, {
+      onDelete: "set null",
+    }),
+    candidateId: text("candidate_id").references(() => visualAssetCandidates.id, { onDelete: "set null" }),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("accepted_visual_asset_slots_set_slot_unique").on(table.setId, table.slot),
+    check(
+      "accepted_visual_asset_slots_digest_shape",
+      sql`${table.binaryDigest} ~ '^[0-9a-f]{64}$' AND ${table.governanceDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "accepted_visual_asset_slots_resolution_mode_valid",
+      sql`${table.resolutionMode} IN ('reuse_real', 'deterministic_transform', 'ai_edit', 'ai_generate')`,
+    ),
+    check(
+      "accepted_visual_asset_slots_truth_class_valid",
+      sql`${table.truthClass} IN ('documentary', 'documentary_edited', 'illustrative', 'decorative', 'data_visualization')`,
+    ),
+    check(
+      "accepted_visual_asset_slots_documentary_forbids_generated",
+      sql`NOT (${table.resolutionMode} = 'ai_generate' AND ${table.truthClass} IN ('documentary', 'documentary_edited', 'data_visualization'))`,
+    ),
+    index("accepted_visual_asset_slots_project_idx").on(table.projectId),
+  ],
+);
+
+/**
+ * Visual budget reservation ledger: exact lifecycle clone of
+ * writer_budget_reservations (ceiling-check + INSERT in one tx under the
+ * shared budget advisory xact lock; ACTIVE -> ACCOUNTED | RELEASED).
+ */
+export const visualBudgetReservations = pgTable(
+  "visual_budget_reservations",
+  {
+    id: text("id").primaryKey(),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    authorizedMicros: integer("authorized_micros").notNull(),
+    accountedMicros: integer("accounted_micros"),
+    state: text("state").notNull(),
+    invocationDigest: text("invocation_digest").notNull(),
+    lineage: jsonb("lineage"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    accountedAt: timestamp("accounted_at", { withTimezone: true }),
+  },
+  (table) => [
+    check(
+      "visual_budget_reservations_state_valid",
+      sql`${table.state} IN ('ACTIVE', 'ACCOUNTED', 'RELEASED')`,
+    ),
+    check(
+      "visual_budget_reservations_accounted_valid",
+      sql`(
+        (${table.state} = 'ACTIVE' AND ${table.accountedMicros} IS NULL AND ${table.accountedAt} IS NULL)
+        OR (${table.state} = 'ACCOUNTED' AND ${table.accountedMicros} IS NOT NULL AND ${table.accountedAt} IS NOT NULL)
+        OR (${table.state} = 'RELEASED' AND ${table.accountedMicros} IS NULL AND ${table.accountedAt} IS NOT NULL)
+      )`,
+    ),
+    index("visual_budget_reservations_state_created_idx").on(table.state, table.createdAt),
+    index("visual_budget_reservations_created_idx").on(table.createdAt),
+  ],
+);
+
+export type VisualAssetPlanRecord = typeof visualAssetPlans.$inferSelect;
+export type InsertVisualAssetPlan = typeof visualAssetPlans.$inferInsert;
+export type VisualSlotClassificationRecord = typeof visualSlotClassifications.$inferSelect;
+export type VisualPromptSnapshotRecord = typeof visualPromptSnapshots.$inferSelect;
+export type VisualGenerationRequestRecord = typeof visualGenerationRequests.$inferSelect;
+export type VisualAssetCandidateRecord = typeof visualAssetCandidates.$inferSelect;
+export type AcceptedVisualAssetSetRecord = typeof acceptedVisualAssetSets.$inferSelect;
+export type AcceptedVisualAssetSlotRecord = typeof acceptedVisualAssetSlots.$inferSelect;
+export type VisualBudgetReservationRecord = typeof visualBudgetReservations.$inferSelect;

@@ -1073,3 +1073,162 @@ export const designApi = {
   artifactUrl: (projectId: string, digest: string) =>
     `/api/projects/${encodeURIComponent(projectId)}/design/artifacts/${encodeURIComponent(digest)}`,
 };
+
+// ---------------------------------------------------------------------------
+// Visual Assets (Macro Run 7) — thin typed surface over the Operator API.
+// ---------------------------------------------------------------------------
+
+export interface VisualPreflight {
+  configured: boolean;
+  provider: string;
+  reachable?: boolean;
+  verifiedModels?: string[];
+  reason?: string;
+}
+
+export interface VisualCandidateView {
+  id: string;
+  candidateIndex: number;
+  binaryDigest: string;
+  mediaType: string;
+  width: number;
+  height: number;
+  state: string;
+  c2paStatus: string;
+  parentLineage: Array<{ versionId: string; binaryDigest: string }>;
+  requestId: string;
+  providerMode: string;
+  model: string;
+}
+
+export interface VisualSlotView {
+  slot: string;
+  pageSlug: string;
+  role: string;
+  requiredRole: string;
+  requirement: string;
+  truthClassProposal: string;
+  truthClassRationale: string;
+  truthClass: string | null;
+  truthClassConfirmedAt: string | null;
+  proposedStrategy: string;
+  strategyReason: string;
+  aspectRatio: string;
+  minDimensions: { width: number; height: number };
+  existingVersionId: string | null;
+  existingBinaryDigest: string | null;
+  existingGovernanceDigest: string | null;
+  unresolvedReason: string;
+  resolved: boolean;
+  promptSnapshot: { id: string; digest: string; approvalState: string; operation: string } | null;
+  candidates: VisualCandidateView[];
+  acceptedResolution: {
+    resolutionMode: string;
+    truthClass: string;
+    versionId: string;
+    binaryDigest: string;
+    governanceDigest: string;
+    assetId: string;
+    assignmentId: string | null;
+  } | null;
+}
+
+export interface VisualWorkspace {
+  schemaVersion: string;
+  provider: { preflight: VisualPreflight; providerMode: string };
+  plan: {
+    id: string;
+    version: number;
+    planDigest: string;
+    designArtifactId: string;
+    designArtifactVersion: number;
+    designCandidateDigest: string;
+    designInputDigest: string;
+    designProviderMode: string;
+    createdAt: string;
+    stale: boolean;
+    staleReason: string | null;
+  } | null;
+  slots: VisualSlotView[];
+  acceptedSet: {
+    id: string;
+    version: number;
+    setDigest: string;
+    acceptedAt: string;
+    slots: Array<{ slot: string; pageSlug: string; role: string; versionId: string; resolutionMode: string; truthClass: string }>;
+  } | null;
+  budget: { accountedTodayMicros: number; activeReservationMicros: number };
+}
+
+export const visualApi = {
+  workspace: (projectId: string) =>
+    request<VisualWorkspace>(`/api/projects/${encodeURIComponent(projectId)}/visual/workspace`),
+
+  derivePlan: (projectId: string) =>
+    request<{ id: string; version: number; planDigest: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/visual/plan`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+
+  classify: (projectId: string, planId: string, slot: string, truthClass: string) =>
+    request<{ ok: boolean }>(
+      `/api/projects/${encodeURIComponent(projectId)}/visual/plans/${encodeURIComponent(planId)}/slots/${encodeURIComponent(slot)}/classification`,
+      { method: "PUT", body: JSON.stringify({ truthClass, acknowledged: true }) },
+    ),
+
+  compilePrompt: (projectId: string, planId: string, slot: string, operation: "edit" | "generate", sourceVersionId?: string) =>
+    request<{ id: string; promptDigest: string; approvalState: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/visual/plans/${encodeURIComponent(planId)}/slots/${encodeURIComponent(slot)}/prompt-snapshot`,
+      { method: "POST", body: JSON.stringify({ operation, sourceVersionId }) },
+    ),
+
+  approvePrompt: (projectId: string, snapshotId: string, promptDigest: string) =>
+    request<{ id: string; approvalState: string; promptDigest: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/visual/prompt-snapshots/${encodeURIComponent(snapshotId)}/approve`,
+      { method: "POST", body: JSON.stringify({ promptDigest }) },
+    ),
+
+  generate: (projectId: string, planId: string, slot: string, sourceVersionId?: string, escalationReason?: string) =>
+    request<{
+      requestId: string;
+      reused: boolean;
+      model: string;
+      providerMode: string;
+      candidates: Array<{ id: string; candidateIndex: number; binaryDigest: string; mediaType: string; width: number; height: number; state: string }>;
+    }>(
+      `/api/projects/${encodeURIComponent(projectId)}/visual/plans/${encodeURIComponent(planId)}/slots/${encodeURIComponent(slot)}/generate`,
+      { method: "POST", body: JSON.stringify({ sourceVersionId, escalationReason }) },
+    ),
+
+  resolveReuse: (projectId: string, planId: string, slot: string, versionId?: string) =>
+    request<{ versionId: string; binaryDigest: string; governanceDigest: string | null; assetId: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/visual/plans/${encodeURIComponent(planId)}/slots/${encodeURIComponent(slot)}/resolve-reuse`,
+      { method: "POST", body: JSON.stringify({ versionId }) },
+    ),
+
+  resolveTransform: (
+    projectId: string,
+    planId: string,
+    slot: string,
+    input: { sourceVersionId: string; maxWidth?: number; aspectRatioCrop?: string; grayscale?: boolean; brightness?: number },
+  ) =>
+    request<{ versionId: string; binaryDigest: string; governanceDigest: string | null; transformation: string | null }>(
+      `/api/projects/${encodeURIComponent(projectId)}/visual/plans/${encodeURIComponent(planId)}/slots/${encodeURIComponent(slot)}/resolve-transform`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+
+  acceptCandidate: (projectId: string, planId: string, slot: string, candidateId: string, expectedBinaryDigest: string, confirmTruthDowngrade?: boolean) =>
+    request<{ versionId: string; binaryDigest: string; governanceDigest: string; assetId: string; assignmentId: string | null; truthClass: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/visual/plans/${encodeURIComponent(planId)}/slots/${encodeURIComponent(slot)}/accept`,
+      { method: "POST", body: JSON.stringify({ candidateId, expectedBinaryDigest, confirmTruthDowngrade }) },
+    ),
+
+  acceptSet: (projectId: string, planId: string) =>
+    request<{ id: string; version: number; setDigest: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/visual/plans/${encodeURIComponent(planId)}/accept-set`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+
+  candidateUrl: (projectId: string, candidateId: string) =>
+    `/api/projects/${encodeURIComponent(projectId)}/visual/candidates/${encodeURIComponent(candidateId)}/bytes`,
+};

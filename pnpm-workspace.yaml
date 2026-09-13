@@ -4,7 +4,10 @@ packages:
   - "sites/*"
 allowBuilds:
   # esbuild's postinstall verifies its platform binary (used by tsx/vite).
+  '@contentauth/c2pa-node': true
+  '@google/genai': true
   esbuild: true
+  protobufjs: true
   # Wrangler's pinned workerd runtime verifies its platform binary at install.
   workerd: true
 minimumReleaseAgeExclude:

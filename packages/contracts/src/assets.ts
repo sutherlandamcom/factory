@@ -79,12 +79,39 @@ export type AssetApprovalState = z.infer<typeof assetApprovalStateSchema>;
 
 export const assetProvenanceCategorySchema = z.enum([
   "operator_upload",
-  // Contract-level anticipation only: Run 5 implements operator_upload.
-  // `generated`/`imported` rows must never be created by Run 5 code.
+  // Run 7: `derived` marks versions produced from an approved parent asset
+  // (deterministic transform or AI edit); `generated` marks fully synthetic
+  // creation. Run 5 itself still only creates operator_upload rows.
+  "derived",
   "generated",
   "imported",
 ]);
 export type AssetProvenanceCategory = z.infer<typeof assetProvenanceCategorySchema>;
+
+/**
+ * Exact derivation lineage for versions that originate from an approved
+ * parent (Run 7). Present ONLY on derived/generated rows; operator uploads
+ * never carry it. Parent references are exact ids + both digests — never a
+ * prose description like "edited from the homepage photo".
+ */
+export const assetDerivationSchema = z
+  .object({
+    origin: z.enum(["deterministic_transform", "ai_edit", "ai_generate"]),
+    parentVersionId: z.string().trim().regex(/^asv-[0-9a-f-]{36}$/),
+    parentBinaryDigest: z.string().trim().regex(/^[0-9a-f]{64}$/),
+    parentGovernanceDigest: z.string().trim().regex(/^[0-9a-f]{64}$/),
+    /** Deterministic-transform description (e.g. "crop 16:9, resize 1600w"). */
+    transformation: z.string().trim().max(300).optional(),
+    provider: z.string().trim().max(60).optional(),
+    model: z.string().trim().max(120).optional(),
+    promptSnapshotId: z.string().trim().max(128).optional(),
+    generationRequestId: z.string().trim().max(128).optional(),
+    /** Visual slot this version was produced for (exact design lineage). */
+    visualSlot: z.string().trim().max(120).optional(),
+    visualTruthClass: z.string().trim().max(40).optional(),
+  })
+  .strict();
+export type AssetDerivation = z.infer<typeof assetDerivationSchema>;
 
 export const assetProvenanceSchema = z
   .object({
@@ -100,6 +127,8 @@ export const assetProvenanceSchema = z
       })
       .strict()
       .optional(),
+    /** Exact derivation lineage (Run 7 derived/generated rows only). */
+    derivation: assetDerivationSchema.optional(),
   })
   .strict();
 export type AssetProvenance = z.infer<typeof assetProvenanceSchema>;

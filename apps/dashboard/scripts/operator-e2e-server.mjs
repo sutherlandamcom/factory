@@ -46,6 +46,9 @@ const CHILD_ENV = {
   // Design pipeline (Macro Run 6): fixture design provider so the full
   // journey never touches a paid provider. Trusted backend config only.
   FACTORY_DESIGN_MODE: process.env.FACTORY_DESIGN_MODE || "fixture",
+  // Visual pipeline (Macro Run 7): fixture visual provider so the full
+  // journey never touches a paid provider. Trusted backend config only.
+  FACTORY_VISUAL_MODE: process.env.FACTORY_VISUAL_MODE || "fixture",
 };
 
 /** @type {import('node:child_process').ChildProcess | null} */

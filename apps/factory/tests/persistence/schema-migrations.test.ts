@@ -25,6 +25,8 @@ test("schema & migrations: clean DB migration succeeds and is idempotent", async
     const tableNames = tablesRes.rows.map((r) => r.table_name);
 
     const expectedTables = [
+      "accepted_visual_asset_sets",
+      "accepted_visual_asset_slots",
       "attempts",
       "deployments",
       "model_invocations",
@@ -33,6 +35,12 @@ test("schema & migrations: clean DB migration succeeds and is idempotent", async
       "runs",
       "sites",
       "tasks",
+      "visual_asset_candidates",
+      "visual_asset_plans",
+      "visual_budget_reservations",
+      "visual_generation_requests",
+      "visual_prompt_snapshots",
+      "visual_slot_classifications",
     ];
 
     for (const table of expectedTables) {

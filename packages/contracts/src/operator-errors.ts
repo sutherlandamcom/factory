@@ -165,6 +165,32 @@ export const OPERATOR_ERROR_CODES = [
   "design_md_invalid",
   /** Trusted design provider budget policy blocks this execution (fail before spend). */
   "design_budget_blocked",
+  /** Accepted design missing/stale/fixture-classified for a visual live path. */
+  "visual_design_not_eligible",
+  /** Visual plan is stale versus the accepted design; re-derive required. */
+  "visual_plan_stale",
+  /** Truth classification must be confirmed before this operation. */
+  "visual_classification_required",
+  /** Requested resolution mode is forbidden for the slot's truth class. */
+  "visual_truth_policy_violation",
+  /** Prompt snapshot missing/not approved, or digest mismatch. */
+  "visual_prompt_not_approved",
+  /** Visual provider credentials/configuration are missing. */
+  "visual_provider_not_configured",
+  /** Visual provider endpoint failed before or during execution. */
+  "visual_provider_unavailable",
+  /** Visual provider output failed strict byte/contract validation. */
+  "visual_provider_output_invalid",
+  /** Trusted visual budget policy blocks this execution (fail before spend). */
+  "visual_budget_blocked",
+  /** Visual plan/prompt/request/candidate/set does not exist for this project. */
+  "visual_not_found",
+  /** Slot acceptance rejected (digest mismatch, invalid state, or lineage). */
+  "visual_acceptance_failed",
+  /** Accepted visual set is immutable; resolve remaining slots or re-accept. */
+  "visual_set_immutable",
+  /** Slot has no accepted resolution yet (set acceptance fail-closed). */
+  "visual_slot_unresolved",
   /** Unexpected server fault (message is always the sanitized fixed string). */
   "internal_error",
 ] as const;
@@ -249,6 +275,19 @@ export const OPERATOR_ERROR_STATUS: Readonly<Record<OperatorErrorCode, number>> 
   design_provider_output_invalid: 502,
   design_md_invalid: 502,
   design_budget_blocked: 402,
+  visual_design_not_eligible: 409,
+  visual_plan_stale: 409,
+  visual_classification_required: 409,
+  visual_truth_policy_violation: 422,
+  visual_prompt_not_approved: 409,
+  visual_provider_not_configured: 409,
+  visual_provider_unavailable: 502,
+  visual_provider_output_invalid: 502,
+  visual_budget_blocked: 402,
+  visual_not_found: 404,
+  visual_acceptance_failed: 409,
+  visual_set_immutable: 409,
+  visual_slot_unresolved: 409,
   internal_error: 500,
 };
 

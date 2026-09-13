@@ -6,7 +6,6 @@ import {
   type AssetUploadInput,
 } from "@factory/contracts";
 import { FactoryError } from "../executor/errors.js";
-import { deterministicDigest } from "../intelligence/digest.js";
 import { resolveRepositoryRoot } from "../repo-root.js";
 import { createAssetStorage, sha256HexBytes, type AssetStorage } from "./storage.js";
 import { AssetStore, type AssignmentRow, type AssetRow, type AssetVersionRow, type DerivativeRow } from "./asset-store.js";
@@ -366,34 +365,13 @@ export class AssetService {
     versionId: string,
     expectedBinaryDigest: string,
   ): Promise<AssetVersionRow> {
-    // Governance digest: immutable snapshot of the approved governance
-    // surface (identity + provenance + rights). Distinct from the binary
-    // digest. It is computed from the CURRENT stored row and recorded inside
-    // the same approval transaction (atomic: an approved row always carries
-    // its governance digest; the digest can never be rewritten afterwards).
-    const current = await this.store.getVersion(projectId, versionId);
-    if (!current) throw new FactoryError("asset_version_not_found", "Asset version not found for this project.");
-    const governanceDigest = deterministicDigest({
-      schemaVersion: ASSETS_SCHEMA_VERSION,
-      versionId: current.id,
-      binaryDigest: current.binaryDigest,
-      mediaType: current.mediaType,
-      byteSize: current.byteSize,
-      width: current.width,
-      height: current.height,
-      provenance: current.provenance,
-      rights: {
-        status: current.rightsStatus,
-        note: current.rightsNote,
-        altIntent: current.altIntent,
-      },
-    });
-    return await this.store.approveVersion({
-      projectId,
-      versionId,
-      expectedBinaryDigest,
-      governanceDigest,
-    });
+    // The governance digest is computed by the store FROM THE ROW LOCKED
+    // INSIDE the approval transaction (atomic approval operation). The
+    // service layer must never compute the final approval governance digest
+    // from an unlocked earlier read: a concurrent metadata update between an
+    // unlocked read and the row lock would otherwise approve metadata B
+    // while recording a digest of metadata A.
+    return await this.store.approveVersion({ projectId, versionId, expectedBinaryDigest });
   }
 
   async rejectVersion(

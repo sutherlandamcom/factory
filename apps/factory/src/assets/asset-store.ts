@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, sql } from "drizzle-orm";
-import type { AssetProvenance } from "@factory/contracts";
+import { ASSETS_SCHEMA_VERSION, type AssetProvenance } from "@factory/contracts";
 import type { FactoryDb } from "../persistence/db.js";
 import {
   assetDerivatives,
@@ -10,6 +10,7 @@ import {
   projectAssetSettings,
 } from "../persistence/schema.js";
 import { FactoryError } from "../executor/errors.js";
+import { deterministicDigest } from "../intelligence/digest.js";
 
 /**
  * Asset persistence (Macro Run 5).
@@ -241,17 +242,19 @@ export class AssetStore {
   }
 
   /**
-   * Terminal approval binding the exact binary digest, with the governance
-   * digest computed and recorded INSIDE the same transaction (atomic: an
-   * approved row always carries its governance digest). Idempotent when the
-   * stored digest already matches; a digest mismatch on an approved version
-   * fails closed (never re-approves different bytes).
+   * Terminal approval binding the exact binary digest. The governance
+   * digest is computed FROM THE ROW LOCKED INSIDE THIS TRANSACTION, so the
+   * recorded digest always describes the exact governance surface that was
+   * approved (no TOCTOU window between a service-layer read and the row
+   * lock). Atomic: an approved row always carries its governance digest
+   * (DB CHECK enforces this). Idempotent when the stored digest already
+   * matches; a digest mismatch on an approved version fails closed (never
+   * re-approves different bytes).
    */
   async approveVersion(input: {
     projectId: string;
     versionId: string;
     expectedBinaryDigest: string;
-    governanceDigest: string;
   }): Promise<AssetVersionRow> {
     return await this.db.transaction(async (tx) => {
       const [row] = await tx
@@ -270,9 +273,27 @@ export class AssetStore {
       if (row.binaryDigest !== input.expectedBinaryDigest) {
         throw approvalError("Approval rejected: expectedBinaryDigest does not match the stored version.");
       }
+      // Governance digest: immutable snapshot of the approved governance
+      // surface (identity + provenance + rights), computed from the LOCKED
+      // row. Distinct from the binary digest; write-once afterwards.
+      const governanceDigest = deterministicDigest({
+        schemaVersion: ASSETS_SCHEMA_VERSION,
+        versionId: row.id,
+        binaryDigest: row.binaryDigest,
+        mediaType: row.mediaType,
+        byteSize: row.byteSize,
+        width: row.width,
+        height: row.height,
+        provenance: row.provenance,
+        rights: {
+          status: row.rightsStatus,
+          note: row.rightsNote,
+          altIntent: row.altIntent,
+        },
+      });
       const [updated] = await tx
         .update(assetVersions)
-        .set({ approvalState: "approved", approvedAt: new Date(), governanceDigest: input.governanceDigest })
+        .set({ approvalState: "approved", approvedAt: new Date(), governanceDigest })
         .where(and(eq(assetVersions.id, row.id), eq(assetVersions.approvalState, "pending")))
         .returning();
       return updated!;
@@ -379,6 +400,14 @@ export class AssetStore {
           "Asset version has unresolved rights (unknown); resolve rights before assignment.",
         );
       }
+      // Fail closed: an approved version MUST carry its governance digest.
+      // Binary and governance digests are distinct authorities and are never
+      // silently substituted for one another.
+      if (version.governanceDigest === null) {
+        throw approvalError(
+          "Assignment rejected: approved version has no governance digest (corrupt approval state); re-approve via a new version upload.",
+        );
+      }
       const [existing] = await tx
         .select()
         .from(assetPageAssignments)
@@ -403,7 +432,7 @@ export class AssetStore {
             projectId: input.projectId,
             assetId: input.assetId,
             versionId: version.id,
-            versionDigest: version.governanceDigest ?? version.binaryDigest,
+            versionDigest: version.governanceDigest,
             binaryDigest: version.binaryDigest,
             pageSlug: input.pageSlug,
             role: input.role,
@@ -476,6 +505,14 @@ export class AssetStore {
           "Target version has unresolved rights (unknown); resolve rights before replacement.",
         );
       }
+      // Fail closed: an approved version MUST carry its governance digest
+      // (same authority rule as assignment; never substitute the binary
+      // digest for the governance digest).
+      if (version.governanceDigest === null) {
+        throw approvalError(
+          "Replacement rejected: approved version has no governance digest (corrupt approval state); re-approve via a new version upload.",
+        );
+      }
       if (version.id === assignment.versionId) {
         throw conflictError("Assignment already binds this exact version.");
       }
@@ -483,7 +520,7 @@ export class AssetStore {
         .update(assetPageAssignments)
         .set({
           versionId: version.id,
-          versionDigest: version.governanceDigest ?? version.binaryDigest,
+          versionDigest: version.governanceDigest,
           binaryDigest: version.binaryDigest,
           assignedAt: new Date(),
         })

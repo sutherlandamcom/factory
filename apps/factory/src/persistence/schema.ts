@@ -1213,6 +1213,13 @@ export const assetVersions = pgTable(
       "asset_versions_provenance_category_valid",
       sql`${table.provenance} ->> 'category' IN ('operator_upload', 'generated', 'imported')`,
     ),
+    // Governance invariant: an approved version ALWAYS carries its
+    // governance digest (binary and governance digests are distinct
+    // authorities; substitution is forbidden at the store layer too).
+    check(
+      "asset_versions_approved_governance_digest_required",
+      sql`${table.approvalState} <> 'approved' OR ${table.governanceDigest} IS NOT NULL`,
+    ),
     index("asset_versions_asset_idx").on(table.assetId, table.version),
     index("asset_versions_project_idx").on(table.projectId),
   ],

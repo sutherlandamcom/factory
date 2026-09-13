@@ -909,3 +909,163 @@ export const assetsApi = {
   derivativeUrl: (projectId: string, derivativeId: string) =>
     `/api/projects/${encodeURIComponent(projectId)}/assets/derivatives/${encodeURIComponent(derivativeId)}`,
 };
+
+// ---------------------------------------------------------------------------
+// Design (Macro Run 6)
+// ---------------------------------------------------------------------------
+
+export interface DesignPreflight {
+  configured: boolean;
+  provider: string;
+  reachable?: boolean;
+  reason?: string;
+}
+
+export interface DesignScreenView {
+  id: string;
+  providerScreenName: string;
+  title: string;
+  deviceType: string;
+  archetype: string;
+  htmlDigest?: string;
+  screenshotDigest?: string;
+}
+
+export interface DesignArchetypeView {
+  kind: string;
+  purpose: string;
+  providerScreenNames: string[];
+  sectionPatterns: string[];
+  contentRequirements: string[];
+  assetSlots: Array<{ slot: string; requirement: string; placeholder: boolean; boundAssetVersionId?: string }>;
+  primaryCta: string;
+  secondaryCta: string;
+  responsiveBehavior: string;
+  trustPresentation: string;
+}
+
+export interface DesignCandidateDataView {
+  schemaVersion: string;
+  provider: string;
+  providerProjectName: string;
+  providerDesignSystemAsset?: string;
+  designMdDigest: string;
+  designMdToolVersion: string;
+  designMdLint: { errors: number; warnings: number; infos: number };
+  tokens: {
+    colors: Record<string, string | undefined>;
+    typography: { headingFont: string; bodyFont: string; scaleNotes?: string };
+    spacing: Record<string, string>;
+    rounded: Record<string, string>;
+    ctaHierarchy?: string;
+    navigationLanguage?: string;
+    imageryTreatment?: string;
+    sectionRhythm?: string;
+  };
+  screens: DesignScreenView[];
+  archetypes: DesignArchetypeView[];
+  rationale?: string;
+  providerSessionId?: string;
+}
+
+export interface DesignInputSnapshotView {
+  id: string;
+  version: number;
+  inputDigest: string;
+  data: unknown;
+  stale: boolean;
+  staleReason: string | null;
+  createdAt: string;
+}
+
+export interface DesignCandidateView {
+  id: string;
+  provider: string;
+  providerProjectName: string;
+  inputSnapshotId: string;
+  inputSnapshotVersion: number;
+  inputDigest: string;
+  candidateDigest: string;
+  approvalState: string;
+  reviewNotes: string | null;
+  data: DesignCandidateDataView;
+  stale: boolean;
+  staleReason: string | null;
+  createdAt: string;
+}
+
+export interface AcceptedDesignView {
+  id: string;
+  version: number;
+  candidateId: string;
+  candidateDigest: string;
+  inputSnapshotId: string;
+  inputSnapshotVersion: number;
+  inputDigest: string;
+  provider: string;
+  providerProjectName: string;
+  designMdDigest: string;
+  data: DesignCandidateDataView;
+  stale: boolean;
+  staleReason: string | null;
+  acceptedAt: string;
+}
+
+export interface DesignWorkspace {
+  schemaVersion: string;
+  provider: { preflight: DesignPreflight };
+  inputSnapshots: DesignInputSnapshotView[];
+  latestInputSnapshot: DesignInputSnapshotView | null;
+  candidates: DesignCandidateView[];
+  accepted: AcceptedDesignView | null;
+  acceptedVersions: Array<{ id: string; version: number; acceptedAt: string; stale: boolean }>;
+}
+
+export const designApi = {
+  workspace: (projectId: string) =>
+    request<DesignWorkspace>(`/api/projects/${encodeURIComponent(projectId)}/design/workspace`),
+
+  deriveInputSnapshot: (projectId: string) =>
+    request<{ id: string; version: number; inputDigest: string; stale: boolean; staleReason: string | null }>(
+      `/api/projects/${encodeURIComponent(projectId)}/design/input-snapshot`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+
+  generate: (projectId: string) =>
+    request<{
+      id: string;
+      candidateDigest: string;
+      provider: string;
+      providerProjectName: string;
+      approvalState: string;
+      screens: Array<{ id: string; title: string; deviceType: string }>;
+    }>(`/api/projects/${encodeURIComponent(projectId)}/design/generate`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+
+  accept: (
+    projectId: string,
+    candidateId: string,
+    expectedCandidateDigest: string,
+    reviewNotes?: string,
+  ) =>
+    request<{ id: string; version: number; candidateDigest: string; acceptedAt: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/design/candidates/${encodeURIComponent(candidateId)}/accept`,
+      { method: "POST", body: JSON.stringify({ candidateId, expectedCandidateDigest, reviewNotes }) },
+    ),
+
+  reject: (
+    projectId: string,
+    candidateId: string,
+    expectedCandidateDigest: string,
+    reviewNotes?: string,
+  ) =>
+    request<{ id: string; approvalState: string; reviewNotes: string | null }>(
+      `/api/projects/${encodeURIComponent(projectId)}/design/candidates/${encodeURIComponent(candidateId)}/reject`,
+      { method: "POST", body: JSON.stringify({ candidateId, expectedCandidateDigest, reviewNotes }) },
+    ),
+
+  artifactUrl: (projectId: string, digest: string) =>
+    `/api/projects/${encodeURIComponent(projectId)}/design/artifacts/${encodeURIComponent(digest)}`,
+};

@@ -145,6 +145,26 @@ export const OPERATOR_ERROR_CODES = [
   "asset_assignment_conflict",
   /** Trusted local asset storage failed (fail closed, nothing persisted). */
   "asset_storage_failed",
+  /** No accepted ProjectInputSnapshot exists for this project (design). */
+  "design_input_not_accepted",
+  /** Design input snapshot/candidate/accepted design does not exist for this project. */
+  "design_not_found",
+  /** Design input snapshot is stale versus upstream accepted authorities. */
+  "design_input_stale",
+  /** Design approval/rejection rejected (digest mismatch or invalid state). */
+  "design_approval_failed",
+  /** Accepted design is immutable; a new version is required. */
+  "design_immutable",
+  /** Design provider credentials/configuration are missing. */
+  "design_provider_not_configured",
+  /** Design provider endpoint unreachable/failed before or during generation. */
+  "design_provider_unavailable",
+  /** Provider output failed strict contract validation (fail closed). */
+  "design_provider_output_invalid",
+  /** DESIGN.md artifact failed validation (structural or lint errors). */
+  "design_md_invalid",
+  /** Trusted design provider budget policy blocks this execution (fail before spend). */
+  "design_budget_blocked",
   /** Unexpected server fault (message is always the sanitized fixed string). */
   "internal_error",
 ] as const;
@@ -219,6 +239,16 @@ export const OPERATOR_ERROR_STATUS: Readonly<Record<OperatorErrorCode, number>> 
   asset_rights_blocked: 409,
   asset_assignment_conflict: 409,
   asset_storage_failed: 500,
+  design_input_not_accepted: 409,
+  design_not_found: 404,
+  design_input_stale: 409,
+  design_approval_failed: 409,
+  design_immutable: 409,
+  design_provider_not_configured: 409,
+  design_provider_unavailable: 502,
+  design_provider_output_invalid: 502,
+  design_md_invalid: 502,
+  design_budget_blocked: 402,
   internal_error: 500,
 };
 

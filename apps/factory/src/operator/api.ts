@@ -13,6 +13,7 @@ import type { SearchIntelligenceService } from "../search/service.js";
 import type { CompetitorContentGapService } from "../competitors/service.js";
 import type { WriterService } from "../writer/service.js";
 import type { AssetService } from "../assets/service.js";
+import type { DesignService } from "../design/service.js";
 import { activeModelOverrides } from "../models/policy.js";
 import {
   assetApprovalSchema,
@@ -34,6 +35,8 @@ export interface OperatorApiDeps {
   readonly writer?: WriterService;
   /** Assets v0 (Macro Run 5); optional for backward-compatible construction. */
   readonly assets?: AssetService;
+  /** Design pipeline v0 (Macro Run 6); optional for backward compatibility. */
+  readonly design?: DesignService;
 }
 
 const projectKeySchema = z
@@ -171,6 +174,14 @@ const writerAcceptSchema = z
   .object({
     proposalId: z.string().trim().min(1).max(128),
     expectedProposalDigest: z.string().trim().min(1).max(128),
+  })
+  .strict();
+
+const designCandidateActionSchema = z
+  .object({
+    candidateId: z.string().trim().min(1).max(128),
+    expectedCandidateDigest: z.string().trim().regex(/^[0-9a-f]{64}$/),
+    reviewNotes: z.string().trim().max(2000).optional(),
   })
   .strict();
 
@@ -678,6 +689,114 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         const input = parseOr400(writerAcceptSchema, parsed);
         const accepted = await deps.writer.acceptContent({ projectId: project.id, ...input });
         return sendJson(res, 201, accepted);
+      }
+
+      // ---- Design pipeline (Macro Run 6) ------------------------------------
+
+      if (segments.length >= 4 && segments[0] === "projects" && segments[2] === "design") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.design) return sendError(res, "not_found", "Design is not available.");
+        const design = deps.design;
+
+        // GET workspace: full read model (provider preflight, snapshots,
+        // candidates, accepted design + staleness).
+        if (req.method === "GET" && segments.length === 4 && segments[3] === "workspace") {
+          return sendJson(res, 200, await design.workspace(project.id));
+        }
+
+        // POST input-snapshot: derive the authority-bound design input snapshot.
+        if (req.method === "POST" && segments.length === 4 && segments[3] === "input-snapshot") {
+          if (body.trim()) parseJsonBody(body);
+          const view = await design.deriveInputSnapshotDraft(project.id);
+          return sendJson(res, 201, {
+            id: view.id,
+            version: view.version,
+            inputDigest: view.inputDigest,
+            stale: view.stale,
+            staleReason: view.staleReason,
+          });
+        }
+
+        // POST generate: run the governed provider generation from the LATEST
+        // input snapshot (trusted preflight runs server-side first).
+        if (req.method === "POST" && segments.length === 4 && segments[3] === "generate") {
+          if (body.trim()) parseJsonBody(body);
+          const view = await design.generateCandidate({ projectId: project.id });
+          return sendJson(res, 201, {
+            id: view.id,
+            candidateDigest: view.candidateDigest,
+            provider: view.provider,
+            providerProjectName: view.providerProjectName,
+            approvalState: view.approvalState,
+            screens: view.data.screens.map((s) => ({ id: s.id, title: s.title, deviceType: s.deviceType })),
+          });
+        }
+
+        // POST accept/reject: /projects/:id/design/candidates/:candidateId/{accept,reject}
+        if (
+          req.method === "POST" &&
+          segments.length === 6 &&
+          segments[3] === "candidates" &&
+          (segments[5] === "accept" || segments[5] === "reject")
+        ) {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(designCandidateActionSchema, parsed);
+          if (input.candidateId !== segments[4]!) {
+            return sendError(res, "validation_error", "candidateId must match the URL path candidate.");
+          }
+          if (segments[5] === "accept") {
+            const accepted = await design.acceptCandidate({
+              projectId: project.id,
+              candidateId: segments[4]!,
+              expectedCandidateDigest: input.expectedCandidateDigest,
+              reviewNotes: input.reviewNotes ?? null,
+            });
+            return sendJson(res, 200, {
+              id: accepted.id,
+              version: accepted.version,
+              candidateDigest: accepted.candidateDigest,
+              inputDigest: accepted.inputDigest,
+              designMdDigest: accepted.designMdDigest,
+              acceptedAt: accepted.acceptedAt,
+            });
+          }
+          const rejected = await design.rejectCandidate({
+            projectId: project.id,
+            candidateId: segments[4]!,
+            expectedCandidateDigest: input.expectedCandidateDigest,
+            reviewNotes: input.reviewNotes ?? null,
+          });
+          return sendJson(res, 200, {
+            id: rejected.id,
+            approvalState: rejected.approvalState,
+            reviewNotes: rejected.reviewNotes,
+          });
+        }
+
+        // GET artifact bytes: /projects/:id/design/artifacts/:digest
+        // Provider HTML is served with X-Frame-Options sandboxing headers and
+        // a Content-Security-Policy that disables scripts — the Dashboard
+        // renders it ONLY inside a sandboxed iframe (fail closed).
+        if (req.method === "GET" && segments.length === 5 && segments[3] === "artifacts") {
+          const digest = segments[4]!;
+          if (!/^[0-9a-f]{64}$/.test(digest)) {
+            return sendError(res, "validation_error", "Artifact digest must be a lowercase SHA-256 hex digest.");
+          }
+          const artifact = await design.readArtifact(digest);
+          if (!artifact) return sendError(res, "not_found", "Design artifact not found.");
+          res.writeHead(200, {
+            "Content-Type": artifact.mediaType,
+            "Content-Length": String(artifact.bytes.byteLength),
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'",
+            "Cache-Control": "private, no-store",
+          });
+          res.end(Buffer.from(artifact.bytes));
+          return;
+        }
+
+        return sendError(res, "not_found", "Unknown endpoint.");
       }
 
       return sendError(res, "not_found", "Unknown endpoint.");

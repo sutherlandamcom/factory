@@ -28,6 +28,10 @@ import { WriterStore, WriterSnapshotStore, WriterQaStore } from "../writer/write
 import { WriterService } from "../writer/service.js";
 import { WriterBudgetStore } from "../writer/budget.js";
 import { FixtureWriterProvider } from "../writer/fixture-writer.js";
+import { DesignStore } from "../design/design-store.js";
+import { DesignService } from "../design/service.js";
+import { StitchDesignProvider } from "../design/stitch-provider.js";
+import { FixtureDesignProvider } from "../design/fixture-provider.js";
 import { FactoryError } from "../executor/errors.js";
 
 /**
@@ -343,7 +347,16 @@ export async function startOperatorServer(): Promise<http.Server> {
   const writer = new WriterService(writerStore, writerSnapshotStore, writerBudget, writerQaStore, writerProvider);
   const assetStore = new AssetStore(dbInstance.db);
   const assets = new AssetService({ store: assetStore });
-  const deps: OperatorApiDeps = { store, intake, search, competitors, writer, assets };
+  const designStore = new DesignStore(dbInstance.db);
+  // Design provider selection is trusted backend config only (never browser
+  // input): FACTORY_DESIGN_MODE=fixture wires the deterministic fixture
+  // provider so E2E journeys never touch a paid provider.
+  const designMode = process.env.FACTORY_DESIGN_MODE === "fixture" ? "fixture" : "production";
+  const design = new DesignService({
+    store: designStore,
+    provider: designMode === "fixture" ? new FixtureDesignProvider() : new StitchDesignProvider(),
+  });
+  const deps: OperatorApiDeps = { store, intake, search, competitors, writer, assets, design };
   const server = createOperatorServer(deps);
   const host = process.env.FACTORY_OPERATOR_HOST ?? "127.0.0.1";
   const port = Number(process.env.FACTORY_OPERATOR_PORT ?? 3000);

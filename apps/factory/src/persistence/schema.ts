@@ -1329,3 +1329,135 @@ export type AssetPageAssignmentRecord = typeof assetPageAssignments.$inferSelect
 export type InsertAssetPageAssignment = typeof assetPageAssignments.$inferInsert;
 export type ProjectAssetSettingsRecord = typeof projectAssetSettings.$inferSelect;
 export type InsertProjectAssetSettings = typeof projectAssetSettings.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Design: Google Stitch Design Provider (Macro Run 6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Immutable, authority-bound design generation input. Every material
+ * upstream dependency (accepted project inputs, accepted page content,
+ * approved asset versions) is bound by id + version + exact digest at
+ * snapshot time so any design artifact can answer "which exact content,
+ * facts, and assets produced this design?" and so upstream mutation makes
+ * dependent artifacts stale.
+ */
+export const designInputSnapshots = pgTable(
+  "design_input_snapshots",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    data: jsonb("data").notNull(),
+    inputDigest: text("input_digest").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("design_input_snapshots_project_version_unique").on(table.projectId, table.version),
+    check("design_input_snapshots_version_positive", sql`${table.version} >= 1`),
+    check("design_input_snapshots_digest_shape", sql`${table.inputDigest} ~ '^[0-9a-f]{64}$'`),
+    index("design_input_snapshots_project_idx").on(table.projectId, table.version),
+  ],
+);
+
+/**
+ * A provider generation result (candidate). Candidates are immutable
+ * evidence: acceptance never mutates them; a rejected candidate stays
+ * inspectable. Approval state transitions pending -> accepted | rejected
+ * bind the exact candidate digest.
+ */
+export const designCandidates = pgTable(
+  "design_candidates",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    inputSnapshotId: text("input_snapshot_id")
+      .notNull()
+      .references(() => designInputSnapshots.id, { onDelete: "cascade" }),
+    inputSnapshotVersion: integer("input_snapshot_version").notNull(),
+    inputDigest: text("input_digest").notNull(),
+    provider: text("provider").notNull(),
+    providerProjectName: text("provider_project_name").notNull(),
+    data: jsonb("data").notNull(),
+    candidateDigest: text("candidate_digest").notNull(),
+    approvalState: text("approval_state").notNull().default("pending"),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    rejectedAt: timestamp("rejected_at", { withTimezone: true }),
+    reviewNotes: text("review_notes"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check(
+      "design_candidates_approval_state_valid",
+      sql`${table.approvalState} IN ('pending', 'accepted', 'rejected')`,
+    ),
+    check("design_candidates_digest_shape", sql`${table.candidateDigest} ~ '^[0-9a-f]{64}$'`),
+    check("design_candidates_input_digest_shape", sql`${table.inputDigest} ~ '^[0-9a-f]{64}$'`),
+    check(
+      "design_candidates_state_timestamps_valid",
+      sql`(
+        (${table.approvalState} = 'pending' AND ${table.acceptedAt} IS NULL AND ${table.rejectedAt} IS NULL)
+        OR (${table.approvalState} = 'accepted' AND ${table.acceptedAt} IS NOT NULL AND ${table.rejectedAt} IS NULL)
+        OR (${table.approvalState} = 'rejected' AND ${table.acceptedAt} IS NULL AND ${table.rejectedAt} IS NOT NULL)
+      )`,
+    ),
+    check(
+      "design_candidates_provider_valid",
+      sql`${table.provider} IN ('google-stitch')`,
+    ),
+    index("design_candidates_project_idx").on(table.projectId, table.createdAt),
+    index("design_candidates_input_idx").on(table.inputSnapshotId),
+  ],
+);
+
+/**
+ * The immutable accepted design artifact. Created ONLY by explicit human
+ * acceptance of an exact candidate (id + digest). Bind-time digests are
+ * copied from the candidate so downstream staleness never silently tracks
+ * mutable "latest" state.
+ */
+export const acceptedDesignArtifacts = pgTable(
+  "accepted_design_artifacts",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    candidateId: text("candidate_id")
+      .notNull()
+      .references(() => designCandidates.id, { onDelete: "restrict" }),
+    candidateDigest: text("candidate_digest").notNull(),
+    inputSnapshotId: text("input_snapshot_id").notNull(),
+    inputSnapshotVersion: integer("input_snapshot_version").notNull(),
+    inputDigest: text("input_digest").notNull(),
+    provider: text("provider").notNull(),
+    providerProjectName: text("provider_project_name").notNull(),
+    designMdDigest: text("design_md_digest").notNull(),
+    data: jsonb("data").notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("accepted_design_artifacts_project_version_unique").on(table.projectId, table.version),
+    check("accepted_design_artifacts_version_positive", sql`${table.version} >= 1`),
+    check("accepted_design_artifacts_candidate_digest_shape", sql`${table.candidateDigest} ~ '^[0-9a-f]{64}$'`),
+    check("accepted_design_artifacts_input_digest_shape", sql`${table.inputDigest} ~ '^[0-9a-f]{64}$'`),
+    check("accepted_design_artifacts_design_md_digest_shape", sql`${table.designMdDigest} ~ '^[0-9a-f]{64}$'`),
+    check(
+      "accepted_design_artifacts_provider_valid",
+      sql`${table.provider} IN ('google-stitch')`,
+    ),
+    index("accepted_design_artifacts_project_idx").on(table.projectId, table.version),
+  ],
+);
+
+export type DesignInputSnapshotRecord = typeof designInputSnapshots.$inferSelect;
+export type InsertDesignInputSnapshot = typeof designInputSnapshots.$inferInsert;
+export type DesignCandidateRecord = typeof designCandidates.$inferSelect;
+export type InsertDesignCandidate = typeof designCandidates.$inferInsert;
+export type AcceptedDesignArtifactRecord = typeof acceptedDesignArtifacts.$inferSelect;
+export type InsertAcceptedDesignArtifact = typeof acceptedDesignArtifacts.$inferInsert;

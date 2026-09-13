@@ -272,6 +272,11 @@ test("ingest: duplicate exact bytes within a project produce a typed conflict, n
       (error: unknown) => error instanceof FactoryError && error.code === "asset_assignment_conflict",
     );
     assert.equal(first.version.version, 1);
+    const workspace = await service.workspace(projectId);
+    assert.equal(workspace.assets.length, 1, "failed duplicate must roll back the new logical Asset");
+    assert.equal(workspace.assets[0]!.id, first.asset.id);
+    assert.equal(workspace.assets[0]!.versions.length, 1);
+    assert.equal((await new AssetStore(dbInst.db).listDerivatives(projectId, first.version.id)).length, 2);
   } finally {
     await cleanup();
   }
@@ -433,4 +438,66 @@ test("ingest: base64 with invalid padding length (len % 4 == 1) is rejected at t
   // Valid padded lengths still parse.
   assert.doesNotThrow(() => parseAssetUploadInput({ ...VALID_UPLOAD, dataBase64: "AAAA" }));
   assert.doesNotThrow(() => parseAssetUploadInput({ ...VALID_UPLOAD, dataBase64: "AAA=" }));
+});
+
+
+test("ingest: concurrent same-title uploads serialize first creation and contiguous versions", async () => {
+  const { service, cleanup } = await makeService();
+  try {
+    const projectId = await createProject(`ingest-race-${Date.now()}`);
+    const payloads = await Promise.all([31, 32, 33].map(async (seed) => ({
+      ...VALID_UPLOAD, dataBase64: base64(await jpegBytes(240, 160, seed)),
+    })));
+    const results = await Promise.all(payloads.map((input) => service.uploadAsset(projectId, input)));
+    assert.equal(new Set(results.map((r) => r.asset.id)).size, 1);
+    assert.deepEqual(results.map((r) => r.version.version).sort(), [1, 2, 3]);
+    const workspace = await service.workspace(projectId);
+    assert.equal(workspace.assets.length, 1);
+    assert.equal(workspace.assets[0]!.versions.length, 3);
+    for (const result of results) assert.equal(result.derivatives.length, 2);
+  } finally { await cleanup(); }
+});
+
+test("ingest: concurrent duplicate bytes leave only the winning logical Asset", async () => {
+  const { service, cleanup } = await makeService();
+  try {
+    const projectId = await createProject(`ingest-duplicate-race-${Date.now()}`);
+    const dataBase64 = base64(await jpegBytes(241, 161, 34));
+    const results = await Promise.allSettled(["Title A", "Title B"].map((title) =>
+      service.uploadAsset(projectId, { ...VALID_UPLOAD, title, dataBase64 })));
+    assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
+    const failure = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
+    assert.ok(failure.reason instanceof FactoryError);
+    assert.equal(failure.reason.code, "asset_assignment_conflict");
+    const workspace = await service.workspace(projectId);
+    assert.equal(workspace.assets.length, 1);
+    assert.equal(workspace.assets[0]!.versions.length, 1);
+  } finally { await cleanup(); }
+});
+
+test("ingest: derivative metadata constraint failure rolls back asset and version too", async () => {
+  const { service, cleanup } = await makeService();
+  try {
+    const projectId = await createProject(`ingest-derivative-rollback-${Date.now()}`);
+    const first = await service.uploadAsset(projectId, {
+      ...VALID_UPLOAD, dataBase64: base64(await jpegBytes(242, 162, 35)),
+    });
+    const store = new AssetStore(dbInst.db);
+    const v = first.version;
+    const { id: _id, projectId: _projectId, versionId: _versionId, ...derivative } = first.derivatives[0]!;
+    await assert.rejects(() => store.insertUpload({
+      asset: { projectId, kind: "photo", title: "Must roll back" },
+      version: {
+        binaryDigest: "d".repeat(64), mediaType: v.mediaType, byteSize: v.byteSize,
+        width: v.width, height: v.height, storageKey: v.storageKey,
+        originalFilename: v.originalFilename,
+        provenance: v.provenance as import("@factory/contracts").AssetProvenance,
+        rightsStatus: v.rightsStatus, rightsNote: v.rightsNote, altIntent: v.altIntent,
+      },
+      derivatives: [derivative, derivative], // real UNIQUE(version_id, kind) failure
+    }), (error: unknown) => error instanceof FactoryError && error.code === "asset_assignment_conflict");
+    assert.deepEqual((await store.listAssets(projectId)).map((a) => a.id), [first.asset.id]);
+    assert.deepEqual((await store.listAllVersions(projectId)).map((v) => v.id), [first.version.id]);
+    assert.equal((await store.listDerivatives(projectId, first.version.id)).length, 2);
+  } finally { await cleanup(); }
 });

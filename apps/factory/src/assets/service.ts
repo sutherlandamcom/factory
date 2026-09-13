@@ -200,11 +200,6 @@ export class AssetService {
       },
     };
 
-    // Asset identity: same filename + kind + title reuses the logical asset
-    // and appends a new immutable version (explicit replacement semantics).
-    const asset = await this.findOrCreateAsset(projectId, input);
-    const version = await this.store.nextVersionForAsset(asset.id);
-
     // Derivatives are computed from the exact original bytes.
     const derivativeResults = await computeDerivatives(bytes, width, height);
 
@@ -216,57 +211,30 @@ export class AssetService {
       await storage.putObject(storage.derivativeKey(derivative.binaryDigest), derivative.bytes);
     }
 
-    const versionRow = await this.store.insertVersion({
-      projectId,
-      assetId: asset.id,
-      version,
-      binaryDigest,
-      mediaType: detected.mime,
-      byteSize: bytes.byteLength,
-      width,
-      height,
-      storageKey,
-      originalFilename: declaredName,
-      provenance,
-      rightsStatus: input.rightsStatus,
-      rightsNote: input.rightsNote?.trim() ? input.rightsNote.trim() : null,
-      altIntent: input.altIntent?.trim() ? input.altIntent.trim() : null,
-    });
-
-    const derivativeRows: DerivativeRow[] = [];
-    for (const derivative of derivativeResults) {
-      derivativeRows.push(
-        await this.store.insertDerivative({
-          projectId,
-          versionId: versionRow.id,
-          kind: derivative.kind,
-          mediaType: "image/jpeg",
-          width: derivative.width,
-          height: derivative.height,
-          byteSize: derivative.bytes.byteLength,
-          binaryDigest: derivative.binaryDigest,
-          storageKey: storage.derivativeKey(derivative.binaryDigest),
-        }),
-      );
-    }
-
-    return { asset, version: versionRow, derivatives: derivativeRows };
-  }
-
-  private async findOrCreateAsset(projectId: string, input: AssetUploadInput): Promise<AssetRow> {
-    // Logical-asset identity heuristic (v0): kind + exact title match reuses
-    // the existing asset and appends a new immutable version. A different
-    // title creates a distinct logical asset — replacement of an accepted
-    // assignment is always an explicit action, never an upload side effect.
-    const existing = await this.store.listAssets(projectId);
-    const match = existing.find(
-      (candidate) => candidate.kind === input.kind && candidate.title === input.title.trim(),
-    );
-    if (match) return match;
-    return await this.store.createAsset({
-      projectId,
-      kind: input.kind,
-      title: input.title.trim(),
+    return await this.store.insertUpload({
+      asset: { projectId, kind: input.kind, title: input.title.trim() },
+      version: {
+        binaryDigest,
+        mediaType: detected.mime,
+        byteSize: bytes.byteLength,
+        width,
+        height,
+        storageKey,
+        originalFilename: declaredName,
+        provenance,
+        rightsStatus: input.rightsStatus,
+        rightsNote: input.rightsNote?.trim() || null,
+        altIntent: input.altIntent?.trim() || null,
+      },
+      derivatives: derivativeResults.map((derivative) => ({
+        kind: derivative.kind,
+        mediaType: "image/jpeg",
+        width: derivative.width,
+        height: derivative.height,
+        byteSize: derivative.bytes.byteLength,
+        binaryDigest: derivative.binaryDigest,
+        storageKey: storage.derivativeKey(derivative.binaryDigest),
+      })),
     });
   }
 

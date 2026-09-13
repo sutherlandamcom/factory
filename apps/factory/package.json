@@ -15,8 +15,10 @@
     "test:operator": "tsx --test --test-concurrency=1 tests/operator/*.test.ts"
   },
   "dependencies": {
+    "@contentauth/c2pa-node": "0.9.5",
     "@factory/contracts": "workspace:*",
     "@google/design.md": "0.4.0",
+    "@google/genai": "2.22.0",
     "@modelcontextprotocol/client": "2.0.0",
     "drizzle-orm": "0.45.2",
     "file-type": "21.0.0",

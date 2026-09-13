@@ -32,6 +32,11 @@ import { DesignStore } from "../design/design-store.js";
 import { DesignService } from "../design/service.js";
 import { StitchDesignProvider } from "../design/stitch-provider.js";
 import { FixtureDesignProvider } from "../design/fixture-provider.js";
+import { VisualStore } from "../visual/store.js";
+import { VisualService } from "../visual/service.js";
+import { VisualBudgetStore } from "../visual/budget.js";
+import { GoogleGenAiVisualAssetAdapter } from "../visual/google-genai-adapter.js";
+import { FixtureVisualAssetProvider } from "../visual/fixture-adapter.js";
 import { FactoryError } from "../executor/errors.js";
 
 /**
@@ -356,7 +361,22 @@ export async function startOperatorServer(): Promise<http.Server> {
     store: designStore,
     provider: designMode === "fixture" ? new FixtureDesignProvider() : new StitchDesignProvider(),
   });
-  const deps: OperatorApiDeps = { store, intake, search, competitors, writer, assets, design };
+  // Visual provider selection is trusted backend config only (never browser
+  // input): FACTORY_VISUAL_MODE=fixture wires the deterministic fixture
+  // provider so E2E journeys never touch a paid provider. The fixture
+  // selection ALSO binds the plan-level fixture gate: a fixture accepted
+  // design can drive a fixture visual path, never live spend.
+  const visualMode = process.env.FACTORY_VISUAL_MODE === "fixture" ? "fixture" : "production";
+  const visualProvider =
+    visualMode === "fixture" ? new FixtureVisualAssetProvider() : new GoogleGenAiVisualAssetAdapter();
+  const visual = await VisualService.create({
+    store: new VisualStore(dbInstance.db),
+    designStore,
+    assets,
+    budget: new VisualBudgetStore(dbInstance.db),
+    provider: visualProvider,
+  });
+  const deps: OperatorApiDeps = { store, intake, search, competitors, writer, assets, design, visual };
   const server = createOperatorServer(deps);
   const host = process.env.FACTORY_OPERATOR_HOST ?? "127.0.0.1";
   const port = Number(process.env.FACTORY_OPERATOR_PORT ?? 3000);

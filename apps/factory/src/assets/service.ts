@@ -328,6 +328,32 @@ export class AssetService {
     });
   }
 
+  /**
+   * Run 7 seam: record exact derivation provenance on a PENDING version
+   * before approval (derived/generated outputs only; fail closed otherwise).
+   */
+  async recordDerivationProvenance(projectId: string, versionId: string, input: {
+    expectedBinaryDigest: string;
+    provenance: AssetProvenance;
+  }): Promise<AssetVersionRow> {
+    return await this.store.recordDerivationProvenance({
+      projectId,
+      versionId,
+      expectedBinaryDigest: input.expectedBinaryDigest,
+      provenance: input.provenance,
+    });
+  }
+
+  /**
+   * Run 7 seam (read-only): find a project version by exact binary digest.
+   * Lets the visual pipeline BIND byte-identical provider/transform output to
+   * the existing approved version instead of failing on the Run 5
+   * UNIQUE(project_id, binary_digest) constraint after a real spend.
+   */
+  async findByBinaryDigest(projectId: string, binaryDigest: string): Promise<AssetVersionRow | null> {
+    return await this.store.findByBinaryDigest(projectId, binaryDigest);
+  }
+
   async approveVersion(
     projectId: string,
     versionId: string,

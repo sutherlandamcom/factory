@@ -245,7 +245,7 @@ test.describe("Visual assets journey", () => {
     // ---- Accept the visual asset set ----
     await page.getByRole("button", { name: "Visual Assets" }).click();
     await page.getByRole("button", { name: "Accept visual asset set" }).click();
-    await expect(page.getByText(/Accepted Visual Asset Set v1/)).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("heading", { name: /Accepted Visual Asset Set v1/ })).toBeVisible({ timeout: 30_000 });
 
     // ---- RESTART the operator service (DB kept) — everything persists ----
     await supervisorCall("/restart");
@@ -255,6 +255,6 @@ test.describe("Visual assets journey", () => {
     await page.getByRole("button", { name: new RegExp(KEY) }).first().click();
     await expect(page.locator("h1", { hasText: NAME })).toBeVisible({ timeout: 30_000 });
     await page.getByRole("button", { name: "Visual Assets" }).click();
-    await expect(page.getByText(/Accepted Visual Asset Set v1/)).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("heading", { name: /Accepted Visual Asset Set v1/ })).toBeVisible({ timeout: 30_000 });
   });
 });

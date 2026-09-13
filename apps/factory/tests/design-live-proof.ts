@@ -125,7 +125,7 @@ const durationMs = Date.now() - started;
 
 console.log("DURATION_MS:", durationMs);
 console.log("PROVIDER_MODE: live (real Stitch MCP execution)");
-console.log("DESIGN_MD_TOOL_VERSION:", DESIGN_MD_TOOL_VERSION, "(Factory internal validator — the DESIGN.md is validated in-process, NOT by official Google tooling)");
+console.log("DESIGN_MD_TOOL_VERSION:", DESIGN_MD_TOOL_VERSION, "(@google/design.md linter + factory strict requirements)");
 console.log("PROVIDER_PROJECT:", result.providerProjectName);
 console.log("PROVIDER_SESSION:", result.providerSessionId);
 console.log("SCREENS:", JSON.stringify(result.candidate.screens, null, 1));

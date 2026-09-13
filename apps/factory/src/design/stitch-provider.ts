@@ -40,8 +40,9 @@ const MAX_ARTIFACT_BYTES = 32 * 1024 * 1024;
 
 export const STITCH_MCP_ENDPOINT = "https://stitch.googleapis.com/mcp";
 
-/** Google OAuth access token for the Stitch API (trusted server-side only). */
+/** Google OAuth access token or API key for the Stitch API (trusted server-side only). */
 export const STITCH_ACCESS_TOKEN_ENV = "STITCH_ACCESS_TOKEN";
+export const STITCH_API_KEY_ENV = "STITCH_API_KEY";
 /** Optional explicit quota project header (x-goog-user-project). */
 export const STITCH_QUOTA_PROJECT_ENV = "STITCH_QUOTA_PROJECT";
 /** Optional explicit bearer token path override for tests/dev. */
@@ -114,9 +115,12 @@ function stitchError(code: "design_provider_not_configured" | "design_provider_u
   return new FactoryError(code, message);
 }
 
-/** Resolve the bearer token from trusted server env (never from browser). */
+/** Resolve the bearer token or API key from trusted server env (never from browser). */
 export function resolveStitchToken(env: Record<string, string | undefined> = process.env): string | null {
-  const token = env[STITCH_ACCESS_TOKEN_ENV]?.trim() || env[STITCH_ACCESS_TOKEN_ENV_ALT]?.trim();
+  const token =
+    env[STITCH_ACCESS_TOKEN_ENV]?.trim() ||
+    env[STITCH_API_KEY_ENV]?.trim() ||
+    env[STITCH_ACCESS_TOKEN_ENV_ALT]?.trim();
   return token && token.length > 0 ? token : null;
 }
 
@@ -126,8 +130,8 @@ function resolveQuotaProject(env: Record<string, string | undefined>): string | 
 
 /**
  * Default client factory: official MCP SDK Client over Streamable HTTP with
- * a bearer-token AuthProvider. The token is resolved per request so ADC
- * token rotation is honored.
+ * a bearer-token AuthProvider or X-Goog-Api-Key header. The token is resolved
+ * per request so ADC token rotation or API key changes are honored.
  */
 export function createStitchMcpClient(deps: StitchProviderDeps = {}): StitchMcpClientLike {
   const endpoint = deps.endpoint ?? STITCH_MCP_ENDPOINT;
@@ -136,13 +140,20 @@ export function createStitchMcpClient(deps: StitchProviderDeps = {}): StitchMcpC
     { name: "factory-design-provider", version: "0.1.0" },
     {},
   );
+  const token = resolveStitchToken(env);
+  const isApiKey = Boolean(token?.startsWith("AQ.") || env[STITCH_API_KEY_ENV]?.trim());
   const transport = new StreamableHTTPClientTransport(new URL(endpoint), {
-    authProvider: {
-      token: async () => resolveStitchToken(env) ?? undefined,
-    },
+    ...(isApiKey
+      ? {}
+      : {
+          authProvider: {
+            token: async () => resolveStitchToken(env) ?? undefined,
+          },
+        }),
     requestInit: {
       headers: {
         ...(resolveQuotaProject(env) ? { "x-goog-user-project": resolveQuotaProject(env)! } : {}),
+        ...(isApiKey && token ? { "X-Goog-Api-Key": token } : {}),
       },
     },
   });

@@ -317,9 +317,13 @@ test("generation: unparseable tool result fails closed", async () => {
 test("default client factory: constructs without network on creation", () => {
   // The default factory must be constructible without side effects; actual
   // network happens only on listTools/callTool after connect().
-  const client = createStitchMcpClient({ env: { STITCH_ACCESS_TOKEN: "x" } });
-  assert.ok(client);
-  assert.ok(typeof client.callTool === "function");
+  const bearerClient = createStitchMcpClient({ env: { STITCH_ACCESS_TOKEN: "x" } });
+  assert.ok(bearerClient);
+  assert.ok(typeof bearerClient.callTool === "function");
+
+  const apiKeyClient = createStitchMcpClient({ env: { STITCH_API_KEY: "AQ.test_api_key" } });
+  assert.ok(apiKeyClient);
+  assert.ok(typeof apiKeyClient.callTool === "function");
 });
 
 test("endpoint constant points at the official Google Stitch MCP service", () => {
@@ -328,6 +332,9 @@ test("endpoint constant points at the official Google Stitch MCP service", () =>
 
 test("token resolution: prefers STITCH_ACCESS_TOKEN over alternate env", () => {
   assert.equal(resolveStitchToken({ STITCH_ACCESS_TOKEN: " primary " }), "primary");
+  assert.equal(resolveStitchToken({ STITCH_ACCESS_TOKEN: " primary ", STITCH_API_KEY: " key " }), "primary");
+  assert.equal(resolveStitchToken({ STITCH_API_KEY: " key " }), "key");
   assert.equal(resolveStitchToken({ GOOGLE_OAUTH_ACCESS_TOKEN: " alt " }), "alt");
   assert.equal(resolveStitchToken({}), null);
 });
+

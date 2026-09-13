@@ -12,7 +12,7 @@
     "db:migrate": "tsx src/index.ts db migrate",
     "db:check": "tsx src/index.ts db check",
     "test:persistence": "tsx --test --test-concurrency=1 tests/persistence/*.test.ts",
-    "test:operator": "tsx --test tests/operator/*.test.ts"
+    "test:operator": "tsx --test --test-concurrency=1 tests/operator/*.test.ts"
   },
   "dependencies": {
     "@factory/contracts": "workspace:*",

@@ -655,9 +655,12 @@ export class StitchDesignProvider implements DesignProvider {
       throw stitchError("design_provider_output_invalid", "Stitch artifact URL is not a valid URL.");
     }
     // Provider-controlled URLs are UNTRUSTED. Apply the repository's accepted
-    // SSRF policy (Run 3/4.1 ssrf-guard): HTTPS-only, per-hop resolution
-    // validation with manual redirects — a public URL that redirects to a
-    // private host fails closed.
+    // SSRF policy (Run 3/4.1 ssrf-guard): HTTPS-only (initial URL AND every
+    // redirect hop), per-hop resolution validation with manual redirects —
+    // a public URL that redirects to a private host fails closed.
+    if (firstUrl.protocol !== "https:") {
+      throw stitchError("design_provider_output_invalid", "Stitch artifact URL must use HTTPS.");
+    }
     let currentUrl = firstUrl;
     for (let hop = 0; hop <= MAX_ARTIFACT_REDIRECTS; hop++) {
       const check = await validateUrlResolved(currentUrl.toString());

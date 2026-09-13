@@ -115,8 +115,8 @@ export const designAssetSlotSchema = z
      * (the provider never saw it) — these states are never conflated.
      */
     providerConsumed: z.boolean(),
-    /** Placeholder handling until the slot is resolved by the provider. */
-    placeholder: z.literal(true),
+    /** Placeholder handling (false when the provider consumes an approved asset). */
+    placeholder: z.boolean(),
     /** Why the slot is unresolved, when it is (typed, bounded reason). */
     unresolvedReason: z.string().trim().max(300).optional(),
   })
@@ -536,6 +536,7 @@ export const designStalenessCodeSchema = z.enum([
   "ASSET_ASSIGNMENT_CHANGED",
   "ASSET_ASSIGNMENT_REMOVED",
   "RUN7_ASSET_ASSIGNMENTS_ADDED",
+  "RUN7_EXACT_ASSET_REPLACED",
   "DESIGN_INPUT_SNAPSHOT_REMOVED",
   "DESIGN_INPUT_SNAPSHOT_INVALID",
 ]);

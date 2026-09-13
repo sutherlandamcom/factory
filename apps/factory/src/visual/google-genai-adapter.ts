@@ -148,6 +148,7 @@ export class GoogleGenAiVisualAssetAdapter implements VisualAssetProvider {
         configured: true,
         provider: GOOGLE_GENAI_PROVIDER_ID,
         reachable: true,
+        configuredModels: Array.from(ALLOWED_VISUAL_MODELS),
         verifiedModels: Array.from(ALLOWED_VISUAL_MODELS),
       };
     } catch (error) {

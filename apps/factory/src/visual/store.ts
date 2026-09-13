@@ -344,7 +344,12 @@ export class VisualStore {
     modelPolicyVersion: string;
     operation: "edit" | "generate";
     escalationReason: string | null;
+    leaseHolder?: string;
+    leaseDurationMs?: number;
   }): Promise<{ request: VisualGenerationRequestRecord; owner: boolean }> {
+    const leaseHolder = input.leaseHolder ?? `worker-${randomUUID()}`;
+    const leaseDurationMs = input.leaseDurationMs ?? 90_000;
+    const leaseExpiresAt = new Date(Date.now() + leaseDurationMs);
     try {
       const [row] = await this.db
         .insert(visualGenerationRequests)
@@ -362,6 +367,8 @@ export class VisualStore {
           operation: input.operation,
           escalationReason: input.escalationReason,
           resultState: "running",
+          leaseHolder,
+          leaseExpiresAt,
         })
         .returning();
       return { request: row!, owner: true };
@@ -389,6 +396,8 @@ export class VisualStore {
         costMicros: input.costMicros,
         rawMetadata: input.rawMetadata,
         completedAt: new Date(),
+        leaseHolder: null,
+        leaseExpiresAt: null,
       })
       .where(eq(visualGenerationRequests.id, input.requestId));
   }
@@ -405,6 +414,8 @@ export class VisualStore {
         failureCode: input.failureCode,
         rawMetadata: input.rawMetadata,
         completedAt: new Date(),
+        leaseHolder: null,
+        leaseExpiresAt: null,
       })
       .where(eq(visualGenerationRequests.id, input.requestId));
   }

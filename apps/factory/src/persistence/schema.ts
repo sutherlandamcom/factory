@@ -1638,6 +1638,8 @@ export const visualGenerationRequests = pgTable(
     escalationReason: text("escalation_reason"),
     providerRequestRef: text("provider_request_ref"),
     resultState: text("result_state").notNull(),
+    leaseHolder: text("lease_holder"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
     costMicros: integer("cost_micros"),
     rawMetadata: jsonb("raw_metadata"),
     failureCode: text("failure_code"),
@@ -1731,7 +1733,7 @@ export const acceptedVisualAssetSets = pgTable(
     planId: text("plan_id")
       .notNull()
       .references(() => visualAssetPlans.id, { onDelete: "cascade" }),
-    providerMode: text("provider_mode").notNull().default("live"),
+    providerMode: text("provider_mode").notNull().default("fixture"),
     designArtifactId: text("design_artifact_id").notNull(),
     designArtifactVersion: integer("design_artifact_version").notNull(),
     designCandidateDigest: text("design_candidate_digest").notNull(),

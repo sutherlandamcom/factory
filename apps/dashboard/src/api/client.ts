@@ -1082,6 +1082,7 @@ export interface VisualPreflight {
   configured: boolean;
   provider: string;
   reachable?: boolean;
+  configuredModels?: string[];
   verifiedModels?: string[];
   reason?: string;
 }

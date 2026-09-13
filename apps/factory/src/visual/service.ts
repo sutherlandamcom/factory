@@ -125,6 +125,8 @@ export interface VisualServiceDeps {
   storage?: VisualCandidateStorage;
   dailyLimitUsd?: number;
   designService?: DesignService;
+  followerTimeoutMs?: number;
+  followerPollIntervalMs?: number;
 }
 
 export interface VisualSlotView {
@@ -227,6 +229,9 @@ export class VisualService {
   private static readonly PREFLIGHT_TTL_MS = 60_000;
   private preflightCache: { at: number; value: VisualAssetProviderPreflight } | null = null;
 
+  private readonly followerTimeoutMs: number;
+  private readonly followerPollIntervalMs: number;
+
   constructor(deps: VisualServiceDeps) {
     this.store = deps.store;
     this.designStore = deps.designStore;
@@ -237,6 +242,8 @@ export class VisualService {
     this.repoRoot = deps.repoRoot;
     this.dailyLimitUsd = deps.dailyLimitUsd;
     this.designService = deps.designService;
+    this.followerTimeoutMs = deps.followerTimeoutMs ?? 60_000;
+    this.followerPollIntervalMs = deps.followerPollIntervalMs ?? 200;
   }
 
   /** Cached provider preflight (60s TTL; one provider call per TTL window). */
@@ -269,7 +276,10 @@ export class VisualService {
   assertDesignAuthorityEligible(design: {
     staleness: { code?: string | null; stale: boolean; reason: string | null };
   }): void {
-    if (design.staleness.stale && design.staleness.code !== "RUN7_ASSET_ASSIGNMENTS_ADDED") {
+    const allowed =
+      design.staleness.code === "RUN7_ASSET_ASSIGNMENTS_ADDED" ||
+      design.staleness.code === "RUN7_EXACT_ASSET_REPLACED";
+    if (design.staleness.stale && !allowed) {
       throw new FactoryError(
         "visual_design_not_eligible",
         `The accepted design is stale versus current upstream authority (${design.staleness.code ?? "STALE"}): ${design.staleness.reason}. Re-derive and re-accept the design first.`,
@@ -723,8 +733,8 @@ export class VisualService {
       }
       let current = request;
       const pollStart = Date.now();
-      while (current.resultState === "running" && Date.now() - pollStart < 60_000) {
-        await new Promise((r) => setTimeout(r, 200));
+      while (current.resultState === "running" && Date.now() - pollStart < this.followerTimeoutMs) {
+        await new Promise((r) => setTimeout(r, this.followerPollIntervalMs));
         const found = await this.store.getRequest(input.projectId, current.id);
         if (found) current = found;
       }
@@ -738,6 +748,10 @@ export class VisualService {
           "Concurrent generation request failed.",
         );
       }
+      throw new FactoryError(
+        "visual_generation_timeout",
+        "Concurrent generation request timed out waiting for execution lease.",
+      );
     }
 
     const executeLeader = async (): Promise<{
@@ -1363,10 +1377,25 @@ export class VisualService {
       );
     }
     const latestDesign = await this.designStore.latestAcceptedDesign(input.projectId);
-    if (latestDesign && !latestDesign.staleness.stale) {
+    if (!latestDesign) {
+      throw new FactoryError(
+        "visual_acceptance_failed",
+        "An accepted design artifact is required before running the final design pass.",
+      );
+    }
+    if (!latestDesign.staleness.stale) {
       throw new FactoryError(
         "visual_acceptance_failed",
         `Final design is already frozen and up to date (version ${latestDesign.artifact.version}). No final design pass is needed.`,
+      );
+    }
+    if (
+      latestDesign.staleness.code !== "RUN7_ASSET_ASSIGNMENTS_ADDED" &&
+      latestDesign.staleness.code !== "RUN7_EXACT_ASSET_REPLACED"
+    ) {
+      throw new FactoryError(
+        "visual_design_not_eligible",
+        `Final design pass is only permitted for Run 7 asset resolution staleness, but design has upstream staleness (${latestDesign.staleness.code ?? "UNKNOWN"}): ${latestDesign.staleness.reason}. Fix upstream authority first.`,
       );
     }
     if (!this.designService) {
@@ -1417,7 +1446,11 @@ export class VisualService {
       if (!design || design.artifact.id !== plan.designArtifactId || design.artifact.version !== plan.designArtifactVersion) {
         stale = true;
         staleReason = "The accepted design changed since this plan was derived.";
-      } else if (design.staleness.stale && design.staleness.code !== "RUN7_ASSET_ASSIGNMENTS_ADDED") {
+      } else if (
+        design.staleness.stale &&
+        design.staleness.code !== "RUN7_ASSET_ASSIGNMENTS_ADDED" &&
+        design.staleness.code !== "RUN7_EXACT_ASSET_REPLACED"
+      ) {
         stale = true;
         staleReason = design.staleness.reason;
       }
@@ -1501,7 +1534,11 @@ export class VisualService {
 
     const latestDesign = await this.designStore.latestAcceptedDesign(projectId);
     const finalDesignPass = {
-      required: Boolean(acceptedSet && latestDesign?.staleness.code === "RUN7_ASSET_ASSIGNMENTS_ADDED"),
+      required: Boolean(
+        acceptedSet &&
+          (latestDesign?.staleness.code === "RUN7_ASSET_ASSIGNMENTS_ADDED" ||
+            latestDesign?.staleness.code === "RUN7_EXACT_ASSET_REPLACED"),
+      ),
       frozen: Boolean(acceptedSet && latestDesign && !latestDesign.staleness.stale),
       acceptedDesignVersion: latestDesign?.artifact.version ?? null,
       designStalenessCode: latestDesign?.staleness.code ?? null,

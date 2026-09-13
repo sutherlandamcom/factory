@@ -18,6 +18,7 @@ import {
   designCandidates,
   designInputSnapshots,
   projectInputSnapshots,
+  visualAssetPlans,
   type AcceptedDesignArtifactRecord,
   type DesignCandidateRecord,
   type DesignInputSnapshotRecord,
@@ -354,9 +355,22 @@ export class DesignStore {
       if (!current) {
         return { stale: true, reason: `Asset assignment ${ref.pageSlug}/${ref.role} was removed.`, code: "ASSET_ASSIGNMENT_REMOVED" };
       }
-      if (!validAssignmentAuthority(current, projectId) ||
-          current.binaryDigest !== ref.binaryDigest || current.versionId !== ref.versionId ||
-          current.governanceDigest !== ref.governanceDigest) {
+      if (!validAssignmentAuthority(current, projectId)) {
+        return { stale: true, reason: `Asset assignment ${ref.pageSlug}/${ref.role} changed authority.`, code: "ASSET_ASSIGNMENT_CHANGED" };
+      }
+      if (
+        current.binaryDigest !== ref.binaryDigest ||
+        current.versionId !== ref.versionId ||
+        current.governanceDigest !== ref.governanceDigest
+      ) {
+        const isAuthorizedReplacement = await this.isAuthorizedPlanReplacement(projectId, ref, current);
+        if (isAuthorizedReplacement) {
+          return {
+            stale: true,
+            reason: `Asset assignment ${ref.pageSlug}/${ref.role} replaced with approved Run 7 asset.`,
+            code: "RUN7_EXACT_ASSET_REPLACED",
+          };
+        }
         return { stale: true, reason: `Asset assignment ${ref.pageSlug}/${ref.role} changed.`, code: "ASSET_ASSIGNMENT_CHANGED" };
       }
     }
@@ -373,6 +387,28 @@ export class DesignStore {
     }
 
     return { stale: false, reason: null, code: null };
+  }
+
+  private async isAuthorizedPlanReplacement(
+    projectId: string,
+    ref: { pageSlug: string; role: string; versionId: string },
+    current: { versionId: string; approvalState: string; assetProjectId: string },
+  ): Promise<boolean> {
+    if (current.approvalState !== "approved" || current.assetProjectId !== projectId) {
+      return false;
+    }
+    const [plan] = await this.db
+      .select({ slots: visualAssetPlans.slots })
+      .from(visualAssetPlans)
+      .where(eq(visualAssetPlans.projectId, projectId))
+      .orderBy(desc(visualAssetPlans.version))
+      .limit(1);
+    if (!plan || !plan.slots) return false;
+    const slots = plan.slots as Array<{ pageSlug: string; role: string; existingVersionId?: string | null }>;
+    if (!Array.isArray(slots)) return false;
+    return slots.some(
+      (s) => s.pageSlug === ref.pageSlug && s.role === ref.role && s.existingVersionId === ref.versionId,
+    );
   }
 
   // ---- Design candidates -----------------------------------------------------

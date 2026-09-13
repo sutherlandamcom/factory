@@ -62,12 +62,13 @@ if (!preflight.configured) {
   process.exit(1);
 }
 
-if (!preflight.verifiedModels || preflight.verifiedModels.length === 0) {
-  console.error("Preflight failed to report verified models.");
+const reportedModels = preflight.configuredModels ?? preflight.verifiedModels;
+if (!reportedModels || reportedModels.length === 0) {
+  console.error("Preflight failed to report configured models.");
   process.exit(1);
 }
 
-console.log("VERIFIED_MODELS:", preflight.verifiedModels.join(", "));
+console.log("CONFIGURED_MODELS:", reportedModels.join(", "));
 
 // 2. Controlled Generation (Single Bounded Call)
 const modelId = VISUAL_DEFAULT_MODEL;

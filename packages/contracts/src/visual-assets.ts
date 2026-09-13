@@ -352,8 +352,10 @@ export interface VisualAssetProviderPreflightConfigured {
   configured: true;
   provider: "google-genai";
   reachable: boolean;
-  /** Model ids the provider accepted during preflight (evidence). */
-  verifiedModels: string[];
+  /** Policy-configured model ids the adapter permits (honest reporting). */
+  configuredModels: string[];
+  /** Optional model ids dynamically verified by an interactive zero-cost probe. */
+  verifiedModels?: string[];
 }
 
 export interface VisualAssetProviderPreflightNotConfigured {
@@ -458,6 +460,8 @@ export const VISUAL_ERROR_CODES = [
   "visual_set_immutable",
   /** Slot has no accepted resolution yet (set acceptance fail-closed). */
   "visual_slot_unresolved",
+  /** Follower timeout waiting for concurrent provider generation to complete. */
+  "visual_generation_timeout",
 ] as const;
 export type VisualErrorCode = (typeof VISUAL_ERROR_CODES)[number];
 

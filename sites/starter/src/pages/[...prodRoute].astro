@@ -1,0 +1,131 @@
+---
+import Layout from "../layouts/Layout.astro";
+import { loadProductionManifests, type ProductionRenderManifest } from "../lib/production-manifest";
+import type { WebPage, WithContext } from "schema-dts";
+
+/**
+ * PRODUCTION PAGE RENDERER (Run 9) — deterministic implementation of
+ * accepted design authority over exact accepted content.
+ *
+ * This component renders a ProductionRenderManifest produced by the trusted
+ * Factory compiler. It NEVER rewrites, paraphrases, shortens, expands or
+ * SEO-optimizes accepted copy; it materializes it. Whitespace-only rendering
+ * normalization is the only permitted transformation.
+ *
+ * Zero client JavaScript: pure static HTML.
+ */
+
+export async function getStaticPaths() {
+  const manifests = await loadProductionManifests();
+  return manifests.map((manifest) => ({
+    params: { prodRoute: manifest.input.route.replace(/^\//, "").replace(/\/$/, "") || undefined },
+    props: { manifest },
+  }));
+}
+
+interface Props {
+  manifest: ProductionRenderManifest;
+}
+
+const { manifest } = Astro.props;
+const { content, assets, input } = manifest;
+
+const canonicalUrl = new URL(input.route, input.canonicalOrigin).href;
+
+// Structured data: a projection of accepted visible truth only. Typed via
+// schema-dts (WebPage) at authoring time; serialized to JSON for rendering.
+// No invented ratings/reviews/prices/addresses/geo/credentials — ever.
+// Schema.org validity != Google rich-result eligibility.
+const jsonLdNode: WithContext<WebPage> = {
+  "@context": "https://schema.org",
+  "@type": "WebPage",
+  name: content.title,
+  description: content.metaDescription,
+  url: canonicalUrl,
+};
+const jsonLd = jsonLdNode as unknown as Record<string, unknown>;
+
+const heroAsset = assets.find((asset) => asset.isProbableLcp);
+const inlineAssets = assets.filter((asset) => !asset.isProbableLcp);
+---
+
+<Layout title={content.title} description={content.metaDescription} jsonLd={jsonLd}>
+  {/* Hero: accepted title as the single H1, accepted introduction verbatim. */}
+  <section class="bg-paper">
+    <div class="mx-auto max-w-6xl px-6 py-20 md:py-28">
+      <h1 class="font-display text-4xl font-semibold tracking-tight text-ink-900 md:text-6xl">
+        {content.title}
+      </h1>
+      <p class="mt-8 max-w-2xl text-lg leading-relaxed text-ink-700">{content.introduction}</p>
+      {
+        heroAsset && (
+          <figure class="mt-12">
+            <img
+              src={heroAsset.publicPath}
+              alt={heroAsset.alt}
+              width={heroAsset.width}
+              height={heroAsset.height}
+              loading="eager"
+              decoding="async"
+              class="w-full h-auto rounded-lg"
+            />
+          </figure>
+        )
+      }
+    </div>
+  </section>
+
+  {/* Accepted sections verbatim, in accepted order, exactly once each. */}
+  {
+    content.sections.map((section) => (
+      <section class="bg-paper py-12 md:py-16">
+        <div class="mx-auto max-w-4xl px-6">
+          <h2 class="font-display text-3xl font-semibold tracking-tight text-ink-900 md:text-4xl">
+            {section.heading}
+          </h2>
+          {section.body.split(/\n{2,}/).map((paragraph) => (
+            <p class="mt-6 text-base leading-relaxed text-ink-700">{paragraph}</p>
+          ))}
+        </div>
+      </section>
+    ))
+  }
+
+  {/* Inline accepted assets below the fold (lazy) with accepted alt semantics. */}
+  {
+    inlineAssets.map((asset) => (
+      <figure class="mx-auto max-w-4xl px-6 py-8">
+        <img
+          src={asset.publicPath}
+          alt={asset.alt}
+          width={asset.width}
+          height={asset.height}
+          loading="lazy"
+          decoding="async"
+          class="w-full h-auto rounded-lg"
+        />
+      </figure>
+    ))
+  }
+
+  {/* Accepted conclusion verbatim. */}
+  <section class="bg-mist py-16 md:py-24">
+    <div class="mx-auto max-w-3xl px-6">
+      {content.conclusion.split(/\n{2,}/).map((paragraph) => (
+        <p class="mt-6 font-display text-xl leading-relaxed text-ink-700 md:text-2xl">{paragraph}</p>
+      ))}
+    </div>
+  </section>
+
+  {/* Accepted CTA verbatim — crawlable anchor, never a JS handler. */}
+  {
+    content.cta.trim() !== "" && (
+      <section class="bg-paper py-12">
+        <div class="mx-auto max-w-3xl px-6 text-center">
+          <p class="text-lg leading-relaxed text-ink-700">{content.cta}</p>
+        </div>
+      </section>
+    )
+  }
+</Layout>
+

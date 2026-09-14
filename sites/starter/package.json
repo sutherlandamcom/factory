@@ -8,7 +8,9 @@
     "build": "astro build",
     "preview": "astro preview",
     "check": "astro check",
-    "test": "playwright test"
+    "test": "playwright test",
+    "test:axe": "playwright test tests/axe.production.spec.ts",
+    "test:lhci": "lhci autorun"
   },
   "dependencies": {
     "@factory/contracts": "workspace:*",
@@ -19,8 +21,12 @@
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
+    "@axe-core/playwright": "^4.13.0",
+    "@lhci/cli": "^0.15.1",
     "@playwright/test": "~1.61.0",
     "@types/node": "^26.3.0",
+    "schema-dts": "^2.0.0",
+    "tslib": "^2.8.1",
     "typescript": "^5.9.3"
   }
 }

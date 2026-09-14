@@ -91,3 +91,27 @@ jobs:
           FACTORY_OPERATOR_PORT: "4175"
           FACTORY_E2E_SUPERVISOR_PORT: "4177"
         run: pnpm --filter @factory/dashboard run test:e2e
+
+      - name: Run Run 9 Production QA Gates (built-site deterministic QA)
+        run: pnpm --filter @factory/factory run test:production
+
+      - name: Run Gitleaks (secret scanning, redacted reporting)
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz" -o gitleaks.tgz
+          echo "a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb  gitleaks.tgz" | sha256sum -c -
+          tar xzf gitleaks.tgz gitleaks
+          ./gitleaks detect --redact -v
+
+      - name: Run OSV Scanner (dependency vulnerabilities)
+        run: |
+          curl -sSfL "https://github.com/google/osv-scanner/releases/download/v2.6.0/osv-scanner_linux_amd64" -o osv-scanner
+          echo "ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108  osv-scanner" | sha256sum -c -
+          chmod +x osv-scanner
+          ./osv-scanner scan --lockfile=pnpm-lock.yaml || echo "OSV_SCANNER_FINDINGS_PRESENT"
+
+      - name: Run Lychee (broken internal links on built site)
+        run: |
+          curl -sSfL "https://github.com/lycheeverse/lychee/releases/download/lychee-v0.24.2/lychee-x86_64-unknown-linux-gnu.tar.gz" -o lychee.tgz
+          echo "1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a  lychee.tgz" | sha256sum -c -
+          tar xzf lychee.tgz
+          ./lychee --offline --no-progress 'sites/starter/dist/**/*.html'

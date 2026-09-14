@@ -1977,3 +1977,141 @@ export const assetAssignmentHistory = pgTable("asset_assignment_history", {
   binding: jsonb("binding").notNull(),
   recordedAt: timestamp("recorded_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+// ---------------------------------------------------------------------------
+// Production authority: ProductionPageInput + ProductionCandidate + QA
+// (Macro Run 9 — Production + SEO + Performance Engine)
+// ---------------------------------------------------------------------------
+
+/**
+ * Immutable, versioned, digest-bound manifest of the exact accepted
+ * authorities (content + design + visual set + route/site identity +
+ * renderer identity) that a production build consumes. NOT a copy of
+ * editable page data — the renderer reads authority artifacts by exact
+ * id/version/digest lineage.
+ */
+export const productionPageInputs = pgTable(
+  "production_page_inputs",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    /** Accepted page identity: the bound AcceptedPageContent slug. */
+    pageIdentity: text("page_identity").notNull(),
+    pageType: text("page_type").notNull(),
+    route: text("route").notNull(),
+    canonicalOrigin: text("canonical_origin").notNull(),
+    acceptedContentId: text("accepted_content_id").notNull(),
+    acceptedContentVersion: integer("accepted_content_version").notNull(),
+    acceptedContentDigest: text("accepted_content_digest").notNull(),
+    acceptedDesignId: text("accepted_design_id").notNull(),
+    acceptedDesignVersion: integer("accepted_design_version").notNull(),
+    acceptedDesignDigest: text("accepted_design_digest").notNull(),
+    acceptedVisualSetId: text("accepted_visual_set_id").notNull(),
+    acceptedVisualSetVersion: integer("accepted_visual_set_version").notNull(),
+    acceptedVisualSetDigest: text("accepted_visual_set_digest").notNull(),
+    rendererId: text("renderer_id").notNull(),
+    rendererVersion: text("renderer_version").notNull(),
+    rendererPolicyVersion: text("renderer_policy_version").notNull(),
+    data: jsonb("data").notNull(),
+    inputDigest: text("input_digest").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("production_page_inputs_project_version_unique").on(table.projectId, table.version),
+    // Route authority: one intended page = one production route per project.
+    unique("production_page_inputs_project_route_unique").on(table.projectId, table.route),
+    check("production_page_inputs_version_positive", sql`${table.version} >= 1`),
+    check("production_page_inputs_digest_shape", sql`${table.inputDigest} ~ '^[0-9a-f]{64}$'`),
+    check(
+      "production_page_inputs_authority_digests_shape",
+      sql`${table.acceptedContentDigest} ~ '^[0-9a-f]{64}$' AND ${table.acceptedDesignDigest} ~ '^[0-9a-f]{64}$' AND ${table.acceptedVisualSetDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "production_page_inputs_renderer_valid",
+      sql`${table.rendererId} = 'astro-static'`,
+    ),
+    check(
+      "production_page_inputs_page_type_valid",
+      sql`${table.pageType} IN ('homepage', 'service', 'location', 'editorial', 'investment_advisory')`,
+    ),
+    index("production_page_inputs_project_idx").on(table.projectId, table.version),
+  ],
+);
+
+/**
+ * Immutable production build result. A candidate proves exactly which
+ * authority versions/digests it was built from, the rendered artifact
+ * digest, and its QA state. Upstream mutation never mutates a historical
+ * candidate — it becomes STALE and a new candidate is required.
+ */
+export const productionCandidates = pgTable(
+  "production_candidates",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    productionInputId: text("production_input_id")
+      .notNull()
+      .references(() => productionPageInputs.id, { onDelete: "restrict" }),
+    productionInputVersion: integer("production_input_version").notNull(),
+    productionInputDigest: text("production_input_digest").notNull(),
+    pageIdentity: text("page_identity").notNull(),
+    route: text("route").notNull(),
+    canonicalUrl: text("canonical_url").notNull(),
+    /** Digest over the rendered production artifacts (normalized surface). */
+    artifactDigest: text("artifact_digest"),
+    /** Build output directory/manifest reference (runtime evidence). */
+    artifactRef: text("artifact_ref"),
+    assetReferences: jsonb("asset_references"),
+    /** pending | built | qa_passed | qa_failed | stale */
+    state: text("state").notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check("production_candidates_state_valid", sql`${table.state} IN ('pending', 'built', 'qa_passed', 'qa_failed', 'stale')`),
+    check("production_candidates_input_digest_shape", sql`${table.productionInputDigest} ~ '^[0-9a-f]{64}$'`),
+    check("production_candidates_artifact_digest_shape", sql`${table.artifactDigest} IS NULL OR ${table.artifactDigest} ~ '^[0-9a-f]{64}$'`),
+    check("production_candidates_canonical_shape", sql`${table.canonicalUrl} LIKE 'http%'`),
+    index("production_candidates_project_idx").on(table.projectId, table.createdAt),
+    index("production_candidates_input_idx").on(table.productionInputId),
+  ],
+);
+
+/**
+ * One deterministic QA execution against one exact candidate. Reports are
+ * immutable evidence: re-running QA creates a new qa_run row.
+ */
+export const productionQaRuns = pgTable(
+  "production_qa_runs",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    candidateId: text("candidate_id")
+      .notNull()
+      .references(() => productionCandidates.id, { onDelete: "cascade" }),
+    candidateArtifactDigest: text("candidate_artifact_digest"),
+    data: jsonb("data").notNull(),
+    overall: text("overall").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check(
+      "production_qa_runs_overall_valid",
+      sql`${table.overall} IN ('PASS', 'REVIEW', 'FAIL')`,
+    ),
+    index("production_qa_runs_candidate_idx").on(table.candidateId, table.createdAt),
+  ],
+);
+
+export type ProductionPageInputRecord = typeof productionPageInputs.$inferSelect;
+export type InsertProductionPageInput = typeof productionPageInputs.$inferInsert;
+export type ProductionCandidateRecord = typeof productionCandidates.$inferSelect;
+export type InsertProductionCandidate = typeof productionCandidates.$inferInsert;
+export type ProductionQaRunRecord = typeof productionQaRuns.$inferSelect;
+export type InsertProductionQaRun = typeof productionQaRuns.$inferInsert;

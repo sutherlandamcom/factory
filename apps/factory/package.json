@@ -12,7 +12,8 @@
     "db:migrate": "tsx src/index.ts db migrate",
     "db:check": "tsx src/index.ts db check",
     "test:persistence": "tsx --test --test-concurrency=1 tests/persistence/*.test.ts",
-    "test:operator": "tsx --test --test-concurrency=1 tests/operator/*.test.ts"
+    "test:operator": "tsx --test --test-concurrency=1 tests/operator/*.test.ts",
+    "test:production": "tsx --test tests/production-contract.test.ts tests/production-qa-gates.test.ts tests/production-scale.test.ts"
   },
   "dependencies": {
     "@contentauth/c2pa-node": "0.9.5",

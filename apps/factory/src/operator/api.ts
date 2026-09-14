@@ -26,6 +26,7 @@ import {
   visualTruthClassSchema,
 } from "@factory/contracts";
 import type { VisualService } from "../visual/service.js";
+import type { ProductionApiFacade } from "../production/api-facade.js";
 
 export interface OperatorApiDeps {
   readonly store: FactoryStore;
@@ -42,6 +43,8 @@ export interface OperatorApiDeps {
   readonly design?: DesignService;
   /** Visual asset pipeline v0 (Macro Run 7); optional for backward compatibility. */
   readonly visual?: VisualService;
+  /** Production pipeline v0 (Macro Run 9); optional for backward compatibility. */
+  readonly production?: ProductionApiFacade;
 }
 
 const projectKeySchema = z
@@ -1115,6 +1118,82 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         if (req.method === "GET" && segments.length === 6 && segments[3] === "candidates" && segments[5] === "bytes") {
           const bytes = await visual.readCandidateBytes(project.id, segments[4]!);
           return sendBytes(res, bytes.mediaType, bytes.bytes);
+        }
+
+        return sendError(res, "not_found", "Unknown endpoint.");
+      }
+
+      // ------------------------------------------------------------------
+      // Production (Macro Run 9): derive input / build candidate / QA view.
+      // Thin operator surface over the ProductionStore/BuildService — no
+      // Publish action (Run 13 owns publication).
+      // ------------------------------------------------------------------
+      if (segments[2] === "production" && deps.production) {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        const production = deps.production;
+
+        // GET workspace: /projects/:id/production/workspace
+        if (req.method === "GET" && segments.length === 4 && segments[3] === "workspace") {
+          const workspace = await production.workspace(project.id);
+          return sendJson(res, 200, workspace);
+        }
+
+        // POST derive-input: /projects/:id/production/derive-input
+        if (req.method === "POST" && segments.length === 4 && segments[3] === "derive-input") {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(
+            z.object({
+              pageSlug: z.string().trim().min(1).max(200),
+              canonicalOrigin: z.string().trim().min(1).max(200),
+            }),
+            parsed,
+          );
+          const result = await production.deriveInput({
+            projectId: project.id,
+            pageSlug: input.pageSlug,
+            canonicalOrigin: input.canonicalOrigin,
+          });
+          return sendJson(res, 201, result);
+        }
+
+        // POST prepare-candidate: /projects/:id/production/prepare-candidate
+        // (derive/reuse input + create immutable candidate in one action)
+        if (req.method === "POST" && segments.length === 4 && segments[3] === "prepare-candidate") {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(
+            z.object({
+              pageSlug: z.string().trim().min(1).max(200),
+              canonicalOrigin: z.string().trim().min(1).max(200),
+            }),
+            parsed,
+          );
+          const result = await production.prepareCandidate({
+            projectId: project.id,
+            pageSlug: input.pageSlug,
+            canonicalOrigin: input.canonicalOrigin,
+          });
+          return sendJson(res, 201, result);
+        }
+
+        // POST build: /projects/:id/production/candidates/:candidateId/build
+        if (req.method === "POST" && segments.length === 6 && segments[3] === "candidates" && segments[5] === "build") {
+          if (body.trim()) parseJsonBody(body);
+          const result = await production.buildCandidate({ projectId: project.id, candidateId: segments[4]! });
+          return sendJson(res, 200, result);
+        }
+
+        // POST QA: /projects/:id/production/candidates/:candidateId/qa
+        if (req.method === "POST" && segments.length === 6 && segments[3] === "candidates" && segments[5] === "qa") {
+          if (body.trim()) parseJsonBody(body);
+          const result = await production.runCandidateQa({ projectId: project.id, candidateId: segments[4]! });
+          return sendJson(res, 200, result);
+        }
+
+        // GET candidate detail: /projects/:id/production/candidates/:candidateId
+        if (req.method === "GET" && segments.length === 5 && segments[3] === "candidates") {
+          const detail = await production.candidateDetail({ projectId: project.id, candidateId: segments[4]! });
+          return sendJson(res, 200, detail);
         }
 
         return sendError(res, "not_found", "Unknown endpoint.");

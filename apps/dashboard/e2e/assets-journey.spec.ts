@@ -1,3 +1,4 @@
+import { fillAndAcceptIntake, acceptPageContent } from "./content-authority-helper.js";
 import { test, expect, type Page } from "@playwright/test";
 import http from "node:http";
 import sharp from "sharp";
@@ -80,6 +81,8 @@ test.describe("Asset journey", () => {
     test.setTimeout(600_000);
     const key = `e2e-assets-${UNIQUE}`;
     await createProject(page, key, "E2E Assets Chamonix");
+    await fillAndAcceptIntake(page);
+    await acceptPageContent(page);
 
     // ---- Asset Library ----
     await page.getByRole("button", { name: "Asset Library", exact: true }).click();
@@ -111,7 +114,7 @@ test.describe("Asset journey", () => {
     await expect(page.getByText("approved").first()).toBeVisible({ timeout: 10_000 });
 
     // ---- Assign to homepage/hero ----
-    await page.getByPlaceholder("homepage", { exact: true }).last().fill("homepage");
+    await page.getByRole("combobox", { name: "Accepted page" }).last().selectOption("homepage");
     await page.getByRole("button", { name: "Assign to page slot" }).click();
     await expect(page.getByText(/Assigned v1 to homepage\/hero/)).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText(/homepage \/ hero/)).toBeVisible({ timeout: 10_000 });

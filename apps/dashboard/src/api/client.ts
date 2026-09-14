@@ -646,6 +646,7 @@ export interface WriterQaView {
 }
 
 export interface AcceptedContentView {
+  lineageQualification?: "complete" | "no-gap-waiver" | "unqualified";
   id: string;
   version: number;
   slug: string;
@@ -662,7 +663,7 @@ export interface WriterWorkspace {
   brief: { latest: ContentBriefView | null; versions: Array<{ id: string; version: number; state: string; digest: string; slug: string; createdAt: string }> };
   snapshot: { latest: WriterSnapshotView | null; versions: Array<{ id: string; version: number; state: string; digest: string; createdAt: string }> };
   proposal: { latest: WriterProposalView | null; versions: Array<{ id: string; version: number; digest: string; slug: string; createdAt: string }> };
-  accepted: { latest: AcceptedContentView | null };
+  accepted: { latest: AcceptedContentView | null; currentPages?: Array<{ id: string; version: number; slug: string; digest: string }>; versions?: Array<{ id: string; version: number; slug: string; digest: string }> };
   devModelOverride: {
     active: boolean;
     roles: Array<{ roleId: string; model: string; championModel: string }>;
@@ -670,6 +671,7 @@ export interface WriterWorkspace {
 }
 
 export const writerApi = {
+  acceptedDetail: (projectId: string, id: string) => request<AcceptedContentView>(`/api/projects/${encodeURIComponent(projectId)}/writer/accepted/${encodeURIComponent(id)}`),
   workspace: (projectId: string) =>
     request<WriterWorkspace>(`/api/projects/${encodeURIComponent(projectId)}/writer/workspace`),
 
@@ -814,9 +816,13 @@ export interface AssetAssignmentView {
   replacementAvailable: boolean;
   latestApprovedVersionId: string | null;
   latestApprovedVersionNumber: number | null;
+  acceptedPageContentId: string | null;
+  acceptedPageContentVersion: number | null;
+  acceptedPageContentDigest: string | null;
 }
 
 export interface AssetsWorkspace {
+  acceptedPages: Array<{ id: string; version: number; contentDigest: string; slug: string }>;
   schemaVersion: string;
   imageryStrategy: string;
   assets: AssetView[];
@@ -880,7 +886,7 @@ export const assetsApi = {
 
   assign: (
     projectId: string,
-    input: { assetId: string; versionId: string; pageSlug: string; role: string; expectedBinaryDigest: string },
+    input: { acceptedPageContentId: string; acceptedPageContentVersion: number; acceptedPageContentDigest: string; expectedGovernanceDigest: string; assetId: string; versionId: string; pageSlug: string; role: string; expectedBinaryDigest: string },
   ) =>
     request<{ id: string; versionId: string; pageSlug: string; role: string }>(
       `/api/projects/${encodeURIComponent(projectId)}/assets/assignments`,
@@ -890,7 +896,7 @@ export const assetsApi = {
   replace: (
     projectId: string,
     assignmentId: string,
-    input: { toVersionId: string; expectedBinaryDigest: string },
+    input: { pageAuthority?: { id: string; version: number; contentDigest: string; slug: string }; toVersionId: string; expectedBinaryDigest: string },
   ) =>
     request<{ id: string; versionId: string }>(
       `/api/projects/${encodeURIComponent(projectId)}/assets/assignments/${encodeURIComponent(assignmentId)}/replace`,

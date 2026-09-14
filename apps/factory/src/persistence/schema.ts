@@ -362,6 +362,7 @@ export const searchRuns = pgTable(
     language: text("language"),
     device: text("device").notNull(),
     provider: text("provider").notNull(),
+    sourceRunId: text("source_run_id"),
     /** Cache/dedupe key: provider + normalized inputs + lineage + request version. */
     requestDigest: text("request_digest").notNull(),
     refreshRequested: boolean("refresh_requested").notNull().default(false),
@@ -1102,7 +1103,7 @@ export const acceptedPageContent = pgTable(
   },
   (table) => [
     unique("accepted_page_content_project_version_unique").on(table.projectId, table.version),
-    unique("accepted_page_content_project_slug_unique").on(table.projectId, table.slug),
+    unique("accepted_page_content_project_proposal_unique").on(table.projectId, table.proposalId),
     index("accepted_page_content_project_idx").on(table.projectId, table.version),
   ],
 );
@@ -1282,11 +1283,18 @@ export const assetPageAssignments = pgTable(
       .references(() => assetVersions.id, { onDelete: "restrict" }),
     versionDigest: text("version_digest").notNull(),
     binaryDigest: text("binary_digest").notNull(),
+    acceptedPageContentId: text("accepted_page_content_id").references(() => acceptedPageContent.id),
+    acceptedPageContentVersion: integer("accepted_page_content_version"),
+    acceptedPageContentDigest: text("accepted_page_content_digest"),
     pageSlug: text("page_slug").notNull(),
     role: text("role").notNull(),
     assignedAt: timestamp("assigned_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
+    check("assignment_page_lineage_complete", sql`(
+      (${table.acceptedPageContentId} IS NULL AND ${table.acceptedPageContentVersion} IS NULL AND ${table.acceptedPageContentDigest} IS NULL) OR
+      (${table.acceptedPageContentId} IS NOT NULL AND ${table.acceptedPageContentVersion} IS NOT NULL AND ${table.acceptedPageContentDigest} IS NOT NULL AND ${table.acceptedPageContentVersion} > 0 AND ${table.acceptedPageContentDigest} ~ '^[0-9a-f]{64}$')
+    )`),
     unique("asset_page_assignments_slot_unique").on(table.projectId, table.pageSlug, table.role),
     check(
       "asset_page_assignments_role_valid",
@@ -1848,3 +1856,40 @@ export type VisualAssetCandidateRecord = typeof visualAssetCandidates.$inferSele
 export type AcceptedVisualAssetSetRecord = typeof acceptedVisualAssetSets.$inferSelect;
 export type AcceptedVisualAssetSlotRecord = typeof acceptedVisualAssetSlots.$inferSelect;
 export type VisualBudgetReservationRecord = typeof visualBudgetReservations.$inferSelect;
+
+export const searchBudgetReservations = pgTable(
+  "search_budget_reservations",
+  {
+    id: text("id").primaryKey(),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    authorizedMicros: integer("authorized_micros").notNull(),
+    accountedMicros: integer("accounted_micros"),
+    state: text("state").notNull(),
+    invocationDigest: text("invocation_digest").notNull(),
+    lineage: jsonb("lineage"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    accountedAt: timestamp("accounted_at", { withTimezone: true }),
+  },
+  (table) => [
+    check(
+      "search_budget_reservations_state_valid",
+      sql`${table.state} IN ('ACTIVE', 'ACCOUNTED', 'RELEASED')`,
+    ),
+    check(
+      "search_budget_reservations_accounted_valid",
+      sql`(${table.state} = 'ACTIVE' AND ${table.accountedMicros} IS NULL AND ${table.accountedAt} IS NULL) OR (${table.state} = 'ACCOUNTED' AND ${table.accountedMicros} IS NOT NULL AND ${table.accountedAt} IS NOT NULL) OR (${table.state} = 'RELEASED' AND ${table.accountedMicros} IS NULL AND ${table.accountedAt} IS NOT NULL)`,
+    ),
+    index("search_budget_reservations_state_created_idx").on(table.state, table.createdAt),
+    index("search_budget_reservations_created_idx").on(table.createdAt),
+  ],
+);
+
+
+export const assetAssignmentHistory = pgTable("asset_assignment_history", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id").notNull().references(() => projects.id),
+  assignmentId: text("assignment_id").notNull().references(() => assetPageAssignments.id),
+  binding: jsonb("binding").notNull(),
+  recordedAt: timestamp("recorded_at", { withTimezone: true }).defaultNow().notNull(),
+});

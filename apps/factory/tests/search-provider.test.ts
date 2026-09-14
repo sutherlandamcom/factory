@@ -305,3 +305,14 @@ describe("analyst output governance", () => {
     );
   });
 });
+
+
+test("P1-D: DataForSEO task failure retains trusted actual cost", async () => {
+  const body = { status_code: 20000, tasks: [{ status_code: 50000, cost: 0.02 }] };
+  const provider = makeProvider(() => ({ status: 200, body: JSON.stringify(body) }));
+  await assert.rejects(provider.acquire(acquisition), (error: any) => {
+    assert.equal(error.requestSubmitted, true);
+    assert.equal(error.trustedCostMicros, 20000);
+    return true;
+  });
+});

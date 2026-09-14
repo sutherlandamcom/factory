@@ -205,6 +205,10 @@ export const assetAssignSchema = z
   .object({
     assetId: assetIdSchema,
     versionId: assetVersionIdSchema,
+    acceptedPageContentId: z.string().min(1),
+    acceptedPageContentVersion: z.number().int().positive(),
+    acceptedPageContentDigest: assetDigestSchema,
+    expectedGovernanceDigest: assetDigestSchema,
     pageSlug: assetPageSlugSchema,
     role: assetRoleSchemaV2,
     /** Optimistic concurrency: caller must echo the approved version digest. */
@@ -215,6 +219,7 @@ export type AssetAssignInput = z.infer<typeof assetAssignSchema>;
 
 export const assetReplaceSchema = z
   .object({
+    pageAuthority: z.object({ id: z.string().min(1), version: z.number().int().positive(), contentDigest: assetDigestSchema, slug: assetPageSlugSchema }).strict().optional(),
     toVersionId: assetVersionIdSchema,
     expectedBinaryDigest: assetDigestSchema,
   })

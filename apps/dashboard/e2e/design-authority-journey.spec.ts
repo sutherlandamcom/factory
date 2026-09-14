@@ -1,3 +1,5 @@
+import { fillAndAcceptIntake, acceptPageContent } from "./content-authority-helper.js";
+import type { WriterWorkspace, AssetsWorkspace, DesignWorkspace } from "../src/api/client.js";
 import { test, expect, type Page } from "@playwright/test";
 import http from "node:http";
 import sharp from "sharp";
@@ -60,73 +62,6 @@ async function createProject(page: Page, key: string, name: string): Promise<voi
   await expect(page.locator("h1", { hasText: name })).toBeVisible({ timeout: 10_000 });
 }
 
-async function fillAndAcceptIntake(page: Page): Promise<void> {
-  const set = async (tab: string, label: string, value: string) => {
-    await page.getByRole("button", { name: tab, exact: true }).click();
-    await page.getByLabel(label, { exact: false }).first().fill(value);
-  };
-  await set("Business", "Business Name", "Design Authority Roofing Co");
-  await set("Business", "Description", "Family roofing company used by the design authority journey test.");
-  await set("Business", "Business Model", "Direct-to-consumer services");
-  await set("Audience", "Segments", "Residential Homeowners");
-  await set("Site Identity", "Site Name", "Design Authority Roofing");
-  await set("Site Identity", "Language", "en");
-  await set("Site Identity", "Locale", "en-US");
-  await set("Conversion", "Primary Objective", "Generate assessment requests");
-  await set("Conversion", "CTA Type", "Call the office");
-  await page.getByRole("button", { name: "Conversion", exact: true }).click();
-  await page.getByLabel("Destination Type").selectOption("phone");
-  await set("Conversion", "CTA Destination", "+15550100200");
-  await set("Search Seeds", "Seed Queries", "roof repair austin");
-  await set("Evidence & Claims", "Operator Facts", "Family-owned roofing firm operating since 1998");
-  await set("Brand", "Positioning", "High-altitude roofing expertise");
-  await set("Brand", "Tone", "Plain-spoken expert");
-  await set("Content Constitution", "Brand Voice", "Warm, plain-spoken expert");
-  await set("Content Constitution", "Tone", "Confident but never pushy");
-  await set("Content Constitution", "Evidence / Factuality Policy", "Every claim traces to an operator fact.");
-  await set("Content Constitution", "Trust Expectations", "Show license numbers where relevant.");
-  await set("Content Constitution", "Locale / Language Preferences", "US English");
-  await set("Content Constitution", "Custom Project Writer Instructions", "Keep sentences short.");
-  await page.getByRole("button", { name: "Save Draft" }).click();
-  await page.getByRole("button", { name: "Review", exact: true }).click();
-  await page.getByRole("button", { name: "ACCEPT INPUTS" }).click();
-  await expect(page.locator("span", { hasText: /^APPROVED$/i }).first()).toBeVisible({ timeout: 15_000 });
-}
-
-/** Accepted page content via the fixture writer (no-gap path: no SERP spend). */
-async function acceptPageContent(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Content", exact: true }).click();
-  await expect(page.getByText("Factory Writer Policy")).toBeVisible({ timeout: 10_000 });
-  await page.getByRole("button", { name: "Derive draft" }).click();
-  await expect(page.getByText("Writer policy draft created")).toBeVisible({ timeout: 15_000 });
-  await page.getByRole("button", { name: "Approve exact digest" }).first().click();
-  await expect(page.getByText("Writer policy v1 approved and immutable.")).toBeVisible({ timeout: 15_000 });
-
-  await page.locator('input[placeholder="roof-replacement-denver"]').fill(PAGE_SLUG);
-  await page.getByLabel("Title", { exact: false }).first().fill("Roof Repair in Austin");
-  await page.getByLabel("Objective", { exact: false }).fill("Convert homeowners researching roof repair into inspection requests.");
-  await page.getByLabel("Audience", { exact: false }).fill("Austin homeowners comparing local roofers");
-  await page.getByLabel("Structure guidance (one per line)").fill("Storm damage context\nRepair process\nWarranty and trust signals");
-  await page.getByLabel("CTA intent", { exact: false }).fill("Book a free roof inspection");
-  await page.getByLabel(/Explicitly draft\/approve WITHOUT accepted gap lineage/).check();
-  await page.getByRole("button", { name: "Create draft" }).click();
-  await expect(page.getByText(/Brief draft v1 saved/)).toBeVisible({ timeout: 15_000 });
-  await page.getByRole("button", { name: "Approve exact digest" }).click();
-  await expect(page.getByText("Brief v1 approved.")).toBeVisible({ timeout: 15_000 });
-
-  await page.getByRole("button", { name: "Compile new snapshot" }).click();
-  await expect(page.getByText(/Snapshot v1 compiled/)).toBeVisible({ timeout: 15_000 });
-  await page.getByRole("button", { name: "Approve exact digest" }).click();
-  await expect(page.getByText(/approved\. Generation is now authorized/)).toBeVisible({ timeout: 15_000 });
-
-  await page.getByRole("button", { name: "Generate proposal" }).click();
-  await expect(page.getByText(/Proposal generated/)).toBeVisible({ timeout: 30_000 });
-  await page.getByRole("button", { name: "Run QA" }).click();
-  await expect(page.getByText("QA verdict: REVIEW")).toBeVisible({ timeout: 30_000 });
-  await page.getByRole("button", { name: "ACCEPT CONTENT" }).click();
-  await expect(page.getByText(new RegExp(`AcceptedPageContent v1 created for ${PAGE_SLUG}`))).toBeVisible({ timeout: 30_000 });
-}
-
 /** Deterministic "photograph-like" fixture image (real bytes, real ingest). */
 async function createHeroFixture(seed: number): Promise<string> {
   const width = 640;
@@ -162,19 +97,44 @@ async function approveAndAssignHeroAsset(page: Page): Promise<void> {
   await expect(page.getByText(/Uploaded v1 \(image\/jpeg/)).toBeVisible({ timeout: 30_000 });
   await page.getByRole("button", { name: "Approve exact digest" }).first().click();
   await expect(page.getByText(/Version v1 approved and immutable/)).toBeVisible({ timeout: 15_000 });
-  await page.getByPlaceholder("homepage", { exact: true }).last().fill("homepage");
+  await page.getByRole("combobox", { name: "Accepted page" }).last().selectOption(PAGE_SLUG);
   await page.getByRole("button", { name: "Assign to page slot" }).click();
-  await expect(page.getByText(/Assigned v1 to homepage\/hero/)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(new RegExp(`Assigned v1 to ${PAGE_SLUG}/hero`))).toBeVisible({ timeout: 15_000 });
 }
 
 test.describe("Design authority journey", () => {
   test("accepted content + approved/assigned asset -> design input -> fixture candidate -> fixture acceptance gate -> restart persistence", async ({ page }) => {
     test.setTimeout(900_000);
 
+    let projectId = "";
+    page.on("request", request => {
+      const match = new URL(request.url()).pathname.match(/^\/api\/projects\/([^/]+)\//);
+      if (match) projectId = match[1]!;
+    });
+    const read = async <T,>(suffix: string): Promise<T> => {
+      expect(projectId).not.toBe("");
+      const response = await page.request.get(`/api/projects/${projectId}/${suffix}`);
+      expect(response.ok()).toBe(true);
+      return response.json();
+    };
     await createProject(page, KEY, NAME);
     await fillAndAcceptIntake(page);
-    await acceptPageContent(page);
+    await acceptPageContent(page, PAGE_SLUG);
+    const writer = await read<WriterWorkspace>("writer/workspace");
+    const brief = writer.brief.latest!, snapshot = writer.snapshot.latest!, proposal = writer.proposal.latest!, content = writer.accepted.latest!;
+    expect(brief.noGapLineageAcknowledged).toBe(false);
+    expect(brief.lineage.gapSnapshotId).toBeTruthy();
+    expect(brief.lineage.gapSnapshotDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(brief.lineage.writerPolicyDigest).toBe(writer.policy.latest!.digest);
+    expect(snapshot).toMatchObject({ briefId: brief.id, briefVersion: brief.version, briefDigest: brief.digest });
+    expect(proposal).toMatchObject({ snapshotId: snapshot.id, snapshotVersion: snapshot.version, snapshotDigest: snapshot.digest });
+    expect(content).toMatchObject({ proposalId: proposal.id, proposalDigest: proposal.digest, slug: PAGE_SLUG });
+    await page.getByRole("button", { name: `Inspect ${PAGE_SLUG} v1` }).click();
+    await expect(page.getByText(proposal.data.introduction, { exact: true }).last()).toBeVisible();
     await approveAndAssignHeroAsset(page);
+    const assets = await read<AssetsWorkspace>("assets/workspace");
+    const assignment = assets.assignments[0]!;
+    expect(assignment).toMatchObject({ acceptedPageContentId: content.id, acceptedPageContentVersion: content.version, acceptedPageContentDigest: content.digest, pageSlug: PAGE_SLUG, role: "hero" });
 
     // ---- Design: derive the authority-bound input snapshot ----
     await page.getByRole("button", { name: "Design" }).click();
@@ -185,7 +145,7 @@ test.describe("Design authority journey", () => {
     // The input snapshot must carry the accepted content + the exact asset
     // assignment (upstream lineage visible in the UI).
     await expect(page.getByText(`Accepted content: ${PAGE_SLUG}`)).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText(/homepage \/ hero/).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(new RegExp(`${PAGE_SLUG} / hero`)).first()).toBeVisible({ timeout: 15_000 });
 
     // ---- Generate a fixture candidate ----
     await page.getByRole("button", { name: "Generate design candidate" }).click();
@@ -222,6 +182,13 @@ test.describe("Design authority journey", () => {
     // The accepted design durably shows the FIXTURE mode.
     await expect(page.getByTitle("Accepted from a deterministic fixture candidate — NOT live Google Stitch evidence")).toBeVisible({ timeout: 15_000 });
 
+    const design = await read<DesignWorkspace>("design/workspace");
+    const input = design.latestInputSnapshot!;
+    const data = input.data as { contentRefs: unknown[]; assetRefs: unknown[] };
+    expect(data.contentRefs).toContainEqual({ id: content.id, version: content.version, slug: PAGE_SLUG, contentDigest: content.digest });
+    expect(data.assetRefs).toContainEqual({ versionId: assignment.versionId, binaryDigest: assignment.binaryDigest, governanceDigest: assignment.versionDigest, acceptedPageContentId: content.id, acceptedPageContentVersion: content.version, acceptedPageContentDigest: content.digest, pageSlug: PAGE_SLUG, role: "hero" });
+    expect(design.accepted).toMatchObject({ inputSnapshotId: input.id, inputSnapshotVersion: input.version, inputDigest: input.inputDigest, candidateId: design.candidates[0]!.id, candidateDigest: design.candidates[0]!.candidateDigest, providerMode: "fixture" });
+
     // ---- RESTART the operator service (DB kept) — accepted design persists ----
     await supervisorCall("/restart");
     await page.waitForTimeout(2_000);
@@ -234,5 +201,8 @@ test.describe("Design authority journey", () => {
     await page.getByRole("button", { name: "Design" }).click();
     await expect(page.locator("h3", { hasText: "Accepted Design" })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTitle("Accepted from a deterministic fixture candidate — NOT live Google Stitch evidence")).toBeVisible({ timeout: 15_000 });
+    expect((await read<WriterWorkspace>("writer/workspace")).accepted.latest).toEqual(content);
+    expect((await read<AssetsWorkspace>("assets/workspace")).assignments).toEqual(assets.assignments);
+    expect((await read<DesignWorkspace>("design/workspace")).accepted).toEqual(design.accepted);
   });
 });

@@ -225,7 +225,7 @@ test("search persistence: freshness cache finds fresh snapshot, misses stale one
     });
     await search.finishRun(run.id, "succeeded", null, null);
 
-    const fresh = await search.findFreshSerp(requestDigest, 24);
+    const fresh = await search.findFreshSerp(project.id, requestDigest, 24);
     assert.equal(fresh?.run.id, run.id);
 
     // Age the observation beyond the freshness window.
@@ -233,7 +233,7 @@ test("search persistence: freshness cache finds fresh snapshot, misses stale one
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (await import("drizzle-orm")).sql`UPDATE serp_snapshots SET observed_at = now() - interval '48 hours'`,
     );
-    const stale = await search.findFreshSerp(requestDigest, 24);
+    const stale = await search.findFreshSerp(project.id, requestDigest, 24);
     assert.equal(stale, null);
   } finally {
     await dbInst.close();

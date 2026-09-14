@@ -1,3 +1,5 @@
+import { assignmentPage } from "../fixtures/accepted-page.js";
+import { seedProjectWithAcceptedInputs } from "../fixtures/writer-seeds.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import http from "node:http";
@@ -150,7 +152,8 @@ async function makeRealService(): Promise<{ service: AssetService; projectId: st
     repoRoot: storageRoot,
   });
   const store = new FactoryStore(dbInst.db);
-  const project = await store.createProject({ key: `api-assets-${uniqueSuffix++}`, name: "API Assets" });
+  const seed = await seedProjectWithAcceptedInputs(dbInst, `api-assets-${uniqueSuffix++}`);
+  const project = { id: seed.projectId };
   return { service, projectId: project.id, cleanup: () => rm(storageRoot, { recursive: true, force: true }) };
 }
 
@@ -180,6 +183,7 @@ test("API: full asset workflow through the real HTTP boundary", async () => {
 
     // 3. Assignment of a PENDING version is blocked (bypass attempt).
     const bypassRes = await jsonPost(h.port, `/api/projects/${projectId}/assets/assignments`, {
+      ...await assignmentPage(dbInst, projectId, "homepage", "0".repeat(64)),
       assetId: upload.assetId,
       versionId: upload.versionId,
       pageSlug: "homepage",
@@ -200,6 +204,7 @@ test("API: full asset workflow through the real HTTP boundary", async () => {
 
     // 5. Assign the approved version.
     const assignRes = await jsonPost(h.port, `/api/projects/${projectId}/assets/assignments`, {
+      ...await assignmentPage(dbInst, projectId, "homepage", approved.governanceDigest),
       assetId: upload.assetId,
       versionId: upload.versionId,
       pageSlug: "homepage",

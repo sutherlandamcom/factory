@@ -1,3 +1,4 @@
+import { PageAuthorityReader } from "../writer/page-authority.js";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, sql } from "drizzle-orm";
 import {
@@ -64,6 +65,13 @@ export class DesignStore {
    * identical digests; changed upstream creates the next version.
    */
   async deriveInputSnapshotDraft(input: { projectId: string }): Promise<DesignInputSnapshotRecord> {
+    return this.db.transaction(async tx => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
+      return new DesignStore(tx as unknown as FactoryDb).deriveInputSnapshotDraftLocked(input);
+    });
+  }
+
+  private async deriveInputSnapshotDraftLocked(input: { projectId: string }): Promise<DesignInputSnapshotRecord> {
     const [inputSnapshot] = await this.db
       .select()
       .from(projectInputSnapshots)
@@ -77,11 +85,8 @@ export class DesignStore {
       );
     }
 
-    const contentRows = await this.db
-      .select()
-      .from(acceptedPageContent)
-      .where(eq(acceptedPageContent.projectId, input.projectId))
-      .orderBy(acceptedPageContent.slug);
+    const contentRows = (await new PageAuthorityReader(this.db).currentPages(input.projectId)).sort((a,b) => a.slug.localeCompare(b.slug));
+    for (const row of contentRows) await new PageAuthorityReader(this.db).requireCurrent(input.projectId, row);
 
     const assignmentRows = await this.db
       .select({
@@ -92,6 +97,9 @@ export class DesignStore {
         approvedBinaryDigest: assetVersions.binaryDigest,
         approvalState: assetVersions.approvalState,
         assetProjectId: assetVersions.projectId,
+        acceptedPageContentId: assetPageAssignments.acceptedPageContentId,
+        acceptedPageContentVersion: assetPageAssignments.acceptedPageContentVersion,
+        acceptedPageContentDigest: assetPageAssignments.acceptedPageContentDigest,
         pageSlug: assetPageAssignments.pageSlug,
         role: assetPageAssignments.role,
         versionNumber: assetVersions.version,
@@ -101,7 +109,7 @@ export class DesignStore {
       .where(eq(assetPageAssignments.projectId, input.projectId))
       .orderBy(assetPageAssignments.pageSlug, assetPageAssignments.role);
 
-    if (assignmentRows.some((row) => !validAssignmentAuthority(row, input.projectId))) {
+    if (assignmentRows.some((row) => !validAssignmentAuthority(row, input.projectId) || !contentRows.some(page => page.id === row.acceptedPageContentId && page.version === row.acceptedPageContentVersion && page.contentDigest === row.acceptedPageContentDigest && page.slug === row.pageSlug))) {
       throw staleError("An asset assignment no longer matches its exact approved binary/governance authority.");
     }
 
@@ -146,6 +154,9 @@ export class DesignStore {
         versionId: row.versionId,
         binaryDigest: row.binaryDigest,
         governanceDigest: row.governanceDigest,
+        acceptedPageContentId: row.acceptedPageContentId,
+        acceptedPageContentVersion: row.acceptedPageContentVersion,
+        acceptedPageContentDigest: row.acceptedPageContentDigest,
         pageSlug: row.pageSlug,
         role: row.role,
       })),
@@ -259,135 +270,18 @@ export class DesignStore {
   async getAcceptedContentForProject(projectId: string): Promise<
     Array<{ id: string; version: number; slug: string; contentDigest: string; data: unknown }>
   > {
-    const rows = await this.db
-      .select({
-        id: acceptedPageContent.id,
-        version: acceptedPageContent.version,
-        slug: acceptedPageContent.slug,
-        contentDigest: acceptedPageContent.contentDigest,
-        data: acceptedPageContent.data,
-      })
-      .from(acceptedPageContent)
-      .where(eq(acceptedPageContent.projectId, projectId))
-      .orderBy(acceptedPageContent.slug);
-    return rows;
+    return new PageAuthorityReader(this.db).currentPages(projectId);
   }
 
-  /**
-   * Compute staleness of a design input snapshot against CURRENT upstream
-   * authority. Never mutates anything: staleness is a computed state.
-   */
+
   async inputSnapshotStaleness(
     projectId: string,
     snapshot: DesignInputSnapshotRecord,
   ): Promise<DesignStaleness> {
-    let data: DesignInputSnapshotData;
-    try { data = parseDesignInputSnapshotData(snapshot.data); }
-    catch { return { stale: true, reason: "Design input snapshot lacks valid exact upstream lineage; re-derive it." }; }
-    if (snapshot.projectId !== projectId || deterministicDigest(data) !== snapshot.inputDigest) {
-      return { stale: true, reason: "Design input snapshot identity/digest is invalid." };
-    }
-
-    // 1. Accepted project inputs.
-    const [inputSnapshot] = await this.db
-      .select()
-      .from(projectInputSnapshots)
-      .where(eq(projectInputSnapshots.projectId, projectId))
-      .orderBy(desc(projectInputSnapshots.version))
-      .limit(1);
-    if (!inputSnapshot) {
-      return { stale: true, reason: "The accepted project inputs no longer exist." };
-    }
-    if (inputSnapshot.id !== data.acceptedInputSnapshotId || inputSnapshot.digest !== data.acceptedInputDigest) {
-      return {
-        stale: true,
-        reason: `Accepted project inputs changed (snapshot ${data.acceptedInputSnapshotVersion} -> ${inputSnapshot.version}).`,
-      };
-    }
-
-    // 2. Accepted page content digests.
-    const contentRows = await this.db
-      .select()
-      .from(acceptedPageContent)
-      .where(eq(acceptedPageContent.projectId, projectId));
-    const currentContent = new Map(contentRows.map((row) => [row.id, row]));
-    for (const ref of data.contentRefs) {
-      const current = currentContent.get(ref.id);
-      if (!current) {
-        return { stale: true, reason: `Accepted content "${ref.slug}" was removed.` };
-      }
-      if (current.contentDigest !== ref.contentDigest || current.slug !== ref.slug || current.version !== ref.version) {
-        return { stale: true, reason: `Accepted content "${ref.slug}" changed.` };
-      }
-    }
-    const boundContentIds = new Set(data.contentRefs.map((ref) => ref.id));
-    const addedContent = contentRows.filter((row) => !boundContentIds.has(row.id));
-    if (addedContent.length > 0) {
-      return {
-        stale: true,
-        reason: `New accepted content exists (${addedContent.map((r) => r.slug).join(", ")}).`,
-      };
-    }
-
-    // 3. Approved asset assignments (exact version digests).
-    const assignmentRows = await this.db
-      .select({
-        versionId: assetPageAssignments.versionId,
-        binaryDigest: assetPageAssignments.binaryDigest,
-        governanceDigest: assetPageAssignments.versionDigest,
-        approvedGovernanceDigest: assetVersions.governanceDigest,
-        approvedBinaryDigest: assetVersions.binaryDigest,
-        approvalState: assetVersions.approvalState,
-        assetProjectId: assetVersions.projectId,
-        pageSlug: assetPageAssignments.pageSlug,
-        role: assetPageAssignments.role,
-      })
-      .from(assetPageAssignments)
-      .innerJoin(assetVersions, eq(assetPageAssignments.versionId, assetVersions.id))
-      .where(eq(assetPageAssignments.projectId, projectId));
-    const currentAssignments = new Map(
-      assignmentRows.map((row) => [`${row.pageSlug}::${row.role}`, row]),
-    );
-    for (const ref of data.assetRefs) {
-      const current = currentAssignments.get(`${ref.pageSlug}::${ref.role}`);
-      if (!current) {
-        return { stale: true, reason: `Asset assignment ${ref.pageSlug}/${ref.role} was removed.` };
-      }
-      if (!validAssignmentAuthority(current, projectId) ||
-          current.binaryDigest !== ref.binaryDigest || current.versionId !== ref.versionId ||
-          current.governanceDigest !== ref.governanceDigest) {
-        return { stale: true, reason: `Asset assignment ${ref.pageSlug}/${ref.role} changed.` };
-      }
-    }
-    const boundAssignmentKeys = new Set(data.assetRefs.map((ref) => `${ref.pageSlug}::${ref.role}`));
-    const addedAssignments = assignmentRows.filter(
-      (row) => !boundAssignmentKeys.has(`${row.pageSlug}::${row.role}`),
-    );
-    if (addedAssignments.length > 0) {
-      return {
-        stale: true,
-        reason: `New asset assignments exist (${addedAssignments.map((r) => `${r.pageSlug}/${r.role}`).join(", ")}).`,
-      };
-    }
-
-    return { stale: false, reason: null };
+    return this.inputSnapshotStalenessTx(this.db, projectId, snapshot);
   }
 
-  // ---- Design candidates -----------------------------------------------------
 
-  /**
-   * Persist a provider generation result as an immutable candidate. The
-   * caller must have validated the payload against the contract. The exact
-   * input snapshot lineage is copied at bind time.
-   */
-  /**
-   * Record the durable artifact-reference manifest for a candidate: every
-   * raw artifact digest the candidate's generation produced, bound to the
-   * owning project/candidate. This is the authority that proves
-   * "this project/candidate owns/references this artifact digest" — the
-   * basis for project-scoped artifact access (the CAS itself stays
-   * globally deduplicated; authorization does not).
-   */
   async recordArtifactRefs(input: {
     projectId: string;
     candidateId: string;
@@ -427,6 +321,16 @@ export class DesignStore {
     inputSnapshot: DesignInputSnapshotRecord;
     data: DesignCandidateData;
   }): Promise<DesignCandidateRecord> {
+    return this.db.transaction(async tx => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
+      const store = new DesignStore(tx as unknown as FactoryDb);
+      const freshness = await store.inputSnapshotStaleness(input.projectId, input.inputSnapshot);
+      if (freshness.stale) throw staleError(freshness.reason!);
+      return store.createCandidateLocked(input);
+    });
+  }
+
+  private async createCandidateLocked(input: { projectId: string; inputSnapshot: DesignInputSnapshotRecord; data: DesignCandidateData }): Promise<DesignCandidateRecord> {
     const data = parseDesignCandidateData(input.data);
     const snapshotData = parseDesignInputSnapshotData(input.inputSnapshot.data);
     if (input.inputSnapshot.projectId !== input.projectId || deterministicDigest(snapshotData) !== input.inputSnapshot.inputDigest) {
@@ -480,6 +384,7 @@ export class DesignStore {
     reviewNotes: string | null;
   }): Promise<AcceptedDesignArtifactRecord> {
     return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
       const [candidate] = await tx
         .select()
         .from(designCandidates)
@@ -609,6 +514,7 @@ export class DesignStore {
     reviewNotes: string | null;
   }): Promise<DesignCandidateRecord> {
     return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
       const [candidate] = await tx
         .select()
         .from(designCandidates)
@@ -677,6 +583,10 @@ export class DesignStore {
       .where(eq(acceptedPageContent.projectId, projectId));
     const currentContent = new Map(contentRows.map((row) => [row.id, row]));
     for (const ref of data.contentRefs) {
+      try { await new PageAuthorityReader(tx).requireCurrent(projectId, ref); }
+      catch (error) { return { stale: true, reason: error instanceof Error ? error.message : "Accepted content is stale." }; }
+    }
+    for (const ref of data.contentRefs) {
       const current = currentContent.get(ref.id);
       if (!current) {
         return { stale: true, reason: `Accepted content "${ref.slug}" was removed.` };
@@ -703,6 +613,9 @@ export class DesignStore {
         approvedBinaryDigest: assetVersions.binaryDigest,
         approvalState: assetVersions.approvalState,
         assetProjectId: assetVersions.projectId,
+        acceptedPageContentId: assetPageAssignments.acceptedPageContentId,
+        acceptedPageContentVersion: assetPageAssignments.acceptedPageContentVersion,
+        acceptedPageContentDigest: assetPageAssignments.acceptedPageContentDigest,
         pageSlug: assetPageAssignments.pageSlug,
         role: assetPageAssignments.role,
       })
@@ -717,7 +630,7 @@ export class DesignStore {
       if (!current) {
         return { stale: true, reason: `Asset assignment ${ref.pageSlug}/${ref.role} was removed.` };
       }
-      if (!validAssignmentAuthority(current, projectId) ||
+      if (current.acceptedPageContentId !== ref.acceptedPageContentId || current.acceptedPageContentVersion !== ref.acceptedPageContentVersion || current.acceptedPageContentDigest !== ref.acceptedPageContentDigest || !validAssignmentAuthority(current, projectId) ||
           current.binaryDigest !== ref.binaryDigest || current.versionId !== ref.versionId ||
           current.governanceDigest !== ref.governanceDigest) {
         return { stale: true, reason: `Asset assignment ${ref.pageSlug}/${ref.role} changed.` };

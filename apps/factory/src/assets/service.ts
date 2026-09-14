@@ -92,6 +92,9 @@ export interface AssignmentView {
   replacementAvailable: boolean;
   latestApprovedVersionId: string | null;
   latestApprovedVersionNumber: number | null;
+  acceptedPageContentId: string | null;
+  acceptedPageContentVersion: number | null;
+  acceptedPageContentDigest: string | null;
 }
 
 export interface AssetWorkspaceReadModel {
@@ -106,6 +109,8 @@ export interface AssetWorkspaceReadModel {
     latestVersion: AssetVersionView | null;
   }>;
   assignments: AssignmentView[];
+  assignmentHistory: Array<{ id: string; assignmentId: string; binding: unknown; recordedAt: Date }>;
+  acceptedPages: Array<{ id: string; version: number; contentDigest: string; slug: string }>;
 }
 
 export class AssetService {
@@ -272,6 +277,8 @@ export class AssetService {
       .map((assignment) => this.toAssignmentView(assignment, versionsByAsset, assetRows))
       .sort((a, b) => a.pageSlug.localeCompare(b.pageSlug) || a.role.localeCompare(b.role));
     return {
+      assignmentHistory: await this.store.assignmentHistory(projectId),
+      acceptedPages: await this.store.currentAcceptedPages(projectId),
       schemaVersion: ASSETS_SCHEMA_VERSION,
       imageryStrategy: strategy,
       assets: assetsOut,
@@ -293,6 +300,9 @@ export class AssetService {
     const assetTitle = assetRows.find((a) => a.id === assignment.assetId)?.title ?? assignment.assetId;
     return {
       id: assignment.id,
+      acceptedPageContentId: assignment.acceptedPageContentId,
+      acceptedPageContentVersion: assignment.acceptedPageContentVersion,
+      acceptedPageContentDigest: assignment.acceptedPageContentDigest,
       assetId: assignment.assetId,
       assetTitle,
       versionId: assignment.versionId,
@@ -379,6 +389,10 @@ export class AssetService {
   async assignVersion(projectId: string, input: {
     assetId: string;
     versionId: string;
+    acceptedPageContentId: string;
+    acceptedPageContentVersion: number;
+    acceptedPageContentDigest: string;
+    expectedGovernanceDigest: string;
     pageSlug: string;
     role: string;
     expectedBinaryDigest: string;
@@ -391,11 +405,12 @@ export class AssetService {
   async replaceAssignment(
     projectId: string,
     assignmentId: string,
-    input: { toVersionId: string; expectedBinaryDigest: string },
+    input: { pageAuthority?: { id: string; version: number; contentDigest: string; slug: string }; toVersionId: string; expectedBinaryDigest: string },
   ): Promise<AssignmentRow> {
     return await this.store.replaceAssignment({
       projectId,
       assignmentId,
+      pageAuthority: input.pageAuthority,
       toVersionId: input.toVersionId,
       expectedBinaryDigest: input.expectedBinaryDigest,
     });

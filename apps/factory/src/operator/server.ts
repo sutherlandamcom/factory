@@ -117,6 +117,11 @@ export function buildSearchIntelligenceService(
     config: {
       ...DEFAULT_SEARCH_CONFIG,
       providerMode: mode,
+      authorizedMicros: {
+        serp: env.FACTORY_SEARCH_SERP_MAX_COST_MICROS ? Number(env.FACTORY_SEARCH_SERP_MAX_COST_MICROS) : undefined,
+        grounded: env.FACTORY_SEARCH_GROUNDED_MAX_COST_MICROS ? Number(env.FACTORY_SEARCH_GROUNDED_MAX_COST_MICROS) : undefined,
+        analyst: env.FACTORY_SEARCH_ANALYST_MAX_COST_MICROS ? Number(env.FACTORY_SEARCH_ANALYST_MAX_COST_MICROS) : undefined,
+      },
       ...(process.env.FACTORY_SEARCH_FRESHNESS_HOURS
         ? { freshnessHours: Number(process.env.FACTORY_SEARCH_FRESHNESS_HOURS) }
         : {}),

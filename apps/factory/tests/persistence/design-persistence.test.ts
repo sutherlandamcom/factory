@@ -1,3 +1,5 @@
+import { assignmentPage, acceptFixturePage } from "../fixtures/accepted-page.js";
+import { seedProjectWithAcceptedInputs } from "../fixtures/writer-seeds.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { setupMigratedTestDatabase } from "./helpers.js";
@@ -400,16 +402,11 @@ test("PG: Run 5 governance lineage survives candidate/acceptance, rejects forger
   const dbInst = await setupMigratedTestDatabase();
   const root = await mkdtemp(path.join(tmpdir(), "design-lineage-"));
   try {
-    const { projectId } = await seedProject(dbInst, "design-exact-lineage");
+    const { projectId } = await seedProjectWithAcceptedInputs(dbInst, "design-exact-lineage");
+    const acceptedPages = [];
+    for (const slug of ["home", "services/foo"]) acceptedPages.push(await acceptFixturePage(dbInst, projectId, slug));
     // Deliberately shared digest proves routing depends on page identity too.
-    for (const [index, slug] of ["home", "services/foo"].entries()) {
-      await dbInst.db.insert(acceptedPageContent).values({
-        id: `accepted-${index}`, projectId, version: index + 1, slug,
-        proposalId: `proposal-${index}`, proposalVersion: 1,
-        proposalDigest: "a".repeat(64), qaReportDigest: "b".repeat(64),
-        contentDigest: "c".repeat(64), data: { title: slug, introduction: `Copy for ${slug}`, sections: [], conclusion: "", cta: "Contact" },
-      });
-    }
+    await dbInst.db.update(acceptedPageContent).set({ contentDigest: "c".repeat(64) }).where(eq(acceptedPageContent.projectId, projectId));
     const assets = new AssetService({ store: new AssetStore(dbInst.db), storage: createAssetStorage(root) });
     async function upload(seed: number) {
       const bytes = await sharp({ create: { width: 32, height: 32, channels: 3, background: { r: seed, g: 70, b: 90 } } }).jpeg().toBuffer();
@@ -419,6 +416,7 @@ test("PG: Run 5 governance lineage survives candidate/acceptance, rejects forger
     }
     const first = await upload(30);
     const assignment = await assets.assignVersion(projectId, {
+      ...await assignmentPage(dbInst, projectId, "services/foo", first.approved.governanceDigest!),
       assetId: first.asset.id, versionId: first.version.id, pageSlug: "services/foo", role: "supporting", expectedBinaryDigest: first.version.binaryDigest,
     });
     const store = new DesignStore(dbInst.db);
@@ -441,8 +439,8 @@ test("PG: Run 5 governance lineage survives candidate/acceptance, rejects forger
       },
     } });
     const candidate = await service.generateCandidate({ projectId });
-    assert.equal(received!.acceptedCopyByArchetype.homepage!.introduction, "Copy for home");
-    assert.equal(received!.acceptedCopyByArchetype.service!.introduction, "Copy for services/foo");
+    assert.equal(received!.acceptedCopyByArchetype.homepage!.introduction, (acceptedPages[0]!.data as any).introduction);
+    assert.equal(received!.acceptedCopyByArchetype.service!.introduction, (acceptedPages[1]!.data as any).introduction);
     const slot = candidate.data.archetypes.find((a) => a.kind === "service")!.assetSlots[0]!;
     assert.equal(slot.boundGovernanceDigest, assignment.versionDigest);
     assert.equal(slot.boundBinaryDigest, first.version.binaryDigest);

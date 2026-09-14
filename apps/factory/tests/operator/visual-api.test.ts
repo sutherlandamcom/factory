@@ -20,6 +20,8 @@ import { createVisualCandidateStorage } from "../../src/visual/candidate-storage
 import { deterministicDigest } from "../../src/intelligence/digest.js";
 import { buildIntakePayload } from "../fixtures/intake-payloads.js";
 import { setupMigratedTestDatabase } from "../persistence/helpers.js";
+import { seedProjectWithAcceptedInputs } from "../fixtures/writer-seeds.js";
+import { acceptFixturePage } from "../fixtures/accepted-page.js";
 import { parseDesignCandidateData, type DesignCandidateData } from "@factory/contracts";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -156,27 +158,9 @@ async function startTestServer(): Promise<TestServer> {
 }
 
 async function createProjectWithAcceptedInputs(baseUrl: string, key: string): Promise<string> {
-  const createRes = await fetch(`${baseUrl}/api/projects`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key, name: `Project ${key}` }),
-  });
-  assert.equal(createRes.status, 201);
-  const project = (await createRes.json()) as { id: string };
-  const payload = buildIntakePayload();
-  const saveRes = await fetch(`${baseUrl}/api/projects/${project.id}/intake-draft`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ baseRevision: 0, payload }),
-  });
-  assert.equal(saveRes.status, 200);
-  const acceptRes = await fetch(`${baseUrl}/api/projects/${project.id}/intake/accept`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ expectedRevision: 1, expectedDigest: deterministicDigest(payload) }),
-  });
-  assert.equal(acceptRes.status, 200);
-  return project.id;
+  const { projectId } = await seedProjectWithAcceptedInputs(dbInst!, key);
+  await acceptFixturePage(dbInst!, projectId, "home");
+  return projectId;
 }
 
 /** Accept a fixture design via the API (fixture declaration in review notes). */

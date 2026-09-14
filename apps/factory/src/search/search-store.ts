@@ -1,3 +1,5 @@
+import { FactoryError } from "../executor/errors.js";
+import { WriterBudgetStore } from "../writer/budget.js";
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import {
@@ -9,6 +11,7 @@ import {
 import type { FactoryDb } from "../persistence/db.js";
 import {
   searchRuns,
+  searchBudgetReservations,
   serpSnapshots,
   groundedSearchSnapshots,
   searchIntelligenceSnapshots,
@@ -30,7 +33,8 @@ import { deterministicDigest } from "../intelligence/digest.js";
  * - project isolation is enforced by projectId predicates on every read.
  */
 export class SearchStore {
-  constructor(private readonly db: FactoryDb) {}
+  readonly budget: WriterBudgetStore;
+  constructor(private readonly db: FactoryDb) { this.budget = new WriterBudgetStore(db, searchBudgetReservations); }
 
   async createRun(input: {
     projectId: string;
@@ -44,6 +48,7 @@ export class SearchStore {
     provider: string;
     requestDigest: string;
     refreshRequested: boolean;
+    sourceRunId?: string;
   }): Promise<SearchRunRecord> {
     const [row] = await this.db
       .insert(searchRuns)
@@ -92,6 +97,7 @@ export class SearchStore {
    * SERP observation is younger than maxAgeHours. Returns the run + SERP row.
    */
   async findFreshSerp(
+    projectId: string,
     requestDigest: string,
     maxAgeHours: number,
   ): Promise<{ run: SearchRunRecord; serp: SerpSnapshotRecord } | null> {
@@ -101,6 +107,8 @@ export class SearchStore {
       .innerJoin(serpSnapshots, eq(serpSnapshots.runId, searchRuns.id))
       .where(
         and(
+          eq(searchRuns.projectId, projectId),
+          eq(serpSnapshots.projectId, projectId),
           eq(searchRuns.requestDigest, requestDigest),
           eq(searchRuns.status, "succeeded"),
           sql`${serpSnapshots.observedAt} > now() - (${maxAgeHours} * interval '1 hour')`,
@@ -246,6 +254,13 @@ export class SearchStore {
   }): Promise<SearchIntelligenceSnapshotRecord> {
     // Fail closed: persisted intelligence must satisfy the current contract.
     const data = parseSearchIntelligenceData(input.data);
+    const expectedRefs = [
+      { kind: "serp_snapshot", id: input.serpSnapshotId, digest: input.evidenceDigests.serp },
+      ...(input.groundedSnapshotId ? [{ kind: "grounded_snapshot", id: input.groundedSnapshotId, digest: input.evidenceDigests.grounded }] : []),
+    ];
+    if (expectedRefs.some(ref => !ref.digest || !/^[0-9a-f]{64}$/.test(ref.digest) || !data.evidenceRefs.some(actual => actual.kind === ref.kind && actual.id === ref.id && actual.digest === ref.digest)) || data.evidenceRefs.length !== expectedRefs.length) {
+      throw new FactoryError("search_intelligence_invalid", "Intelligence evidence lineage must bind exact SHA-256 snapshot digests.");
+    }
     const snapshotDigest = deterministicDigest({
       query: input.query,
       model: input.model,
@@ -338,22 +353,7 @@ export class SearchStore {
    * uncounted, never fabricated.
    */
   async sumTodaySearchCostMicros(): Promise<number> {
-    const [serp] = await this.db
-      .select({
-        total: sql<number>`coalesce(sum((${serpSnapshots.usage} -> 'costMicros')::numeric), 0)`,
-      })
-      .from(serpSnapshots)
-      .where(sql`${serpSnapshots.createdAt} >= date_trunc('day', now() at time zone 'utc')`);
-    const [grounded] = await this.db
-      .select({
-        total: sql<number>`coalesce(sum((${groundedSearchSnapshots.usage} -> 'costMicros')::numeric), 0)`,
-      })
-      .from(groundedSearchSnapshots)
-      .where(
-        sql`${groundedSearchSnapshots.createdAt} >= date_trunc('day', now() at time zone 'utc')`,
-      );
-    const total = Number(serp?.total ?? 0) + Number(grounded?.total ?? 0);
-    return Number.isFinite(total) && total > 0 ? Math.round(total) : 0;
+    return (await this.budget.sumTodayWriterCostMicros()) + (await this.budget.unreservedSearchCost());
   }
 
   async latestIntelligenceForProject(projectId: string) {

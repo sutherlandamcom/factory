@@ -269,6 +269,8 @@ export class DesignService {
       designMdLint: { errors: lint.errors, warnings: lint.warnings, infos: lint.infos },
     };
 
+    const afterGeneration = await this.store.inputSnapshotStaleness(input.projectId, snapshot);
+    if (afterGeneration.stale) throw new FactoryError("design_input_stale", `Upstream changed during generation: ${afterGeneration.reason}`);
     const candidate = await this.store.createCandidate({
       projectId: input.projectId,
       inputSnapshot: snapshot,

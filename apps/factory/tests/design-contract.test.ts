@@ -58,7 +58,7 @@ function validInputSnapshotData(): DesignInputSnapshotData {
       {
         versionId: "asv-11111111-1111-4111-8111-111111111111",
         binaryDigest: "c".repeat(64),
-        governanceDigest: "e".repeat(64),
+        governanceDigest: "e".repeat(64), acceptedPageContentId: "page-home", acceptedPageContentVersion: 1, acceptedPageContentDigest: "c".repeat(64),
         pageSlug: "roof-repair",
         role: "hero",
       },
@@ -394,7 +394,7 @@ test("asset slot lineage: homepage hero binds ONLY homepage+hero; service slot c
       {
         versionId: "asv-11111111-1111-4111-8111-111111111111",
         binaryDigest: "c".repeat(64),
-        governanceDigest: "e".repeat(64),
+        governanceDigest: "e".repeat(64), acceptedPageContentId: "page-home", acceptedPageContentVersion: 1, acceptedPageContentDigest: "c".repeat(64),
         pageSlug: "home",
         role: "hero",
       },
@@ -557,7 +557,7 @@ test("actual archetype construction: exact page/role asset lineage matrix", () =
   ];
   const ref = (pageSlug: string, role: string, n = "1") => ({
     versionId: `asv-${n.repeat(8)}-${n.repeat(4)}-4${n.repeat(3)}-8${n.repeat(3)}-${n.repeat(12)}`,
-    binaryDigest: n.repeat(64), governanceDigest: "e".repeat(64), pageSlug, role,
+    binaryDigest: n.repeat(64), governanceDigest: "e".repeat(64), acceptedPageContentId: "page-home", acceptedPageContentVersion: 1, acceptedPageContentDigest: "c".repeat(64), pageSlug, role,
   });
   const cases = [
     { label: "exact service", kind: "service", refs: [ref("services/foo", "supporting")], binds: true },

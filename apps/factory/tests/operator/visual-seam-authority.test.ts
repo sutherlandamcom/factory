@@ -26,6 +26,7 @@ import { createVisualCandidateStorage } from "../../src/visual/candidate-storage
 import { deterministicDigest } from "../../src/intelligence/digest.js";
 import { buildIntakePayload } from "../fixtures/intake-payloads.js";
 import { setupMigratedTestDatabase } from "../persistence/helpers.js";
+import { assignmentPage } from "../fixtures/accepted-page.js";
 import { FactoryError } from "../../src/executor/errors.js";
 import {
   acceptedPageContent,
@@ -177,6 +178,7 @@ async function seedPreBoundProject(h: Awaited<ReturnType<typeof createHarness>>,
   });
   const approved = await h.assets.approveVersion(project.id, upload.version.id, upload.version.binaryDigest);
   await h.assets.assignVersion(project.id, {
+    ...await assignmentPage(dbInst!, project.id, "home", approved.governanceDigest!),
     assetId: upload.asset.id,
     versionId: approved.id,
     pageSlug: "home",
@@ -252,6 +254,7 @@ test("AUTHORITY 2: same slot changed externally to another approved asset (no Ru
   // RUN7_ASSET_ASSIGNMENTS_ADDED, so to test CHANGED we must first bind the
   // slot into a snapshot. Bind upload -> derive design v1 -> swap -> check.
   await h.assets.assignVersion(projectId, {
+    ...await assignmentPage(dbInst!, projectId, "home", approved.governanceDigest!),
     assetId: upload.asset.id,
     versionId: approved.id,
     pageSlug: "home",
@@ -306,6 +309,7 @@ test("AUTHORITY 3: wrong page slot mutation -> ASSET_ASSIGNMENT_CHANGED (Run 7 r
   });
   const approved = await h.assets.approveVersion(projectId, upload.version.id, upload.version.binaryDigest);
   await h.assets.assignVersion(projectId, {
+    ...await assignmentPage(dbInst!, projectId, "about", approved.governanceDigest!),
     assetId: upload.asset.id,
     versionId: approved.id,
     pageSlug: "about",
@@ -587,6 +591,7 @@ test("TRUTHFULNESS 2: reuse_real slot reports providerConsumed=false (provider n
   });
   const approved = await h.assets.approveVersion(project.id, upload.version.id, upload.version.binaryDigest);
   await h.assets.assignVersion(project.id, {
+    ...await assignmentPage(dbInst!, project.id, "home", approved.governanceDigest!),
     assetId: upload.asset.id,
     versionId: approved.id,
     pageSlug: "home",

@@ -17,7 +17,7 @@ const GOOD_PROPOSAL = {
   title: "Roof Replacement in Denver",
   metaDescription: "Licensed Denver roof replacement with a limited warranty.",
   introduction:
-    "Denver hailstorms and freeze-thaw cycles put every roof under storm-damage stress. Homeowners comparing local roofers need clear answers about roof replacement cost drivers, process and trust signals before requesting a quote.",
+    "Commercial roofing decisions in Denver involve hailstorms and freeze-thaw cycles put every roof under storm-damage stress. Homeowners comparing local roofers need clear answers about roof replacement cost drivers, process and trust signals before requesting a quote.",
   sections: [
     {
       heading: "What a full roof replacement includes",
@@ -444,8 +444,8 @@ test("service QA: acceptance verifies the TRANSITIVE upstream chain (policy, gap
     const accepted = await accept();
     assert.equal(accepted.version, 1);
 
-    // New accepted intake generation -> even the idempotent same-digest
-    // re-acceptance is now rejected: the transitive intake snapshot mutated.
+    // Exact proposal replay returns historical acceptance without promoting it;
+    // changed intake still prevents the page from conferring current authority.
     const { ProjectIntakeStore } = await import("../../src/operator/intake-store.js");
     const { buildIntakePayload } = await import("../fixtures/intake-payloads.js");
     const { deterministicDigest } = await import("../../src/intelligence/digest.js");
@@ -457,7 +457,9 @@ test("service QA: acceptance verifies the TRANSITIVE upstream chain (policy, gap
       expectedRevision: 2,
       expectedDigest: deterministicDigest(pay2),
     });
-    await assert.rejects(accept, (e: unknown) => isCode(e, "writer_artifact_stale"));
+    assert.equal((await accept()).id, accepted.id);
+    const { PageAuthorityReader } = await import("../../src/writer/page-authority.js");
+    await assert.rejects(new PageAuthorityReader(dbInst.db).requireCurrent(seed.projectId, { id: accepted.id, version: accepted.version, slug: accepted.slug, contentDigest: accepted.digest }), (e: unknown) => isCode(e, "writer_artifact_stale"));
   } finally {
     await dbInst.close();
   }

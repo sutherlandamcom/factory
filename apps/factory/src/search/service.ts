@@ -1,3 +1,4 @@
+import { InvocationFailure } from "../models/invocation-failure.js";
 import {
   normalizeSearchQuery,
   MAX_SERP_RAW_BYTES,
@@ -24,12 +25,14 @@ import type { SearchAnalystModel } from "./analyst.js";
  * configuration; the browser never controls provider plumbing.
  */
 
-export const SEARCH_REQUEST_VERSION = "search-request-v1";
+export const SEARCH_REQUEST_VERSION = "search-request-v2";
 
 export interface SearchServiceConfig {
   /** Freshness window for cache reuse (hours). */
   freshnessHours: number;
-  /** Daily spend ceiling in USD (recorded costMicros only; UNKNOWN uncounted). */
+  /** Trusted upper bounds per invocation; absent means no paid execution. */
+  authorizedMicros?: Partial<Record<"serp" | "grounded" | "analyst", number>>;
+  /** Daily spend ceiling in USD (reserved plus accounted cost). */
   dailyLimitUsd: number;
   /** Trusted provider selection: production adapter id or 'fixture'. */
   providerMode: "production" | "fixture";
@@ -235,6 +238,30 @@ export class SearchIntelligenceService {
     };
   }
 
+  private async invoke<T extends { usage: { costMicros?: number | null } | null }>(
+    stage: "serp" | "grounded" | "analyst", provider: string, runId: string, call: () => Promise<T>,
+  ): Promise<T> {
+    // Fixture adapters are selected by trusted backend configuration, never by a request.
+    if (this.config.providerMode === "fixture" && (provider === "fixture" || provider.startsWith("fixture-"))) return call();
+    const authorizedMicros = this.config.authorizedMicros?.[stage];
+    if (!Number.isSafeInteger(authorizedMicros) || authorizedMicros! <= 0 || !this.deps.searchStore.budget) {
+      throw new FactoryError("search_provider_budget_blocked", `No trusted conservative reservation bound for ${stage}.`);
+    }
+    const reservation = await this.deps.searchStore.budget.reserveWriterBudget({
+      provider, model: stage, authorizedMicros: authorizedMicros!,
+      invocationDigest: deterministicDigest({ runId, stage, provider }), lineage: { runId, stage },
+    }, this.config.dailyLimitUsd);
+    let result: T;
+    try { result = await call(); }
+    catch (error) {
+      if (error instanceof InvocationFailure && error.requestSubmitted === false) await reservation.releaseUnexecuted();
+      else await reservation.account(error instanceof InvocationFailure ? error.trustedCostMicros : null);
+      throw error;
+    }
+    await reservation.account(result.usage?.costMicros ?? null);
+    return result;
+  }
+
   async runSearch(input: RunSearchInput): Promise<SearchRunReadModel> {
     // ---- Preflight (fail before spend) -----------------------------------
     const query = normalizeSearchQuery(input.query);
@@ -281,6 +308,7 @@ export class SearchIntelligenceService {
 
     // Normalize request + cache key.
     const requestDigest = deterministicDigest({
+      projectId: input.projectId,
       provider: provider.id,
       query,
       location,
@@ -293,11 +321,13 @@ export class SearchIntelligenceService {
     // ---- Cache check (no accidental duplicate spend) ---------------------
     if (!input.refresh) {
       const fresh = await this.deps.searchStore.findFreshSerp(
+        input.projectId,
         requestDigest,
         this.config.freshnessHours,
       );
       if (fresh) {
-        await this.recordReusedRun({
+        const reusedRunId = await this.recordReusedRun({
+          sourceRunId: fresh.run.id,
           projectId: input.projectId,
           acceptedInputSnapshotId: accepted.id,
           acceptedInputVersion: accepted.version,
@@ -312,7 +342,7 @@ export class SearchIntelligenceService {
         });
         const read = await this.buildReadModel(
           input.projectId,
-          fresh.run.id,
+          reusedRunId,
           accepted,
           true,
           false,
@@ -337,7 +367,7 @@ export class SearchIntelligenceService {
     });
 
     try {
-      const acquisition = await provider.acquire({ query, location, language, device: input.device });
+      const acquisition = await this.invoke("serp", provider.id, run.id, () => provider.acquire({ query, location, language, device: input.device }));
 
       if (JSON.stringify(acquisition.rawPayload ?? null).length > MAX_SERP_RAW_BYTES) {
         throw new FactoryError(
@@ -372,16 +402,17 @@ export class SearchIntelligenceService {
 
       // ---- Grounded research (optional) ----------------------------------
       let groundedSnapshotId: string | null = null;
+      let groundedSnapshot: Awaited<ReturnType<SearchStore["insertGroundedSnapshot"]>> | null = null;
       const grounded = this.deps.groundedProvider;
       if (grounded && grounded.readiness().configured) {
         const packet = compilePacket(accepted.payload as Record<string, unknown>, query, location, language);
-        const groundedResult = await grounded.research({
+        const groundedResult = await this.invoke("grounded", grounded.id, run.id, () => grounded.research({
           query,
           location,
           language,
           packetDigest: deterministicDigest(packet),
-        });
-        const groundedSnapshot = await this.deps.searchStore.insertGroundedSnapshot({
+        }));
+        groundedSnapshot = await this.deps.searchStore.insertGroundedSnapshot({
           runId: run.id,
           projectId: input.projectId,
           acceptedInputSnapshotId: accepted.id,
@@ -406,8 +437,11 @@ export class SearchIntelligenceService {
 
       // ---- Intelligence derivation ----------------------------------------
       const analyst = this.deps.analyst;
-      const packet = compilePacket(accepted.payload as Record<string, unknown>, query, location, language);
-      const analystResult = await analyst.analyze({
+      const packet = {
+        project: compilePacket(accepted.payload as Record<string, unknown>, query, location, language),
+        evidence: compileAnalystEvidence(serpSnapshot, groundedSnapshot),
+      };
+      const analystResult = await this.invoke("analyst", analyst.provider, run.id, () => analyst.analyze({
         query,
         location,
         language,
@@ -419,12 +453,12 @@ export class SearchIntelligenceService {
                 {
                   kind: "grounded_snapshot" as const,
                   id: groundedSnapshotId,
-                  digest: "pending",
+                  digest: groundedSnapshot!.snapshotDigest,
                 },
               ]
             : []),
         ],
-      });
+      }));
 
       await this.deps.searchStore.insertIntelligenceSnapshot({
         runId: run.id,
@@ -439,7 +473,7 @@ export class SearchIntelligenceService {
         promptDigest: analystResult.promptDigest,
         serpSnapshotId: serpSnapshot.id,
         groundedSnapshotId,
-        evidenceDigests: { serp: serpSnapshot.snapshotDigest },
+        evidenceDigests: { serp: serpSnapshot.snapshotDigest, ...(groundedSnapshot ? { grounded: groundedSnapshot.snapshotDigest } : {}) },
         data: analystResult.data,
       });
 
@@ -483,9 +517,11 @@ export class SearchIntelligenceService {
     refreshRequested: boolean,
   ): Promise<SearchRunReadModel> {
     const run = (await this.deps.searchStore.getRun(projectId, runId))!;
-    const serp = await this.deps.searchStore.getSerpSnapshot(projectId, runId);
-    const grounded = await this.deps.searchStore.getGroundedSnapshot(projectId, runId);
-    const intelligence = await this.deps.searchStore.getIntelligenceSnapshot(projectId, runId);
+    const evidenceRunId = run.sourceRunId ?? runId;
+    const serp = await this.deps.searchStore.getSerpSnapshot(projectId, evidenceRunId);
+    const grounded = await this.deps.searchStore.getGroundedSnapshot(projectId, evidenceRunId);
+    const intelligence = await this.deps.searchStore.getIntelligenceSnapshot(projectId, evidenceRunId);
+    cacheReused = Boolean(run.sourceRunId);
 
     const snapshots = await this.deps.intake.listSnapshots(projectId);
     const latestVersion = snapshots.at(-1)?.version ?? accepted.version;
@@ -514,7 +550,7 @@ export class SearchIntelligenceService {
         stale: run.acceptedInputVersion < latestVersion,
       },
       serp:
-        serp && serp.runId === runId
+        serp && serp.runId === evidenceRunId
           ? {
               snapshotId: serp.id,
               snapshotDigest: serp.snapshotDigest,
@@ -597,4 +633,31 @@ export function compilePacket(
     },
     searchTask: { query, location, language },
   };
+}
+
+/** Persisted evidence only; ranking measurements and grounded research stay separate.
+ * Full evidence digests remain bound even when the prompt packet is truncated.
+ */
+export function compileAnalystEvidence(
+  serp: { id: string; snapshotDigest: string; organic: unknown; features: unknown; peopleAlsoAsk: unknown; relatedSearches: unknown },
+  grounded: { id: string; snapshotDigest: string; sources: unknown; structuredOutput?: unknown; webSearchQueries: unknown } | null,
+): Record<string, unknown> {
+  let truncated = false;
+  let remainingChars = 24000;
+  let remainingNodes = 500;
+  const bounded = (value: unknown, depth = 0): unknown => {
+    if (--remainingNodes < 0 || remainingChars <= 0) { truncated = true; return null; }
+    if (typeof value === "string") { const size = Math.min(2000, remainingChars); if (value.length > size) truncated = true; const text = value.slice(0, size); remainingChars -= text.length; return text; }
+    if (value == null || typeof value !== "object") return value ?? null;
+    if (depth >= 6) { truncated = true; return null; }
+    if (Array.isArray(value)) { if (value.length > 30) truncated = true; return value.slice(0, 30).map(v => bounded(v, depth + 1)); }
+    const entries = Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    if (entries.length > 30) truncated = true;
+    return Object.fromEntries(entries.slice(0, 30).map(([k,v]) => [k, bounded(v, depth + 1)]));
+  };
+  const measurement = bounded({ organic: serp.organic, features: serp.features, peopleAlsoAsk: serp.peopleAlsoAsk, relatedSearches: serp.relatedSearches });
+  const research = grounded ? bounded({ sources: grounded.sources, structuredOutput: grounded.structuredOutput, webSearchQueries: grounded.webSearchQueries }) : null;
+  return { packetVersion: "search-evidence-v1", truncated,
+    serp: { id: serp.id, digest: serp.snapshotDigest, measurement },
+    grounded: grounded ? { id: grounded.id, digest: grounded.snapshotDigest, research } : null };
 }

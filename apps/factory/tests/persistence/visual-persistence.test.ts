@@ -1,3 +1,5 @@
+import { assignmentPage, acceptFixturePage } from "../fixtures/accepted-page.js";
+import { seedProjectWithAcceptedInputs } from "../fixtures/writer-seeds.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { sql } from "drizzle-orm";
@@ -111,7 +113,8 @@ function candidateData(): DesignCandidateData {
 
 /** Full fixture-mode Run 7 environment over a migrated DB + temp storage. */
 async function setupVisualFixture(dbInst: Awaited<ReturnType<typeof setupMigratedTestDatabase>>, key: string) {
-  const { projectId } = await seedProject(dbInst, key);
+  const { projectId } = await seedProjectWithAcceptedInputs(dbInst, key);
+  await acceptFixturePage(dbInst, projectId, "home");
   const root = await mkdtemp(path.join(tmpdir(), "visual-fixture-"));
   const designStore = new DesignStore(dbInst.db);
   const store = new VisualStore(dbInst.db);
@@ -445,6 +448,7 @@ test("PG: documentary AI edit downgrades truth to documentary_edited with explic
     const upload = await env.uploadAsset(21);
     const approved = await env.assets.approveVersion(env.projectId, upload.version.id, upload.version.binaryDigest);
     await env.assets.assignVersion(env.projectId, {
+      ...await assignmentPage(dbInst, env.projectId, "home", approved.governanceDigest!),
       assetId: upload.asset.id,
       versionId: approved.id,
       pageSlug: "home",

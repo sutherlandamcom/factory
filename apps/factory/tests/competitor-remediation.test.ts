@@ -55,7 +55,7 @@ function createValidGap(overrides: Partial<ContentGap> = {}): ContentGap {
     userNeed,
     topicQuestion: "What rental yield can investors expect?",
     searchEvidenceRefs: [
-      { kind: "serp_snapshot", id: "serp-1", digest: "s".repeat(64) },
+      { kind: "serp_snapshot", id: "serp-1", digest: "a".repeat(64) },
       { kind: "search_intelligence_snapshot", id: "intel-1", digest: "i".repeat(64) },
     ],
     competitorCoverage: "PARTIAL",
@@ -81,7 +81,7 @@ function createValidGap(overrides: Partial<ContentGap> = {}): ContentGap {
 function createGroundingContext(overrides: Partial<GapGroundingContext> = {}): GapGroundingContext {
   return {
     serpSnapshotId: "serp-1",
-    serpSnapshotDigest: "s".repeat(64),
+    serpSnapshotDigest: "a".repeat(64),
     intelligenceSnapshotId: "intel-1",
     intelligenceSnapshotDigest: "i".repeat(64),
     pageSnapshots: [
@@ -131,7 +131,7 @@ test("grounding: empty searchEvidenceRefs fails closed", () => {
 test("grounding: foreign or mismatched SERP snapshot ref fails closed", () => {
   const gap = createValidGap({
     searchEvidenceRefs: [
-      { kind: "serp_snapshot", id: "wrong-serp", digest: "s".repeat(64) },
+      { kind: "serp_snapshot", id: "wrong-serp", digest: "a".repeat(64) },
     ],
   });
   const ctx = createGroundingContext();
@@ -272,7 +272,7 @@ function createMockServiceWithDeps(overrides: {
     competitorStore: {
       getSerpSnapshot: overrides.getSerpSnapshot ?? (async () => ({
         id: "serp-1",
-        snapshotDigest: "s1",
+        snapshotDigest: "a".repeat(64),
         query: "chamonix property",
         location: null,
         language: null,
@@ -284,7 +284,7 @@ function createMockServiceWithDeps(overrides: {
         overrides.getLatestSerpForQuery ??
         (async () => ({
           id: "serp-1",
-          snapshotDigest: "s1",
+          snapshotDigest: "a".repeat(64),
           query: "chamonix property",
           location: null,
           language: null,
@@ -292,6 +292,9 @@ function createMockServiceWithDeps(overrides: {
           observedAt: new Date("2026-09-01T10:00:00Z"),
         })),
       getIntelligenceSnapshot: overrides.getIntelligenceSnapshot ?? (async () => ({
+        serpSnapshotId: "serp-1",
+        evidenceDigests: { serp: "a".repeat(64) },
+        data: { evidenceRefs: [{ kind: "serp_snapshot", id: "serp-1", digest: "a".repeat(64) }] },
         id: "intel-1",
         snapshotDigest: "i1",
         createdAt: new Date("2026-09-01T10:05:00Z"),
@@ -331,7 +334,7 @@ const standardBound = {
   acceptedInputVersion: 1,
   acceptedInputDigest: "d1",
   serpSnapshotId: "serp-1",
-  serpSnapshotDigest: "s1",
+  serpSnapshotDigest: "a".repeat(64),
   intelligenceSnapshotId: "intel-1",
   intelligenceSnapshotDigest: "i1",
   pageSnapshotRefs: [{ id: "page-1", digest: "p1" }],
@@ -574,7 +577,7 @@ test("classification overrides: proposeGaps excludes candidates overridden to EX
         status: "succeeded",
         acceptedInputDigest: "v1".repeat(32),
         serpSnapshotId: "serp-1",
-        serpSnapshotDigest: "s".repeat(64),
+        serpSnapshotDigest: "a".repeat(64),
       }),
       getSerpSnapshot: async () => ({
         id: "serp-1",
@@ -676,7 +679,7 @@ test("classification overrides: runReadModel candidates reflect operator overrid
 test("evaluateUpstreamStaleness: different device/market does not trigger false staleness", async () => {
   const boundSerp = {
     id: "serp-1",
-    snapshotDigest: "s".repeat(64),
+    snapshotDigest: "a".repeat(64),
     query: "real estate investment",
     location: "France",
     language: "fr",
@@ -705,6 +708,9 @@ test("evaluateUpstreamStaleness: different device/market does not trigger false 
         };
       },
       getIntelligenceSnapshot: async () => ({
+        serpSnapshotId: "serp-1",
+        evidenceDigests: { serp: "a".repeat(64) },
+        data: { evidenceRefs: [{ kind: "serp_snapshot", id: "serp-1", digest: "a".repeat(64) }] },
         id: "intel-1",
         snapshotDigest: "i".repeat(64),
         createdAt: new Date("2026-09-01T10:05:00Z"),
@@ -725,7 +731,7 @@ test("evaluateUpstreamStaleness: different device/market does not trigger false 
     acceptedInputVersion: 1,
     acceptedInputDigest: "v1".repeat(32),
     serpSnapshotId: "serp-1",
-    serpSnapshotDigest: "s".repeat(64),
+    serpSnapshotDigest: "a".repeat(64),
     intelligenceSnapshotId: "intel-1",
     intelligenceSnapshotDigest: "i".repeat(64),
     pageSnapshotRefs: [],
@@ -745,7 +751,7 @@ test("evaluateUpstreamStaleness: competitor page content change triggers stalene
     competitorStore: {
       getSerpSnapshot: async () => ({
         id: "serp-1",
-        snapshotDigest: "s".repeat(64),
+        snapshotDigest: "a".repeat(64),
         query: "investment property",
         location: null,
         language: null,
@@ -757,6 +763,9 @@ test("evaluateUpstreamStaleness: competitor page content change triggers stalene
         observedAt: new Date("2026-09-01T10:00:00Z"),
       }),
       getIntelligenceSnapshot: async () => ({
+        serpSnapshotId: "serp-1",
+        evidenceDigests: { serp: "a".repeat(64) },
+        data: { evidenceRefs: [{ kind: "serp_snapshot", id: "serp-1", digest: "a".repeat(64) }] },
         id: "intel-1",
         snapshotDigest: "i".repeat(64),
         createdAt: new Date("2026-09-01T10:05:00Z"),
@@ -792,7 +801,7 @@ test("evaluateUpstreamStaleness: competitor page content change triggers stalene
     acceptedInputVersion: 1,
     acceptedInputDigest: "v1".repeat(32),
     serpSnapshotId: "serp-1",
-    serpSnapshotDigest: "s".repeat(64),
+    serpSnapshotDigest: "a".repeat(64),
     intelligenceSnapshotId: "intel-1",
     intelligenceSnapshotDigest: "i".repeat(64),
     pageSnapshotRefs: [{ id: "page-1", digest: "p1".repeat(32) }],
@@ -813,7 +822,7 @@ test("evaluateUpstreamStaleness: newer competitor run for SERP triggers stalenes
     competitorStore: {
       getSerpSnapshot: async () => ({
         id: "serp-1",
-        snapshotDigest: "s".repeat(64),
+        snapshotDigest: "a".repeat(64),
         query: "investment property",
         location: null,
         language: null,
@@ -825,6 +834,9 @@ test("evaluateUpstreamStaleness: newer competitor run for SERP triggers stalenes
         observedAt: new Date("2026-09-01T10:00:00Z"),
       }),
       getIntelligenceSnapshot: async () => ({
+        serpSnapshotId: "serp-1",
+        evidenceDigests: { serp: "a".repeat(64) },
+        data: { evidenceRefs: [{ kind: "serp_snapshot", id: "serp-1", digest: "a".repeat(64) }] },
         id: "intel-1",
         snapshotDigest: "i".repeat(64),
         createdAt: new Date("2026-09-01T10:05:00Z"),
@@ -853,7 +865,7 @@ test("evaluateUpstreamStaleness: newer competitor run for SERP triggers stalenes
     acceptedInputVersion: 1,
     acceptedInputDigest: "v1".repeat(32),
     serpSnapshotId: "serp-1",
-    serpSnapshotDigest: "s".repeat(64),
+    serpSnapshotDigest: "a".repeat(64),
     intelligenceSnapshotId: "intel-1",
     intelligenceSnapshotDigest: "i".repeat(64),
     pageSnapshotRefs: [],
@@ -938,7 +950,7 @@ test("A1: evaluateUpstreamStaleness flags report stale when candidate classifica
     competitorStore: {
       getSerpSnapshot: async () => ({
         id: "serp-1",
-        snapshotDigest: "sd-1",
+        snapshotDigest: "a".repeat(64),
         query: "q",
         location: null,
         language: null,
@@ -947,6 +959,9 @@ test("A1: evaluateUpstreamStaleness flags report stale when candidate classifica
       }),
       getLatestSerpForSearchIdentity: async () => ({ id: "serp-1", observedAt: new Date("2026-09-01") }),
       getIntelligenceSnapshot: async () => ({
+        serpSnapshotId: "serp-1",
+        evidenceDigests: { serp: "a".repeat(64) },
+        data: { evidenceRefs: [{ kind: "serp_snapshot", id: "serp-1", digest: "a".repeat(64) }] },
         id: "intel-1",
         snapshotDigest: "id-1",
         createdAt: new Date("2026-09-01"),
@@ -967,7 +982,7 @@ test("A1: evaluateUpstreamStaleness flags report stale when candidate classifica
     acceptedInputVersion: 1,
     acceptedInputDigest: "d1",
     serpSnapshotId: "serp-1",
-    serpSnapshotDigest: "sd-1",
+    serpSnapshotDigest: "a".repeat(64),
     intelligenceSnapshotId: "intel-1",
     intelligenceSnapshotDigest: "id-1",
     pageSnapshotRefs: [],
@@ -988,7 +1003,7 @@ test("A2: acceptGapReport rejects direct acceptance when classification override
 
   const reportData = {
     serpSnapshotId: "serp-1",
-    serpSnapshotDigest: "sd-1",
+    serpSnapshotDigest: "a".repeat(64),
     intelligenceSnapshotId: "intel-1",
     intelligenceSnapshotDigest: "id-1",
     acceptedInputSnapshotId: "in-1",
@@ -1018,7 +1033,7 @@ test("A2: acceptGapReport rejects direct acceptance when classification override
         acceptedInputVersion: 1,
         acceptedInputDigest: "d1",
         serpSnapshotId: "serp-1",
-        serpSnapshotDigest: "sd-1",
+        serpSnapshotDigest: "a".repeat(64),
         intelligenceSnapshotId: "intel-1",
         intelligenceSnapshotDigest: "id-1",
         data: reportData,
@@ -1027,7 +1042,7 @@ test("A2: acceptGapReport rejects direct acceptance when classification override
       listDecisions: async () => [{ gapId: "gap-1", disposition: "REQUIRED", priority: "HIGH", note: null }],
       getSerpSnapshot: async () => ({
         id: "serp-1",
-        snapshotDigest: "sd-1",
+        snapshotDigest: "a".repeat(64),
         query: "q",
         location: null,
         language: null,
@@ -1036,6 +1051,9 @@ test("A2: acceptGapReport rejects direct acceptance when classification override
       }),
       getLatestSerpForSearchIdentity: async () => ({ id: "serp-1", observedAt: new Date("2026-09-01") }),
       getIntelligenceSnapshot: async () => ({
+        serpSnapshotId: "serp-1",
+        evidenceDigests: { serp: "a".repeat(64) },
+        data: { evidenceRefs: [{ kind: "serp_snapshot", id: "serp-1", digest: "a".repeat(64) }] },
         id: "intel-1",
         snapshotDigest: "id-1",
         createdAt: new Date("2026-09-01"),
@@ -1082,7 +1100,7 @@ test("A3: proposeGaps binds classificationDigest and changing overrides produces
           status: "succeeded",
           acceptedInputDigest: "d1",
           serpSnapshotId: "serp-1",
-          serpSnapshotDigest: "s".repeat(64),
+          serpSnapshotDigest: "a".repeat(64),
         }),
         getSerpSnapshot: async () => ({
           id: "serp-1",
@@ -1163,7 +1181,7 @@ test("A4: evaluateUpstreamStaleness ignores classification overrides for unrelat
     competitorStore: {
       getSerpSnapshot: async () => ({
         id: "serp-1",
-        snapshotDigest: "sd-1",
+        snapshotDigest: "a".repeat(64),
         query: "q",
         location: null,
         language: null,
@@ -1172,6 +1190,9 @@ test("A4: evaluateUpstreamStaleness ignores classification overrides for unrelat
       }),
       getLatestSerpForSearchIdentity: async () => ({ id: "serp-1", observedAt: new Date("2026-09-01") }),
       getIntelligenceSnapshot: async () => ({
+        serpSnapshotId: "serp-1",
+        evidenceDigests: { serp: "a".repeat(64) },
+        data: { evidenceRefs: [{ kind: "serp_snapshot", id: "serp-1", digest: "a".repeat(64) }] },
         id: "intel-1",
         snapshotDigest: "id-1",
         createdAt: new Date("2026-09-01"),
@@ -1191,7 +1212,7 @@ test("A4: evaluateUpstreamStaleness ignores classification overrides for unrelat
     acceptedInputVersion: 1,
     acceptedInputDigest: "d1",
     serpSnapshotId: "serp-1",
-    serpSnapshotDigest: "sd-1",
+    serpSnapshotDigest: "a".repeat(64),
     intelligenceSnapshotId: "intel-1",
     intelligenceSnapshotDigest: "id-1",
     pageSnapshotRefs: [],
@@ -1214,7 +1235,7 @@ test("A5: acceptGapReport preserves classification lineage into AcceptedContentG
     provider: "fixture",
     promptVersion: "v1",
     serpSnapshotId: "serp-1",
-    serpSnapshotDigest: "sd-1",
+    serpSnapshotDigest: "a".repeat(64),
     intelligenceSnapshotId: "intel-1",
     intelligenceSnapshotDigest: "id-1",
     acceptedInputSnapshotId: "in-1",
@@ -1264,7 +1285,7 @@ test("A5: acceptGapReport preserves classification lineage into AcceptedContentG
         acceptedInputVersion: 1,
         acceptedInputDigest: "d1",
         serpSnapshotId: "serp-1",
-        serpSnapshotDigest: "sd-1",
+        serpSnapshotDigest: "a".repeat(64),
         intelligenceSnapshotId: "intel-1",
         intelligenceSnapshotDigest: "id-1",
         data: reportData,
@@ -1273,7 +1294,7 @@ test("A5: acceptGapReport preserves classification lineage into AcceptedContentG
       listDecisions: async () => decs,
       getSerpSnapshot: async () => ({
         id: "serp-1",
-        snapshotDigest: "sd-1",
+        snapshotDigest: "a".repeat(64),
         query: "q",
         location: null,
         language: null,
@@ -1282,6 +1303,9 @@ test("A5: acceptGapReport preserves classification lineage into AcceptedContentG
       }),
       getLatestSerpForSearchIdentity: async () => ({ id: "serp-1", observedAt: new Date("2026-09-01") }),
       getIntelligenceSnapshot: async () => ({
+        serpSnapshotId: "serp-1",
+        evidenceDigests: { serp: "a".repeat(64) },
+        data: { evidenceRefs: [{ kind: "serp_snapshot", id: "serp-1", digest: "a".repeat(64) }] },
         id: "intel-1",
         snapshotDigest: "id-1",
         createdAt: new Date("2026-09-01"),
@@ -1335,7 +1359,7 @@ test("B1: proposeGaps persists usage with costMicros into content_gap_reports", 
         status: "succeeded",
         acceptedInputDigest: "d1",
         serpSnapshotId: "serp-1",
-        serpSnapshotDigest: "s".repeat(64),
+        serpSnapshotDigest: "a".repeat(64),
       }),
       getSerpSnapshot: async () => ({ id: "serp-1", acceptedInputDigest: "d1" }),
       listPageSnapshotsForRun: async () => [
@@ -1454,7 +1478,7 @@ test("B4: null costMicros in proposal usage is handled gracefully without NaN", 
         status: "succeeded",
         acceptedInputDigest: "d1",
         serpSnapshotId: "serp-1",
-        serpSnapshotDigest: "s".repeat(64),
+        serpSnapshotDigest: "a".repeat(64),
       }),
       getSerpSnapshot: async () => ({ id: "serp-1", acceptedInputDigest: "d1" }),
       listPageSnapshotsForRun: async () => [
@@ -1866,6 +1890,9 @@ test("C10: staleness parity: gapWorkspace and acceptedGapDetail return identical
         createdAt: new Date(1000),
       }),
       getIntelligenceSnapshot: async () => ({
+        serpSnapshotId: "serp-1",
+        evidenceDigests: { serp: "a".repeat(64) },
+        data: { evidenceRefs: [{ kind: "serp_snapshot", id: "serp-1", digest: "a".repeat(64) }] },
         id: "intel-1",
         createdAt: new Date(1000),
       }),
@@ -2780,7 +2807,7 @@ test("P1-04: finalizeGapReport materializes searchSemantics and accepted snapsho
       differentiationRequirements: { items: [] },
     },
     serpSnapshotId: "serp-1",
-    serpSnapshotDigest: "s".repeat(64),
+    serpSnapshotDigest: "a".repeat(64),
     intelligenceSnapshotId: "intel-101",
     intelligenceSnapshotDigest: searchSemantics.intelligenceSnapshotDigest,
     searchSemantics,
@@ -3095,7 +3122,7 @@ test("P1-1: fixture competitor and gap analyst invocations incur 0 cost and make
 test("P1-2: parseContentGapReportData rejects payload missing searchSemantics", () => {
   const validData: any = {
     serpSnapshotId: "serp-1",
-    serpSnapshotDigest: "s".repeat(64),
+    serpSnapshotDigest: "a".repeat(64),
     intelligenceSnapshotId: "intel-1",
     intelligenceSnapshotDigest: "i".repeat(64),
     pageSnapshotRefs: [{ id: "snap-1", digest: "p".repeat(64) }],
@@ -3140,7 +3167,7 @@ test("P1-2: parseContentGapReportData rejects payload missing searchSemantics", 
 test("P1-2: parseContentGapReportData rejects searchSemantics with missing userNeeds", () => {
   const baseData: any = {
     serpSnapshotId: "serp-1",
-    serpSnapshotDigest: "s".repeat(64),
+    serpSnapshotDigest: "a".repeat(64),
     intelligenceSnapshotId: "intel-1",
     intelligenceSnapshotDigest: "i".repeat(64),
     pageSnapshotRefs: [{ id: "snap-1", digest: "p".repeat(64) }],
@@ -3191,7 +3218,7 @@ test("P1-2: parseContentGapReportData rejects searchSemantics with missing userN
 test("P1-2: parseAcceptedContentGapSnapshotData rejects payload missing searchSemantics", () => {
   const validSnapshotData: any = {
     serpSnapshotId: "serp-1",
-    serpSnapshotDigest: "s".repeat(64),
+    serpSnapshotDigest: "a".repeat(64),
     intelligenceSnapshotId: "intel-1",
     intelligenceSnapshotDigest: "i".repeat(64),
     acceptedInputSnapshotId: "in-1",
@@ -3264,7 +3291,7 @@ test("P1-2: finalizeGapReport fails closed if searchSemantics digest does not ma
       finalizeGapReport({
         modelGaps,
         serpSnapshotId: "serp-1",
-        serpSnapshotDigest: "s".repeat(64),
+        serpSnapshotDigest: "a".repeat(64),
         intelligenceSnapshotId: "intel-1",
         intelligenceSnapshotDigest: "i".repeat(64),
         searchSemantics: {

@@ -26,6 +26,7 @@ import { createVisualCandidateStorage } from "../../src/visual/candidate-storage
 import { deterministicDigest } from "../../src/intelligence/digest.js";
 import { buildIntakePayload, completeIntakePayload } from "../fixtures/intake-payloads.js";
 import { setupMigratedTestDatabase } from "../persistence/helpers.js";
+import { assignmentPage } from "../fixtures/accepted-page.js";
 import { FactoryError } from "../../src/executor/errors.js";
 import {
   acceptedPageContent,
@@ -383,8 +384,9 @@ test("ADVERSARIAL 4: exact accepted Run 7 replacement triggers RUN7_EXACT_ASSET_
     rightsStatus: "operator_owned",
     dataBase64: rawBytes1.toString("base64"),
   });
-  await h.assets.approveVersion(project.id, upload1.version.id, upload1.version.binaryDigest);
+  const approved1 = await h.assets.approveVersion(project.id, upload1.version.id, upload1.version.binaryDigest);
   await h.assets.assignVersion(project.id, {
+    ...await assignmentPage(dbInst!, project.id, "home", approved1.governanceDigest!),
     pageSlug: "home",
     role: "hero",
     assetId: upload1.asset.id,
@@ -475,8 +477,9 @@ test("ADVERSARIAL 4: exact accepted Run 7 replacement triggers RUN7_EXACT_ASSET_
     rightsStatus: "operator_owned",
     dataBase64: rawBytes1.toString("base64"),
   });
-  await h.assets.approveVersion(projectB.id, uploadB1.version.id, uploadB1.version.binaryDigest);
+  const approvedB1 = await h.assets.approveVersion(projectB.id, uploadB1.version.id, uploadB1.version.binaryDigest);
   const assignmentB = await h.assets.assignVersion(projectB.id, {
+    ...await assignmentPage(dbInst!, projectB.id, "home", approvedB1.governanceDigest!),
     pageSlug: "home",
     role: "hero",
     assetId: uploadB1.asset.id,

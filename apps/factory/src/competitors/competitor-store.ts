@@ -20,6 +20,7 @@ import {
   contentGapReports,
   searchIntelligenceSnapshots,
   serpSnapshots,
+  groundedSearchSnapshots,
   type AcceptedContentGapSnapshotRecord,
   type CompetitorPageAnalysisRecord,
   type CompetitorPageSnapshotRecord,
@@ -174,6 +175,11 @@ export class CompetitorStore {
       )
       .orderBy(desc(searchIntelligenceSnapshots.createdAt))
       .limit(1);
+    return row ?? null;
+  }
+
+  async getGroundedSnapshot(projectId: string, id: string) {
+    const [row] = await this.db.select().from(groundedSearchSnapshots).where(and(eq(groundedSearchSnapshots.projectId, projectId), eq(groundedSearchSnapshots.id, id)));
     return row ?? null;
   }
 

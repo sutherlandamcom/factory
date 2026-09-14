@@ -1,3 +1,4 @@
+import { preserveInvocationCost } from "../models/invocation-failure.js";
 import { z } from "zod";
 import {
   parseSearchIntelligenceData,
@@ -140,6 +141,7 @@ export class OpenRouterSearchAnalyst implements SearchAnalystModel {
     const promptDigest = deterministicDigest(prompt);
     const { text, usage } = await this.callModel(prompt);
 
+    try {
     let parsed: unknown;
     try {
       parsed = JSON.parse(extractJsonObject(text));
@@ -159,6 +161,7 @@ export class OpenRouterSearchAnalyst implements SearchAnalystModel {
       promptDigest,
       usage: usage ?? null,
     };
+    } catch (error) { throw preserveInvocationCost(error, usage?.costMicros ?? null); }
   }
 }
 
@@ -211,7 +214,7 @@ export class FixtureSearchAnalyst implements SearchAnalystModel {
       model: this.model,
       provider: this.provider,
       promptVersion: this.promptVersion,
-      promptDigest: this.promptDigest,
+      promptDigest: deterministicDigest(buildSearchAnalystPrompt(request)),
       usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, costMicros: 0 },
     };
   }

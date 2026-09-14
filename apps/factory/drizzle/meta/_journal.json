@@ -138,8 +138,57 @@
     {
       "idx": 19,
       "version": "7",
+      "when": 1789590000000,
+      "tag": "0019_search_authority",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
       "when": 1789600000000,
-      "tag": "0019_visual_concurrency_and_provider_mode",
+      "tag": "0020_content_versions",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1789610000000,
+      "tag": "0021_exact_page_assignment",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1789620000000,
+      "tag": "0022_project_authority_lock",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1789630000000,
+      "tag": "0023_assignment_history",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1789640000000,
+      "tag": "0024_complete_page_lineage",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1789650000000,
+      "tag": "0025_grounded_authority_lock",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1789660000000,
+      "tag": "0026_visual_concurrency_and_provider_mode",
       "breakpoints": true
     }
   ]

@@ -1,3 +1,4 @@
+import { WriterBudgetStore } from "../src/writer/budget.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -148,6 +149,7 @@ function makeStores() {
   const grounded: Array<Record<string, unknown>> = [];
   const intel: Array<Record<string, unknown>> = [];
   const searchStore = {
+    budget: new WriterBudgetStore({} as never),
     sumTodaySearchCostMicros: async () => spentToday,
     findFreshSerp: async (_digest: string, _hours: number) => {
       if (!freshSerp) return null;
@@ -172,7 +174,7 @@ function makeStores() {
       };
       const cachedSerp = serps[0] ?? {
         id: "serp-cached",
-        snapshotDigest: "s".repeat(64),
+        snapshotDigest: "a".repeat(64),
         runId: "run-cached",
         provider: "fake-serp",
         observedAt: new Date("2026-09-06T00:00:00.000Z"),
@@ -211,7 +213,7 @@ function makeStores() {
     insertSerpSnapshot: async (input: { data: { organic: unknown[]; features: unknown; peopleAlsoAsk: unknown; relatedSearches: unknown }; usage: unknown; runId: string; provider: string | null }) => {
       const snap = {
         id: `serp-${serps.length + 1}`,
-        snapshotDigest: "s".repeat(64),
+        snapshotDigest: "a".repeat(64),
         rawDigest: "r".repeat(64),
         observedAt: new Date("2026-09-06T00:00:00.000Z"),
         providerRequestId: "fake-1",
@@ -229,7 +231,7 @@ function makeStores() {
     insertGroundedSnapshot: async (input: { data: { webSearchQueries: unknown; sources: unknown }; runId: string; model: string; promptVersion: string }) => {
       const snap = {
         id: `g-${grounded.length + 1}`,
-        snapshotDigest: "g".repeat(64),
+        snapshotDigest: "b".repeat(64),
         runId: input.runId,
         model: input.model,
         promptVersion: input.promptVersion,
@@ -325,7 +327,7 @@ function makeService(
     productionSerpProvider: serp,
     groundedProvider: overrides.grounded === undefined ? fakeGrounded() : overrides.grounded,
     analyst: overrides.analyst ?? fakeAnalyst(),
-    config: overrides.config,
+    config: { authorizedMicros: { serp: 10000, grounded: 10000, analyst: 10000 }, ...overrides.config },
   });
 }
 
@@ -494,4 +496,60 @@ test("compilePacket: bounded packet contains project facts, not plumbing", () =>
   assert.ok(json.includes("roof repair"));
   assert.ok(!json.includes("customWriterInstructions"));
   assert.ok(!json.includes("designReferences"));
+});
+
+test("P1-A/B: persisted evidence reaches analyst and grounded lineage is exact", async () => {
+  const stores = makeStores();
+  let captured: Parameters<SearchAnalystModel["analyze"]>[0] | undefined;
+  const analyst = fakeAnalyst();
+  const analyze = analyst.analyze;
+  analyst.analyze = async request => { captured = request; return analyze(request); };
+  await makeService(stores, fakeSerp(), { analyst }).runSearch(RUN);
+  assert.ok(JSON.stringify(captured?.packet).includes("https://x.example.com/"));
+  assert.equal(captured?.evidenceRefs.find(r => r.kind === "grounded_snapshot")?.digest,
+    stores.state.grounded[0]!.snapshotDigest);
+});
+
+test("P1-C: cache response identifies the new audit run", async () => {
+  const stores = makeStores();
+  const service = makeService(stores, fakeSerp());
+  const original = await service.runSearch(RUN);
+  stores.state.freshSerp = true;
+  const reused = await service.runSearch(RUN);
+  assert.notEqual(reused.run.id, original.run.id);
+  assert.equal(reused.run.id, stores.state.runs.at(-1)!.id);
+  assert.equal(reused.serp?.snapshotId, original.serp?.snapshotId);
+  assert.deepEqual(await service.runDetail("p1", reused.run.id), reused);
+});
+
+test("P1-A: same IDs/query with altered persisted SERP changes actual analyst prompt digest", async () => {
+  const { FixtureSearchAnalyst } = await import("../src/search/analyst.js");
+  const digests: string[] = [];
+  for (const snippet of ["Original measured snippet", "Changed measured snippet"]) {
+    const stores = makeStores();
+    const provider = fakeSerp();
+    const acquire = provider.acquire;
+    provider.acquire = async request => { const result = await acquire(request); result.data.organic[0]!.snippet = snippet; return result; };
+    const analyst = new FixtureSearchAnalyst();
+    const analyze = analyst.analyze.bind(analyst);
+    analyst.analyze = async request => { const result = await analyze(request); digests.push(result.promptDigest); return result; };
+    await makeService(stores, provider, { analyst }).runSearch(RUN);
+  }
+  assert.notEqual(digests[0], digests[1]);
+});
+
+test("P1-D: unknown cost and submitted failures consume reservations; pre-submission releases", async () => {
+  const { InvocationFailure } = await import("../src/models/invocation-failure.js");
+  for (const submitted of [true, false]) {
+    const stores = makeStores();
+    const provider = fakeSerp({ acquire: async () => { throw new InvocationFailure("search_run_failed", "test failure", { requestSubmitted: submitted }); } });
+    await assert.rejects(makeService(stores, provider).runSearch(RUN));
+    assert.equal((await stores.searchStore.budget.getWriterBudgetSummary()).accountedTodayMicros, submitted ? 10000 : 0);
+    assert.equal((await stores.searchStore.budget.getWriterBudgetSummary()).activeReservationMicros, 0);
+  }
+  const stores = makeStores(), provider = fakeSerp();
+  const acquire = provider.acquire;
+  provider.acquire = async request => ({ ...await acquire(request), usage: null });
+  await makeService(stores, provider).runSearch(RUN);
+  assert.equal((await stores.searchStore.budget.getWriterBudgetSummary()).accountedTodayMicros, 30000);
 });

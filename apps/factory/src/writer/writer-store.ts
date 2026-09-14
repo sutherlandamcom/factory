@@ -1,3 +1,6 @@
+import { GapAuthorityReader } from "../competitors/authority.js";
+import { CompetitorStore } from "../competitors/competitor-store.js";
+import { ProjectIntakeStore } from "../operator/intake-store.js";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, sql } from "drizzle-orm";
 import {
@@ -58,6 +61,15 @@ function approvalError(message: string): FactoryError {
 
 export class WriterStore {
   constructor(private readonly db: FactoryDb) {}
+
+  async gapStaleness(projectId: string, gapId: string): Promise<{ stale: boolean; reason: string | null }> {
+    const competitors = new CompetitorStore(this.db);
+    const [gap] = await this.db.select().from(acceptedContentGapSnapshots).where(and(eq(acceptedContentGapSnapshots.projectId, projectId), eq(acceptedContentGapSnapshots.id, gapId)));
+    if (!gap) return { stale: true, reason: "Accepted gap does not exist in this project." };
+    const check = await new GapAuthorityReader({ intake: new ProjectIntakeStore(this.db), competitorStore: competitors })
+      .evaluateAcceptedSnapshotStaleness(projectId, gap);
+    return { stale: check.stale, reason: check.staleReasons.join(" ") || null };
+  }
 
   // ---- Factory Writer Policy -------------------------------------------------
 
@@ -129,6 +141,7 @@ export class WriterStore {
     expectedDigest: string;
   }): Promise<ApprovalResult> {
     return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
       // Lock the policy row so concurrent approvals serialize.
       const [row] = await tx
         .select()
@@ -246,6 +259,10 @@ export class WriterStore {
     // Gap lineage: default REQUIRED (typed failure when missing). Drafting
     // without a gap snapshot is only possible with the explicit flag.
     const gap = await this.latestAcceptedGapSnapshot(input.projectId);
+    if (gap) {
+      const freshness = await this.gapStaleness(input.projectId, gap.id);
+      if (freshness.stale) throw staleError(freshness.reason!);
+    }
     if (!gap) {
       if (!acknowledged) {
         throw new FactoryError(
@@ -267,6 +284,7 @@ export class WriterStore {
     const data = this.composeBriefData({ snapshot, policy, pageTarget, keyPoints: input.contentBriefKeyPoints, gap, noGapLineageAcknowledged: acknowledged });
     const briefDigest = deterministicDigest(data);
     return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
       const [current] = await tx
         .select({ id: contentBriefs.id, version: contentBriefs.version, state: contentBriefs.state })
         .from(contentBriefs)
@@ -339,6 +357,7 @@ export class WriterStore {
     noGapLineageAcknowledged?: boolean;
   }): Promise<ApprovalResult> {
     return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
       // Lock the brief row so concurrent approvals serialize.
       const [row] = await tx
         .select()
@@ -355,6 +374,8 @@ export class WriterStore {
       if (row.version !== input.expectedVersion) {
         throw approvalError(`Brief revision mismatch: expected ${input.expectedVersion}, current ${row.version}.`);
       }
+      const fresh = await new WriterStore(tx as unknown as FactoryDb).briefStaleness(input.projectId, row);
+      if (fresh.stale) throw staleError(fresh.reason!);
       const data = parseContentBriefData(row.data);
       if (input.noGapLineageAcknowledged) {
         if (data.lineage.gapSnapshotId != null) {
@@ -485,6 +506,7 @@ export class WriterStore {
         return { stale: true, reason: "accepted ContentGap snapshot changed" };
       }
     }
+    if (data.lineage.gapSnapshotId) return this.gapStaleness(projectId, data.lineage.gapSnapshotId);
     return { stale: false, reason: null };
   }
 
@@ -652,6 +674,8 @@ export class WriterSnapshotStore {
     if (briefRow.state !== "approved") {
       throw new FactoryError("writer_policy_not_approved", "The brief must be approved before a snapshot can be compiled.");
     }
+    const fresh = await new WriterStore(this.db).briefStaleness(input.projectId, briefRow);
+    if (fresh.stale) throw staleError(fresh.reason!);
     const data = parseWriterPromptSnapshotData({
       schemaVersion: "writer-content-v1",
       briefId: briefRow.id,
@@ -663,6 +687,9 @@ export class WriterSnapshotStore {
     });
     const snapshotDigest = deterministicDigest(data);
     return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
+      const currentAuthority = await new WriterStore(tx as unknown as FactoryDb).briefStaleness(input.projectId, briefRow);
+      if (currentAuthority.stale) throw staleError(currentAuthority.reason!);
       const [current] = await tx
         .select({ version: writerPromptSnapshots.version, state: writerPromptSnapshots.state })
         .from(writerPromptSnapshots)
@@ -732,6 +759,7 @@ export class WriterSnapshotStore {
     expectedDigest: string;
   }): Promise<ApprovalResult> {
     return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
       const [row] = await tx
         .select()
         .from(writerPromptSnapshots)
@@ -754,6 +782,8 @@ export class WriterSnapshotStore {
       if (!brief || brief.state !== "approved" || brief.briefDigest !== row.briefDigest) {
         throw staleError("Snapshot is stale: the approved brief changed after this snapshot was compiled.");
       }
+      const freshness = await new WriterStore(tx as unknown as FactoryDb).briefStaleness(input.projectId, brief);
+      if (freshness.stale) throw staleError(freshness.reason!);
       if (row.snapshotDigest !== input.expectedDigest) {
         throw approvalError("Snapshot digest mismatch: expected digest does not match the stored draft.");
       }
@@ -817,13 +847,13 @@ export class WriterSnapshotStore {
     const latest = await this.db
       .select({ state: contentBriefs.state, briefDigest: contentBriefs.briefDigest })
       .from(contentBriefs)
-      .where(eq(contentBriefs.projectId, projectId))
+      .where(and(eq(contentBriefs.projectId, projectId), eq(contentBriefs.slug, brief.slug)))
       .orderBy(desc(contentBriefs.version))
       .limit(1);
     if (latest[0] && latest[0].state === "approved" && latest[0].briefDigest !== snapshot.briefDigest) {
       return { stale: true, reason: "a newer approved brief exists" };
     }
-    return { stale: false, reason: null };
+    return new WriterStore(this.db).briefStaleness(projectId, brief);
   }
 
   // ---- PageContentProposal ------------------------------------------------------
@@ -855,6 +885,11 @@ export class WriterSnapshotStore {
     }
     const proposalDigest = deterministicDigest(data);
     return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
+      const [bound] = await tx.select().from(writerPromptSnapshots).where(and(eq(writerPromptSnapshots.id, input.snapshotId), eq(writerPromptSnapshots.projectId, input.projectId)));
+      if (!bound || bound.snapshotDigest !== input.snapshotDigest) throw staleError("Proposal snapshot lineage changed.");
+      const fresh = await new WriterSnapshotStore(tx as unknown as FactoryDb).snapshotStaleness(input.projectId, bound);
+      if (fresh.stale) throw staleError(fresh.reason!);
       const [current] = await tx
         .select({ version: pageContentProposals.version })
         .from(pageContentProposals)
@@ -912,7 +947,7 @@ export class WriterSnapshotStore {
     if (!snapshot || snapshot.state !== "approved" || snapshot.snapshotDigest !== proposal.snapshotDigest) {
       return { stale: true, reason: "approved snapshot changed" };
     }
-    return { stale: false, reason: null };
+    return this.snapshotStaleness(projectId, snapshot);
   }
 }
 
@@ -996,6 +1031,14 @@ export class WriterQaStore {
     expectedProposalDigest: string;
   }): Promise<{ id: string; version: number; digest: string; slug: string; proposalId: string; proposalDigest: string; qaReportDigest: string }> {
     return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
+      const [alreadyAccepted] = await tx.select().from(acceptedPageContent)
+        .where(and(eq(acceptedPageContent.projectId, input.projectId), eq(acceptedPageContent.proposalId, input.proposalId)));
+      if (alreadyAccepted) {
+        if (alreadyAccepted.proposalDigest !== input.expectedProposalDigest) throw new FactoryError("content_accept_failed", "Proposal digest mismatch.");
+        return { ...alreadyAccepted, digest: alreadyAccepted.contentDigest };
+      }
       const [proposal] = await tx
         .select()
         .from(pageContentProposals)
@@ -1008,6 +1051,8 @@ export class WriterQaStore {
           "Proposal digest mismatch: expected digest does not match the stored proposal.",
         );
       }
+      const proposalAuthority = await new WriterSnapshotStore(tx as unknown as FactoryDb).proposalStaleness(input.projectId, proposal);
+      if (proposalAuthority.stale) throw staleError(proposalAuthority.reason!);
       // Snapshot binding must still hold.
       const [snapshot] = await tx
         .select()
@@ -1027,6 +1072,8 @@ export class WriterQaStore {
       if (!brief || brief.state !== "approved" || brief.briefDigest !== snapshot.briefDigest) {
         throw staleError("Proposal is stale: the bound approved brief changed.");
       }
+      const authority = await new WriterStore(tx as unknown as FactoryDb).briefStaleness(input.projectId, brief);
+      if (authority.stale) throw staleError(authority.reason!);
       const briefData = parseContentBriefData(brief.data);
       const [latestInput] = await tx
         .select()
@@ -1075,27 +1122,6 @@ export class WriterQaStore {
         throw new FactoryError("content_accept_failed", "QA overall verdict is FAIL; acceptance is blocked.");
       }
       // Same slug re-acceptance with the same proposal digest is idempotent.
-      const [existing] = await tx
-        .select()
-        .from(acceptedPageContent)
-        .where(and(eq(acceptedPageContent.projectId, input.projectId), eq(acceptedPageContent.slug, proposal.slug)));
-      if (existing && existing.proposalDigest === proposal.proposalDigest) {
-        return {
-          id: existing.id,
-          version: existing.version,
-          digest: existing.contentDigest,
-          slug: existing.slug,
-          proposalId: existing.proposalId,
-          proposalDigest: existing.proposalDigest,
-          qaReportDigest: existing.qaReportDigest,
-        };
-      }
-      if (existing) {
-        throw new FactoryError(
-          "content_accept_failed",
-          `Accepted content already exists for slug "${proposal.slug}" at a different digest; a new brief version is required to change it.`,
-        );
-      }
       const [maxVersion] = await tx
         .select({ maxVersion: sql<number>`coalesce(max(${acceptedPageContent.version}), 0)` })
         .from(acceptedPageContent)
@@ -1150,6 +1176,24 @@ export class WriterQaStore {
         qaReportDigest: qa.reportDigest,
       };
     });
+  }
+
+  async acceptedLineageQualification(projectId: string, proposalId: string): Promise<"complete" | "no-gap-waiver" | "unqualified"> {
+    const [lineage] = await this.db.select({ gapId: contentBriefs.gapSnapshotId, waiver: contentBriefs.noGapLineageAcknowledged })
+      .from(pageContentProposals)
+      .innerJoin(writerPromptSnapshots, and(eq(writerPromptSnapshots.id, pageContentProposals.snapshotId), eq(writerPromptSnapshots.snapshotDigest, pageContentProposals.snapshotDigest), eq(writerPromptSnapshots.projectId, projectId)))
+      .innerJoin(contentBriefs, and(eq(contentBriefs.id, writerPromptSnapshots.briefId), eq(contentBriefs.briefDigest, writerPromptSnapshots.briefDigest), eq(contentBriefs.projectId, projectId)))
+      .where(and(eq(pageContentProposals.id, proposalId), eq(pageContentProposals.projectId, projectId)));
+    return !lineage ? "unqualified" : lineage.waiver ? "no-gap-waiver" : lineage.gapId ? "complete" : "unqualified";
+  }
+
+  async acceptedContentVersions(projectId: string) {
+    return this.db.select().from(acceptedPageContent).where(eq(acceptedPageContent.projectId, projectId)).orderBy(desc(acceptedPageContent.version));
+  }
+
+  async acceptedContentById(projectId: string, id: string) {
+    const [row] = await this.db.select().from(acceptedPageContent).where(and(eq(acceptedPageContent.projectId, projectId), eq(acceptedPageContent.id, id)));
+    return row ?? null;
   }
 
   async latestAcceptedContent(

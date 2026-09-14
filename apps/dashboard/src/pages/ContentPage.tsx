@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { writerApi, OperatorApiError, type WriterWorkspace, type WriterQaView } from "../api/client";
+import { writerApi, OperatorApiError, type WriterWorkspace, type WriterQaView, type AcceptedContentView } from "../api/client";
 import { Section } from "../components/Section";
 import { StatusBadge } from "../components/StatusBadge";
 import { usePolling } from "../hooks/usePolling";
@@ -37,6 +37,8 @@ function Digest({ digest }: { digest: string }) {
 }
 
 export function ContentPage({ projectId }: { projectId: string }) {
+  const [inspectedContent, setInspectedContent] = useState<AcceptedContentView | null>(null);
+  useEffect(() => setInspectedContent(null), [projectId]);
   const [ws, setWs] = useState<WriterWorkspace | null>(null);
   const [qa, setQa] = useState<WriterQaView | null>(null);
   const [busy, setBusy] = useState(false);
@@ -105,7 +107,8 @@ export function ContentPage({ projectId }: { projectId: string }) {
   const policy = ws?.policy.latest ?? null;
   const snapshot = ws?.snapshot.latest ?? null;
   const proposal = ws?.proposal.latest ?? null;
-  const accepted = ws?.accepted.latest ?? null;
+  const accepted = inspectedContent ?? ws?.accepted.latest ?? null;
+  const acceptedCopy = accepted?.data as { title?: string; introduction?: string; sections?: Array<{ heading: string; body: string }>; conclusion?: string; cta?: string } | undefined;
 
   return (
     <div className="space-y-6">
@@ -533,10 +536,18 @@ export function ContentPage({ projectId }: { projectId: string }) {
       {/* 5. Accepted content */}
       {accepted && (
         <Section title="Accepted Page Content">
+          <div className="flex flex-wrap gap-2 mb-3" aria-label="Accepted content versions">
+            {ws?.accepted.versions?.map(version => (
+              <button key={version.id} className="rounded border px-2 py-1 text-sm" onClick={() => {
+                void writerApi.acceptedDetail(projectId, version.id).then(setInspectedContent).catch(error => setError(errorMessage(error, "Could not load accepted content.")));
+              }}>Inspect {version.slug} v{version.version}</button>
+            ))}
+          </div>
           <div className="space-y-1 text-sm">
             <div className="flex items-center gap-2">
               <StatusBadge status="accepted" />
               <span className="text-gray-500">v{accepted.version}</span>
+              {accepted.lineageQualification !== "complete" && <span className="text-amber-700">Incomplete lineage: {accepted.lineageQualification ?? "unqualified"}</span>}
               <span className="text-gray-500">{accepted.slug}</span>
             </div>
             <div>
@@ -546,6 +557,12 @@ export function ContentPage({ projectId }: { projectId: string }) {
               Proposal: <Digest digest={accepted.proposalDigest} /> · QA report: <Digest digest={accepted.qaReportDigest} />
             </div>
             <div className="text-gray-500">Accepted at {accepted.acceptedAt}</div>
+            {acceptedCopy ? <article className="mt-4 space-y-3">
+              <h3 className="font-semibold">{acceptedCopy.title}</h3>
+              <p>{acceptedCopy.introduction}</p>
+              {acceptedCopy.sections?.map((section, index) => <section key={index}><h4 className="font-medium">{section.heading}</h4><p className="whitespace-pre-wrap">{section.body}</p></section>)}
+              <p>{acceptedCopy.conclusion}</p><p>{acceptedCopy.cta}</p>
+            </article> : null}
           </div>
         </Section>
       )}

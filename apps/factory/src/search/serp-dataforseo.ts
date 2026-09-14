@@ -1,3 +1,4 @@
+import { InvocationFailure, preserveInvocationCost } from "../models/invocation-failure.js";
 import {
   normalizeSearchQuery,
   parseSerpSnapshotData,
@@ -97,7 +98,7 @@ export class DataForSeoSerpProvider implements StructuredSerpProvider {
   async acquire(request: SerpAcquisitionRequest): Promise<SerpAcquisitionResult> {
     const readiness = this.readiness();
     if (!readiness.configured) {
-      throw new FactoryError("search_provider_not_configured", readiness.reason);
+      throw new InvocationFailure("search_provider_not_configured", readiness.reason, { requestSubmitted: false });
     }
 
     const login = this.env[DATAFORSEO_LOGIN_ENV]!.trim();
@@ -169,6 +170,11 @@ export class DataForSeoSerpProvider implements StructuredSerpProvider {
     // DataForSEO wraps success codes in tasks[]; 40000-series task codes
     // indicate auth/quota problems even under HTTP 200.
     const task = parsed.tasks?.[0];
+    const costMicros =
+      typeof task?.cost === "number" && Number.isFinite(task.cost) && task.cost >= 0
+        ? Math.round(task.cost * 1_000_000)
+        : null;
+    try {
     const statusCode = task?.status_code ?? parsed.status_code ?? 0;
     if (statusCode === 40100 || statusCode === 40101 || statusCode === 40300) {
       throw new FactoryError(
@@ -193,10 +199,7 @@ export class DataForSeoSerpProvider implements StructuredSerpProvider {
     const data = normalizeDfsItems(organicItems);
     const validated = parseSerpSnapshotData(data);
 
-    const costMicros =
-      typeof task?.cost === "number" && Number.isFinite(task.cost)
-        ? Math.round(task.cost * 1_000_000)
-        : null;
+
 
     return {
       data: validated,
@@ -209,6 +212,7 @@ export class DataForSeoSerpProvider implements StructuredSerpProvider {
         costUnknown: costMicros == null,
       },
     };
+    } catch (error) { throw preserveInvocationCost(error, costMicros); }
   }
 }
 

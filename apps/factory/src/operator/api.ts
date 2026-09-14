@@ -640,6 +640,13 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         return sendError(res, "not_found", "Unknown endpoint.");
       }
 
+      if (req.method === "GET" && segments.length === 5 && segments[0] === "projects" && segments[2] === "writer" && segments[3] === "accepted") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.writer) return sendError(res, "not_found", "Writer is not available.");
+        return sendJson(res, 200, await deps.writer.acceptedContentDetail(project.id, segments[4]!));
+      }
+
       // ---- Writer pipeline (Macro Run 4) ------------------------------------
 
       if (req.method === "GET" && segments.length === 4 && segments[0] === "projects" && segments[2] === "writer" && segments[3] === "workspace") {

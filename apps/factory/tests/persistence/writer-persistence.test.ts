@@ -195,7 +195,7 @@ test("PG: brief drafts, digest determinism, approve exact digest, edits create n
     };
     assert.equal(data.lineage.gapSnapshotDigest, seed.gapSnapshotDigest);
     assert.equal(data.lineage.writerPolicyDigest, draft.policyDigest);
-    assert.match(data.searchSemantics.primaryIntent, /commercial investigation/);
+    assert.match(data.searchSemantics.primaryIntent, /^commercial$/);
     assert.deepEqual(data.allowedClaims, ["Licensed and insured", "25-year limited warranty"]);
     assert.deepEqual(data.prohibitedClaims, ["#1 roofing company", "Cheapest prices in Denver"]);
     assert.equal(data.noGapLineageAcknowledged, false);

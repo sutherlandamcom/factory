@@ -11,6 +11,7 @@ import { createAssetStorage } from "../../src/assets/storage.js";
 import { FactoryStore } from "../../src/persistence/store.js";
 import { FactoryError } from "../../src/executor/errors.js";
 import { setupMigratedTestDatabase } from "./helpers.js";
+import { assignmentPage } from "../fixtures/accepted-page.js";
 
 /**
  * Run 5 cross-asset CAS replacement acceptance (Run 5 -> Run 7 authority
@@ -86,6 +87,7 @@ async function seedSlot(service: AssetService, key: string): Promise<SeededSlot>
   });
   const assetAVersion = await service.approveVersion(projectId, uploadA.version.id, uploadA.version.binaryDigest);
   const assignment = await service.assignVersion(projectId, {
+    ...await assignmentPage(dbInst, projectId, "home", assetAVersion.governanceDigest!),
     assetId: uploadA.asset.id,
     versionId: assetAVersion.id,
     pageSlug: "home",

@@ -947,7 +947,13 @@ export class VisualService {
       });
       assignmentId = replaced.id;
     } else {
+      const page = (await this.assets.workspace(input.projectId)).acceptedPages.find(p => p.slug === slot.pageSlug);
+      if (!page || !version.governanceDigest) throw new FactoryError("visual_acceptance_failed", "Current accepted page/asset authority is missing.");
       const created = await this.assets.assignVersion(input.projectId, {
+        acceptedPageContentId: page.id,
+        acceptedPageContentVersion: page.version,
+        acceptedPageContentDigest: page.contentDigest,
+        expectedGovernanceDigest: version.governanceDigest,
         assetId: asset.id,
         versionId: version.id,
         pageSlug: slot.pageSlug,
@@ -1090,7 +1096,13 @@ export class VisualService {
       });
       assignmentId = replaced.id;
     } else {
+      const page = (await this.assets.workspace(input.projectId)).acceptedPages.find(p => p.slug === slot.pageSlug);
+      if (!page || !approved.governanceDigest) throw new FactoryError("visual_acceptance_failed", "Current accepted page/asset authority is missing.");
       const created = await this.assets.assignVersion(input.projectId, {
+        acceptedPageContentId: page.id,
+        acceptedPageContentVersion: page.version,
+        acceptedPageContentDigest: page.contentDigest,
+        expectedGovernanceDigest: approved.governanceDigest,
         assetId: asset.id,
         versionId: approved.id,
         pageSlug: slot.pageSlug,
@@ -1280,7 +1292,11 @@ export class VisualService {
       });
       assignmentId = replaced.id;
     } else {
+      const page = (await this.assets.workspace(input.projectId)).acceptedPages.find(p => p.slug === planSlot.pageSlug);
+      if (!page || !approved.governanceDigest) throw new FactoryError("visual_acceptance_failed", "Current accepted page/asset authority is missing.");
       const created = await this.assets.assignVersion(input.projectId, {
+        acceptedPageContentId: page.id, acceptedPageContentVersion: page.version,
+        acceptedPageContentDigest: page.contentDigest, expectedGovernanceDigest: approved.governanceDigest,
         assetId: asset.id,
         versionId: approved.id,
         pageSlug: planSlot.pageSlug,

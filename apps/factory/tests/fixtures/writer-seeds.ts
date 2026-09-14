@@ -51,6 +51,7 @@ export async function seedProjectWithAcceptedInputs(
   const runId = `crun-${randomUUID()}`;
   const reportId = `cgap-${randomUUID()}`;
   const intelData = JSON.stringify({
+    evidenceRefs: [{ kind: "serp_snapshot", id: serpId, digest: "a".repeat(64) }],
     primaryIntent: "commercial",
     intentRationale: "fixture",
     secondaryIntents: [],
@@ -75,7 +76,7 @@ export async function seedProjectWithAcceptedInputs(
   `);
   await dbInst.db.execute(sql`
     INSERT INTO search_intelligence_snapshots (id, run_id, project_id, accepted_input_snapshot_id, accepted_input_version, accepted_input_digest, query, model, provider, prompt_version, prompt_digest, serp_snapshot_id, evidence_digests, data, snapshot_digest)
-    VALUES (${intelId}, ${searchRunId}, ${project.id}, ${accepted.id}, ${accepted.version}, ${accepted.digest}, 'fixture query', 'fixture-analyst', 'fixture', 'search-analyst-v1', ${"c".repeat(64)}, ${serpId}, '[]'::jsonb, ${intelData}::jsonb, ${"d".repeat(64)})
+    VALUES (${intelId}, ${searchRunId}, ${project.id}, ${accepted.id}, ${accepted.version}, ${accepted.digest}, 'fixture query', 'fixture-analyst', 'fixture', 'search-analyst-v1', ${"c".repeat(64)}, ${serpId}, ${JSON.stringify({ serp: 'a'.repeat(64) })}::jsonb, ${intelData}::jsonb, ${"d".repeat(64)})
   `);
   await dbInst.db.execute(sql`
     INSERT INTO competitor_runs (id, project_id, accepted_input_snapshot_id, accepted_input_version, accepted_input_digest, serp_snapshot_id, serp_snapshot_digest, intelligence_snapshot_id, intelligence_snapshot_digest, pipeline_version, status)
@@ -89,7 +90,7 @@ export async function seedProjectWithAcceptedInputs(
     searchSemantics: {
       intelligenceSnapshotId: intelId,
       intelligenceSnapshotDigest: "d".repeat(64),
-      primaryIntent: "commercial investigation — local roofing replacement",
+      primaryIntent: "commercial",
       semanticCoverageRequirements: [
         "What a full roof replacement includes",
         "Typical timeline and process steps",
@@ -105,9 +106,9 @@ export async function seedProjectWithAcceptedInputs(
     acceptedInputSnapshotId: accepted.id,
     acceptedInputSnapshotVersion: accepted.version,
     acceptedInputDigest: accepted.digest,
-    coverageMatrix: { requirements: [] },
+    coverageMatrix: { policyVersion: "fixture-v1", rows: [] },
     gaps: [],
-    differentiationRequirements: { mustHaves: [], differentiators: [] },
+    differentiationRequirements: { items: [] },
     model: "fixture",
     provider: "fixture",
     promptVersion: "fixture-v1",

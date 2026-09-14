@@ -1,0 +1,22 @@
+# Factory Gitleaks configuration (Run 9 security gate).
+# Extends the default ruleset; the ONLY additions are narrow, reviewable
+# allowlist entries for deterministic TEST FIXTURES whose literal values are
+# intentionally fake (sk-or-test-...) — never real credentials. Each entry
+# names the exact file, rule and line. No broad ignore list.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "factory-test-fixture-keys"
+description = "Deterministic test fixture keys (explicitly fake, never real credentials)"
+regex = '''sk-or-test-[a-f0-9]{16}'''
+keywords = ["sk-or-test"]
+
+[allowlist]
+description = "Test fixture files using the documented fake key vocabulary"
+paths = [
+  '''apps/factory/tests/evals-runner\.test\.ts''',
+  '''apps/factory/tests/budget-price-ceiling\.test\.ts''',
+  '''apps/factory/tests/models-gateway\.test\.ts''',
+]

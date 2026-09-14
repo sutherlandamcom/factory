@@ -1103,7 +1103,7 @@ export const acceptedPageContent = pgTable(
   },
   (table) => [
     unique("accepted_page_content_project_version_unique").on(table.projectId, table.version),
-    unique("accepted_page_content_project_slug_unique").on(table.projectId, table.slug),
+    unique("accepted_page_content_project_proposal_unique").on(table.projectId, table.proposalId),
     index("accepted_page_content_project_idx").on(table.projectId, table.version),
   ],
 );

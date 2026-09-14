@@ -89,7 +89,7 @@ export async function seedProjectWithAcceptedInputs(
     searchSemantics: {
       intelligenceSnapshotId: intelId,
       intelligenceSnapshotDigest: "d".repeat(64),
-      primaryIntent: "commercial investigation — local roofing replacement",
+      primaryIntent: "commercial",
       semanticCoverageRequirements: [
         "What a full roof replacement includes",
         "Typical timeline and process steps",
@@ -105,9 +105,9 @@ export async function seedProjectWithAcceptedInputs(
     acceptedInputSnapshotId: accepted.id,
     acceptedInputSnapshotVersion: accepted.version,
     acceptedInputDigest: accepted.digest,
-    coverageMatrix: { requirements: [] },
+    coverageMatrix: { policyVersion: "fixture-v1", rows: [] },
     gaps: [],
-    differentiationRequirements: { mustHaves: [], differentiators: [] },
+    differentiationRequirements: { items: [] },
     model: "fixture",
     provider: "fixture",
     promptVersion: "fixture-v1",

@@ -141,6 +141,13 @@
       "when": 1789590000000,
       "tag": "0019_search_authority",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1789600000000,
+      "tag": "0020_content_versions",
+      "breakpoints": true
     }
   ]
 }

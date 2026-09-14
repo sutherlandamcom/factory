@@ -560,7 +560,7 @@ export class WriterService {
   async acceptContent(input: { projectId: string; proposalId: string; expectedProposalDigest: string }): Promise<AcceptedContentView> {
     if (!this.qaStore) throw new FactoryError("internal_error", "QA store not configured.");
     const result = await this.qaStore.acceptContent(input);
-    const latest = await this.qaStore.latestAcceptedContent(input.projectId);
+    const latest = await this.qaStore.acceptedContentById(input.projectId, result.id);
     return {
       id: result.id,
       version: result.version,
@@ -569,16 +569,26 @@ export class WriterService {
       proposalId: result.proposalId,
       proposalDigest: result.proposalDigest,
       qaReportDigest: result.qaReportDigest,
+      lineageQualification: await this.qaStore.acceptedLineageQualification(input.projectId, result.proposalId),
       data: latest?.data ?? null,
       acceptedAt: latest?.acceptedAt.toISOString() ?? new Date().toISOString(),
     };
   }
 
-  async acceptedContentWorkspace(projectId: string): Promise<{ latest: AcceptedContentView | null }> {
+  async acceptedContentDetail(projectId: string, id: string) {
+    if (!this.qaStore) throw new FactoryError("internal_error", "QA store not configured.");
+    const row = await this.qaStore.acceptedContentById(projectId, id);
+    if (!row) throw new FactoryError("writer_artifact_not_found", "Accepted content not found for this project.");
+    return { ...row, lineageQualification: await this.qaStore.acceptedLineageQualification(projectId, row.proposalId), digest: row.contentDigest, acceptedAt: row.acceptedAt.toISOString() };
+  }
+
+  async acceptedContentWorkspace(projectId: string) {
     if (!this.qaStore) throw new FactoryError("internal_error", "QA store not configured.");
     const latest = await this.qaStore.latestAcceptedContent(projectId);
-    if (!latest) return { latest: null };
+    const versions = (await this.qaStore.acceptedContentVersions(projectId)).map(row => ({ id: row.id, version: row.version, slug: row.slug, digest: row.contentDigest }));
+    if (!latest) return { latest: null, versions };
     return {
+      versions,
       latest: {
         id: latest.id,
         version: latest.version,
@@ -587,6 +597,7 @@ export class WriterService {
         proposalId: latest.proposalId,
         proposalDigest: latest.proposalDigest,
         qaReportDigest: latest.qaReportDigest,
+        lineageQualification: await this.qaStore.acceptedLineageQualification(projectId, latest.proposalId),
         data: latest.data,
         acceptedAt: latest.acceptedAt.toISOString(),
       },
@@ -607,6 +618,7 @@ export interface WriterQaView {
 }
 
 export interface AcceptedContentView {
+  lineageQualification?: "complete" | "no-gap-waiver" | "unqualified";
   id: string;
   version: number;
   slug: string;

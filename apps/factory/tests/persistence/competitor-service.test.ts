@@ -82,7 +82,7 @@ async function seedEnvironment() {
   ]);
   await inst.db.execute(sql`
     INSERT INTO serp_snapshots (id, run_id, project_id, accepted_input_snapshot_id, accepted_input_version, accepted_input_digest, query, device, provider, observed_at, request_digest, snapshot_digest, organic, raw_digest)
-    VALUES ('serp-1', 'sr-1', 'proj-1', 'in-1', 1, 'd1', 'investissement immobilier chamonix', 'desktop', 'fixture', now(), 'rd-1', 'sd-1', ${organic}::jsonb, 'rawd-1')
+    VALUES ('serp-1', 'sr-1', 'proj-1', 'in-1', 1, 'd1', 'investissement immobilier chamonix', 'desktop', 'fixture', now(), 'rd-1', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', ${organic}::jsonb, 'rawd-1')
   `);
   const intel = JSON.stringify({
     primaryIntent: "commercial",
@@ -98,7 +98,7 @@ async function seedEnvironment() {
     relatedConcepts: [],
     semanticCoverageRequirements: ["Explain expected rental yield", "Cover purchase taxes"],
     userNeeds: ["Understand expected rental yield", "Know purchase taxes"],
-    evidenceRefs: [{ kind: "serp_snapshot", id: "serp-1", digest: "sd-1" }],
+    evidenceRefs: [{ kind: "serp_snapshot", id: "serp-1", digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],
     reviewState: "model_proposed",
   });
   await inst.db.execute(sql`

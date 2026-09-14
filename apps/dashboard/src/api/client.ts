@@ -646,6 +646,7 @@ export interface WriterQaView {
 }
 
 export interface AcceptedContentView {
+  lineageQualification?: "complete" | "no-gap-waiver" | "unqualified";
   id: string;
   version: number;
   slug: string;
@@ -662,7 +663,7 @@ export interface WriterWorkspace {
   brief: { latest: ContentBriefView | null; versions: Array<{ id: string; version: number; state: string; digest: string; slug: string; createdAt: string }> };
   snapshot: { latest: WriterSnapshotView | null; versions: Array<{ id: string; version: number; state: string; digest: string; createdAt: string }> };
   proposal: { latest: WriterProposalView | null; versions: Array<{ id: string; version: number; digest: string; slug: string; createdAt: string }> };
-  accepted: { latest: AcceptedContentView | null };
+  accepted: { latest: AcceptedContentView | null; versions?: Array<{ id: string; version: number; slug: string; digest: string }> };
   devModelOverride: {
     active: boolean;
     roles: Array<{ roleId: string; model: string; championModel: string }>;
@@ -670,6 +671,7 @@ export interface WriterWorkspace {
 }
 
 export const writerApi = {
+  acceptedDetail: (projectId: string, id: string) => request<AcceptedContentView>(`/api/projects/${encodeURIComponent(projectId)}/writer/accepted/${encodeURIComponent(id)}`),
   workspace: (projectId: string) =>
     request<WriterWorkspace>(`/api/projects/${encodeURIComponent(projectId)}/writer/workspace`),
 

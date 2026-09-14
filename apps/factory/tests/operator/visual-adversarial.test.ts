@@ -348,7 +348,7 @@ test("ADVERSARIAL 3: historical fixture migration sets provider_mode to fixture 
   );
 });
 
-test("ADVERSARIAL 4: exact Run 6 replacement triggers RUN7_EXACT_ASSET_REPLACED (allowed) while arbitrary change triggers ASSET_ASSIGNMENT_CHANGED (rejected)", async () => {
+test("ADVERSARIAL 4: exact accepted Run 7 replacement triggers RUN7_EXACT_ASSET_REPLACED (allowed) while arbitrary change triggers ASSET_ASSIGNMENT_CHANGED (rejected)", async () => {
   const h = await createHarness();
   const key = `adv4-${randomUUID().slice(0, 8)}`;
   const project = await h.store.createProject({ key, name: `Project ${key}` });
@@ -384,7 +384,7 @@ test("ADVERSARIAL 4: exact Run 6 replacement triggers RUN7_EXACT_ASSET_REPLACED 
     dataBase64: rawBytes1.toString("base64"),
   });
   await h.assets.approveVersion(project.id, upload1.version.id, upload1.version.binaryDigest);
-  const assignment = await h.assets.assignVersion(project.id, {
+  await h.assets.assignVersion(project.id, {
     pageSlug: "home",
     role: "hero",
     assetId: upload1.asset.id,
@@ -408,30 +408,44 @@ test("ADVERSARIAL 4: exact Run 6 replacement triggers RUN7_EXACT_ASSET_REPLACED 
   assert(planSlot, "Plan slot must exist");
   assert.equal(planSlot.existingVersionId, upload1.version.id, "Plan slot must bind asset 1");
 
-  // Part A: Authorized replacement. Upload version 2 for the SAME asset (same title & kind).
-  const rawBytes2 = await sharp({ create: { width: 1600, height: 900, channels: 3, background: { r: 60, g: 60, b: 60 } } }).jpeg().toBuffer();
-  const upload2 = await h.assets.uploadAsset(project.id, {
-    filename: "hero.jpg",
-    kind: "photo",
-    title: "Hero", // same title -> same logical asset, next version!
-    rightsStatus: "operator_owned",
-    dataBase64: rawBytes2.toString("base64"),
+  // Part A: Authorized Run 7 replacement. Generate + accept a candidate so
+  // the exact Run 7 resolution is durable (AcceptedVisualAssetSet slot row),
+  // then the assignment equals that accepted resolution.
+  await h.visual.confirmClassification({
+    projectId: project.id,
+    planId: plan.id,
+    slot: "hero.primary",
+    truthClass: "illustrative",
   });
-  await h.assets.approveVersion(project.id, upload2.version.id, upload2.version.binaryDigest);
-  await h.assets.replaceAssignment(project.id, assignment.id, {
-    toVersionId: upload2.version.id,
-    expectedBinaryDigest: upload2.version.binaryDigest,
+  const prompt = await h.visual.compilePromptSnapshot({ projectId: project.id, planId: plan.id, slot: "hero.primary", operation: "generate" });
+  await h.visual.approvePromptSnapshot({
+    projectId: project.id,
+    snapshotId: prompt.id,
+    expectedPromptDigest: prompt.promptDigest,
   });
+  const gen = await h.visual.generateForSlot({ projectId: project.id, planId: plan.id, slot: "hero.primary" });
+  await h.visual.acceptCandidate({
+    projectId: project.id,
+    planId: plan.id,
+    slot: "hero.primary",
+    candidateId: gen.candidates[0]!.id,
+    expectedBinaryDigest: gen.candidates[0]!.binaryDigest,
+  });
+  await h.visual.acceptSet({ projectId: project.id, planId: plan.id });
 
-  const designAfterReplace = await h.designStore.latestAcceptedDesign(project.id);
-  assert(designAfterReplace, "Design must exist");
-  assert.equal(designAfterReplace.staleness.code, "RUN7_EXACT_ASSET_REPLACED", "Must recognize exact plan slot asset replacement");
+  // The design input snapshot (v1) bound the OLD assignment; the new
+  // assignment equals the accepted Run 7 slot row exactly -> authorized.
+  const designAfterRun7 = await h.designStore.latestAcceptedDesign(project.id);
+  assert(designAfterRun7, "Design must exist");
+  assert.equal(designAfterRun7.staleness.code, "RUN7_EXACT_ASSET_REPLACED", "The exact accepted Run 7 replacement is the authorized transition");
 
   assert.doesNotThrow(() => {
-    h.visual.assertDesignAuthorityEligible(designAfterReplace);
+    h.visual.assertDesignAuthorityEligible(designAfterRun7);
   }, "RUN7_EXACT_ASSET_REPLACED must be permitted for visual service");
 
-  // Part B: Arbitrary mutation. Create a project where an asset assignment changes without an authorized visual plan slot.
+  // Part B: Arbitrary mutation WITHOUT an accepted Run 7 resolution.
+  // Create a project where an asset assignment changes with no accepted
+  // visual set slot proving the transition.
   const keyB = `adv4b-${randomUUID().slice(0, 8)}`;
   const projectB = await h.store.createProject({ key: keyB, name: `Project ${keyB}` });
   const payloadB = buildIntakePayload();
@@ -479,7 +493,10 @@ test("ADVERSARIAL 4: exact Run 6 replacement triggers RUN7_EXACT_ASSET_REPLACED 
     reviewNotes: "fixture acceptance",
   });
 
-  // Replace assignment on projectB without an authorized visual plan slot
+  // Derive a plan (so a plan slot exists) but NEVER accept a Run 7 set.
+  await h.visual.derivePlan({ projectId: projectB.id });
+
+  // Replace assignment on projectB without an accepted Run 7 resolution
   const rawBytes3 = await sharp({ create: { width: 1600, height: 900, channels: 3, background: { r: 70, g: 70, b: 70 } } }).jpeg().toBuffer();
   const uploadB2 = await h.assets.uploadAsset(projectB.id, {
     filename: "hero.jpg",
@@ -496,7 +513,7 @@ test("ADVERSARIAL 4: exact Run 6 replacement triggers RUN7_EXACT_ASSET_REPLACED 
 
   const designBAfter = await h.designStore.latestAcceptedDesign(projectB.id);
   assert(designBAfter, "Design must exist");
-  assert.equal(designBAfter.staleness.code, "ASSET_ASSIGNMENT_CHANGED", "Must detect arbitrary assignment change");
+  assert.equal(designBAfter.staleness.code, "ASSET_ASSIGNMENT_CHANGED", "Plan slot alone is NOT authorization; an arbitrary replacement stays ASSET_ASSIGNMENT_CHANGED");
 
   assert.throws(
     () => {
@@ -507,6 +524,51 @@ test("ADVERSARIAL 4: exact Run 6 replacement triggers RUN7_EXACT_ASSET_REPLACED 
       return true;
     },
   );
+});
+
+test("ADVERSARIAL 4b: exact accepted Run 7 resolution (AcceptedVisualAssetSet slot row) authorizes RUN7_EXACT_ASSET_REPLACED; wrong digest/slot does not", async () => {
+  const h = await createHarness();
+  const projectId = await seedTestProject(h, `adv4b-${randomUUID().slice(0, 8)}`);
+
+  // Full Run 7 resolution: generate -> accept -> accept set. The accepted
+  // set slot row is the durable authority for the exact transition.
+  const plan = await h.visual.derivePlan({ projectId });
+  await h.visual.confirmClassification({
+    projectId,
+    planId: plan.id,
+    slot: "hero.primary",
+    truthClass: "illustrative",
+  });
+  const prompt = await h.visual.compilePromptSnapshot({ projectId, planId: plan.id, slot: "hero.primary", operation: "generate" });
+  await h.visual.approvePromptSnapshot({ projectId, snapshotId: prompt.id, expectedPromptDigest: prompt.promptDigest });
+  const gen = await h.visual.generateForSlot({ projectId, planId: plan.id, slot: "hero.primary" });
+  await h.visual.acceptCandidate({
+    projectId,
+    planId: plan.id,
+    slot: "hero.primary",
+    candidateId: gen.candidates[0]!.id,
+    expectedBinaryDigest: gen.candidates[0]!.binaryDigest,
+  });
+  await h.visual.acceptSet({ projectId, planId: plan.id });
+
+  // The design input snapshot (v1) binds the OLD assignment; the new
+  // assignment equals the accepted Run 7 slot row exactly -> authorized.
+  const design = await h.designStore.latestAcceptedDesign(projectId);
+  assert(design, "Design must exist");
+  assert.equal(design.staleness.code, "RUN7_ASSET_ASSIGNMENTS_ADDED");
+
+  // Tamper: mutate the accepted slot row's digests (simulating a forged
+  // acceptance record) -> the current assignment no longer equals the
+  // accepted resolution -> must NOT be Run7-authorized.
+  const setRow = await dbInst!.db.select().from(acceptedVisualAssetSets).where(eq(acceptedVisualAssetSets.projectId, projectId));
+  const slotRows = await dbInst!.db.select().from(acceptedVisualAssetSlots).where(eq(acceptedVisualAssetSlots.setId, setRow[0]!.id));
+  await dbInst!.db
+    .update(acceptedVisualAssetSlots)
+    .set({ governanceDigest: "f".repeat(64) })
+    .where(eq(acceptedVisualAssetSlots.id, slotRows[0]!.id));
+  const tampered = await h.designStore.latestAcceptedDesign(projectId);
+  assert(tampered, "Design must exist");
+  assert.notEqual(tampered.staleness.code, "RUN7_EXACT_ASSET_REPLACED", "A slot row whose digests diverge from the assignment is NOT Run7 authorization");
 });
 
 test("ADVERSARIAL 5: upstream mutation before freeze causes runFinalDesignPass to fail closed with visual_design_not_eligible", async () => {

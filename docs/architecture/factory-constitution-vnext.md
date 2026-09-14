@@ -161,7 +161,7 @@ Synthetic imagery sits behind `VisualAssetProvider`; preferred v0 production dir
 
 AI edits of real photographs preserve `derivedFrom`, transformation/provider/model provenance. Synthetic images MUST NOT masquerade as documentary evidence of a real location/property/person.
 
-Final design freeze occurs after actual assets are resolved so the design can adapt to the accepted real images.
+Final design freeze occurs after actual assets are resolved so the design can adapt to the accepted real images. Freeze means the accepted Design + Content + VisualAsset authorities are mutually consistent by exact digests. If the selected DesignProvider cannot ingest the exact asset bytes (e.g. the current text-only Stitch seam), the design is still re-derived against the exact final asset lineage, `providerConsumed` stays false, and no UI or report may claim the provider generated with the actual assets.
 
 ## 12. Production should become deterministic at scale
 

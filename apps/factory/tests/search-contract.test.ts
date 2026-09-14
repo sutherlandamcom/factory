@@ -272,3 +272,9 @@ describe("schema version and error codes", () => {
     }
   });
 });
+
+test("P1-B: evidence digests reject pending and malformed SHA-256", () => {
+  for (const digest of ["pending", "A".repeat(64), "a".repeat(63), "g".repeat(64)]) {
+    assert.throws(() => parseSearchIntelligenceData({ ...intelligenceData, evidenceRefs: [{ kind: "serp_snapshot", id: "s1", digest }] }));
+  }
+});

@@ -362,6 +362,7 @@ export const searchRuns = pgTable(
     language: text("language"),
     device: text("device").notNull(),
     provider: text("provider").notNull(),
+    sourceRunId: text("source_run_id"),
     /** Cache/dedupe key: provider + normalized inputs + lineage + request version. */
     requestDigest: text("request_digest").notNull(),
     refreshRequested: boolean("refresh_requested").notNull().default(false),
@@ -1848,3 +1849,31 @@ export type VisualAssetCandidateRecord = typeof visualAssetCandidates.$inferSele
 export type AcceptedVisualAssetSetRecord = typeof acceptedVisualAssetSets.$inferSelect;
 export type AcceptedVisualAssetSlotRecord = typeof acceptedVisualAssetSlots.$inferSelect;
 export type VisualBudgetReservationRecord = typeof visualBudgetReservations.$inferSelect;
+
+export const searchBudgetReservations = pgTable(
+  "search_budget_reservations",
+  {
+    id: text("id").primaryKey(),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    authorizedMicros: integer("authorized_micros").notNull(),
+    accountedMicros: integer("accounted_micros"),
+    state: text("state").notNull(),
+    invocationDigest: text("invocation_digest").notNull(),
+    lineage: jsonb("lineage"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    accountedAt: timestamp("accounted_at", { withTimezone: true }),
+  },
+  (table) => [
+    check(
+      "search_budget_reservations_state_valid",
+      sql`${table.state} IN ('ACTIVE', 'ACCOUNTED', 'RELEASED')`,
+    ),
+    check(
+      "search_budget_reservations_accounted_valid",
+      sql`(${table.state} = 'ACTIVE' AND ${table.accountedMicros} IS NULL AND ${table.accountedAt} IS NULL) OR (${table.state} = 'ACCOUNTED' AND ${table.accountedMicros} IS NOT NULL AND ${table.accountedAt} IS NOT NULL) OR (${table.state} = 'RELEASED' AND ${table.accountedMicros} IS NULL AND ${table.accountedAt} IS NOT NULL)`,
+    ),
+    index("search_budget_reservations_state_created_idx").on(table.state, table.createdAt),
+    index("search_budget_reservations_created_idx").on(table.createdAt),
+  ],
+);

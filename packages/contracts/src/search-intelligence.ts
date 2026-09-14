@@ -320,7 +320,7 @@ export const searchEvidenceRefSchema = z
   .object({
     kind: z.enum(["serp_snapshot", "grounded_snapshot"]),
     id: z.string().min(1).max(128),
-    digest: z.string().min(1).max(128),
+    digest: z.string().regex(/^[0-9a-f]{64}$/),
   })
   .strict();
 

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import type { FactoryDb } from "../persistence/db.js";
-import { writerBudgetReservations } from "../persistence/schema.js";
+import { writerBudgetReservations, searchBudgetReservations } from "../persistence/schema.js";
 import { FactoryError } from "../executor/errors.js";
 import { FACTORY_BUDGET_RESERVATION_LOCK_KEY } from "../persistence/lock.js";
 
@@ -51,7 +51,7 @@ export class WriterBudgetStore {
   >();
   private reservationLock: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly db: FactoryDb) {}
+  constructor(private readonly db: FactoryDb, private readonly table: typeof writerBudgetReservations | typeof searchBudgetReservations = writerBudgetReservations) {}
 
   private get hasDb(): boolean {
     return (this.db as { dialect?: unknown }).dialect !== undefined && this.db.transaction !== undefined;
@@ -82,13 +82,13 @@ export class WriterBudgetStore {
     }
     const rows = await this.db
       .select({
-        authorizedMicros: writerBudgetReservations.authorizedMicros,
-        accountedMicros: writerBudgetReservations.accountedMicros,
+        authorizedMicros: this.table.authorizedMicros,
+        accountedMicros: this.table.accountedMicros,
       })
-      .from(writerBudgetReservations)
+      .from(this.table)
       .where(
-        sql`(${writerBudgetReservations.state} = 'ACCOUNTED'
-             AND ${writerBudgetReservations.accountedAt} >= date_trunc('day', now() at time zone 'utc'))`,
+        sql`(${this.table.state} = 'ACCOUNTED'
+             AND ${this.table.accountedAt} >= date_trunc('day', now() at time zone 'utc'))`,
       );
     let total = 0;
     for (const row of rows) total += row.accountedMicros ?? row.authorizedMicros;
@@ -107,15 +107,15 @@ export class WriterBudgetStore {
     }
     const rows = await this.db
       .select({
-        state: writerBudgetReservations.state,
-        authorizedMicros: writerBudgetReservations.authorizedMicros,
-        accountedMicros: writerBudgetReservations.accountedMicros,
+        state: this.table.state,
+        authorizedMicros: this.table.authorizedMicros,
+        accountedMicros: this.table.accountedMicros,
       })
-      .from(writerBudgetReservations)
+      .from(this.table)
       .where(
-        sql`(${writerBudgetReservations.state} = 'ACTIVE'
-             OR (${writerBudgetReservations.state} = 'ACCOUNTED'
-                 AND ${writerBudgetReservations.accountedAt} >= date_trunc('day', now() at time zone 'utc')))`,
+        sql`(${this.table.state} = 'ACTIVE'
+             OR (${this.table.state} = 'ACCOUNTED'
+                 AND ${this.table.accountedAt} >= date_trunc('day', now() at time zone 'utc')))`,
       );
     let accountedToday = 0;
     let active = 0;
@@ -126,11 +126,34 @@ export class WriterBudgetStore {
     return { accountedTodayMicros: accountedToday, activeReservationMicros: active };
   }
 
+  /** Transitional Search spend predating reservations is still part of today's ceiling. */
+  async unreservedSearchCost(db: FactoryDb = this.db): Promise<number> {
+    if (this.table !== searchBudgetReservations || !this.hasDb) return 0;
+    const result = await db.execute(sql`
+      SELECT s.usage->>'costMicros' AS cost, s.provider FROM serp_snapshots s
+      WHERE s.created_at >= date_trunc('day', now() at time zone 'utc')
+        AND NOT EXISTS (SELECT 1 FROM search_budget_reservations r WHERE r.lineage->>'runId' = s.run_id AND r.lineage->>'stage' = 'serp')
+      UNION ALL
+      SELECT s.usage->>'costMicros' AS cost, s.provider FROM grounded_search_snapshots s
+      WHERE s.created_at >= date_trunc('day', now() at time zone 'utc')
+        AND NOT EXISTS (SELECT 1 FROM search_budget_reservations r WHERE r.lineage->>'runId' = s.run_id AND r.lineage->>'stage' = 'grounded')
+    `);
+    let total = 0;
+    for (const row of result.rows as Array<{ cost: string | null; provider: string }>) {
+      if (row.cost == null && row.provider.startsWith("fixture")) continue;
+      if (row.cost == null || !Number.isFinite(Number(row.cost)) || Number(row.cost) < 0) {
+        throw new FactoryError("search_provider_budget_blocked", "Today's legacy Search spend is unknown; reconcile it before paid execution.");
+      }
+      total += Math.round(Number(row.cost));
+    }
+    return total;
+  }
+
   private static readonly STALE_RESERVATION_MS = 24 * 60 * 60 * 1000;
 
   private async reconcileStaleReservations(tx: FactoryDb): Promise<void> {
     await tx.execute(sql`
-      UPDATE writer_budget_reservations
+      UPDATE ${this.table}
       SET state = 'ACCOUNTED',
           accounted_micros = authorized_micros,
           accounted_at = now()
@@ -165,6 +188,9 @@ export class WriterBudgetStore {
     dailyLimitUsd?: number,
   ): Promise<WriterBudgetReservationHandle> {
     const limitUsd = dailyLimitUsd ?? DEFAULT_WRITER_DAILY_LIMIT_USD;
+    if (!Number.isFinite(limitUsd) || limitUsd < 0 || !Number.isSafeInteger(input.authorizedMicros) || input.authorizedMicros < 0) {
+      throw new FactoryError("budget_invariant_violation", "Budget and reservation must be finite nonnegative amounts.");
+    }
     return await this.withReservationLock(async () => {
       const budgetMicros = Math.round(limitUsd * 1_000_000);
       if (!this.hasDb) {
@@ -190,19 +216,19 @@ export class WriterBudgetStore {
         await this.reconcileStaleReservations(tx as unknown as FactoryDb);
         const rows = await tx
           .select({
-            state: writerBudgetReservations.state,
-            authorizedMicros: writerBudgetReservations.authorizedMicros,
-            accountedMicros: writerBudgetReservations.accountedMicros,
+            state: this.table.state,
+            authorizedMicros: this.table.authorizedMicros,
+            accountedMicros: this.table.accountedMicros,
           })
-          .from(writerBudgetReservations)
+          .from(this.table)
           .where(
-            sql`(${writerBudgetReservations.state} = 'ACTIVE'
-                 OR (${writerBudgetReservations.state} = 'ACCOUNTED'
-                     AND (${writerBudgetReservations.accountedAt} >= date_trunc('day', now() at time zone 'utc')
-                          OR ${writerBudgetReservations.accountedMicros} > ${writerBudgetReservations.authorizedMicros})))`,
+            sql`(${this.table.state} = 'ACTIVE'
+                 OR (${this.table.state} = 'ACCOUNTED'
+                     AND (${this.table.accountedAt} >= date_trunc('day', now() at time zone 'utc')
+                          OR ${this.table.accountedMicros} > ${this.table.authorizedMicros})))`,
           );
         WriterBudgetStore.assertNoBudgetInvariantViolation(rows);
-        let total = 0;
+        let total = await this.unreservedSearchCost(tx as unknown as FactoryDb);
         for (const row of rows) {
           total += row.state === "ACTIVE" ? row.authorizedMicros : (row.accountedMicros ?? row.authorizedMicros);
         }
@@ -212,7 +238,7 @@ export class WriterBudgetStore {
             `Daily writer budget reached (${(budgetMicros / 1_000_000).toFixed(2)} USD).`,
           );
         }
-        await tx.insert(writerBudgetReservations).values({
+        await tx.insert(this.table).values({
           id,
           provider: input.provider,
           model: input.model,
@@ -247,10 +273,10 @@ export class WriterBudgetStore {
           await this.db.transaction(async (tx) => {
             await tx.execute(sql`SELECT pg_advisory_xact_lock(${Number(FACTORY_BUDGET_RESERVATION_LOCK_KEY)})`);
             await tx
-              .update(writerBudgetReservations)
+              .update(this.table)
               .set({ state: "ACCOUNTED", accountedMicros: accounted, accountedAt: new Date() })
               .where(
-                and(eq(writerBudgetReservations.id, id), eq(writerBudgetReservations.state, "ACTIVE")),
+                and(eq(this.table.id, id), eq(this.table.state, "ACTIVE")),
               );
           });
         } else if (inMemoryRows) {
@@ -275,10 +301,10 @@ export class WriterBudgetStore {
           await this.db.transaction(async (tx) => {
             await tx.execute(sql`SELECT pg_advisory_xact_lock(${Number(FACTORY_BUDGET_RESERVATION_LOCK_KEY)})`);
             await tx
-              .update(writerBudgetReservations)
+              .update(this.table)
               .set({ state: "RELEASED", accountedAt: new Date() })
               .where(
-                and(eq(writerBudgetReservations.id, id), eq(writerBudgetReservations.state, "ACTIVE")),
+                and(eq(this.table.id, id), eq(this.table.state, "ACTIVE")),
               );
           });
         } else if (inMemoryRows) {

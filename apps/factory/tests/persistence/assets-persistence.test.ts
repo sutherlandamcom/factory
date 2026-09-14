@@ -1,3 +1,5 @@
+import { assignmentPage } from "../fixtures/accepted-page.js";
+import { seedProjectWithAcceptedInputs } from "../fixtures/writer-seeds.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import sharp from "sharp";
@@ -44,7 +46,7 @@ async function makeService(): Promise<{ service: AssetService; cleanup: () => Pr
 
 async function createProject(key: string): Promise<string> {
   const store = new FactoryStore(dbInst.db);
-  return (await store.createProject({ key, name: `Project ${key}` })).id;
+  return (await seedProjectWithAcceptedInputs(dbInst, key)).projectId;
 }
 
 async function jpegBytes(width: number, height: number, seed: number): Promise<Uint8Array> {
@@ -130,7 +132,7 @@ test("lifecycle: assignment requires approval AND resolved rights", async () => 
     });
     await assert.rejects(
       () =>
-        service.assignVersion(projectId, {
+        assignTestVersion(service, projectId, {
           assetId: pendingUnknown.asset.id,
           versionId: pendingUnknown.version.id,
           pageSlug: "homepage",
@@ -143,7 +145,7 @@ test("lifecycle: assignment requires approval AND resolved rights", async () => 
     await service.approveVersion(projectId, pendingUnknown.version.id, pendingUnknown.version.binaryDigest);
     await assert.rejects(
       () =>
-        service.assignVersion(projectId, {
+        assignTestVersion(service, projectId, {
           assetId: pendingUnknown.asset.id,
           versionId: pendingUnknown.version.id,
           pageSlug: "homepage",
@@ -162,7 +164,7 @@ test("lifecycle: assignment requires approval AND resolved rights", async () => 
       expectedBinaryDigest: resolvable.version.binaryDigest,
     });
     await service.approveVersion(projectId, resolvable.version.id, resolvable.version.binaryDigest);
-    const assignment = await service.assignVersion(projectId, {
+    const assignment = await assignTestVersion(service, projectId, {
       assetId: resolvable.asset.id,
       versionId: resolvable.version.id,
       pageSlug: "homepage",
@@ -184,7 +186,7 @@ test("lifecycle: assignment with a forged digest is rejected", async () => {
     await service.approveVersion(projectId, uploaded.version.id, uploaded.version.binaryDigest);
     await assert.rejects(
       () =>
-        service.assignVersion(projectId, {
+        assignTestVersion(service, projectId, {
           assetId: uploaded.asset.id,
           versionId: uploaded.version.id,
           pageSlug: "homepage",
@@ -205,7 +207,7 @@ test("CRITICAL INVARIANT: newer approved version does NOT move an existing assig
     // v1 -> approve -> assign homepage/hero.
     const v1 = await service.uploadAsset(projectId, { ...UPLOAD, dataBase64: Buffer.from(await jpegBytes(320, 200, 16)).toString("base64") });
     await service.approveVersion(projectId, v1.version.id, v1.version.binaryDigest);
-    const assignment = await service.assignVersion(projectId, {
+    const assignment = await assignTestVersion(service, projectId, {
       assetId: v1.asset.id,
       versionId: v1.version.id,
       pageSlug: "homepage",
@@ -230,7 +232,7 @@ test("CRITICAL INVARIANT: newer approved version does NOT move an existing assig
     // Re-assigning the same slot is a typed conflict (explicit action needed).
     await assert.rejects(
       () =>
-        service.assignVersion(projectId, {
+        assignTestVersion(service, projectId, {
           assetId: v1.asset.id,
           versionId: v2.version.id,
           pageSlug: "homepage",
@@ -261,7 +263,7 @@ test("lifecycle: replace with wrong digest/version fails closed", async () => {
     const projectId = await createProject(`lc-replace-${Date.now()}`);
     const v1 = await service.uploadAsset(projectId, { ...UPLOAD, dataBase64: Buffer.from(await jpegBytes(80, 60, 18)).toString("base64") });
     await service.approveVersion(projectId, v1.version.id, v1.version.binaryDigest);
-    const assignment = await service.assignVersion(projectId, {
+    const assignment = await assignTestVersion(service, projectId, {
       assetId: v1.asset.id,
       versionId: v1.version.id,
       pageSlug: "about",
@@ -309,7 +311,7 @@ test("lifecycle: cross-project asset access fails closed (not found)", async () 
     );
     await assert.rejects(
       () =>
-        service.assignVersion(projectB, {
+        assignTestVersion(service, projectB, {
           assetId: uploaded.asset.id,
           versionId: uploaded.version.id,
           pageSlug: "homepage",
@@ -335,7 +337,7 @@ test("lifecycle: rejected versions cannot be approved or assigned", async () => 
     );
     await assert.rejects(
       () =>
-        service.assignVersion(projectId, {
+        assignTestVersion(service, projectId, {
           assetId: uploaded.asset.id,
           versionId: uploaded.version.id,
           pageSlug: "homepage",
@@ -368,7 +370,7 @@ test("lifecycle: RESTART DURABILITY — exact accepted assignment survives a fre
     projectId = await createProject(`lc-restart-${Date.now()}`);
     const v1 = await service.uploadAsset(projectId, { ...UPLOAD, dataBase64: Buffer.from(await jpegBytes(160, 100, 22)).toString("base64") });
     await service.approveVersion(projectId, v1.version.id, v1.version.binaryDigest);
-    const assignment = await service.assignVersion(projectId, {
+    const assignment = await assignTestVersion(service, projectId, {
       assetId: v1.asset.id,
       versionId: v1.version.id,
       pageSlug: "homepage",
@@ -438,15 +440,16 @@ test("QA remediation: concurrent same-slot assignment race yields the typed conf
     await service.approveVersion(projectId, v1.version.id, v1.version.binaryDigest);
     // Two concurrent assignments to the same empty slot: exactly one wins,
     // the loser gets the typed conflict (previously a raw 23505 -> 500).
+    await assignmentPage(dbInst, projectId, "racepage", "0".repeat(64));
     const results = await Promise.allSettled([
-      service.assignVersion(projectId, {
+      assignTestVersion(service, projectId, {
         assetId: v1.asset.id,
         versionId: v1.version.id,
         pageSlug: "racepage",
         role: "hero",
         expectedBinaryDigest: v1.version.binaryDigest,
       }),
-      service.assignVersion(projectId, {
+      assignTestVersion(service, projectId, {
         assetId: v1.asset.id,
         versionId: v1.version.id,
         pageSlug: "racepage",
@@ -624,7 +627,7 @@ test("QA remediation: assignment and replacement REQUIRE a governance digest (no
     // Assignment/replacement bind the governance digest as versionDigest —
     // never the binary digest. Verify the stored assignment carries the
     // governance digest value exactly (the conflation regression guard).
-    const assignment = await service.assignVersion(projectId, {
+    const assignment = await assignTestVersion(service, projectId, {
       assetId: uploaded.asset.id,
       versionId: uploaded.version.id,
       pageSlug: "homepage",
@@ -679,3 +682,9 @@ test("QA remediation: DB invariant — an approved row can never exist without a
     await cleanup();
   }
 });
+
+async function assignTestVersion(service: AssetService, projectId: string, input: { assetId: string; versionId: string; pageSlug: string; role: string; expectedBinaryDigest: string }) {
+  const version = await new AssetStore(dbInst.db).getVersion(projectId, input.versionId);
+  const page = await assignmentPage(dbInst, projectId, input.pageSlug, version?.governanceDigest ?? "0".repeat(64));
+  return service.assignVersion(projectId, { ...input, ...page });
+}

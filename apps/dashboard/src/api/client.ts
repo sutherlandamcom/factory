@@ -816,9 +816,13 @@ export interface AssetAssignmentView {
   replacementAvailable: boolean;
   latestApprovedVersionId: string | null;
   latestApprovedVersionNumber: number | null;
+  acceptedPageContentId: string | null;
+  acceptedPageContentVersion: number | null;
+  acceptedPageContentDigest: string | null;
 }
 
 export interface AssetsWorkspace {
+  acceptedPages: Array<{ id: string; version: number; contentDigest: string; slug: string }>;
   schemaVersion: string;
   imageryStrategy: string;
   assets: AssetView[];
@@ -882,7 +886,7 @@ export const assetsApi = {
 
   assign: (
     projectId: string,
-    input: { assetId: string; versionId: string; pageSlug: string; role: string; expectedBinaryDigest: string },
+    input: { acceptedPageContentId: string; acceptedPageContentVersion: number; acceptedPageContentDigest: string; expectedGovernanceDigest: string; assetId: string; versionId: string; pageSlug: string; role: string; expectedBinaryDigest: string },
   ) =>
     request<{ id: string; versionId: string; pageSlug: string; role: string }>(
       `/api/projects/${encodeURIComponent(projectId)}/assets/assignments`,
@@ -892,7 +896,7 @@ export const assetsApi = {
   replace: (
     projectId: string,
     assignmentId: string,
-    input: { toVersionId: string; expectedBinaryDigest: string },
+    input: { pageAuthority?: { id: string; version: number; contentDigest: string; slug: string }; toVersionId: string; expectedBinaryDigest: string },
   ) =>
     request<{ id: string; versionId: string }>(
       `/api/projects/${encodeURIComponent(projectId)}/assets/assignments/${encodeURIComponent(assignmentId)}/replace`,

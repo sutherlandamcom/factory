@@ -165,7 +165,13 @@ export function AssetsPage({ projectId }: { projectId: string }) {
     const version = findVersion(assignForm.versionId);
     if (!version) return;
     void run(async () => {
+      const acceptedPage = ws?.acceptedPages.find(p => p.slug === assignForm.pageSlug);
+      if (!acceptedPage || !version.governanceDigest) throw new Error("Select a current accepted page and approved asset.");
       await assetsApi.assign(projectId, {
+        acceptedPageContentId: acceptedPage.id,
+        acceptedPageContentVersion: acceptedPage.version,
+        acceptedPageContentDigest: acceptedPage.contentDigest,
+        expectedGovernanceDigest: version.governanceDigest,
         assetId: version.assetId,
         versionId: version.id,
         pageSlug: assignForm.pageSlug.trim(),
@@ -182,7 +188,11 @@ export function AssetsPage({ projectId }: { projectId: string }) {
     const version = findVersion(replaceForm.toVersionId);
     if (!version) return;
     void run(async () => {
+      const assignment = ws?.assignments.find(a => a.id === replaceForm.assignmentId);
+      const page = ws?.acceptedPages.find(p => p.slug === assignment?.pageSlug);
+      if (!page) throw new Error("Replacement requires a current accepted page.");
       await assetsApi.replace(projectId, replaceForm.assignmentId, {
+        pageAuthority: page,
         toVersionId: version.id,
         expectedBinaryDigest: version.binaryDigest,
       });
@@ -356,12 +366,15 @@ export function AssetsPage({ projectId }: { projectId: string }) {
                   <div className="flex flex-wrap items-end gap-2">
                     <div>
                       <label className="block text-xs text-gray-600 mb-1">Page slug</label>
-                      <input
+                      <select
+                        aria-label="Accepted page"
                         value={assignForm?.versionId === version.id ? assignForm.pageSlug : ""}
                         onChange={(e) => setAssignForm({ versionId: version.id, pageSlug: e.target.value, role: assignForm?.role ?? "hero" })}
-                        placeholder="homepage"
                         className="rounded border border-gray-300 px-2 py-1 text-sm w-40"
-                      />
+                      >
+                        <option value="">Select accepted page</option>
+                        {ws?.acceptedPages.map(p => <option key={p.id} value={p.slug}>{p.slug} · v{p.version}</option>)}
+                      </select>
                     </div>
                     <div>
                       <label className="block text-xs text-gray-600 mb-1">Slot/role</label>
@@ -405,6 +418,7 @@ export function AssetsPage({ projectId }: { projectId: string }) {
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-semibold">
               {assignment.pageSlug} / {assignment.role}
+              <span className="ml-2 text-xs">{assignment.acceptedPageContentVersion ? `Content v${assignment.acceptedPageContentVersion}` : "Legacy assignment: page acceptance required"}</span>
             </span>
             <span className="text-gray-600">
               ← {assignment.assetTitle} v{assignment.versionNumber} (digest {shortDigest(assignment.binaryDigest)})

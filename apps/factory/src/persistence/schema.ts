@@ -1283,11 +1283,18 @@ export const assetPageAssignments = pgTable(
       .references(() => assetVersions.id, { onDelete: "restrict" }),
     versionDigest: text("version_digest").notNull(),
     binaryDigest: text("binary_digest").notNull(),
+    acceptedPageContentId: text("accepted_page_content_id").references(() => acceptedPageContent.id),
+    acceptedPageContentVersion: integer("accepted_page_content_version"),
+    acceptedPageContentDigest: text("accepted_page_content_digest"),
     pageSlug: text("page_slug").notNull(),
     role: text("role").notNull(),
     assignedAt: timestamp("assigned_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
+    check("assignment_page_lineage_complete", sql`(
+      (${table.acceptedPageContentId} IS NULL AND ${table.acceptedPageContentVersion} IS NULL AND ${table.acceptedPageContentDigest} IS NULL) OR
+      (${table.acceptedPageContentId} IS NOT NULL AND ${table.acceptedPageContentVersion} IS NOT NULL AND ${table.acceptedPageContentDigest} IS NOT NULL AND ${table.acceptedPageContentVersion} > 0 AND ${table.acceptedPageContentDigest} ~ '^[0-9a-f]{64}$')
+    )`),
     unique("asset_page_assignments_slot_unique").on(table.projectId, table.pageSlug, table.role),
     check(
       "asset_page_assignments_role_valid",
@@ -1877,3 +1884,12 @@ export const searchBudgetReservations = pgTable(
     index("search_budget_reservations_created_idx").on(table.createdAt),
   ],
 );
+
+
+export const assetAssignmentHistory = pgTable("asset_assignment_history", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id").notNull().references(() => projects.id),
+  assignmentId: text("assignment_id").notNull().references(() => assetPageAssignments.id),
+  binding: jsonb("binding").notNull(),
+  recordedAt: timestamp("recorded_at", { withTimezone: true }).defaultNow().notNull(),
+});

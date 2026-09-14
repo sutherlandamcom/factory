@@ -1,3 +1,4 @@
+import { PageAuthorityReader } from "../writer/page-authority.js";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { ASSETS_SCHEMA_VERSION, type AssetProvenance } from "@factory/contracts";
@@ -5,6 +6,7 @@ import type { FactoryDb } from "../persistence/db.js";
 import {
   assetDerivatives,
   assetPageAssignments,
+  assetAssignmentHistory,
   assetVersions,
   assets,
   projectAssetSettings,
@@ -75,6 +77,10 @@ export interface AssignmentRow {
   pageSlug: string;
   role: string;
   assignedAt: Date;
+  acceptedPageContentId: string | null;
+  acceptedPageContentVersion: number | null;
+  acceptedPageContentDigest: string | null;
+
 }
 
 function assetNotFound(): FactoryError {
@@ -108,6 +114,7 @@ export class AssetStore {
   }): Promise<{ asset: AssetRow; version: AssetVersionRow; derivatives: DerivativeRow[] }> {
     try {
       return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.asset.projectId}, 104))`);
         // A namespaced transaction lock also covers the absent-row case.
         // Hash collisions merely serialize unrelated projects; never bypass.
         await tx.execute(sql`SELECT pg_advisory_xact_lock(1428570005, hashtext(${input.asset.projectId}))`);
@@ -276,6 +283,7 @@ export class AssetStore {
     altIntent: string | null;
   }): Promise<AssetVersionRow> {
     return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
       const [row] = await tx
         .select()
         .from(assetVersions)
@@ -317,6 +325,7 @@ export class AssetStore {
     provenance: AssetProvenance;
   }): Promise<AssetVersionRow> {
     return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
       const [row] = await tx
         .select()
         .from(assetVersions)
@@ -364,6 +373,7 @@ export class AssetStore {
     expectedBinaryDigest: string;
   }): Promise<AssetVersionRow> {
     return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
       const [row] = await tx
         .select()
         .from(assetVersions)
@@ -413,6 +423,7 @@ export class AssetStore {
     expectedBinaryDigest: string;
   }): Promise<AssetVersionRow> {
     return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
       const [row] = await tx
         .select()
         .from(assetVersions)
@@ -471,15 +482,36 @@ export class AssetStore {
    * of an occupied slot is a typed conflict; moving to a different version
    * goes through replaceAssignment (explicit operator action).
    */
+  async currentAcceptedPages(projectId: string) {
+    const reader = new PageAuthorityReader(this.db);
+    const rows = await reader.currentPages(projectId);
+    const current = [];
+    for (const row of rows) {
+      try { await reader.requireCurrent(projectId, row); current.push({ id: row.id, version: row.version, contentDigest: row.contentDigest, slug: row.slug }); }
+      catch (error) { if (!(error instanceof FactoryError)) throw error; }
+    }
+    return current;
+  }
+
   async assignVersion(input: {
     projectId: string;
     assetId: string;
     versionId: string;
+    acceptedPageContentId: string;
+    acceptedPageContentVersion: number;
+    acceptedPageContentDigest: string;
+    expectedGovernanceDigest: string;
     pageSlug: string;
     role: string;
     expectedBinaryDigest: string;
   }): Promise<AssignmentRow> {
     return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
+      await new PageAuthorityReader(tx as unknown as FactoryDb).requireCurrent(input.projectId, {
+        id: input.acceptedPageContentId, version: input.acceptedPageContentVersion,
+        contentDigest: input.acceptedPageContentDigest, slug: input.pageSlug,
+      });
       const [version] = await tx
         .select()
         .from(assetVersions)
@@ -510,7 +542,7 @@ export class AssetStore {
       // Fail closed: an approved version MUST carry its governance digest.
       // Binary and governance digests are distinct authorities and are never
       // silently substituted for one another.
-      if (version.governanceDigest === null) {
+      if (version.governanceDigest === null || version.governanceDigest !== input.expectedGovernanceDigest) {
         throw approvalError(
           "Assignment rejected: approved version has no governance digest (corrupt approval state); re-approve via a new version upload.",
         );
@@ -542,6 +574,9 @@ export class AssetStore {
             versionDigest: version.governanceDigest,
             binaryDigest: version.binaryDigest,
             pageSlug: input.pageSlug,
+            acceptedPageContentId: input.acceptedPageContentId,
+            acceptedPageContentVersion: input.acceptedPageContentVersion,
+            acceptedPageContentDigest: input.acceptedPageContentDigest,
             role: input.role,
           })
           .returning();
@@ -568,10 +603,12 @@ export class AssetStore {
   async replaceAssignment(input: {
     projectId: string;
     assignmentId: string;
+    pageAuthority?: { id: string; version: number; contentDigest: string; slug: string };
     toVersionId: string;
     expectedBinaryDigest: string;
   }): Promise<AssignmentRow> {
     return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
       const [assignment] = await tx
         .select()
         .from(assetPageAssignments)
@@ -582,9 +619,12 @@ export class AssetStore {
           ),
         )
         .for("update");
-      if (!assignment) {
-        throw new FactoryError("asset_assignment_not_found", "Assignment not found for this project.");
-      }
+      if (!assignment) throw new FactoryError("asset_assignment_not_found", "Assignment not found for this project.");
+      const page = await new PageAuthorityReader(tx as unknown as FactoryDb).requireCurrent(input.projectId, input.pageAuthority ?? {
+        id: assignment.acceptedPageContentId ?? "", version: assignment.acceptedPageContentVersion ?? 0,
+        contentDigest: assignment.acceptedPageContentDigest ?? "", slug: assignment.pageSlug,
+      });
+      if (page.slug !== assignment.pageSlug) throw conflictError("Replacement cannot change the canonical page slug.");
       const [version] = await tx
         .select()
         .from(assetVersions)
@@ -620,12 +660,14 @@ export class AssetStore {
           "Replacement rejected: approved version has no governance digest (corrupt approval state); re-approve via a new version upload.",
         );
       }
-      if (version.id === assignment.versionId) {
+      if (version.id === assignment.versionId && page.id === assignment.acceptedPageContentId) {
         throw conflictError("Assignment already binds this exact version.");
       }
+      await tx.insert(assetAssignmentHistory).values({ id: `aah-${randomUUID()}`, projectId: input.projectId, assignmentId: assignment.id, binding: assignment });
       const [updated] = await tx
         .update(assetPageAssignments)
         .set({
+          acceptedPageContentId: page.id, acceptedPageContentVersion: page.version, acceptedPageContentDigest: page.contentDigest,
           versionId: version.id,
           versionDigest: version.governanceDigest,
           binaryDigest: version.binaryDigest,
@@ -637,7 +679,12 @@ export class AssetStore {
     });
   }
 
-  async listAssignments(projectId: string): Promise<AssignmentRow[]> {    return await this.db
+  async assignmentHistory(projectId: string) {
+    return this.db.select().from(assetAssignmentHistory).where(eq(assetAssignmentHistory.projectId, projectId)).orderBy(desc(assetAssignmentHistory.recordedAt));
+  }
+
+  async listAssignments(projectId: string): Promise<AssignmentRow[]> {
+    return await this.db
       .select()
       .from(assetPageAssignments)
       .where(eq(assetPageAssignments.projectId, projectId))

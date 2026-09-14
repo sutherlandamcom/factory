@@ -26,7 +26,8 @@ import { createVisualCandidateStorage } from "../../src/visual/candidate-storage
 import { deterministicDigest } from "../../src/intelligence/digest.js";
 import { buildIntakePayload } from "../fixtures/intake-payloads.js";
 import { setupMigratedTestDatabase } from "../persistence/helpers.js";
-import { assignmentPage } from "../fixtures/accepted-page.js";
+import { assignmentPage, acceptFixturePage } from "../fixtures/accepted-page.js";
+import { seedProjectWithAcceptedInputs } from "../fixtures/writer-seeds.js";
 import { FactoryError } from "../../src/executor/errors.js";
 import {
   acceptedPageContent,
@@ -114,86 +115,50 @@ async function createHarness() {
 }
 
 async function seedTestProject(h: Awaited<ReturnType<typeof createHarness>>, key: string): Promise<string> {
-  const project = await h.store.createProject({ key, name: `Project ${key}` });
-  const payload = buildIntakePayload();
-  await h.intake.saveDraft({ projectId: project.id, baseRevision: 0, payload });
-  await h.intake.accept({
-    projectId: project.id,
-    expectedRevision: 1,
-    expectedDigest: deterministicDigest(payload),
-  });
-  await dbInst!.db.insert(acceptedPageContent).values({
-    id: `apc-${randomUUID()}`,
-    projectId: project.id,
-    version: 1,
-    slug: "home",
-    proposalId: "prop-1",
-    proposalVersion: 1,
-    proposalDigest: "a".repeat(64),
-    qaReportDigest: "b".repeat(64),
-    data: { sections: [] },
-    contentDigest: "c".repeat(64),
-  });
-  await h.design.deriveInputSnapshotDraft(project.id);
-  const cand = await h.design.generateCandidate({ projectId: project.id });
+  const { projectId } = await seedProjectWithAcceptedInputs(dbInst!, key);
+  await acceptFixturePage(dbInst!, projectId, "home");
+  await h.design.deriveInputSnapshotDraft(projectId);
+  const cand = await h.design.generateCandidate({ projectId });
   await h.design.acceptCandidate({
-    projectId: project.id,
+    projectId,
     candidateId: cand.id,
     expectedCandidateDigest: cand.candidateDigest,
     reviewNotes: "fixture acceptance",
   });
-  return project.id;
+  return projectId;
 }
 
 
 /** Project whose design input snapshot already binds a home/hero asset. */
 async function seedPreBoundProject(h: Awaited<ReturnType<typeof createHarness>>, key: string): Promise<string> {
-  const project = await h.store.createProject({ key, name: `Project ${key}` });
-  const payload = buildIntakePayload();
-  await h.intake.saveDraft({ projectId: project.id, baseRevision: 0, payload });
-  await h.intake.accept({
-    projectId: project.id,
-    expectedRevision: 1,
-    expectedDigest: deterministicDigest(payload),
-  });
-  await dbInst!.db.insert(acceptedPageContent).values({
-    id: `apc-${randomUUID()}`,
-    projectId: project.id,
-    version: 1,
-    slug: "home",
-    proposalId: "prop-1",
-    proposalVersion: 1,
-    proposalDigest: "a".repeat(64),
-    qaReportDigest: "b".repeat(64),
-    data: { sections: [] },
-    contentDigest: "c".repeat(64),
-  });
+  const { projectId } = await seedProjectWithAcceptedInputs(dbInst!, key);
+  await acceptFixturePage(dbInst!, projectId, "home");
   const raw = await sharp({ create: { width: 1600, height: 900, channels: 3, background: { r: 60, g: 60, b: 60 } } }).jpeg().toBuffer();
-  const upload = await h.assets.uploadAsset(project.id, {
+  const upload = await h.assets.uploadAsset(projectId, {
     filename: "hero.jpg",
     kind: "photo",
     title: "Hero",
     rightsStatus: "operator_owned",
     dataBase64: Buffer.from(raw).toString("base64"),
   });
-  const approved = await h.assets.approveVersion(project.id, upload.version.id, upload.version.binaryDigest);
-  await h.assets.assignVersion(project.id, {
-    ...await assignmentPage(dbInst!, project.id, "home", approved.governanceDigest!),
+  const approved = await h.assets.approveVersion(projectId, upload.version.id, upload.version.binaryDigest);
+  await h.assets.assignVersion(projectId, {
+    ...await assignmentPage(dbInst!, projectId, "home", approved.governanceDigest!),
     assetId: upload.asset.id,
     versionId: approved.id,
     pageSlug: "home",
     role: "hero",
     expectedBinaryDigest: approved.binaryDigest,
   });
-  await h.design.deriveInputSnapshotDraft(project.id);
-  const cand = await h.design.generateCandidate({ projectId: project.id });
+  await h.design.deriveInputSnapshotDraft(projectId);
+  const cand = await h.design.generateCandidate({ projectId });
   await h.design.acceptCandidate({
-    projectId: project.id,
+    projectId,
     candidateId: cand.id,
     expectedCandidateDigest: cand.candidateDigest,
     reviewNotes: "fixture acceptance",
   });
-  return project.id;
+  return projectId;
 }
 
 /** Drive the full Run 7 resolution for the seeded hero.primary slot. */
@@ -565,54 +530,40 @@ test("TRUTHFULNESS 1: ai_generate slot reports providerConsumed=true; workspace 
 test("TRUTHFULNESS 2: reuse_real slot reports providerConsumed=false (provider never saw the bytes)", async () => {
   const h = await createHarness();
   // Project with a pre-bound asset: the plan slot proposes reuse_real.
-  const project = await h.store.createProject({ key: `truth2-${randomUUID().slice(0, 8)}`, name: "Truth2" });
-  const payload = buildIntakePayload();
-  await h.intake.saveDraft({ projectId: project.id, baseRevision: 0, payload });
-  await h.intake.accept({ projectId: project.id, expectedRevision: 1, expectedDigest: deterministicDigest(payload) });
-  await dbInst!.db.insert(acceptedPageContent).values({
-    id: `apc-${randomUUID()}`,
-    projectId: project.id,
-    version: 1,
-    slug: "home",
-    proposalId: "prop-1",
-    proposalVersion: 1,
-    proposalDigest: "a".repeat(64),
-    qaReportDigest: "b".repeat(64),
-    data: { sections: [] },
-    contentDigest: "c".repeat(64),
-  });
+  const { projectId } = await seedProjectWithAcceptedInputs(dbInst!, `truth2-${randomUUID().slice(0, 8)}`);
+  await acceptFixturePage(dbInst!, projectId, "home");
   const raw = await sharp({ create: { width: 1600, height: 900, channels: 3, background: { r: 30, g: 30, b: 200 } } }).jpeg().toBuffer();
-  const upload = await h.assets.uploadAsset(project.id, {
+  const upload = await h.assets.uploadAsset(projectId, {
     filename: "hero.jpg",
     kind: "photo",
     title: "Hero",
     rightsStatus: "operator_owned",
     dataBase64: Buffer.from(raw).toString("base64"),
   });
-  const approved = await h.assets.approveVersion(project.id, upload.version.id, upload.version.binaryDigest);
-  await h.assets.assignVersion(project.id, {
-    ...await assignmentPage(dbInst!, project.id, "home", approved.governanceDigest!),
+  const approved = await h.assets.approveVersion(projectId, upload.version.id, upload.version.binaryDigest);
+  await h.assets.assignVersion(projectId, {
+    ...await assignmentPage(dbInst!, projectId, "home", approved.governanceDigest!),
     assetId: upload.asset.id,
     versionId: approved.id,
     pageSlug: "home",
     role: "hero",
     expectedBinaryDigest: approved.binaryDigest,
   });
-  await h.design.deriveInputSnapshotDraft(project.id);
-  const cand = await h.design.generateCandidate({ projectId: project.id });
+  await h.design.deriveInputSnapshotDraft(projectId);
+  const cand = await h.design.generateCandidate({ projectId });
   await h.design.acceptCandidate({
-    projectId: project.id,
+    projectId,
     candidateId: cand.id,
     expectedCandidateDigest: cand.candidateDigest,
     reviewNotes: "fixture acceptance",
   });
-  const plan = await h.visual.derivePlan({ projectId: project.id });
-  await h.visual.confirmClassification({ projectId: project.id, planId: plan.id, slot: "hero.primary", truthClass: "illustrative" });
-  const resolved = await h.visual.resolveReuse({ projectId: project.id, planId: plan.id, slot: "hero.primary" });
+  const plan = await h.visual.derivePlan({ projectId });
+  await h.visual.confirmClassification({ projectId, planId: plan.id, slot: "hero.primary", truthClass: "illustrative" });
+  const resolved = await h.visual.resolveReuse({ projectId, planId: plan.id, slot: "hero.primary" });
   assert.equal(resolved.assignmentId != null, true);
-  await h.visual.acceptSet({ projectId: project.id, planId: plan.id });
+  await h.visual.acceptSet({ projectId, planId: plan.id });
 
-  const ws = await h.visual.workspace(project.id);
+  const ws = await h.visual.workspace(projectId);
   const slot = ws.acceptedSet!.slots.find((s) => s.slot === "hero.primary")!;
   assert.equal(slot.resolutionMode, "reuse_real");
   assert.equal(slot.providerConsumed, false, "reuse never involves the provider");

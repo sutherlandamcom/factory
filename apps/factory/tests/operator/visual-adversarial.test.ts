@@ -26,7 +26,8 @@ import { createVisualCandidateStorage } from "../../src/visual/candidate-storage
 import { deterministicDigest } from "../../src/intelligence/digest.js";
 import { buildIntakePayload, completeIntakePayload } from "../fixtures/intake-payloads.js";
 import { setupMigratedTestDatabase } from "../persistence/helpers.js";
-import { assignmentPage } from "../fixtures/accepted-page.js";
+import { assignmentPage, acceptFixturePage } from "../fixtures/accepted-page.js";
+import { seedProjectWithAcceptedInputs } from "../fixtures/writer-seeds.js";
 import { FactoryError } from "../../src/executor/errors.js";
 import {
   acceptedPageContent,
@@ -124,39 +125,21 @@ async function createHarness(opts: {
 }
 
 async function seedTestProject(harness: Awaited<ReturnType<typeof createHarness>>, key: string) {
-  const project = await harness.store.createProject({ key, name: `Project ${key}` });
-  const payload = buildIntakePayload();
-  await harness.intake.saveDraft({ projectId: project.id, baseRevision: 0, payload });
-  await harness.intake.accept({
-    projectId: project.id,
-    expectedRevision: 1,
-    expectedDigest: deterministicDigest(payload),
-  });
+  const { projectId } = await seedProjectWithAcceptedInputs(dbInst!, key);
 
   // Seed representative homepage content
-  await dbInst!.db.insert(acceptedPageContent).values({
-    id: `apc-${randomUUID()}`,
-    projectId: project.id,
-    version: 1,
-    slug: "home",
-    proposalId: "prop-1",
-    proposalVersion: 1,
-    proposalDigest: "a".repeat(64),
-    qaReportDigest: "b".repeat(64),
-    data: { sections: [] },
-    contentDigest: "c".repeat(64),
-  });
+  await acceptFixturePage(dbInst!, projectId, "home");
 
-  await harness.design.deriveInputSnapshotDraft(project.id);
-  const cand = await harness.design.generateCandidate({ projectId: project.id });
+  await harness.design.deriveInputSnapshotDraft(projectId);
+  const cand = await harness.design.generateCandidate({ projectId });
   await harness.design.acceptCandidate({
-    projectId: project.id,
+    projectId,
     candidateId: cand.id,
     expectedCandidateDigest: cand.candidateDigest,
     reviewNotes: "fixture acceptance",
   });
 
-  return project.id;
+  return projectId;
 }
 
 // ---------------------------------------------------------------------------
@@ -352,28 +335,11 @@ test("ADVERSARIAL 3: historical fixture migration sets provider_mode to fixture 
 test("ADVERSARIAL 4: exact accepted Run 7 replacement triggers RUN7_EXACT_ASSET_REPLACED (allowed) while arbitrary change triggers ASSET_ASSIGNMENT_CHANGED (rejected)", async () => {
   const h = await createHarness();
   const key = `adv4-${randomUUID().slice(0, 8)}`;
-  const project = await h.store.createProject({ key, name: `Project ${key}` });
-  const payload = buildIntakePayload();
-  await h.intake.saveDraft({ projectId: project.id, baseRevision: 0, payload });
-  await h.intake.accept({
-    projectId: project.id,
-    expectedRevision: 1,
-    expectedDigest: deterministicDigest(payload),
-  });
+  const { projectId } = await seedProjectWithAcceptedInputs(dbInst!, key);
+  const project = { id: projectId };
 
   // Seed representative homepage content
-  await dbInst!.db.insert(acceptedPageContent).values({
-    id: `apc-${randomUUID()}`,
-    projectId: project.id,
-    version: 1,
-    slug: "home",
-    proposalId: "prop-1",
-    proposalVersion: 1,
-    proposalDigest: "a".repeat(64),
-    qaReportDigest: "b".repeat(64),
-    data: { sections: [] },
-    contentDigest: "c".repeat(64),
-  });
+  await acceptFixturePage(dbInst!, project.id, "home");
 
   // 1. Upload initial asset version 1
   const rawBytes1 = await sharp({ create: { width: 1600, height: 900, channels: 3, background: { r: 50, g: 50, b: 50 } } }).jpeg().toBuffer();
@@ -449,26 +415,9 @@ test("ADVERSARIAL 4: exact accepted Run 7 replacement triggers RUN7_EXACT_ASSET_
   // Create a project where an asset assignment changes with no accepted
   // visual set slot proving the transition.
   const keyB = `adv4b-${randomUUID().slice(0, 8)}`;
-  const projectB = await h.store.createProject({ key: keyB, name: `Project ${keyB}` });
-  const payloadB = buildIntakePayload();
-  await h.intake.saveDraft({ projectId: projectB.id, baseRevision: 0, payload: payloadB });
-  await h.intake.accept({
-    projectId: projectB.id,
-    expectedRevision: 1,
-    expectedDigest: deterministicDigest(payloadB),
-  });
-  await dbInst!.db.insert(acceptedPageContent).values({
-    id: `apc-${randomUUID()}`,
-    projectId: projectB.id,
-    version: 1,
-    slug: "home",
-    proposalId: "prop-1",
-    proposalVersion: 1,
-    proposalDigest: "a".repeat(64),
-    qaReportDigest: "b".repeat(64),
-    data: { sections: [] },
-    contentDigest: "c".repeat(64),
-  });
+  const { projectId: projectIdB } = await seedProjectWithAcceptedInputs(dbInst!, keyB);
+  const projectB = { id: projectIdB };
+  await acceptFixturePage(dbInst!, projectB.id, "home");
 
   const uploadB1 = await h.assets.uploadAsset(projectB.id, {
     filename: "hero.jpg",

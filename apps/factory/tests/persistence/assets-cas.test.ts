@@ -12,6 +12,7 @@ import { FactoryStore } from "../../src/persistence/store.js";
 import { FactoryError } from "../../src/executor/errors.js";
 import { setupMigratedTestDatabase } from "./helpers.js";
 import { assignmentPage } from "../fixtures/accepted-page.js";
+import { seedProjectWithAcceptedInputs } from "../fixtures/writer-seeds.js";
 
 /**
  * Run 5 cross-asset CAS replacement acceptance (Run 5 -> Run 7 authority
@@ -48,8 +49,7 @@ async function makeService(): Promise<{ service: AssetService; cleanup: () => Pr
 }
 
 async function createProject(key: string): Promise<string> {
-  const store = new FactoryStore(dbInst.db);
-  return (await store.createProject({ key, name: `Project ${key}` })).id;
+  return (await seedProjectWithAcceptedInputs(dbInst, key)).projectId;
 }
 
 async function jpegBytes(width: number, height: number, seed: number): Promise<Uint8Array> {

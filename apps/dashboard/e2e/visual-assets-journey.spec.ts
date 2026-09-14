@@ -1,3 +1,4 @@
+import { acceptSearchGap } from "./search-gap-helper.js";
 import { test, expect, type Page } from "@playwright/test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -97,6 +98,7 @@ async function fillAndAcceptIntake(page: Page): Promise<void> {
 
 /** Accepted page content via the fixture writer (no-gap path: no SERP spend). */
 async function acceptPageContent(page: Page): Promise<void> {
+  await acceptSearchGap(page);
   await page.getByRole("button", { name: "Content", exact: true }).click();
   await expect(page.getByText("Factory Writer Policy")).toBeVisible({ timeout: 10_000 });
   await page.getByRole("button", { name: "Derive draft" }).click();
@@ -110,7 +112,7 @@ async function acceptPageContent(page: Page): Promise<void> {
   await page.getByLabel("Audience", { exact: false }).fill("Austin homeowners comparing local roofers");
   await page.getByLabel("Structure guidance (one per line)").fill("Storm damage context\nRepair process\nWarranty and trust signals");
   await page.getByLabel("CTA intent", { exact: false }).fill("Book a free roof inspection");
-  await page.getByLabel(/Explicitly draft\/approve WITHOUT accepted gap lineage/).check();
+
   await page.getByRole("button", { name: "Create draft" }).click();
   await expect(page.getByText(/Brief draft v1 saved/)).toBeVisible({ timeout: 15_000 });
   await page.getByRole("button", { name: "Approve exact digest" }).click();
@@ -164,9 +166,9 @@ async function approveAndAssignHeroAsset(page: Page): Promise<void> {
   await expect(page.getByText(/Uploaded v1 \(image\/jpeg/)).toBeVisible({ timeout: 30_000 });
   await page.getByRole("button", { name: "Approve exact digest" }).first().click();
   await expect(page.getByText(/Version v1 approved and immutable/)).toBeVisible({ timeout: 15_000 });
-  await page.getByPlaceholder("homepage", { exact: true }).last().fill("homepage");
+  await page.getByRole("combobox", { name: "Accepted page" }).last().selectOption(PAGE_SLUG);
   await page.getByRole("button", { name: "Assign to page slot" }).click();
-  await expect(page.getByText(/Assigned v1 to homepage\/hero/)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(new RegExp(`Assigned v1 to ${PAGE_SLUG}/hero`))).toBeVisible({ timeout: 15_000 });
 }
 
 /** Accepted fixture design (the visual plan's upstream authority). */

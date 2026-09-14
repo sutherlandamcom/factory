@@ -1157,7 +1157,16 @@ export interface VisualWorkspace {
     setDigest: string;
     providerMode: string;
     acceptedAt: string;
-    slots: Array<{ slot: string; pageSlug: string; role: string; versionId: string; resolutionMode: string; truthClass: string }>;
+    slots: Array<{
+      slot: string;
+      pageSlug: string;
+      role: string;
+      versionId: string;
+      resolutionMode: string;
+      truthClass: string;
+      /** TRUE only when the provider actually consumed the exact asset bytes. */
+      providerConsumed: boolean;
+    }>;
   } | null;
   budget: { accountedTodayMicros: number; activeReservationMicros: number };
   finalDesignPass?: {
@@ -1165,6 +1174,8 @@ export interface VisualWorkspace {
     frozen: boolean;
     acceptedDesignVersion: number | null;
     designStalenessCode: string | null;
+    /** TRUE only when the design provider actually consumed the bound assets. */
+    providerConsumed: boolean | null;
   };
 }
 

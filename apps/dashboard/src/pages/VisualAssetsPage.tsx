@@ -255,6 +255,21 @@ export function VisualAssetsPage({ projectId }: { projectId: string }) {
                 <li key={s.slot} className="flex items-center gap-2">
                   <ModeBadge mode={s.resolutionMode} />
                   <span>{s.slot} → {s.pageSlug}/{s.role} (v {shortDigest(s.versionId)})</span>
+                  {s.resolutionMode === "ai_edit" || s.resolutionMode === "ai_generate" ? (
+                    <span
+                      className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-800"
+                      title="The provider actually consumed the exact asset bytes for this slot."
+                    >
+                      provider consumed
+                    </span>
+                  ) : (
+                    <span
+                      className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600"
+                      title="Resolved without provider consumption (reuse or deterministic transform); Factory binds the exact asset as production authority."
+                    >
+                      factory-bound
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>
@@ -263,12 +278,18 @@ export function VisualAssetsPage({ projectId }: { projectId: string }) {
           <div className="rounded border border-indigo-200 bg-indigo-50/50 p-4 space-y-3">
             <h3 className="font-medium text-indigo-950">Final Design Pass &amp; Freeze</h3>
             <p className="text-xs text-gray-600">
-              Re-binds the accepted design system to the actual approved visual assets in Run 5,
-              eliminating design staleness and freezing design authority for page implementation.
+              Reconciles the accepted design authority to the exact approved visual asset lineage in Run 5,
+              eliminating design staleness and freezing the accepted Design + Content + VisualAsset
+              combination for page implementation.
             </p>
             {ws.finalDesignPass?.frozen ? (
               <div className="rounded bg-green-100 p-3 text-sm text-green-900 font-medium">
-                ✓ Design frozen (Accepted design v{ws.finalDesignPass.acceptedDesignVersion} is UP_TO_DATE with actual visual assets).
+                ✓ Design frozen (Accepted design v{ws.finalDesignPass.acceptedDesignVersion} is reconciled to the exact approved visual asset authority).
+                {ws.finalDesignPass.providerConsumed === false && (
+                  <span className="mt-1 block text-xs font-normal text-green-800">
+                    Provider did not consume local asset bytes; production binding remains exact in Factory authority.
+                  </span>
+                )}
               </div>
             ) : (
               <div className="space-y-2">
@@ -282,7 +303,7 @@ export function VisualAssetsPage({ projectId }: { projectId: string }) {
                       if (candidate.providerMode === "fixture") {
                         setFinalReviewNotes("fixture acceptance — final design freeze");
                       }
-                      return `Final design pass complete: candidate ${shortDigest(candidate.candidateDigest)} generated with actual assets.`;
+                      return `Final design pass complete: candidate ${shortDigest(candidate.candidateDigest)} reconciled to the exact approved visual asset authority.`;
                     })
                   }
                 >
@@ -320,7 +341,7 @@ export function VisualAssetsPage({ projectId }: { projectId: string }) {
                             reviewNotes: notes,
                           });
                           setFinalCandidate(null);
-                          return `Final design accepted (v${accepted.version})! Design authority frozen with actual assets.`;
+                          return `Final design accepted (v${accepted.version})! Design authority reconciled to the exact approved visual asset authority.`;
                         })
                       }
                     >

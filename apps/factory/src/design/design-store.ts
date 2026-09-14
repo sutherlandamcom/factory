@@ -12,13 +12,18 @@ import type { FactoryDb } from "../persistence/db.js";
 import {
   acceptedDesignArtifacts,
   acceptedPageContent,
+  acceptedVisualAssetSets,
+  acceptedVisualAssetSlots,
   assetPageAssignments,
   assetVersions,
   designArtifactRefs,
   designCandidates,
   designInputSnapshots,
   projectInputSnapshots,
+  visualAssetCandidates,
   visualAssetPlans,
+  visualGenerationRequests,
+  visualPromptSnapshots,
   type AcceptedDesignArtifactRecord,
   type DesignCandidateRecord,
   type DesignInputSnapshotRecord,
@@ -367,7 +372,7 @@ export class DesignStore {
         if (isAuthorizedReplacement) {
           return {
             stale: true,
-            reason: `Asset assignment ${ref.pageSlug}/${ref.role} replaced with approved Run 7 asset.`,
+            reason: `Asset assignment ${ref.pageSlug}/${ref.role} replaced with the exact accepted Run 7 resolution.`,
             code: "RUN7_EXACT_ASSET_REPLACED",
           };
         }
@@ -389,26 +394,123 @@ export class DesignStore {
     return { stale: false, reason: null, code: null };
   }
 
+  /**
+   * Strict Run 7 replacement authorization for `RUN7_EXACT_ASSET_REPLACED`.
+   *
+   * The ENTIRE transition must be provable from durable authority — an
+   * arbitrary approved assignment mutation is NEVER Run7-authorized:
+   *
+   * 1. A VisualAssetPlan slot planned exactly this old binding
+   *    (pageSlug/role/existingVersionId == the OLD design asset ref).
+   * 2. The CURRENT assignment equals the exact Run 7 resolution evidence:
+   *    (a) post-acceptance — the accepted set's slot row for the same
+   *        page/role binds the exact current versionId + binaryDigest +
+   *        governanceDigest; or
+   *    (b) pre-set-acceptance — a SELECTED provider candidate for that
+   *        plan slot (bound to the plan through its approved prompt
+   *        snapshot, from a succeeded request) whose binaryDigest exactly
+   *        equals the currently assigned bytes. This is the explicit
+   *        durable Run 7 resolution record for the lifecycle stage where
+   *        the set does not exist yet; it is never heuristic inference.
+   *
+   * Any gap (no plan slot, no set row, no selected candidate, digest
+   * mismatch, wrong slot) fails closed to ASSET_ASSIGNMENT_CHANGED.
+   */
   private async isAuthorizedPlanReplacement(
     projectId: string,
     ref: { pageSlug: string; role: string; versionId: string },
-    current: { versionId: string; approvalState: string; assetProjectId: string },
+    current: {
+      versionId: string;
+      binaryDigest: string;
+      governanceDigest: string;
+      approvalState: string;
+      assetProjectId: string;
+    },
   ): Promise<boolean> {
     if (current.approvalState !== "approved" || current.assetProjectId !== projectId) {
       return false;
     }
+    // Step 1: a plan slot that planned exactly this old->new transition.
     const [plan] = await this.db
-      .select({ slots: visualAssetPlans.slots })
+      .select({ id: visualAssetPlans.id, slots: visualAssetPlans.slots })
       .from(visualAssetPlans)
       .where(eq(visualAssetPlans.projectId, projectId))
       .orderBy(desc(visualAssetPlans.version))
       .limit(1);
     if (!plan || !plan.slots) return false;
-    const slots = plan.slots as Array<{ pageSlug: string; role: string; existingVersionId?: string | null }>;
+    const slots = plan.slots as Array<{ slot: string; pageSlug: string; role: string; existingVersionId?: string | null }>;
     if (!Array.isArray(slots)) return false;
-    return slots.some(
+    const plannedSlot = slots.find(
       (s) => s.pageSlug === ref.pageSlug && s.role === ref.role && s.existingVersionId === ref.versionId,
     );
+    if (!plannedSlot) return false;
+
+    // Step 2a: the current assignment equals the exact accepted Run 7
+    // resolution for that slot (latest AcceptedVisualAssetSet bound to the
+    // plan; slot row identity + both digests must match exactly).
+    const [set] = await this.db
+      .select({ id: acceptedVisualAssetSets.id })
+      .from(acceptedVisualAssetSets)
+      .where(
+        and(
+          eq(acceptedVisualAssetSets.projectId, projectId),
+          eq(acceptedVisualAssetSets.planId, plan.id),
+        ),
+      )
+      .orderBy(desc(acceptedVisualAssetSets.version))
+      .limit(1);
+    if (set) {
+      const [slotRow] = await this.db
+        .select({
+          resolvedVersionId: acceptedVisualAssetSlots.resolvedVersionId,
+          binaryDigest: acceptedVisualAssetSlots.binaryDigest,
+          governanceDigest: acceptedVisualAssetSlots.governanceDigest,
+        })
+        .from(acceptedVisualAssetSlots)
+        .where(
+          and(
+            eq(acceptedVisualAssetSlots.setId, set.id),
+            eq(acceptedVisualAssetSlots.projectId, projectId),
+            eq(acceptedVisualAssetSlots.pageSlug, ref.pageSlug),
+            eq(acceptedVisualAssetSlots.role, ref.role),
+          ),
+        )
+        .limit(1);
+      if (
+        slotRow &&
+        slotRow.resolvedVersionId === current.versionId &&
+        slotRow.binaryDigest === current.binaryDigest &&
+        slotRow.governanceDigest === current.governanceDigest
+      ) {
+        return true;
+      }
+      // A set exists for this plan but its slot row does not match the
+      // current assignment: fail closed (do NOT fall through to weaker
+      // evidence once the strongest authority exists).
+      return false;
+    }
+
+    // Step 2b: pre-acceptance durable Run 7 resolution record — the
+    // selected candidate for this plan slot, from a succeeded request bound
+    // to the plan via its approved prompt snapshot, whose bytes are exactly
+    // the currently assigned bytes.
+    const [selected] = await this.db
+      .select({ id: visualAssetCandidates.id })
+      .from(visualAssetCandidates)
+      .innerJoin(visualGenerationRequests, eq(visualAssetCandidates.requestId, visualGenerationRequests.id))
+      .innerJoin(visualPromptSnapshots, eq(visualGenerationRequests.promptSnapshotId, visualPromptSnapshots.id))
+      .where(
+        and(
+          eq(visualAssetCandidates.projectId, projectId),
+          eq(visualAssetCandidates.slot, plannedSlot.slot),
+          eq(visualAssetCandidates.state, "selected"),
+          eq(visualGenerationRequests.resultState, "succeeded"),
+          eq(visualPromptSnapshots.planId, plan.id),
+          eq(visualAssetCandidates.binaryDigest, current.binaryDigest),
+        ),
+      )
+      .limit(1);
+    return selected !== undefined;
   }
 
   // ---- Design candidates -----------------------------------------------------

@@ -197,7 +197,21 @@ export interface VisualWorkspaceReadModel {
     setDigest: string;
     providerMode: string;
     acceptedAt: string;
-    slots: Array<{ slot: string; pageSlug: string; role: string; versionId: string; resolutionMode: string; truthClass: string }>;
+    slots: Array<{
+      slot: string;
+      pageSlug: string;
+      role: string;
+      versionId: string;
+      resolutionMode: string;
+      truthClass: string;
+      /**
+       * TRUE only when the provider actually received/consumed the exact
+       * asset bytes for this slot. The production Stitch seam is text-only,
+       * so this stays false there; Factory still binds the exact asset as
+       * production authority. Never conflated with "bound".
+       */
+      providerConsumed: boolean;
+    }>;
   } | null;
   budget: { accountedTodayMicros: number; activeReservationMicros: number };
   finalDesignPass?: {
@@ -205,6 +219,14 @@ export interface VisualWorkspaceReadModel {
     frozen: boolean;
     acceptedDesignVersion: number | null;
     designStalenessCode: string | null;
+    /**
+     * TRUE only when every bound asset slot of the accepted design was
+     * actually consumed by the design provider; FALSE when the provider
+     * (e.g. the text-only Stitch seam) never received the asset bytes;
+     * null when no bound slots exist. UI/report claims about "actual
+     * assets" MUST be gated on this, never assumed.
+     */
+    providerConsumed: boolean | null;
   };
 }
 
@@ -905,15 +927,23 @@ export class VisualService {
     const height = meta.height ?? 0;
     verifySlotDimensions(slot, width, height);
 
-    // Assign to Run 5 pageSlug & role (P1-04)
+    // Assign to Run 5 pageSlug & role (P1-04). An occupied slot moves
+    // through the explicit cross-asset CAS: the exact old authority
+    // (assetId + versionId + governance digest) is echoed into the
+    // transaction, so authorization is proven against exact digests —
+    // never inferred from the slot's mere existence.
     let assignmentId: string;
     const existing = await this.findAssignment(input.projectId, slot.pageSlug, slot.role);
     if (existing && existing.versionId === version.id) {
       assignmentId = existing.id;
     } else if (existing) {
-      const replaced = await this.assets.replaceAssignment(input.projectId, existing.id, {
+      const replaced = await this.assets.casReplaceAssignment(input.projectId, existing.id, {
+        expectedCurrentAssetId: existing.assetId,
+        expectedCurrentVersionId: existing.versionId,
+        expectedCurrentGovernanceDigest: existing.versionDigest,
+        toAssetId: asset.id,
         toVersionId: version.id,
-        expectedBinaryDigest: version.binaryDigest,
+        expectedTargetBinaryDigest: version.binaryDigest,
       });
       assignmentId = replaced.id;
     } else {
@@ -1047,9 +1077,16 @@ export class VisualService {
     if (existing && existing.versionId === approved.id) {
       assignmentId = existing.id;
     } else if (existing) {
-      const replaced = await this.assets.replaceAssignment(input.projectId, existing.id, {
+      // Cross-asset CAS with the exact old authority echoed (see
+      // resolveReuse): a deterministic-transform output may belong to a
+      // different logical asset than the slot's previous binding.
+      const replaced = await this.assets.casReplaceAssignment(input.projectId, existing.id, {
+        expectedCurrentAssetId: existing.assetId,
+        expectedCurrentVersionId: existing.versionId,
+        expectedCurrentGovernanceDigest: existing.versionDigest,
+        toAssetId: asset.id,
         toVersionId: approved.id,
-        expectedBinaryDigest: approved.binaryDigest,
+        expectedTargetBinaryDigest: approved.binaryDigest,
       });
       assignmentId = replaced.id;
     } else {
@@ -1226,14 +1263,20 @@ export class VisualService {
     // P2-F2: when binding to an existing approved version that the
     // assignment already points at, replacement would be a Run 5 no-op
     // conflict — the assignment is already exactly right, so reuse it.
+    // Occupied slots move through the explicit cross-asset CAS with the
+    // exact old authority echoed (same rule as resolveReuse).
     let assignmentId: string | null = null;
     const existing = await this.findAssignment(input.projectId, planSlot.pageSlug, planSlot.role);
     if (existing && existing.versionId === approved.id) {
       assignmentId = existing.id;
     } else if (existing) {
-      const replaced = await this.assets.replaceAssignment(input.projectId, existing.id, {
+      const replaced = await this.assets.casReplaceAssignment(input.projectId, existing.id, {
+        expectedCurrentAssetId: existing.assetId,
+        expectedCurrentVersionId: existing.versionId,
+        expectedCurrentGovernanceDigest: existing.versionDigest,
+        toAssetId: asset.id,
         toVersionId: approved.id,
-        expectedBinaryDigest: approved.binaryDigest,
+        expectedTargetBinaryDigest: approved.binaryDigest,
       });
       assignmentId = replaced.id;
     } else {
@@ -1359,8 +1402,23 @@ export class VisualService {
    * Final Design Pass (P1-01): After all visual asset slots are resolved and the
    * visual asset set is accepted, re-derive the design input snapshot (which
    * now binds the newly resolved and approved real/generated assets from Run 5),
-   * invoke the DesignProvider to generate a new candidate with the actual assets,
-   * ready for final review and freeze.
+   * invoke the DesignProvider to generate a new candidate ready for final
+   * review and freeze.
+   *
+   * Truthful consumption semantics (§5): the LIVE Stitch seam is text-only —
+   * it cannot ingest the actual Run 5 image bytes. The final pass therefore
+   * re-derives design authority against the EXACT final asset lineage
+   * (assetRefs with version/binary/governance digests); it does NOT claim
+   * provider consumption of those bytes. `providerConsumed` stays false for
+   * slots the provider never actually received.
+   *
+   * Final-freeze pre-checks (fail closed, zero provider spend on failure):
+   * - an accepted visual asset set exists;
+   * - the set belongs to the CURRENT accepted design lineage (exact
+   *   designArtifactId/version/candidateDigest binding, never "latest");
+   * - every accepted set slot row exactly matches the current Run 5
+   *   assignment (versionId + binaryDigest + governanceDigest);
+   * - design staleness is ONLY an expected Run 7 transition.
    */
   async runFinalDesignPass(input: { projectId: string }): Promise<DesignCandidateView> {
     const acceptedSet = await this.store.latestAcceptedSet(input.projectId);
@@ -1398,6 +1456,20 @@ export class VisualService {
         `Final design pass is only permitted for Run 7 asset resolution staleness, but design has upstream staleness (${latestDesign.staleness.code ?? "UNKNOWN"}): ${latestDesign.staleness.reason}. Fix upstream authority first.`,
       );
     }
+    // Set lineage: the accepted set must belong to the exact accepted design
+    // authority (not merely the "latest" set of the project).
+    if (
+      acceptedSet.designArtifactId !== latestDesign.artifact.id ||
+      acceptedSet.designArtifactVersion !== latestDesign.artifact.version ||
+      acceptedSet.designCandidateDigest !== latestDesign.artifact.candidateDigest
+    ) {
+      throw new FactoryError(
+        "visual_acceptance_failed",
+        `The accepted visual asset set (v${acceptedSet.version}) does not belong to the current accepted design (v${latestDesign.artifact.version}); re-resolve the visual slots against the current design.`,
+      );
+    }
+    // Every accepted slot must exactly match the CURRENT Run 5 assignment.
+    await this.assertSetMatchesAssignments(input.projectId, acceptedSet.id);
     if (!this.designService) {
       throw new FactoryError("visual_not_configured", "DesignService dependency not provided to VisualService.");
     }
@@ -1408,6 +1480,16 @@ export class VisualService {
   /**
    * Accept the final design pass candidate to freeze design authority into
    * AcceptedDesignArtifact v2 (UP_TO_DATE, referencing the final visual assets).
+   *
+   * Mandatory TOCTOU recheck (state may change between generation and human
+   * acceptance): at acceptance time this re-proves that
+   *   candidate input snapshot == current accepted input/content authority
+   *   AND candidate assetRefs == current assignments
+   *   AND current assignments == accepted visual set exact slot rows.
+   * The first two are enforced by the design store's acceptance transaction
+   * (it recomputes the bound snapshot's full upstream staleness under row
+   * lock and fails closed). The third is the visual-set equality check here.
+   * Any mismatch fails closed — the operator re-runs the final pass.
    */
   async acceptFinalDesign(input: {
     projectId: string;
@@ -1422,10 +1504,49 @@ export class VisualService {
         "An accepted visual asset set is required before accepting final design.",
       );
     }
+    await this.assertSetMatchesAssignments(input.projectId, acceptedSet.id);
     if (!this.designService) {
       throw new FactoryError("visual_not_configured", "DesignService dependency not provided to VisualService.");
     }
     return await this.designService.acceptCandidate(input);
+  }
+
+  /**
+   * Final exact reconciliation: for every AcceptedVisualAssetSet slot row,
+   * the CURRENT Run 5 assignment for the same (pageSlug, role) must bind
+   * the EXACT same versionId, binaryDigest and governanceDigest. Any drift
+   * (assignment replaced/re-bound after set acceptance) fails closed.
+   */
+  private async assertSetMatchesAssignments(projectId: string, setId: string): Promise<void> {
+    const slotRows = await this.store.listAcceptedSlots(setId);
+    if (slotRows.length === 0) {
+      throw new FactoryError(
+        "visual_acceptance_failed",
+        "The accepted visual asset set contains no slot rows; re-accept the visual set.",
+      );
+    }
+    const assignments = await this.listAssignments(projectId);
+    for (const slotRow of slotRows) {
+      const assignment = assignments.find(
+        (a) => a.pageSlug === slotRow.pageSlug && a.role === slotRow.role,
+      );
+      if (!assignment) {
+        throw new FactoryError(
+          "visual_acceptance_failed",
+          `Visual slot ${slotRow.slot} (${slotRow.pageSlug}/${slotRow.role}) has no current Run 5 assignment; the final design cannot freeze against a missing authority.`,
+        );
+      }
+      if (
+        assignment.versionId !== slotRow.resolvedVersionId ||
+        assignment.binaryDigest !== slotRow.binaryDigest ||
+        assignment.versionDigest !== slotRow.governanceDigest
+      ) {
+        throw new FactoryError(
+          "visual_acceptance_failed",
+          `Visual slot ${slotRow.slot} (${slotRow.pageSlug}/${slotRow.role}) no longer matches the accepted visual asset set (assignment authority drifted after set acceptance); re-resolve and re-accept the set.`,
+        );
+      }
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1533,6 +1654,19 @@ export class VisualService {
       : [];
 
     const latestDesign = await this.designStore.latestAcceptedDesign(projectId);
+    // Truthful provider-consumption evidence for the FINAL design: examine
+    // the accepted design's own asset slots. A slot the design provider
+    // actually received/consumed reports providerConsumed=true; the live
+    // Stitch text-only seam keeps it false even when the slot is exactly
+    // bound. null = no bound slots exist (nothing to claim either way).
+    let finalProviderConsumed: boolean | null = null;
+    if (latestDesign) {
+      const designData = latestDesign.artifact.data as DesignCandidateData;
+      const boundSlots = designData.archetypes.flatMap((a) => a.assetSlots).filter((s) => s.boundAssetVersionId != null);
+      if (boundSlots.length > 0) {
+        finalProviderConsumed = boundSlots.every((s) => s.providerConsumed);
+      }
+    }
     const finalDesignPass = {
       required: Boolean(
         acceptedSet &&
@@ -1542,6 +1676,7 @@ export class VisualService {
       frozen: Boolean(acceptedSet && latestDesign && !latestDesign.staleness.stale),
       acceptedDesignVersion: latestDesign?.artifact.version ?? null,
       designStalenessCode: latestDesign?.staleness.code ?? null,
+      providerConsumed: finalProviderConsumed,
     };
 
     return {
@@ -1570,14 +1705,22 @@ export class VisualService {
             setDigest: acceptedSet.setDigest,
             providerMode: acceptedSet.providerMode,
             acceptedAt: acceptedSet.acceptedAt.toISOString(),
-            slots: acceptedSlots.map((s) => ({
-              slot: s.slot,
-              pageSlug: s.pageSlug,
-              role: s.role,
-              versionId: s.resolvedVersionId,
-              resolutionMode: s.resolutionMode,
-              truthClass: s.truthClass,
-            })),
+            slots: acceptedSlots.map((s) => {
+              // Truthful consumption: only ai_edit/ai_generate resolutions
+              // actually delivered bytes to the provider (via sourceImages /
+              // generated output round-trip). reuse_real and
+              // deterministic_transform never involve the provider.
+              const providerConsumed = s.resolutionMode === "ai_edit" || s.resolutionMode === "ai_generate";
+              return {
+                slot: s.slot,
+                pageSlug: s.pageSlug,
+                role: s.role,
+                versionId: s.resolvedVersionId,
+                resolutionMode: s.resolutionMode,
+                truthClass: s.truthClass,
+                providerConsumed,
+              };
+            }),
           }
         : null,
       budget: budgetSummary,

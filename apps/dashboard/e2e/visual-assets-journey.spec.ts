@@ -251,7 +251,7 @@ test.describe("Visual assets journey", () => {
     await page.getByRole("button", { name: "Run final design pass" }).click();
     await expect(page.getByText(/Final design pass complete/)).toBeVisible({ timeout: 30_000 });
     await page.getByRole("button", { name: "Accept and freeze design" }).click();
-    await expect(page.getByText(/Design frozen \(Accepted design v2 is UP_TO_DATE/)).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/Design frozen \(Accepted design v2 is reconciled/)).toBeVisible({ timeout: 30_000 });
 
     // ---- RESTART the operator service (DB kept) — everything persists ----
     await supervisorCall("/restart");
@@ -262,7 +262,7 @@ test.describe("Visual assets journey", () => {
     await expect(page.locator("h1", { hasText: NAME })).toBeVisible({ timeout: 30_000 });
     await page.getByRole("button", { name: "Visual Assets" }).click();
     await expect(page.getByRole("heading", { name: /Accepted Visual Asset Set v1/ })).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByText(/Design frozen \(Accepted design v2 is UP_TO_DATE/)).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/Design frozen \(Accepted design v2 is reconciled/)).toBeVisible({ timeout: 30_000 });
 
     // Verify Design tab reflects Accepted Design v2 (not stale)
     await page.getByRole("button", { name: "Design" }).click();

@@ -19,11 +19,13 @@ extend a transitional v0 behavior merely because it still exists in code.
 
 - **Language: TypeScript** for Factory control-plane, contracts, application
   services and operator UI unless a concrete reviewed task requires otherwise.
-- **Current website production path: Astro 7 + Tailwind CSS 4.** This remains
-  the accepted implementation until the roadmap's explicit Stitch-native
-  static vs Astro bake-off produces a reviewed ADR. Do not remove Astro or
-  weaken current Astro QA before that decision; also do not treat Astro as a
-  permanent vNext invariant.
+- **Ordinary production renderer: Astro 7 + Tailwind CSS 4.** Run 8's reviewed
+  architecture decision selects Astro static as the single ordinary production
+  renderer. Google Stitch remains design authority, not production runtime
+  authority. Raw Stitch/provider HTML may be retained as implementation/design
+  evidence, but it is not a second production renderer or source of truth.
+  Do not maintain a parallel Stitch-native/direct-static path unless a later
+  reviewed ADR meets the documented reversal conditions.
 - **Dashboard/operator UI is explicitly in vNext scope.** It must be a thin
   operator surface over shared application services, not a second source of
   business truth or a separate business-logic implementation.
@@ -42,8 +44,10 @@ extend a transitional v0 behavior merely because it still exists in code.
 
 - Prefer **static generation**. Client-side JavaScript only where strictly
   necessary; zero is the default.
-- For the current Astro path, **reuse existing components**
-  (`sites/starter/src/components/`) before creating new ones.
+- For the production Astro path, **reuse existing components**
+  (`sites/starter/src/components/`) before creating new ones. New reusable
+  primitives must be justified by repeated accepted archetype needs rather than
+  speculative page-builder generality.
 - Every public page requires:
   - a unique `title` and meta `description`,
   - a canonical URL,
@@ -51,6 +55,10 @@ extend a transitional v0 behavior merely because it still exists in code.
   - a responsive layout,
   - coherent internal links,
   - JSON-LD structured data where applicable (e.g. `Article` on blog posts).
+- Production rendering must consume exact accepted authority:
+  `AcceptedPageContent` + `AcceptedDesignArtifact` +
+  `AcceptedVisualAssetSet` + route/site identity. The renderer may materialize
+  these authorities but may not silently rewrite, substitute or redesign them.
 - Current Astro-site images are local assets processed through the accepted
   asset path; no external hotlinks. vNext asset work must preserve local/durable
   provenance, rights, optimization and deterministic production semantics.
@@ -64,11 +72,12 @@ extend a transitional v0 behavior merely because it still exists in code.
   minimum connective prose needed to render those bounded points. This is a
   transitional compatibility behavior, not a design pattern for new content
   workflows and not permission to invent additional claims or marketing ideas.
-- **Code workers do not invent accepted design.** Once a design artifact or
-  approved archetype exists, implementation workers must implement it rather
-  than redesign it. Current `ProductionSpec` layout/editorial guidance is a
-  transitional production input until the external DesignProvider workflow is
-  accepted; do not expand it into a proprietary Factory design engine.
+- **Code workers do not invent accepted design.** Once an
+  `AcceptedDesignArtifact` or approved archetype exists, implementation workers
+  must implement it rather than redesign it. Legacy `ProductionSpec`
+  layout/editorial guidance remains a compatibility input only; it must not
+  supersede the accepted external DesignProvider authority or expand into a
+  proprietary Factory design engine.
 
 ## Search, writer and provider governance
 
@@ -88,6 +97,9 @@ extend a transitional v0 behavior merely because it still exists in code.
 - Professional visual design is owned by `DesignProvider`, not by legacy
   `design_director` model-eval tasks. Google Stitch is the preferred first v0
   candidate; alternatives are tested only if it fails the quality/cost floor.
+  Provider HTML/screenshots/DESIGN.md are evidence and implementation
+  references; accepted design authority is the version/digest-bound Factory
+  artifact.
 - Synthetic/generated imagery belongs behind `VisualAssetProvider`; the
   preferred v0 production direction is Google Vertex/Gemini Nano Banana Pro.
   Any older `image_generator` model-policy entry is a pre-vNext placeholder and
@@ -247,7 +259,7 @@ explicitly persists them.
 
 - `apps/factory` — Factory control plane and application/backend capabilities.
 - `packages/contracts` — machine-readable domain/runtime contracts shared across trusted boundaries.
-- `sites/starter` — current accepted Astro starter/production path pending the explicit renderer ADR.
+- `sites/starter` — accepted Astro static production foundation selected by the Run 8 renderer decision.
 - `docs/architecture.md` — detailed record of implemented architecture; historical "future/deferred" statements inside older sections do not override vNext sequencing.
 - `docs/architecture/factory-constitution-vnext.md` — governing vNext product/engineering constitution.
 - `docs/roadmap-vnext.md` — macro-run implementation sequence.

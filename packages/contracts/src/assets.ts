@@ -221,6 +221,35 @@ export const assetReplaceSchema = z
   .strict();
 export type AssetReplaceInput = z.infer<typeof assetReplaceSchema>;
 
+/**
+ * Explicit compare-and-swap replacement (Run 5 → Run 7 authority seam).
+ *
+ * The caller must echo the ENTIRE expected current authority of the
+ * assignment (asset id, version id, governance digest) and the exact
+ * expected target binary digest. Every expected value is verified inside
+ * one PostgreSQL transaction under row locks; any mismatch fails closed
+ * with a typed conflict. This is what makes a cross-asset slot move
+ * (Asset A/v1 -> Asset B/v1 for the same page/role) safe: authorization is
+ * proven against exact digests, never against mutable "latest" state.
+ */
+export const assetReplaceCasSchema = z
+  .object({
+    /** Expected current bound asset (old authority identity). */
+    expectedCurrentAssetId: assetIdSchema,
+    /** Expected current bound version (old authority identity). */
+    expectedCurrentVersionId: assetVersionIdSchema,
+    /** Expected current governance digest (old authority authority surface). */
+    expectedCurrentGovernanceDigest: assetDigestSchema,
+    /** Target logical asset (may differ from the current one). */
+    toAssetId: assetIdSchema,
+    /** Target approved version. */
+    toVersionId: assetVersionIdSchema,
+    /** Optimistic concurrency: caller must echo the target's binary digest. */
+    expectedTargetBinaryDigest: assetDigestSchema,
+  })
+  .strict();
+export type AssetReplaceCasInput = z.infer<typeof assetReplaceCasSchema>;
+
 export const assetSettingsSchema = z
   .object({
     imageryStrategy: imageryStrategySchema,

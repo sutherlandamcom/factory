@@ -491,6 +491,7 @@ export {
   assetRoleSchemaV2,
   assetAssignSchema,
   assetReplaceSchema,
+  assetReplaceCasSchema,
   assetSettingsSchema,
   ASSET_ERROR_CODES,
   parseAssetUploadInput,
@@ -510,6 +511,7 @@ export type {
   AssetRoleV2,
   AssetAssignInput,
   AssetReplaceInput,
+  AssetReplaceCasInput,
   AssetSettingsInput,
   AssetErrorCode,
 } from "./assets.js";

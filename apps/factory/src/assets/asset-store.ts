@@ -564,6 +564,128 @@ export class AssetStore {
     });
   }
 
+  /**
+   * Explicit compare-and-swap replacement of an existing assignment.
+   *
+   * Two supported transitions, both inside ONE transaction with row locks:
+   * - same-asset version move (Asset A/v1 -> Asset A/v2);
+   * - cross-asset slot move (Asset A/v1 -> Asset B/v1) for the SAME
+   *   page/role slot — the Run 7 final-resolution seam.
+   *
+   * Transaction invariant (fail closed on every mismatch):
+   *   LOCK assignment
+   *   -> verify exact expected old authority (assetId + versionId +
+   *      governanceDigest)
+   *   -> LOCK target AssetVersion
+   *   -> verify: same project, target assetId, approved, rights resolved,
+   *      expected binary digest, governance digest non-null
+   *   -> atomically update assetId/versionId/digests/assignedAt
+   *   -> commit
+   *
+   * There is no read-then-write CAS outside the transaction: a concurrent
+   * replacement either sees the exact expected old authority or fails with
+   * a typed conflict (one deterministic winner per slot).
+   */
+  async casReplaceAssignment(input: {
+    projectId: string;
+    assignmentId: string;
+    expectedCurrentAssetId: string;
+    expectedCurrentVersionId: string;
+    expectedCurrentGovernanceDigest: string;
+    toAssetId: string;
+    toVersionId: string;
+    expectedTargetBinaryDigest: string;
+  }): Promise<AssignmentRow> {
+    return await this.db.transaction(async (tx) => {
+      const [assignment] = await tx
+        .select()
+        .from(assetPageAssignments)
+        .where(
+          and(
+            eq(assetPageAssignments.projectId, input.projectId),
+            eq(assetPageAssignments.id, input.assignmentId),
+          ),
+        )
+        .for("update");
+      if (!assignment) {
+        throw new FactoryError("asset_assignment_not_found", "Assignment not found for this project.");
+      }
+      // Exact expected-old authority: every component must match the locked
+      // row. A stale expected version, a forged governance digest, or a
+      // wrong expected asset each fail closed here.
+      if (
+        assignment.assetId !== input.expectedCurrentAssetId ||
+        assignment.versionId !== input.expectedCurrentVersionId ||
+        assignment.versionDigest !== input.expectedCurrentGovernanceDigest
+      ) {
+        throw conflictError(
+          "CAS replacement rejected: the expected current assignment authority (asset/version/governance digest) does not match; the slot moved concurrently or the caller holds stale authority.",
+        );
+      }
+      // Target version must belong to the target asset AND this project.
+      const [targetAsset] = await tx
+        .select()
+        .from(assets)
+        .where(and(eq(assets.projectId, input.projectId), eq(assets.id, input.toAssetId)))
+        .for("update");
+      if (!targetAsset) {
+        throw new FactoryError("asset_not_found", "Target asset not found for this project.");
+      }
+      const [version] = await tx
+        .select()
+        .from(assetVersions)
+        .where(
+          and(
+            eq(assetVersions.projectId, input.projectId),
+            eq(assetVersions.id, input.toVersionId),
+            eq(assetVersions.assetId, input.toAssetId),
+          ),
+        )
+        .for("update");
+      if (!version) {
+        throw versionNotFound();
+      }
+      if (version.binaryDigest !== input.expectedTargetBinaryDigest) {
+        throw approvalError("CAS replacement rejected: expectedTargetBinaryDigest does not match the target version.");
+      }
+      if (version.approvalState !== "approved") {
+        throw new FactoryError(
+          "asset_rights_blocked",
+          "Only approved asset versions can be assigned to a page slot.",
+        );
+      }
+      if (version.rightsStatus === "unknown") {
+        throw new FactoryError(
+          "asset_rights_blocked",
+          "Target version has unresolved rights (unknown); resolve rights before replacement.",
+        );
+      }
+      // Fail closed: an approved version MUST carry its governance digest
+      // (same authority rule as assignment; never substitute the binary
+      // digest for the governance digest).
+      if (version.governanceDigest === null) {
+        throw approvalError(
+          "CAS replacement rejected: approved target version has no governance digest (corrupt approval state); re-approve via a new version upload.",
+        );
+      }
+      if (version.id === assignment.versionId && version.assetId === assignment.assetId) {
+        throw conflictError("Assignment already binds this exact version.");
+      }
+      const [updated] = await tx
+        .update(assetPageAssignments)
+        .set({
+          assetId: version.assetId,
+          versionId: version.id,
+          versionDigest: version.governanceDigest,
+          binaryDigest: version.binaryDigest,
+          assignedAt: new Date(),
+        })
+        .where(eq(assetPageAssignments.id, assignment.id))
+        .returning();
+      return updated!;
+    });
+  }
+
   /** Explicit replacement of an existing assignment to a new approved version. */
   async replaceAssignment(input: {
     projectId: string;

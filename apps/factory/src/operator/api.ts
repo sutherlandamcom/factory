@@ -19,6 +19,7 @@ import {
   assetApprovalSchema,
   assetAssignSchema,
   assetReplaceSchema,
+  assetReplaceCasSchema,
   assetSettingsSchema,
   assetUploadSchema,
   assetVersionMetadataSchema,
@@ -618,6 +619,20 @@ export function createOperatorApi(deps: OperatorApiDeps) {
           return sendJson(res, 200, {
             id: assignment.id,
             versionId: assignment.versionId,
+            binaryDigest: assignment.binaryDigest,
+          });
+        }
+
+        // POST cross-asset CAS replacement: /projects/:id/assets/assignments/:assignmentId/replace-cas
+        if (req.method === "POST" && segments.length === 6 && segments[3] === "assignments" && segments[5] === "replace-cas") {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(assetReplaceCasSchema, parsed);
+          const assignment = await assets.casReplaceAssignment(project.id, segments[4]!, input);
+          return sendJson(res, 200, {
+            id: assignment.id,
+            assetId: assignment.assetId,
+            versionId: assignment.versionId,
+            versionDigest: assignment.versionDigest,
             binaryDigest: assignment.binaryDigest,
           });
         }

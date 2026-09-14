@@ -183,6 +183,13 @@
       "when": 1789650000000,
       "tag": "0025_grounded_authority_lock",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1789660000000,
+      "tag": "0026_visual_concurrency_and_provider_mode",
+      "breakpoints": true
     }
   ]
 }

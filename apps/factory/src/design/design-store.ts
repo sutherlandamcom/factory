@@ -6,17 +6,25 @@ import {
   parseDesignInputSnapshotData,
   type DesignCandidateData,
   type DesignInputSnapshotData,
+  type DesignStaleness,
+  type DesignStalenessCode,
 } from "@factory/contracts";
 import type { FactoryDb } from "../persistence/db.js";
 import {
   acceptedDesignArtifacts,
   acceptedPageContent,
+  acceptedVisualAssetSets,
+  acceptedVisualAssetSlots,
   assetPageAssignments,
   assetVersions,
   designArtifactRefs,
   designCandidates,
   designInputSnapshots,
   projectInputSnapshots,
+  visualAssetCandidates,
+  visualAssetPlans,
+  visualGenerationRequests,
+  visualPromptSnapshots,
   type AcceptedDesignArtifactRecord,
   type DesignCandidateRecord,
   type DesignInputSnapshotRecord,
@@ -47,10 +55,7 @@ function designNotFound(message: string): FactoryError {
   return new FactoryError("design_not_found", message);
 }
 
-export interface DesignStaleness {
-  stale: boolean;
-  reason: string | null;
-}
+export type { DesignStaleness, DesignStalenessCode };
 
 export class DesignStore {
   constructor(private readonly db: FactoryDb) {}
@@ -279,6 +284,122 @@ export class DesignStore {
     snapshot: DesignInputSnapshotRecord,
   ): Promise<DesignStaleness> {
     return this.inputSnapshotStalenessTx(this.db, projectId, snapshot);
+  }
+
+  /**
+   * Strict Run 7 replacement authorization for `RUN7_EXACT_ASSET_REPLACED`.
+   *
+   * The ENTIRE transition must be provable from durable authority — an
+   * arbitrary approved assignment mutation is NEVER Run7-authorized:
+   *
+   * 1. A VisualAssetPlan slot planned exactly this old binding
+   *    (pageSlug/role/existingVersionId == the OLD design asset ref).
+   * 2. The CURRENT assignment equals the exact Run 7 resolution evidence:
+   *    (a) post-acceptance — the accepted set's slot row for the same
+   *        page/role binds the exact current versionId + binaryDigest +
+   *        governanceDigest; or
+   *    (b) pre-set-acceptance — a SELECTED provider candidate for that
+   *        plan slot (bound to the plan through its approved prompt
+   *        snapshot, from a succeeded request) whose binaryDigest exactly
+   *        equals the currently assigned bytes. This is the explicit
+   *        durable Run 7 resolution record for the lifecycle stage where
+   *        the set does not exist yet; it is never heuristic inference.
+   *
+   * Any gap (no plan slot, no set row, no selected candidate, digest
+   * mismatch, wrong slot) fails closed to ASSET_ASSIGNMENT_CHANGED.
+   */
+  private async isAuthorizedPlanReplacement(
+    projectId: string,
+    ref: { pageSlug: string; role: string; versionId: string },
+    current: {
+      versionId: string;
+      binaryDigest: string;
+      governanceDigest: string;
+      approvalState: string;
+      assetProjectId: string;
+    },
+  ): Promise<boolean> {
+    if (current.approvalState !== "approved" || current.assetProjectId !== projectId) {
+      return false;
+    }
+    // Step 1: a plan slot that planned exactly this old->new transition.
+    const [plan] = await this.db
+      .select({ id: visualAssetPlans.id, slots: visualAssetPlans.slots })
+      .from(visualAssetPlans)
+      .where(eq(visualAssetPlans.projectId, projectId))
+      .orderBy(desc(visualAssetPlans.version))
+      .limit(1);
+    if (!plan || !plan.slots) return false;
+    const slots = plan.slots as Array<{ slot: string; pageSlug: string; role: string; existingVersionId?: string | null }>;
+    if (!Array.isArray(slots)) return false;
+    const plannedSlot = slots.find(
+      (s) => s.pageSlug === ref.pageSlug && s.role === ref.role && s.existingVersionId === ref.versionId,
+    );
+    if (!plannedSlot) return false;
+
+    // Step 2a: the current assignment equals the exact accepted Run 7
+    // resolution for that slot (latest AcceptedVisualAssetSet bound to the
+    // plan; slot row identity + both digests must match exactly).
+    const [set] = await this.db
+      .select({ id: acceptedVisualAssetSets.id })
+      .from(acceptedVisualAssetSets)
+      .where(
+        and(
+          eq(acceptedVisualAssetSets.projectId, projectId),
+          eq(acceptedVisualAssetSets.planId, plan.id),
+        ),
+      )
+      .orderBy(desc(acceptedVisualAssetSets.version))
+      .limit(1);
+    if (set) {
+      const [slotRow] = await this.db
+        .select({
+          resolvedVersionId: acceptedVisualAssetSlots.resolvedVersionId,
+          binaryDigest: acceptedVisualAssetSlots.binaryDigest,
+          governanceDigest: acceptedVisualAssetSlots.governanceDigest,
+        })
+        .from(acceptedVisualAssetSlots)
+        .where(
+          and(
+            eq(acceptedVisualAssetSlots.setId, set.id),
+            eq(acceptedVisualAssetSlots.projectId, projectId),
+            eq(acceptedVisualAssetSlots.pageSlug, ref.pageSlug),
+            eq(acceptedVisualAssetSlots.role, ref.role),
+          ),
+        )
+        .limit(1);
+      if (
+        slotRow &&
+        slotRow.resolvedVersionId === current.versionId &&
+        slotRow.binaryDigest === current.binaryDigest &&
+        slotRow.governanceDigest === current.governanceDigest
+      ) {
+        return true;
+      }
+      return false;
+    }
+
+    // Step 2b: pre-acceptance durable Run 7 resolution record — the
+    // selected candidate for this plan slot, from a succeeded request bound
+    // to the plan via its approved prompt snapshot, whose bytes are exactly
+    // the currently assigned bytes.
+    const [selected] = await this.db
+      .select({ id: visualAssetCandidates.id })
+      .from(visualAssetCandidates)
+      .innerJoin(visualGenerationRequests, eq(visualAssetCandidates.requestId, visualGenerationRequests.id))
+      .innerJoin(visualPromptSnapshots, eq(visualGenerationRequests.promptSnapshotId, visualPromptSnapshots.id))
+      .where(
+        and(
+          eq(visualAssetCandidates.projectId, projectId),
+          eq(visualAssetCandidates.slot, plannedSlot.slot),
+          eq(visualAssetCandidates.state, "selected"),
+          eq(visualGenerationRequests.resultState, "succeeded"),
+          eq(visualPromptSnapshots.planId, plan.id),
+          eq(visualAssetCandidates.binaryDigest, current.binaryDigest),
+        ),
+      )
+      .limit(1);
+    return selected !== undefined;
   }
 
 
@@ -556,9 +677,9 @@ export class DesignStore {
   ): Promise<DesignStaleness> {
     let data: DesignInputSnapshotData;
     try { data = parseDesignInputSnapshotData(snapshot.data); }
-    catch { return { stale: true, reason: "Design input snapshot lacks valid exact upstream lineage; re-derive it." }; }
+    catch { return { stale: true, reason: "Design input snapshot lacks valid exact upstream lineage; re-derive it.", code: "DESIGN_INPUT_SNAPSHOT_INVALID" }; }
     if (snapshot.projectId !== projectId || deterministicDigest(data) !== snapshot.inputDigest) {
-      return { stale: true, reason: "Design input snapshot identity/digest is invalid." };
+      return { stale: true, reason: "Design input snapshot identity/digest is invalid.", code: "DESIGN_INPUT_SNAPSHOT_INVALID" };
     }
 
     const [inputSnapshot] = await tx
@@ -568,12 +689,13 @@ export class DesignStore {
       .orderBy(desc(projectInputSnapshots.version))
       .limit(1);
     if (!inputSnapshot) {
-      return { stale: true, reason: "The accepted project inputs no longer exist." };
+      return { stale: true, reason: "The accepted project inputs no longer exist.", code: "INPUT_REMOVED" };
     }
     if (inputSnapshot.id !== data.acceptedInputSnapshotId || inputSnapshot.digest !== data.acceptedInputDigest) {
       return {
         stale: true,
         reason: `Accepted project inputs changed (snapshot ${data.acceptedInputSnapshotVersion} -> ${inputSnapshot.version}).`,
+        code: "INPUT_CHANGED",
       };
     }
 
@@ -589,10 +711,10 @@ export class DesignStore {
     for (const ref of data.contentRefs) {
       const current = currentContent.get(ref.id);
       if (!current) {
-        return { stale: true, reason: `Accepted content "${ref.slug}" was removed.` };
+        return { stale: true, reason: `Accepted content "${ref.slug}" was removed.`, code: "CONTENT_REMOVED" };
       }
       if (current.contentDigest !== ref.contentDigest || current.slug !== ref.slug || current.version !== ref.version) {
-        return { stale: true, reason: `Accepted content "${ref.slug}" changed.` };
+        return { stale: true, reason: `Accepted content "${ref.slug}" changed.`, code: "CONTENT_CHANGED" };
       }
     }
     const boundContentIds = new Set(data.contentRefs.map((ref) => ref.id));
@@ -601,6 +723,7 @@ export class DesignStore {
       return {
         stale: true,
         reason: `New accepted content exists (${addedContent.map((r) => r.slug).join(", ")}).`,
+        code: "CONTENT_ADDED",
       };
     }
 
@@ -628,12 +751,20 @@ export class DesignStore {
     for (const ref of data.assetRefs) {
       const current = currentAssignments.get(`${ref.pageSlug}::${ref.role}`);
       if (!current) {
-        return { stale: true, reason: `Asset assignment ${ref.pageSlug}/${ref.role} was removed.` };
+        return { stale: true, reason: `Asset assignment ${ref.pageSlug}/${ref.role} was removed.`, code: "ASSET_ASSIGNMENT_REMOVED" };
       }
       if (current.acceptedPageContentId !== ref.acceptedPageContentId || current.acceptedPageContentVersion !== ref.acceptedPageContentVersion || current.acceptedPageContentDigest !== ref.acceptedPageContentDigest || !validAssignmentAuthority(current, projectId) ||
           current.binaryDigest !== ref.binaryDigest || current.versionId !== ref.versionId ||
           current.governanceDigest !== ref.governanceDigest) {
-        return { stale: true, reason: `Asset assignment ${ref.pageSlug}/${ref.role} changed.` };
+        const isAuthorizedReplacement = await this.isAuthorizedPlanReplacement(projectId, ref, current);
+        if (isAuthorizedReplacement) {
+          return {
+            stale: true,
+            reason: `Asset assignment ${ref.pageSlug}/${ref.role} replaced with the exact accepted Run 7 resolution.`,
+            code: "RUN7_EXACT_ASSET_REPLACED",
+          };
+        }
+        return { stale: true, reason: `Asset assignment ${ref.pageSlug}/${ref.role} changed.`, code: "ASSET_ASSIGNMENT_CHANGED" };
       }
     }
     const boundAssignmentKeys = new Set(data.assetRefs.map((ref) => `${ref.pageSlug}::${ref.role}`));
@@ -644,10 +775,11 @@ export class DesignStore {
       return {
         stale: true,
         reason: `New asset assignments exist (${addedAssignments.map((r) => `${r.pageSlug}/${r.role}`).join(", ")}).`,
+        code: "RUN7_ASSET_ASSIGNMENTS_ADDED",
       };
     }
 
-    return { stale: false, reason: null };
+    return { stale: false, reason: null, code: null };
   }
 
   async latestAcceptedDesign(projectId: string): Promise<{

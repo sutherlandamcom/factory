@@ -166,9 +166,9 @@ Implement `VisualAssetProvider` with Google Vertex/Gemini Nano Banana Pro as pre
 
 The older `image_generator` model-policy placeholder is not production authority and must not be activated merely because it already exists in the v0 policy matrix.
 
-Resolve design asset slots, approve real/generated assets, and perform a final Stitch pass with actual assets before design freeze.
+Resolve all visual slots into exact approved assets. Perform a final design/asset reconciliation: the accepted design authority is re-derived against the exact final asset lineage, and the accepted Design + Content + VisualAsset authority combination is frozen together. If the selected DesignProvider supports exact asset ingestion, generate final provider evidence using those exact assets; if it does not (the current Google Stitch seam is text-only and cannot ingest local image bytes), record `providerConsumed=false` truthfully — the production binding remains exact in Factory authority, and no UI/report may claim the provider generated with the actual assets. Run 8 remains responsible for the renderer ADR; no renderer-specific runtime behavior is encoded here.
 
-Exit: accepted copy + final accepted design + approved real/generated assets exist without page implementation ambiguity.
+Exit: accepted copy + final accepted design + approved real/generated assets exist without page implementation ambiguity, with every slot's exact version/binary/governance digests provable across the accepted content, design and visual-asset authorities.
 
 ## Program IV — Production Architecture
 

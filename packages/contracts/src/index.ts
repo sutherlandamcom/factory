@@ -491,6 +491,7 @@ export {
   assetRoleSchemaV2,
   assetAssignSchema,
   assetReplaceSchema,
+  assetReplaceCasSchema,
   assetSettingsSchema,
   ASSET_ERROR_CODES,
   parseAssetUploadInput,
@@ -510,6 +511,7 @@ export type {
   AssetRoleV2,
   AssetAssignInput,
   AssetReplaceInput,
+  AssetReplaceCasInput,
   AssetSettingsInput,
   AssetErrorCode,
 } from "./assets.js";
@@ -532,6 +534,7 @@ export {
   DESIGN_ERROR_CODES,
   parseDesignInputSnapshotData,
   parseDesignCandidateData,
+  designStalenessCodeSchema,
 } from "./design.js";
 export type {
   DesignArchetypeKind,
@@ -550,6 +553,8 @@ export type {
   DesignGenerationResult,
   DesignProvider,
   DesignErrorCode,
+  DesignStalenessCode,
+  DesignStaleness,
 } from "./design.js";
 
 export {

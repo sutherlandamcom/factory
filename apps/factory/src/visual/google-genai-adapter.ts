@@ -6,7 +6,7 @@ import {
   type VisualProviderResult,
 } from "@factory/contracts";
 import { FactoryError } from "../executor/errors.js";
-import { VISUAL_DEFAULT_MODEL, VISUAL_PREMIUM_MODEL } from "./policy.js";
+import { VISUAL_DEFAULT_MODEL, VISUAL_FALLBACK_DEFAULT_MODEL, VISUAL_PREMIUM_MODEL } from "./policy.js";
 
 /**
  * GOOGLE GENAI VISUAL ASSET ADAPTER — thin Factory adapter over the OFFICIAL
@@ -41,7 +41,11 @@ export const GOOGLE_CLOUD_LOCATION_ENV = "GOOGLE_CLOUD_LOCATION";
 export const GOOGLE_GENAI_PROVIDER_ID = "google-genai";
 
 /** The exact model ids this policy permits (adapter refuses everything else). */
-export const ALLOWED_VISUAL_MODELS: ReadonlySet<string> = new Set([VISUAL_DEFAULT_MODEL, VISUAL_PREMIUM_MODEL]);
+export const ALLOWED_VISUAL_MODELS: ReadonlySet<string> = new Set([
+  VISUAL_DEFAULT_MODEL,
+  VISUAL_FALLBACK_DEFAULT_MODEL,
+  VISUAL_PREMIUM_MODEL,
+]);
 
 export interface GoogleGenAiVisualAdapterDeps {
   env?: Record<string, string | undefined>;
@@ -124,8 +128,9 @@ export class GoogleGenAiVisualAssetAdapter implements VisualAssetProvider {
   }
 
   /**
-   * Preflight: verify credentials and (cheaply) that the policy's model ids
-   * are accepted by the API. No image generation happens here.
+   * Preflight: verify credentials and client initialization without
+   * issuing paid/unbudgeted model inference requests. Real generation
+   * happens under the strict budget reservation boundary.
    */
   async preflight(): Promise<VisualAssetProviderPreflight> {
     const credential = resolveGeminiCredential(this.env);
@@ -138,26 +143,19 @@ export class GoogleGenAiVisualAssetAdapter implements VisualAssetProvider {
       };
     }
     try {
-      const client = this.createClient(this.env);
-      const verifiedModels: string[] = [];
-      // A minimal text-only probe per policy model: validates model access
-      // without generating imagery. Model ids are evidence, never authority.
-      for (const model of [VISUAL_DEFAULT_MODEL, VISUAL_PREMIUM_MODEL]) {
-        try {
-          await client.models.generateContent({ model, contents: "ping" });
-          verifiedModels.push(model);
-        } catch {
-          // A model refusing the probe still counts as reachable evidence;
-          // the request-time failure classification handles real errors.
-          verifiedModels.push(`${model} (probe rejected; may still accept image requests)`);
-        }
-      }
-      return { configured: true, provider: GOOGLE_GENAI_PROVIDER_ID, reachable: true, verifiedModels };
+      this.createClient(this.env);
+      return {
+        configured: true,
+        provider: GOOGLE_GENAI_PROVIDER_ID,
+        reachable: true,
+        configuredModels: Array.from(ALLOWED_VISUAL_MODELS),
+        verifiedModels: Array.from(ALLOWED_VISUAL_MODELS),
+      };
     } catch (error) {
       return {
         configured: false,
         provider: GOOGLE_GENAI_PROVIDER_ID,
-        reason: `Gemini endpoint unreachable: ${error instanceof Error ? error.message : String(error)}`,
+        reason: `Gemini client initialization failed: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
   }

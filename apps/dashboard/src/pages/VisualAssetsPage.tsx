@@ -4,6 +4,7 @@ import {
   OperatorApiError,
   type VisualWorkspace,
   type VisualSlotView,
+  type DesignCandidateView,
 } from "../api/client";
 import { usePolling } from "../hooks/usePolling";
 
@@ -98,6 +99,8 @@ export function VisualAssetsPage({ projectId }: { projectId: string }) {
   const [promptDigestInputs, setPromptDigestInputs] = useState<Record<string, string>>({});
   const [sourceVersionInputs, setSourceVersionInputs] = useState<Record<string, string>>({});
   const [downgradeConfirm, setDowngradeConfirm] = useState<Record<string, boolean>>({});
+  const [finalCandidate, setFinalCandidate] = useState<DesignCandidateView | null>(null);
+  const [finalReviewNotes, setFinalReviewNotes] = useState("fixture acceptance — final design freeze");
 
   const load = useCallback(async () => {
     try {
@@ -241,17 +244,114 @@ export function VisualAssetsPage({ projectId }: { projectId: string }) {
       )}
 
       {ws.acceptedSet && (
-        <div className="rounded border border-green-300 bg-green-50 p-4">
-          <h3 className="font-medium text-green-900">Accepted Visual Asset Set v{ws.acceptedSet.version}</h3>
-          <p className="mt-1 text-xs text-gray-600">Set digest {shortDigest(ws.acceptedSet.setDigest)} · accepted {ws.acceptedSet.acceptedAt}</p>
-          <ul className="mt-2 space-y-1 text-sm">
-            {ws.acceptedSet.slots.map((s) => (
-              <li key={s.slot} className="flex items-center gap-2">
-                <ModeBadge mode={s.resolutionMode} />
-                <span>{s.slot} → {s.pageSlug}/{s.role} (v {shortDigest(s.versionId)})</span>
-              </li>
-            ))}
-          </ul>
+        <div className="space-y-4">
+          <div className="rounded border border-green-300 bg-green-50 p-4">
+            <h3 className="font-medium text-green-900">Accepted Visual Asset Set v{ws.acceptedSet.version}</h3>
+            <p className="mt-1 text-xs text-gray-600">
+              Set digest {shortDigest(ws.acceptedSet.setDigest)} · mode: {ws.acceptedSet.providerMode} · accepted {ws.acceptedSet.acceptedAt}
+            </p>
+            <ul className="mt-2 space-y-1 text-sm">
+              {ws.acceptedSet.slots.map((s) => (
+                <li key={s.slot} className="flex items-center gap-2">
+                  <ModeBadge mode={s.resolutionMode} />
+                  <span>{s.slot} → {s.pageSlug}/{s.role} (v {shortDigest(s.versionId)})</span>
+                  {s.resolutionMode === "ai_edit" || s.resolutionMode === "ai_generate" ? (
+                    <span
+                      className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-800"
+                      title="The provider actually consumed the exact asset bytes for this slot."
+                    >
+                      provider consumed
+                    </span>
+                  ) : (
+                    <span
+                      className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600"
+                      title="Resolved without provider consumption (reuse or deterministic transform); Factory binds the exact asset as production authority."
+                    >
+                      factory-bound
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="rounded border border-indigo-200 bg-indigo-50/50 p-4 space-y-3">
+            <h3 className="font-medium text-indigo-950">Final Design Pass &amp; Freeze</h3>
+            <p className="text-xs text-gray-600">
+              Reconciles the accepted design authority to the exact approved visual asset lineage in Run 5,
+              eliminating design staleness and freezing the accepted Design + Content + VisualAsset
+              combination for page implementation.
+            </p>
+            {ws.finalDesignPass?.frozen ? (
+              <div className="rounded bg-green-100 p-3 text-sm text-green-900 font-medium">
+                ✓ Design frozen (Accepted design v{ws.finalDesignPass.acceptedDesignVersion} is reconciled to the exact approved visual asset authority).
+                {ws.finalDesignPass.providerConsumed === false && (
+                  <span className="mt-1 block text-xs font-normal text-green-800">
+                    Provider did not consume local asset bytes; production binding remains exact in Factory authority.
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <button
+                  className="rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                  disabled={busy}
+                  onClick={() =>
+                    run(async () => {
+                      const candidate = await visualApi.runFinalDesignPass(projectId);
+                      setFinalCandidate(candidate);
+                      if (candidate.providerMode === "fixture") {
+                        setFinalReviewNotes("fixture acceptance — final design freeze");
+                      }
+                      return `Final design pass complete: candidate ${shortDigest(candidate.candidateDigest)} reconciled to the exact approved visual asset authority.`;
+                    })
+                  }
+                >
+                  Run final design pass
+                </button>
+                {finalCandidate && (
+                  <div className="rounded border border-gray-300 bg-white p-3 space-y-2">
+                    <p className="text-xs font-mono text-gray-700">Candidate digest: {finalCandidate.candidateDigest}</p>
+                    <div>
+                      <label htmlFor="final-design-review-notes" className="block text-xs font-medium text-gray-700 mb-1">
+                        Review notes:
+                      </label>
+                      <input
+                        id="final-design-review-notes"
+                        type="text"
+                        className="w-full rounded border border-gray-300 px-2 py-1 text-xs"
+                        value={finalReviewNotes}
+                        onChange={(e) => setFinalReviewNotes(e.target.value)}
+                        placeholder="Review notes (e.g. fixture acceptance — final design freeze)"
+                      />
+                    </div>
+                    <button
+                      className="rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                      disabled={busy}
+                      onClick={() =>
+                        run(async () => {
+                          const notes =
+                            finalReviewNotes ||
+                            (finalCandidate.providerMode === "fixture"
+                              ? "fixture acceptance — final design freeze"
+                              : "Approved final design freeze");
+                          const accepted = await visualApi.acceptFinalDesign(projectId, {
+                            candidateId: finalCandidate.id,
+                            expectedCandidateDigest: finalCandidate.candidateDigest,
+                            reviewNotes: notes,
+                          });
+                          setFinalCandidate(null);
+                          return `Final design accepted (v${accepted.version})! Design authority reconciled to the exact approved visual asset authority.`;
+                        })
+                      }
+                    >
+                      Accept and freeze design
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

@@ -1088,6 +1088,7 @@ export interface VisualPreflight {
   configured: boolean;
   provider: string;
   reachable?: boolean;
+  configuredModels?: string[];
   verifiedModels?: string[];
   reason?: string;
 }
@@ -1160,10 +1161,28 @@ export interface VisualWorkspace {
     id: string;
     version: number;
     setDigest: string;
+    providerMode: string;
     acceptedAt: string;
-    slots: Array<{ slot: string; pageSlug: string; role: string; versionId: string; resolutionMode: string; truthClass: string }>;
+    slots: Array<{
+      slot: string;
+      pageSlug: string;
+      role: string;
+      versionId: string;
+      resolutionMode: string;
+      truthClass: string;
+      /** TRUE only when the provider actually consumed the exact asset bytes. */
+      providerConsumed: boolean;
+    }>;
   } | null;
   budget: { accountedTodayMicros: number; activeReservationMicros: number };
+  finalDesignPass?: {
+    required: boolean;
+    frozen: boolean;
+    acceptedDesignVersion: number | null;
+    designStalenessCode: string | null;
+    /** TRUE only when the design provider actually consumed the bound assets. */
+    providerConsumed: boolean | null;
+  };
 }
 
 export const visualApi = {
@@ -1207,7 +1226,7 @@ export const visualApi = {
     ),
 
   resolveReuse: (projectId: string, planId: string, slot: string, versionId?: string) =>
-    request<{ versionId: string; binaryDigest: string; governanceDigest: string | null; assetId: string }>(
+    request<{ versionId: string; binaryDigest: string; governanceDigest: string | null; assetId: string; assignmentId: string }>(
       `/api/projects/${encodeURIComponent(projectId)}/visual/plans/${encodeURIComponent(planId)}/slots/${encodeURIComponent(slot)}/resolve-reuse`,
       { method: "POST", body: JSON.stringify({ versionId }) },
     ),
@@ -1218,7 +1237,7 @@ export const visualApi = {
     slot: string,
     input: { sourceVersionId: string; maxWidth?: number; aspectRatioCrop?: string; grayscale?: boolean; brightness?: number },
   ) =>
-    request<{ versionId: string; binaryDigest: string; governanceDigest: string | null; transformation: string | null }>(
+    request<{ versionId: string; binaryDigest: string; governanceDigest: string | null; assetId: string; assignmentId: string; transformation: string | null }>(
       `/api/projects/${encodeURIComponent(projectId)}/visual/plans/${encodeURIComponent(planId)}/slots/${encodeURIComponent(slot)}/resolve-transform`,
       { method: "POST", body: JSON.stringify(input) },
     ),
@@ -1233,6 +1252,21 @@ export const visualApi = {
     request<{ id: string; version: number; setDigest: string }>(
       `/api/projects/${encodeURIComponent(projectId)}/visual/plans/${encodeURIComponent(planId)}/accept-set`,
       { method: "POST", body: JSON.stringify({}) },
+    ),
+
+  runFinalDesignPass: (projectId: string) =>
+    request<DesignCandidateView>(
+      `/api/projects/${encodeURIComponent(projectId)}/visual/final-design-pass`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+
+  acceptFinalDesign: (
+    projectId: string,
+    input: { candidateId: string; expectedCandidateDigest: string; reviewNotes?: string | null },
+  ) =>
+    request<AcceptedDesignView>(
+      `/api/projects/${encodeURIComponent(projectId)}/visual/accept-final-design`,
+      { method: "POST", body: JSON.stringify(input) },
     ),
 
   candidateUrl: (projectId: string, candidateId: string) =>

@@ -109,7 +109,7 @@ test.describe("Design authority journey", () => {
     let projectId = "";
     page.on("request", request => {
       const match = new URL(request.url()).pathname.match(/^\/api\/projects\/([^/]+)\//);
-      if (match) projectId = match[1]!;
+      if (match && match[1] !== "e2e") projectId = match[1]!;
     });
     const read = async <T,>(suffix: string): Promise<T> => {
       expect(projectId).not.toBe("");

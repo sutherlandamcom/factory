@@ -352,8 +352,10 @@ export interface VisualAssetProviderPreflightConfigured {
   configured: true;
   provider: "google-genai";
   reachable: boolean;
-  /** Model ids the provider accepted during preflight (evidence). */
-  verifiedModels: string[];
+  /** Policy-configured model ids the adapter permits (honest reporting). */
+  configuredModels: string[];
+  /** Optional model ids dynamically verified by an interactive zero-cost probe. */
+  verifiedModels?: string[];
 }
 
 export interface VisualAssetProviderPreflightNotConfigured {
@@ -397,16 +399,29 @@ export type VisualCandidateQa = z.infer<typeof visualCandidateQaSchema>;
 /** C2PA read result (READ/VALIDATE/RECORD only; never fabricated). */
 export const visualCandidateC2paSchema = z
   .object({
-    /** validated = manifest present and parsed; absent = no manifest embedded;
+    /** present_valid = manifest present and validated;
+     *  present_invalid = manifest present but signature/hash validation failed;
+     *  present_untrusted = manifest present and validly signed but trust anchor not trusted;
+     *  absent = no manifest embedded;
      *  unreadable = manifest bytes present but parse failed;
-     *  unavailable_with_reason = the C2PA runtime could not run at all. */
-    status: z.enum(["validated", "absent", "unreadable", "unavailable_with_reason"]),
+     *  verification_unavailable = the C2PA runtime could not run at all;
+     *  validated = legacy alias for present_valid. */
+    status: z.enum([
+      "present_valid",
+      "present_invalid",
+      "present_untrusted",
+      "absent",
+      "unreadable",
+      "verification_unavailable",
+      "validated",
+    ]),
     reason: z.string().trim().max(300).optional(),
     /** Bounded manifest summary when validated (never the full manifest). */
     manifestSummary: z
       .object({
         generator: z.string().trim().max(200).optional(),
         signed: z.boolean().optional(),
+        validationCodes: z.array(z.string().trim().max(100)).optional(),
       })
       .strict()
       .optional(),
@@ -445,6 +460,8 @@ export const VISUAL_ERROR_CODES = [
   "visual_set_immutable",
   /** Slot has no accepted resolution yet (set acceptance fail-closed). */
   "visual_slot_unresolved",
+  /** Follower timeout waiting for concurrent provider generation to complete. */
+  "visual_generation_timeout",
 ] as const;
 export type VisualErrorCode = (typeof VISUAL_ERROR_CODES)[number];
 

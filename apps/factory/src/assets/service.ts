@@ -416,6 +416,37 @@ export class AssetService {
     });
   }
 
+  /**
+   * Run 7 seam: explicit compare-and-swap replacement. The caller must echo
+   * the exact current authority (asset id + version id + governance digest)
+   * of the assignment and the exact target binary digest. Supports moving a
+   * slot to a DIFFERENT logical asset (Asset A/v1 -> Asset B/v1) atomically;
+   * every mismatch fails closed inside one transaction (see AssetStore).
+   */
+  async casReplaceAssignment(
+    projectId: string,
+    assignmentId: string,
+    input: {
+      expectedCurrentAssetId: string;
+      expectedCurrentVersionId: string;
+      expectedCurrentGovernanceDigest: string;
+      toAssetId: string;
+      toVersionId: string;
+      expectedTargetBinaryDigest: string;
+    },
+  ): Promise<AssignmentRow> {
+    return await this.store.casReplaceAssignment({
+      projectId,
+      assignmentId,
+      ...input,
+    });
+  }
+
+  /** Read-only project-scoped assignment lookup (evidence/verification). */
+  async getAssignment(projectId: string, assignmentId: string): Promise<AssignmentRow | null> {
+    return await this.store.getAssignment(projectId, assignmentId);
+  }
+
   async setImageryStrategy(projectId: string, strategy: string): Promise<string> {
     return await this.store.setImageryStrategy(projectId, strategy);
   }

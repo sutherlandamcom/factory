@@ -25,32 +25,79 @@ export async function readC2paEvidence(input: {
     c2paModule = require("@contentauth/c2pa-node");
   } catch (error) {
     return {
-      status: "unavailable_with_reason",
+      status: "verification_unavailable",
       reason: `C2PA runtime unavailable: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
   try {
-    const mod = c2paModule as { Reader: { fromAsset(asset: { buffer: Buffer; mimeType: string }): Promise<unknown> } };
-    const reader = await mod.Reader.fromAsset({
-      buffer: Buffer.from(input.bytes),
-      mimeType: input.mediaType,
-    });
+    const mod = c2paModule as {
+      Reader: {
+        fromAsset(
+          asset: { buffer: Buffer; mimeType: string },
+          settings?: unknown,
+        ): Promise<unknown>;
+      };
+    };
+    // SSRF & egress protection (P1-11): disable remote manifest fetching
+    // and OCSP network calls on untrusted provider bytes.
+    const readerSettings = {
+      verify: {
+        verify_after_reading: true,
+        verify_trust: false,
+        remote_manifest_fetch: false,
+        ocsp_fetch: false,
+      },
+    };
+    const reader = await mod.Reader.fromAsset(
+      {
+        buffer: Buffer.from(input.bytes),
+        mimeType: input.mediaType,
+      },
+      readerSettings,
+    );
     if (reader === null || reader === undefined) {
       return { status: "absent" };
     }
-    const json = (reader as { json(): unknown }).json();
+    const json = (reader as { json(): Record<string, unknown> }).json();
     const manifest = extractActiveManifest(json);
     if (!manifest) {
       return { status: "absent" };
     }
+
     const generator =
       typeof manifest["claim_generator"] === "string" ? manifest["claim_generator"] : undefined;
     const signatureInfo = manifest["signature_info"] as Record<string, unknown> | undefined;
+
+    // Detailed validation status classification (P1-10)
+    const rawValidationStatus = json["validation_status"];
+    const validationList = Array.isArray(rawValidationStatus) ? rawValidationStatus : [];
+    const validationCodes: string[] = validationList
+      .map((item) => (typeof item === "string" ? item : (item as { code?: string })?.code))
+      .filter((code): code is string => typeof code === "string");
+
+    let status: VisualCandidateC2pa["status"] = "present_valid";
+    if (validationCodes.length > 0) {
+      const hasCorruptionOrMismatch = validationCodes.some((code) =>
+        code.includes("mismatch") ||
+        code.includes("corrupt") ||
+        code.startsWith("assertion.") ||
+        code.startsWith("claimSignature.")
+      );
+      if (hasCorruptionOrMismatch) {
+        status = "present_invalid";
+      } else if (validationCodes.every((code) => code.includes("untrusted"))) {
+        status = "present_untrusted";
+      } else {
+        status = "present_invalid";
+      }
+    }
+
     return {
-      status: "validated",
+      status,
       manifestSummary: {
         generator: generator?.slice(0, 200),
         signed: signatureInfo != null,
+        validationCodes: validationCodes.slice(0, 10),
       },
     };
   } catch (error) {

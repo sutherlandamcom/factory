@@ -28,6 +28,7 @@ export class FixtureVisualAssetProvider implements VisualAssetProvider {
       configured: true,
       provider: "google-genai",
       reachable: true,
+      configuredModels: ["fixture (deterministic local provider; no network calls)"],
       verifiedModels: ["fixture (deterministic local provider; no network calls)"],
     };
   }

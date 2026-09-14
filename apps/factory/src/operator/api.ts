@@ -19,6 +19,7 @@ import {
   assetApprovalSchema,
   assetAssignSchema,
   assetReplaceSchema,
+  assetReplaceCasSchema,
   assetSettingsSchema,
   assetUploadSchema,
   assetVersionMetadataSchema,
@@ -622,6 +623,20 @@ export function createOperatorApi(deps: OperatorApiDeps) {
           });
         }
 
+        // POST cross-asset CAS replacement: /projects/:id/assets/assignments/:assignmentId/replace-cas
+        if (req.method === "POST" && segments.length === 6 && segments[3] === "assignments" && segments[5] === "replace-cas") {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(assetReplaceCasSchema, parsed);
+          const assignment = await assets.casReplaceAssignment(project.id, segments[4]!, input);
+          return sendJson(res, 200, {
+            id: assignment.id,
+            assetId: assignment.assetId,
+            versionId: assignment.versionId,
+            versionDigest: assignment.versionDigest,
+            binaryDigest: assignment.binaryDigest,
+          });
+        }
+
         return sendError(res, "not_found", "Unknown endpoint.");
       }
 
@@ -997,6 +1012,7 @@ export function createOperatorApi(deps: OperatorApiDeps) {
             binaryDigest: resolved.version.binaryDigest,
             governanceDigest: resolved.version.governanceDigest,
             assetId: resolved.asset.id,
+            assignmentId: resolved.assignmentId,
           });
         }
 
@@ -1027,6 +1043,7 @@ export function createOperatorApi(deps: OperatorApiDeps) {
             binaryDigest: resolved.version.binaryDigest,
             governanceDigest: resolved.version.governanceDigest,
             assetId: resolved.asset.id,
+            assignmentId: resolved.assignmentId,
             transformation: resolved.derivation.transformation ?? null,
           });
         }
@@ -1065,6 +1082,33 @@ export function createOperatorApi(deps: OperatorApiDeps) {
           if (body.trim()) parseJsonBody(body);
           const set = await visual.acceptSet({ projectId: project.id, planId: segments[4]! });
           return sendJson(res, 200, { id: set.id, version: set.version, setDigest: set.setDigest });
+        }
+
+        // POST final-design-pass: /projects/:id/visual/final-design-pass
+        if (req.method === "POST" && segments.length === 4 && segments[3] === "final-design-pass") {
+          if (body.trim()) parseJsonBody(body);
+          const candidate = await visual.runFinalDesignPass({ projectId: project.id });
+          return sendJson(res, 201, candidate);
+        }
+
+        // POST accept-final-design: /projects/:id/visual/accept-final-design
+        if (req.method === "POST" && segments.length === 4 && segments[3] === "accept-final-design") {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(
+            z.object({
+              candidateId: z.string().trim().min(1),
+              expectedCandidateDigest: z.string().trim().min(1),
+              reviewNotes: z.string().trim().nullable().optional(),
+            }),
+            parsed,
+          );
+          const accepted = await visual.acceptFinalDesign({
+            projectId: project.id,
+            candidateId: input.candidateId,
+            expectedCandidateDigest: input.expectedCandidateDigest,
+            reviewNotes: input.reviewNotes,
+          });
+          return sendJson(res, 200, accepted);
         }
 
         // GET candidate bytes: /projects/:id/visual/candidates/:candidateId/bytes

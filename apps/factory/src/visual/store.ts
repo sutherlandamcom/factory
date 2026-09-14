@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import {
   parseVisualPlanData,
   parseVisualPromptSnapshotData,
@@ -344,7 +344,12 @@ export class VisualStore {
     modelPolicyVersion: string;
     operation: "edit" | "generate";
     escalationReason: string | null;
-  }): Promise<VisualGenerationRequestRecord> {
+    leaseHolder?: string;
+    leaseDurationMs?: number;
+  }): Promise<{ request: VisualGenerationRequestRecord; owner: boolean }> {
+    const leaseHolder = input.leaseHolder ?? `worker-${randomUUID()}`;
+    const leaseDurationMs = input.leaseDurationMs ?? 90_000;
+    const leaseExpiresAt = new Date(Date.now() + leaseDurationMs);
     try {
       const [row] = await this.db
         .insert(visualGenerationRequests)
@@ -361,15 +366,17 @@ export class VisualStore {
           modelPolicyVersion: input.modelPolicyVersion,
           operation: input.operation,
           escalationReason: input.escalationReason,
-          resultState: "succeeded",
+          resultState: "running",
+          leaseHolder,
+          leaseExpiresAt,
         })
         .returning();
-      return row!;
+      return { request: row!, owner: true };
     } catch (error) {
       if (pgCode(error) === "23505") {
-        // A concurrent identical request won the race; resolve to it.
+        // A concurrent identical request won the race; resolve to it as follower.
         const existing = await this.findRequestByDigest(input.projectId, input.requestDigest);
-        if (existing) return existing;
+        if (existing) return { request: existing, owner: false };
       }
       throw error;
     }
@@ -384,10 +391,13 @@ export class VisualStore {
     await this.db
       .update(visualGenerationRequests)
       .set({
+        resultState: "succeeded",
         providerRequestRef: input.providerRequestRef,
         costMicros: input.costMicros,
         rawMetadata: input.rawMetadata,
         completedAt: new Date(),
+        leaseHolder: null,
+        leaseExpiresAt: null,
       })
       .where(eq(visualGenerationRequests.id, input.requestId));
   }
@@ -404,6 +414,8 @@ export class VisualStore {
         failureCode: input.failureCode,
         rawMetadata: input.rawMetadata,
         completedAt: new Date(),
+        leaseHolder: null,
+        leaseExpiresAt: null,
       })
       .where(eq(visualGenerationRequests.id, input.requestId));
   }
@@ -609,9 +621,98 @@ export class VisualStore {
     return row!;
   }
 
+  /**
+   * Atomically create an AcceptedVisualAssetSet and all its slot rows
+   * within a single database transaction (P1-06). Rolls back cleanly
+   * on any failure, preventing orphaned partial sets.
+   */
+  async createAcceptedSetAtomic(input: {
+    projectId: string;
+    planId: string;
+    providerMode: "live" | "fixture";
+    designArtifactId: string;
+    designArtifactVersion: number;
+    designCandidateDigest: string;
+    designInputDigest: string;
+    setDigest?: string;
+    slots: Array<{
+      slot: string;
+      pageSlug: string;
+      role: string;
+      resolvedVersionId: string;
+      binaryDigest: string;
+      governanceDigest: string;
+      resolutionMode: string;
+      truthClass: VisualTruthClass;
+      promptSnapshotId?: string | null;
+      generationRequestId?: string | null;
+      candidateId?: string | null;
+    }>;
+  }): Promise<AcceptedVisualAssetSetRecord> {
+    return await this.db.transaction(async (tx) => {
+      const [latest] = await tx
+        .select({ version: acceptedVisualAssetSets.version })
+        .from(acceptedVisualAssetSets)
+        .where(eq(acceptedVisualAssetSets.projectId, input.projectId))
+        .orderBy(desc(acceptedVisualAssetSets.version))
+        .limit(1)
+        .for("update");
+      const version = (latest?.version ?? 0) + 1;
+      const computedSetDigest = input.setDigest ?? visualSetDigest(input.slots);
+
+      try {
+        const [set] = await tx
+          .insert(acceptedVisualAssetSets)
+          .values({
+            id: `avs-${randomUUID()}`,
+            projectId: input.projectId,
+            version,
+            planId: input.planId,
+            providerMode: input.providerMode,
+            designArtifactId: input.designArtifactId,
+            designArtifactVersion: input.designArtifactVersion,
+            designCandidateDigest: input.designCandidateDigest,
+            designInputDigest: input.designInputDigest,
+            setDigest: computedSetDigest,
+          })
+          .returning();
+
+        for (const slot of input.slots) {
+          await tx.insert(acceptedVisualAssetSlots).values({
+            id: `avsl-${randomUUID()}`,
+            setId: set!.id,
+            projectId: input.projectId,
+            slot: slot.slot,
+            pageSlug: slot.pageSlug,
+            role: slot.role,
+            resolvedVersionId: slot.resolvedVersionId,
+            binaryDigest: slot.binaryDigest,
+            governanceDigest: slot.governanceDigest,
+            resolutionMode: slot.resolutionMode,
+            truthClass: slot.truthClass,
+            promptSnapshotId: slot.promptSnapshotId ?? null,
+            generationRequestId: slot.generationRequestId ?? null,
+            candidateId: slot.candidateId ?? null,
+          });
+        }
+
+        return set!;
+      } catch (error) {
+        if (pgCode(error) === "23505") {
+          throw visualError(
+            "visual_acceptance_failed",
+            "Concurrent set acceptance conflict on the version sequence; retry the acceptance.",
+          );
+        }
+        throw error;
+      }
+    });
+  }
+
   async createSet(input: {
     projectId: string;
     planId: string;
+    providerMode?: "live" | "fixture";
     designArtifactId: string;
     designArtifactVersion: number;
     designCandidateDigest: string;
@@ -632,6 +733,7 @@ export class VisualStore {
           projectId: input.projectId,
           version: (latest?.version ?? 0) + 1,
           planId: input.planId,
+          providerMode: input.providerMode ?? "live",
           designArtifactId: input.designArtifactId,
           designArtifactVersion: input.designArtifactVersion,
           designCandidateDigest: input.designCandidateDigest,
@@ -658,6 +760,62 @@ export class VisualStore {
       .where(and(eq(acceptedVisualAssetSets.projectId, projectId), eq(acceptedVisualAssetSets.setDigest, setDigest)))
       .limit(1);
     return row ?? null;
+  }
+
+  /**
+   * Sole production authority boundary for visual asset sets (P1-03 / P2):
+   * Verifies live provider mode (fixtures rejected), exact set digest,
+   * row-level slot integrity, and bound AssetVersion legitimacy.
+   */
+  async requireProductionVisualSet(
+    projectId: string,
+    setId: string,
+    expectedSetDigest: string,
+  ): Promise<{ set: AcceptedVisualAssetSetRecord; slots: AcceptedVisualAssetSlotRecord[] }> {
+    const [set] = await this.db
+      .select()
+      .from(acceptedVisualAssetSets)
+      .where(
+        and(
+          eq(acceptedVisualAssetSets.projectId, projectId),
+          eq(acceptedVisualAssetSets.id, setId),
+        ),
+      );
+    if (!set) {
+      throw visualError("visual_not_found", "Accepted visual asset set not found for this project.");
+    }
+    if (set.providerMode !== "live") {
+      throw visualError(
+        "visual_acceptance_failed",
+        "Test fixture acceptance is never production visual authority.",
+      );
+    }
+    if (set.setDigest !== expectedSetDigest) {
+      throw visualError("visual_acceptance_failed", "Visual asset set digest mismatch.");
+    }
+    const slots = await this.listAcceptedSlots(set.id);
+    if (slots.length === 0) {
+      throw visualError("visual_acceptance_failed", "Accepted visual set contains no slot rows.");
+    }
+    const recomputedDigest = visualSetDigest(
+      slots.map((s) => ({
+        slot: s.slot,
+        pageSlug: s.pageSlug,
+        role: s.role,
+        resolvedVersionId: s.resolvedVersionId,
+        binaryDigest: s.binaryDigest,
+        governanceDigest: s.governanceDigest,
+        resolutionMode: s.resolutionMode,
+        truthClass: s.truthClass,
+      })),
+    );
+    if (recomputedDigest !== set.setDigest) {
+      throw visualError(
+        "visual_acceptance_failed",
+        "Visual asset set digest divergence under row verification.",
+      );
+    }
+    return { set, slots };
   }
 }
 
@@ -713,7 +871,7 @@ export function visualSetDigest(
   });
 }
 
-/** Count pending generation requests for the workspace read model. */
+/** Count active generation requests for the workspace read model. */
 export async function countActiveRequests(db: FactoryDb, projectId: string): Promise<number> {
   const [row] = await db
     .select({ count: sql<number>`count(*)::int` })
@@ -721,7 +879,7 @@ export async function countActiveRequests(db: FactoryDb, projectId: string): Pro
     .where(
       and(
         eq(visualGenerationRequests.projectId, projectId),
-        eq(visualGenerationRequests.resultState, "succeeded"),
+        inArray(visualGenerationRequests.resultState, ["running", "succeeded"]),
       ),
     );
   return Number(row?.count ?? 0);

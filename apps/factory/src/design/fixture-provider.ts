@@ -46,29 +46,39 @@ export class FixtureDesignProvider implements DesignProvider {
 
     const screens: DesignCandidateData["screens"] = [];
     const archetypeViews: DesignCandidateData["archetypes"] = [];
+    const screenHtmlByRef = new Map<string, string>();
     let index = 1;
     for (const kind of request.inputSnapshot.archetypes) {
       const representative = request.inputSnapshot.representativePages.find((r) => r.archetype === kind);
       const screenName = `fixture/projects/e2e/screens/${kind}-${index}`;
+      const slotRole =
+        kind === "homepage" ? "hero" : kind === "service" ? "supporting" : kind === "location" ? "background" : "illustration";
+      const bound = representative
+        ? request.inputSnapshot.assetRefs.find((ref) => ref.pageSlug === representative.slug && ref.role === slotRole)
+        : null;
+      const desktopHtml = fixtureHtml(kind, "desktop", bound);
+      screenHtmlByRef.set(screenName, desktopHtml);
       screens.push({
         id: `screen-${index}`,
         providerScreenName: screenName,
         title: `Fixture ${kind}`,
         deviceType: "DESKTOP",
         archetype: kind,
-        htmlDigest: await sha256Of(fixtureHtml(kind)),
+        htmlDigest: await sha256Of(desktopHtml),
         screenshotDigest: undefined,
       });
       // One MOBILE homepage screen (responsive review evidence parity with
       // the live adapter, at zero fixture cost).
       if (kind === "homepage") {
+        const mobileHtml = fixtureHtml(kind, "mobile", bound);
+        screenHtmlByRef.set(`${screenName}-mobile`, mobileHtml);
         screens.push({
           id: `screen-${screens.length + 1}`,
           providerScreenName: `${screenName}-mobile`,
           title: `Fixture ${kind} (mobile)`,
           deviceType: "MOBILE",
           archetype: kind,
-          htmlDigest: await sha256Of(fixtureHtml(kind, "mobile")),
+          htmlDigest: await sha256Of(mobileHtml),
           screenshotDigest: undefined,
         });
       }
@@ -96,12 +106,14 @@ export class FixtureDesignProvider implements DesignProvider {
                 boundAssetVersionId: bound.versionId,
                 boundBinaryDigest: bound.binaryDigest,
                 boundGovernanceDigest: bound.governanceDigest,
-                unresolvedReason:
-                  "Approved asset exists for this exact page/role; the fixture does not transmit bytes to any provider, so providerConsumed stays false.",
+                providerConsumed: true,
+                placeholder: false,
               }
-            : { unresolvedReason: `No approved asset assignment for ${representative.slug}/${slotRole}.` }),
-          providerConsumed: false,
-          placeholder: true,
+            : {
+                unresolvedReason: `No approved asset assignment for ${representative.slug}/${slotRole}.`,
+                providerConsumed: false,
+                placeholder: true,
+              }),
         });
       }
       archetypeViews.push({
@@ -173,7 +185,7 @@ export class FixtureDesignProvider implements DesignProvider {
         },
         ...screens.map((screen) => ({
           kind: "screen_html" as const,
-          bytes: new TextEncoder().encode(fixtureHtml(screen.archetype, screen.deviceType === "MOBILE" ? "mobile" : "desktop")),
+          bytes: new TextEncoder().encode(screenHtmlByRef.get(screen.providerScreenName)!),
           mediaType: "text/html",
           providerRef: screen.providerScreenName,
         })),
@@ -191,8 +203,15 @@ export class FixtureDesignProvider implements DesignProvider {
 }
 
 /** Deterministic, script-free fixture HTML for sandboxed preview rendering. */
-function fixtureHtml(kind: string, device: "desktop" | "mobile" = "desktop"): string {
+function fixtureHtml(
+  kind: string,
+  device: "desktop" | "mobile" = "desktop",
+  boundAsset?: { versionId: string; binaryDigest: string } | null,
+): string {
   const maxWidth = device === "mobile" ? "420px" : "720px";
+  const visualMarkup = boundAsset
+    ? `<div class="asset-slot" style="margin: 16px 0;"><img src="/api/projects/e2e/assets/versions/${boundAsset.versionId}/bytes" alt="${kind} asset" data-digest="${boundAsset.binaryDigest}" style="max-width: 100%; height: auto; border-radius: 4px;" /></div>`
+    : `<div class="placeholder">hero.primary — placeholder (Run 7 resolves)</div>`;
   return `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>Fixture ${kind} (${device})</title>
@@ -207,7 +226,7 @@ function fixtureHtml(kind: string, device: "desktop" | "mobile" = "desktop"): st
 <header><strong>Fixture ${kind} (${device})</strong></header>
 <main>
   <h1>Fixture ${kind} archetype</h1>
-  <div class="placeholder">hero.primary — placeholder (Run 7 resolves)</div>
+  ${visualMarkup}
   <p>Accepted copy would be presented verbatim here.</p>
   <a class="cta" href="#">Primary action</a>
 </main>

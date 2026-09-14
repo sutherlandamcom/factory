@@ -115,8 +115,8 @@ export const designAssetSlotSchema = z
      * (the provider never saw it) — these states are never conflated.
      */
     providerConsumed: z.boolean(),
-    /** Placeholder handling until the slot is resolved by the provider. */
-    placeholder: z.literal(true),
+    /** Placeholder handling (false when the provider consumes an approved asset). */
+    placeholder: z.boolean(),
     /** Why the slot is unresolved, when it is (typed, bounded reason). */
     unresolvedReason: z.string().trim().max(300).optional(),
   })
@@ -525,3 +525,29 @@ export function parseDesignInputSnapshotData(input: unknown): DesignInputSnapsho
 export function parseDesignCandidateData(input: unknown): DesignCandidateData {
   return designCandidateDataSchema.parse(input);
 }
+
+// ---------------------------------------------------------------------------
+// Design staleness classification (typed authority; Run 7 uses this)
+// ---------------------------------------------------------------------------
+
+export const designStalenessCodeSchema = z.enum([
+  "INPUT_CHANGED",
+  "INPUT_REMOVED",
+  "CONTENT_CHANGED",
+  "CONTENT_REMOVED",
+  "CONTENT_ADDED",
+  "ASSET_ASSIGNMENT_CHANGED",
+  "ASSET_ASSIGNMENT_REMOVED",
+  "RUN7_ASSET_ASSIGNMENTS_ADDED",
+  "RUN7_EXACT_ASSET_REPLACED",
+  "DESIGN_INPUT_SNAPSHOT_REMOVED",
+  "DESIGN_INPUT_SNAPSHOT_INVALID",
+]);
+export type DesignStalenessCode = z.infer<typeof designStalenessCodeSchema>;
+
+export interface DesignStaleness {
+  stale: boolean;
+  reason: string | null;
+  code?: DesignStalenessCode | null;
+}
+

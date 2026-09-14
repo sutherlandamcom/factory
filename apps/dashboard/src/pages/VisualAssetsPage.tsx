@@ -255,17 +255,17 @@ export function VisualAssetsPage({ projectId }: { projectId: string }) {
                 <li key={s.slot} className="flex items-center gap-2">
                   <ModeBadge mode={s.resolutionMode} />
                   <span>{s.slot} → {s.pageSlug}/{s.role} (v {shortDigest(s.versionId)})</span>
-                  {s.resolutionMode === "ai_edit" || s.resolutionMode === "ai_generate" ? (
+                  {s.visualProviderProducedAsset ? (
                     <span
                       className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-800"
-                      title="The provider actually consumed the exact asset bytes for this slot."
+                      title={s.visualProviderConsumedSourceAsset ? "Visual provider consumed source asset and produced output bytes." : "Visual provider produced output bytes from prompt."}
                     >
-                      provider consumed
+                      {s.visualProviderConsumedSourceAsset ? "provider edited" : "provider generated"}
                     </span>
                   ) : (
                     <span
                       className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600"
-                      title="Resolved without provider consumption (reuse or deterministic transform); Factory binds the exact asset as production authority."
+                      title="Resolved without provider spend (reuse or deterministic transform); Factory binds the exact asset as production authority."
                     >
                       factory-bound
                     </span>
@@ -285,9 +285,9 @@ export function VisualAssetsPage({ projectId }: { projectId: string }) {
             {ws.finalDesignPass?.frozen ? (
               <div className="rounded bg-green-100 p-3 text-sm text-green-900 font-medium">
                 ✓ Design frozen (Accepted design v{ws.finalDesignPass.acceptedDesignVersion} is reconciled to the exact approved visual asset authority).
-                {ws.finalDesignPass.providerConsumed === false && (
+                {ws.finalDesignPass.designProviderConsumedFinalAsset === false && (
                   <span className="mt-1 block text-xs font-normal text-green-800">
-                    Provider did not consume local asset bytes; production binding remains exact in Factory authority.
+                    Design provider did not consume local asset bytes (text-only seam); production binding remains exact in Factory authority.
                   </span>
                 )}
               </div>

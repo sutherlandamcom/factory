@@ -270,6 +270,8 @@ export function buildArchetypePrompt(input: {
       boundBinaryDigest?: string;
     boundGovernanceDigest?: string;
       providerConsumed: boolean;
+      designProviderReferencedFinalAsset: boolean;
+      designProviderConsumedFinalAsset: boolean;
       placeholder: boolean;
       unresolvedReason?: string;
     }>;
@@ -922,6 +924,8 @@ interface ArchetypeTemplate {
     boundBinaryDigest?: string;
     boundGovernanceDigest?: string;
     providerConsumed: boolean;
+    designProviderReferencedFinalAsset: boolean;
+    designProviderConsumedFinalAsset: boolean;
     placeholder: boolean;
     unresolvedReason?: string;
   }>;
@@ -999,6 +1003,8 @@ export function archetypeFor(
         // providerConsumed stays FALSE until a supported mechanism actually
         // delivers the asset bytes to the provider (§15 evidence rule).
         providerConsumed: consumedByProvider,
+        designProviderReferencedFinalAsset: true,
+        designProviderConsumedFinalAsset: consumedByProvider,
         placeholder: true,
         unresolvedReason: consumedByProvider
           ? undefined
@@ -1012,6 +1018,8 @@ export function archetypeFor(
       role,
       requiredRole: role,
       providerConsumed: false,
+      designProviderReferencedFinalAsset: false,
+      designProviderConsumedFinalAsset: false,
       placeholder: true,
       unresolvedReason: `No approved asset assignment exists for page "${pageSlug}" role "${role}".`,
     };

@@ -171,6 +171,10 @@ export interface VisualSlotView {
     governanceDigest: string;
     assetId: string;
     assignmentId: string | null;
+    visualProviderConsumedSourceAsset?: boolean;
+    visualProviderProducedAsset?: boolean;
+    designProviderReferencedFinalAsset?: boolean;
+    designProviderConsumedFinalAsset?: boolean;
   } | null;
 }
 
@@ -211,6 +215,10 @@ export interface VisualWorkspaceReadModel {
        * production authority. Never conflated with "bound".
        */
       providerConsumed: boolean;
+      visualProviderConsumedSourceAsset: boolean;
+      visualProviderProducedAsset: boolean;
+      designProviderReferencedFinalAsset: boolean;
+      designProviderConsumedFinalAsset: boolean;
     }>;
   } | null;
   budget: { accountedTodayMicros: number; activeReservationMicros: number };
@@ -227,6 +235,10 @@ export interface VisualWorkspaceReadModel {
      * assets" MUST be gated on this, never assumed.
      */
     providerConsumed: boolean | null;
+    visualProviderConsumedSourceAsset: boolean | null;
+    visualProviderProducedAsset: boolean | null;
+    designProviderReferencedFinalAsset: boolean | null;
+    designProviderConsumedFinalAsset: boolean | null;
   };
 }
 
@@ -963,6 +975,25 @@ export class VisualService {
       assignmentId = created.id;
     }
 
+    await this.store.recordSlotResolution({
+      projectId: input.projectId,
+      planId: plan.id,
+      slot: slot.slot,
+      pageSlug: slot.pageSlug,
+      role: slot.role,
+      fromAssetId: existing?.assetId ?? null,
+      fromVersionId: existing?.versionId ?? null,
+      fromBinaryDigest: existing?.binaryDigest ?? null,
+      fromGovernanceDigest: existing?.versionDigest ?? null,
+      toAssetId: asset.id,
+      toVersionId: version.id,
+      toBinaryDigest: version.binaryDigest,
+      toGovernanceDigest: version.governanceDigest!,
+      resolutionMode: "reuse_real",
+      visualProviderConsumedSourceAsset: false,
+      visualProviderProducedAsset: false,
+    });
+
     return { version, asset, assignmentId };
   }
 
@@ -1111,6 +1142,25 @@ export class VisualService {
       });
       assignmentId = created.id;
     }
+
+    await this.store.recordSlotResolution({
+      projectId: input.projectId,
+      planId: plan.id,
+      slot: slot.slot,
+      pageSlug: slot.pageSlug,
+      role: slot.role,
+      fromAssetId: existing?.assetId ?? null,
+      fromVersionId: existing?.versionId ?? null,
+      fromBinaryDigest: existing?.binaryDigest ?? null,
+      fromGovernanceDigest: existing?.versionDigest ?? null,
+      toAssetId: asset.id,
+      toVersionId: approved.id,
+      toBinaryDigest: approved.binaryDigest,
+      toGovernanceDigest: approved.governanceDigest!,
+      resolutionMode: "deterministic_transform",
+      visualProviderConsumedSourceAsset: false,
+      visualProviderProducedAsset: false,
+    });
 
     return { version: approved, asset, derivation, assignmentId };
   }
@@ -1316,6 +1366,28 @@ export class VisualService {
       truthClass,
     });
 
+    await this.store.recordSlotResolution({
+      projectId: input.projectId,
+      planId: plan.id,
+      slot: input.slot,
+      pageSlug: planSlot.pageSlug,
+      role: planSlot.role,
+      fromAssetId: existing?.assetId ?? null,
+      fromVersionId: existing?.versionId ?? null,
+      fromBinaryDigest: existing?.binaryDigest ?? null,
+      fromGovernanceDigest: existing?.versionDigest ?? null,
+      toAssetId: asset.id,
+      toVersionId: approved.id,
+      toBinaryDigest: approved.binaryDigest,
+      toGovernanceDigest: approved.governanceDigest!,
+      resolutionMode: mode,
+      visualProviderConsumedSourceAsset: mode === "ai_edit",
+      visualProviderProducedAsset: true,
+      promptSnapshotId: request.promptSnapshotId,
+      generationRequestId: request.id,
+      candidateId: candidate.id,
+    });
+
     return { version: approved, asset, assignmentId, truthClass, resolutionMode: mode, boundExisting };
   }
 
@@ -1342,6 +1414,8 @@ export class VisualService {
       governanceDigest: string;
       resolutionMode: string;
       truthClass: VisualTruthClass;
+      visualProviderConsumedSourceAsset?: boolean;
+      visualProviderProducedAsset?: boolean;
       promptSnapshotId: string | null;
       generationRequestId: string | null;
       candidateId: string | null;
@@ -1358,38 +1432,39 @@ export class VisualService {
           `Slot ${slot.slot} (${slot.pageSlug}/${slot.role}) has no accepted resolution; accept every slot before accepting the set.`,
         );
       }
-      // Resolution mode: reflect what ACTUALLY happened. A selected
-      // candidate's request operation is authoritative for ai paths;
-      // reuse/deterministic paths are inferred from the version lineage.
-      const slotCandidates = await this.store.listCandidatesForSlot(input.projectId, slot.slot);
-      const selected = slotCandidates.find((c) => c.state === "selected");
-      let resolutionMode: VisualResolutionMode;
-      let promptSnapshotId: string | null = null;
-      let generationRequestId: string | null = null;
-      let candidateId: string | null = null;
-      if (selected) {
-        const request = await this.store.getRequest(input.projectId, selected.requestId);
-        resolutionMode = request?.operation === "edit" ? "ai_edit" : "ai_generate";
-        promptSnapshotId = request?.promptSnapshotId ?? null;
-        generationRequestId = request?.id ?? null;
-        candidateId = selected.id;
-      } else if (assignment.versionId === slot.existingVersionId) {
-        resolutionMode = "reuse_real";
-      } else {
-        resolutionMode = "deterministic_transform";
+      // Exact durable slot resolution authority (P1-01 / P1-02).
+      // Reading directly by (planId, slot) guarantees zero cross-plan candidate leakage.
+      const resolution = await this.store.getSlotResolution(plan.id, slot.slot);
+      if (!resolution) {
+        throw new FactoryError(
+          "visual_slot_unresolved",
+          `Slot ${slot.slot} (${slot.pageSlug}/${slot.role}) has no durable resolution record for plan ${plan.id}; resolve the slot before accepting the set.`,
+        );
+      }
+      if (
+        assignment.versionId !== resolution.toVersionId ||
+        assignment.binaryDigest !== resolution.toBinaryDigest ||
+        assignment.versionDigest !== resolution.toGovernanceDigest
+      ) {
+        throw new FactoryError(
+          "visual_slot_resolution_conflict",
+          `Slot ${slot.slot} assignment (${assignment.versionId}) conflicts with recorded plan resolution (${resolution.toVersionId}).`,
+        );
       }
       slotRows.push({
         slot: slot.slot,
         pageSlug: assignment.pageSlug,
         role: assignment.role,
-        resolvedVersionId: assignment.versionId,
-        binaryDigest: assignment.binaryDigest,
-        governanceDigest: assignment.versionDigest,
-        resolutionMode,
+        resolvedVersionId: resolution.toVersionId,
+        binaryDigest: resolution.toBinaryDigest,
+        governanceDigest: resolution.toGovernanceDigest,
+        resolutionMode: resolution.resolutionMode,
         truthClass: classification.truthClass as VisualTruthClass,
-        promptSnapshotId,
-        generationRequestId,
-        candidateId,
+        visualProviderConsumedSourceAsset: resolution.visualProviderConsumedSourceAsset,
+        visualProviderProducedAsset: resolution.visualProviderProducedAsset,
+        promptSnapshotId: resolution.promptSnapshotId ?? null,
+        generationRequestId: resolution.generationRequestId ?? null,
+        candidateId: resolution.candidateId ?? null,
       });
     }
 
@@ -1593,6 +1668,9 @@ export class VisualService {
       }
     }
 
+    const planResolutions = plan ? await this.store.listSlotResolutions(plan.id) : [];
+    const resolutionMap = new Map(planResolutions.map((r) => [r.slot, r]));
+
     const slots: VisualSlotView[] = plan
       ? await Promise.all(
           this.store.planData(plan).slots.map(async (slot) => {
@@ -1625,6 +1703,7 @@ export class VisualService {
               (a) => a.pageSlug === slot.pageSlug && a.role === slot.role,
             );
             const acceptedSlot = acceptedSlots.find((s) => s.slot === slot.slot);
+            const slotResolution = resolutionMap.get(slot.slot);
             return {
               slot: slot.slot,
               pageSlug: slot.pageSlug,
@@ -1655,13 +1734,17 @@ export class VisualService {
               candidates: candidatesWithRequests,
               acceptedResolution: assignment
                 ? {
-                    resolutionMode: acceptedSlot?.resolutionMode ?? "reuse_real",
+                    resolutionMode: acceptedSlot?.resolutionMode ?? slotResolution?.resolutionMode ?? "reuse_real",
                     truthClass: acceptedSlot?.truthClass ?? classification?.truthClass ?? "documentary",
                     versionId: assignment.versionId,
                     binaryDigest: assignment.binaryDigest,
                     governanceDigest: assignment.versionDigest,
                     assetId: assignment.assetId,
                     assignmentId: assignment.id,
+                    visualProviderConsumedSourceAsset: acceptedSlot?.visualProviderConsumedSourceAsset ?? slotResolution?.visualProviderConsumedSourceAsset ?? false,
+                    visualProviderProducedAsset: acceptedSlot?.visualProviderProducedAsset ?? slotResolution?.visualProviderProducedAsset ?? false,
+                    designProviderReferencedFinalAsset: true,
+                    designProviderConsumedFinalAsset: false,
                   }
                 : null,
             };
@@ -1676,12 +1759,23 @@ export class VisualService {
     // Stitch text-only seam keeps it false even when the slot is exactly
     // bound. null = no bound slots exist (nothing to claim either way).
     let finalProviderConsumed: boolean | null = null;
+    let finalDesignReferenced: boolean | null = null;
+    let finalDesignConsumed: boolean | null = null;
+    let finalVisualConsumedSource: boolean | null = null;
+    let finalVisualProduced: boolean | null = null;
+
     if (latestDesign) {
       const designData = latestDesign.artifact.data as DesignCandidateData;
       const boundSlots = designData.archetypes.flatMap((a) => a.assetSlots).filter((s) => s.boundAssetVersionId != null);
       if (boundSlots.length > 0) {
         finalProviderConsumed = boundSlots.every((s) => s.providerConsumed);
+        finalDesignReferenced = boundSlots.every((s) => s.designProviderReferencedFinalAsset ?? false);
+        finalDesignConsumed = boundSlots.every((s) => s.designProviderConsumedFinalAsset ?? false);
       }
+    }
+    if (acceptedSlots.length > 0) {
+      finalVisualConsumedSource = acceptedSlots.some((s) => s.visualProviderConsumedSourceAsset);
+      finalVisualProduced = acceptedSlots.some((s) => s.visualProviderProducedAsset);
     }
     const finalDesignPass = {
       required: Boolean(
@@ -1693,6 +1787,10 @@ export class VisualService {
       acceptedDesignVersion: latestDesign?.artifact.version ?? null,
       designStalenessCode: latestDesign?.staleness.code ?? null,
       providerConsumed: finalProviderConsumed,
+      visualProviderConsumedSourceAsset: finalVisualConsumedSource,
+      visualProviderProducedAsset: finalVisualProduced,
+      designProviderReferencedFinalAsset: finalDesignReferenced,
+      designProviderConsumedFinalAsset: finalDesignConsumed,
     };
 
     return {
@@ -1735,6 +1833,10 @@ export class VisualService {
                 resolutionMode: s.resolutionMode,
                 truthClass: s.truthClass,
                 providerConsumed,
+                visualProviderConsumedSourceAsset: s.visualProviderConsumedSourceAsset ?? false,
+                visualProviderProducedAsset: s.visualProviderProducedAsset ?? false,
+                designProviderReferencedFinalAsset: true,
+                designProviderConsumedFinalAsset: false,
               };
             }),
           }

@@ -106,12 +106,16 @@ export class FixtureDesignProvider implements DesignProvider {
                 boundAssetVersionId: bound.versionId,
                 boundBinaryDigest: bound.binaryDigest,
                 boundGovernanceDigest: bound.governanceDigest,
-                providerConsumed: true,
+                providerConsumed: false,
+                designProviderReferencedFinalAsset: true,
+                designProviderConsumedFinalAsset: false,
                 placeholder: false,
               }
             : {
                 unresolvedReason: `No approved asset assignment for ${representative.slug}/${slotRole}.`,
                 providerConsumed: false,
+                designProviderReferencedFinalAsset: false,
+                designProviderConsumedFinalAsset: false,
                 placeholder: true,
               }),
         });

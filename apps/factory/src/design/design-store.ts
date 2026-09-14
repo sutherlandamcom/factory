@@ -25,6 +25,7 @@ import {
   visualAssetPlans,
   visualGenerationRequests,
   visualPromptSnapshots,
+  visualSlotResolutions,
   type AcceptedDesignArtifactRecord,
   type DesignCandidateRecord,
   type DesignInputSnapshotRecord,
@@ -298,14 +299,14 @@ export class DesignStore {
    *    (a) post-acceptance — the accepted set's slot row for the same
    *        page/role binds the exact current versionId + binaryDigest +
    *        governanceDigest; or
-   *    (b) pre-set-acceptance — a SELECTED provider candidate for that
-   *        plan slot (bound to the plan through its approved prompt
-   *        snapshot, from a succeeded request) whose binaryDigest exactly
-   *        equals the currently assigned bytes. This is the explicit
-   *        durable Run 7 resolution record for the lifecycle stage where
-   *        the set does not exist yet; it is never heuristic inference.
+   *    (b) pre-set-acceptance — a durable VisualSlotResolution record for that
+   *        plan slot (bound to the plan through planId, slot, pageSlug, role,
+   *        matching toVersionId, toBinaryDigest, and toGovernanceDigest).
+   *        This covers all four resolution modes symmetrically (reuse_real,
+   *        deterministic_transform, ai_edit, ai_generate) and is never heuristic
+   *        inference.
    *
-   * Any gap (no plan slot, no set row, no selected candidate, digest
+   * Any gap (no plan slot, no set row, no durable resolution, digest
    * mismatch, wrong slot) fails closed to ASSET_ASSIGNMENT_CHANGED.
    */
   private async isAuthorizedPlanReplacement(
@@ -318,12 +319,13 @@ export class DesignStore {
       approvalState: string;
       assetProjectId: string;
     },
+    tx: FactoryDb = this.db,
   ): Promise<boolean> {
     if (current.approvalState !== "approved" || current.assetProjectId !== projectId) {
       return false;
     }
     // Step 1: a plan slot that planned exactly this old->new transition.
-    const [plan] = await this.db
+    const [plan] = await tx
       .select({ id: visualAssetPlans.id, slots: visualAssetPlans.slots })
       .from(visualAssetPlans)
       .where(eq(visualAssetPlans.projectId, projectId))
@@ -340,7 +342,7 @@ export class DesignStore {
     // Step 2a: the current assignment equals the exact accepted Run 7
     // resolution for that slot (latest AcceptedVisualAssetSet bound to the
     // plan; slot row identity + both digests must match exactly).
-    const [set] = await this.db
+    const [set] = await tx
       .select({ id: acceptedVisualAssetSets.id })
       .from(acceptedVisualAssetSets)
       .where(
@@ -352,7 +354,7 @@ export class DesignStore {
       .orderBy(desc(acceptedVisualAssetSets.version))
       .limit(1);
     if (set) {
-      const [slotRow] = await this.db
+      const [slotRow] = await tx
         .select({
           resolvedVersionId: acceptedVisualAssetSlots.resolvedVersionId,
           binaryDigest: acceptedVisualAssetSlots.binaryDigest,
@@ -380,26 +382,36 @@ export class DesignStore {
     }
 
     // Step 2b: pre-acceptance durable Run 7 resolution record — the
-    // selected candidate for this plan slot, from a succeeded request bound
-    // to the plan via its approved prompt snapshot, whose bytes are exactly
-    // the currently assigned bytes.
-    const [selected] = await this.db
-      .select({ id: visualAssetCandidates.id })
-      .from(visualAssetCandidates)
-      .innerJoin(visualGenerationRequests, eq(visualAssetCandidates.requestId, visualGenerationRequests.id))
-      .innerJoin(visualPromptSnapshots, eq(visualGenerationRequests.promptSnapshotId, visualPromptSnapshots.id))
+    // durable slot resolution for this plan slot, covering all 4 resolution
+    // modes symmetrically (reuse_real, deterministic_transform, ai_edit, ai_generate).
+    const [resolution] = await tx
+      .select({
+        id: visualSlotResolutions.id,
+        fromVersionId: visualSlotResolutions.fromVersionId,
+        toVersionId: visualSlotResolutions.toVersionId,
+        toBinaryDigest: visualSlotResolutions.toBinaryDigest,
+        toGovernanceDigest: visualSlotResolutions.toGovernanceDigest,
+      })
+      .from(visualSlotResolutions)
       .where(
         and(
-          eq(visualAssetCandidates.projectId, projectId),
-          eq(visualAssetCandidates.slot, plannedSlot.slot),
-          eq(visualAssetCandidates.state, "selected"),
-          eq(visualGenerationRequests.resultState, "succeeded"),
-          eq(visualPromptSnapshots.planId, plan.id),
-          eq(visualAssetCandidates.binaryDigest, current.binaryDigest),
+          eq(visualSlotResolutions.projectId, projectId),
+          eq(visualSlotResolutions.planId, plan.id),
+          eq(visualSlotResolutions.slot, plannedSlot.slot),
+          eq(visualSlotResolutions.pageSlug, ref.pageSlug),
+          eq(visualSlotResolutions.role, ref.role),
+          eq(visualSlotResolutions.toVersionId, current.versionId),
+          eq(visualSlotResolutions.toBinaryDigest, current.binaryDigest),
+          eq(visualSlotResolutions.toGovernanceDigest, current.governanceDigest),
         ),
       )
       .limit(1);
-    return selected !== undefined;
+
+    if (!resolution) return false;
+    if (ref.versionId && resolution.fromVersionId && resolution.fromVersionId !== ref.versionId) {
+      return false;
+    }
+    return true;
   }
 
 
@@ -756,7 +768,7 @@ export class DesignStore {
       if (current.acceptedPageContentId !== ref.acceptedPageContentId || current.acceptedPageContentVersion !== ref.acceptedPageContentVersion || current.acceptedPageContentDigest !== ref.acceptedPageContentDigest || !validAssignmentAuthority(current, projectId) ||
           current.binaryDigest !== ref.binaryDigest || current.versionId !== ref.versionId ||
           current.governanceDigest !== ref.governanceDigest) {
-        const isAuthorizedReplacement = await this.isAuthorizedPlanReplacement(projectId, ref, current);
+        const isAuthorizedReplacement = await this.isAuthorizedPlanReplacement(projectId, ref, current, tx);
         if (isAuthorizedReplacement) {
           return {
             stale: true,

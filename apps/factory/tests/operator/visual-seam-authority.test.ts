@@ -525,6 +525,10 @@ test("TRUTHFULNESS 1: ai_generate slot reports providerConsumed=true; workspace 
   const slot = ws.acceptedSet.slots.find((s) => s.slot === "hero.primary")!;
   assert.equal(slot.resolutionMode, "ai_generate");
   assert.equal(slot.providerConsumed, true, "ai_generate actually delivered bytes to the provider");
+  assert.equal(slot.visualProviderProducedAsset, true, "ai_generate produced asset bytes");
+  assert.equal(slot.visualProviderConsumedSourceAsset, false, "ai_generate did not consume source asset");
+  assert.equal(slot.designProviderReferencedFinalAsset, true, "design references final asset");
+  assert.equal(slot.designProviderConsumedFinalAsset, false, "design provider is text-only seam");
 });
 
 test("TRUTHFULNESS 2: reuse_real slot reports providerConsumed=false (provider never saw the bytes)", async () => {
@@ -567,4 +571,8 @@ test("TRUTHFULNESS 2: reuse_real slot reports providerConsumed=false (provider n
   const slot = ws.acceptedSet!.slots.find((s) => s.slot === "hero.primary")!;
   assert.equal(slot.resolutionMode, "reuse_real");
   assert.equal(slot.providerConsumed, false, "reuse never involves the provider");
+  assert.equal(slot.visualProviderProducedAsset, false, "reuse does not produce asset bytes");
+  assert.equal(slot.visualProviderConsumedSourceAsset, false, "reuse does not consume source asset");
+  assert.equal(slot.designProviderReferencedFinalAsset, true, "design references final asset");
+  assert.equal(slot.designProviderConsumedFinalAsset, false, "design provider is text-only seam");
 });

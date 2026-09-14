@@ -128,6 +128,8 @@ export class ProjectIntakeStore {
     expectedDigest: string;
   }): Promise<AcceptedSnapshot> {
     return await this.db.transaction(async (tx) => {
+      // Serialize against concurrent final design acceptance and authority writes (P1-03)
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
       // Lock the draft row so concurrent accepts serialize.
       const [draft] = await tx
         .select()

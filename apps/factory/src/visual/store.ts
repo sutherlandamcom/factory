@@ -16,6 +16,7 @@ import {
   visualGenerationRequests,
   visualPromptSnapshots,
   visualSlotClassifications,
+  visualSlotResolutions,
   type AcceptedVisualAssetSetRecord,
   type AcceptedVisualAssetSlotRecord,
   type VisualAssetCandidateRecord,
@@ -23,6 +24,8 @@ import {
   type VisualGenerationRequestRecord,
   type VisualPromptSnapshotRecord,
   type VisualSlotClassificationRecord,
+  type VisualSlotResolutionRecord,
+  type InsertVisualSlotResolution,
 } from "../persistence/schema.js";
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
@@ -647,9 +650,12 @@ export class VisualStore {
       promptSnapshotId?: string | null;
       generationRequestId?: string | null;
       candidateId?: string | null;
+      visualProviderConsumedSourceAsset?: boolean;
+      visualProviderProducedAsset?: boolean;
     }>;
   }): Promise<AcceptedVisualAssetSetRecord> {
     return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
       const [latest] = await tx
         .select({ version: acceptedVisualAssetSets.version })
         .from(acceptedVisualAssetSets)
@@ -690,6 +696,8 @@ export class VisualStore {
             governanceDigest: slot.governanceDigest,
             resolutionMode: slot.resolutionMode,
             truthClass: slot.truthClass,
+            visualProviderConsumedSourceAsset: slot.visualProviderConsumedSourceAsset ?? false,
+            visualProviderProducedAsset: slot.visualProviderProducedAsset ?? false,
             promptSnapshotId: slot.promptSnapshotId ?? null,
             generationRequestId: slot.generationRequestId ?? null,
             candidateId: slot.candidateId ?? null,
@@ -707,6 +715,100 @@ export class VisualStore {
         throw error;
       }
     });
+  }
+
+  /**
+   * Record a durable, plan-specific, slot-specific resolution authority (P1-01 / P1-02).
+   * Runs under project-level advisory xact lock.
+   * Idempotent for identical resolution; conflicting resolution fails closed with
+   * typed error visual_slot_resolution_conflict.
+   */
+  async recordSlotResolution(
+    input: Omit<InsertVisualSlotResolution, "id" | "createdAt">,
+  ): Promise<VisualSlotResolutionRecord> {
+    return await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
+      const [existing] = await tx
+        .select()
+        .from(visualSlotResolutions)
+        .where(
+          and(
+            eq(visualSlotResolutions.planId, input.planId),
+            eq(visualSlotResolutions.slot, input.slot),
+          ),
+        );
+      const [set] = await tx
+        .select({ id: acceptedVisualAssetSets.id })
+        .from(acceptedVisualAssetSets)
+        .where(
+          and(
+            eq(acceptedVisualAssetSets.projectId, input.projectId),
+            eq(acceptedVisualAssetSets.planId, input.planId),
+          ),
+        )
+        .limit(1);
+      if (set) {
+        throw visualError(
+          "visual_set_immutable",
+          `Accepted visual set already exists for plan ${input.planId}; slot resolution cannot be modified.`,
+        );
+      }
+
+      if (existing) {
+        const [updated] = await tx
+          .update(visualSlotResolutions)
+          .set({
+            pageSlug: input.pageSlug,
+            role: input.role,
+            fromAssetId: input.fromAssetId,
+            fromVersionId: input.fromVersionId,
+            fromBinaryDigest: input.fromBinaryDigest,
+            fromGovernanceDigest: input.fromGovernanceDigest,
+            toAssetId: input.toAssetId,
+            toVersionId: input.toVersionId,
+            toBinaryDigest: input.toBinaryDigest,
+            toGovernanceDigest: input.toGovernanceDigest,
+            resolutionMode: input.resolutionMode,
+            visualProviderConsumedSourceAsset: input.visualProviderConsumedSourceAsset ?? false,
+            visualProviderProducedAsset: input.visualProviderProducedAsset ?? false,
+            promptSnapshotId: input.promptSnapshotId,
+            generationRequestId: input.generationRequestId,
+            candidateId: input.candidateId,
+            createdAt: new Date(),
+          })
+          .where(eq(visualSlotResolutions.id, existing.id))
+          .returning();
+        return updated!;
+      }
+      const [row] = await tx
+        .insert(visualSlotResolutions)
+        .values({
+          id: `vsr-${randomUUID()}`,
+          ...input,
+        })
+        .returning();
+      return row!;
+    });
+  }
+
+  async getSlotResolution(planId: string, slot: string): Promise<VisualSlotResolutionRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(visualSlotResolutions)
+      .where(
+        and(
+          eq(visualSlotResolutions.planId, planId),
+          eq(visualSlotResolutions.slot, slot),
+        ),
+      );
+    return row ?? null;
+  }
+
+  async listSlotResolutions(planId: string): Promise<VisualSlotResolutionRecord[]> {
+    return await this.db
+      .select()
+      .from(visualSlotResolutions)
+      .where(eq(visualSlotResolutions.planId, planId));
   }
 
   async createSet(input: {

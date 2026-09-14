@@ -249,6 +249,43 @@ export const visualClassificationSchema = z
 export type VisualClassificationInput = z.infer<typeof visualClassificationSchema>;
 
 // ---------------------------------------------------------------------------
+// Durable slot resolution authority (P1-01 / P1-02)
+// ---------------------------------------------------------------------------
+
+export const visualSlotResolutionSchema = z
+  .object({
+    id: z.string().trim().regex(/^vsr-[0-9a-f-]{36}$/),
+    projectId: z.string().trim().min(1).max(128),
+    planId: z.string().trim().min(1).max(128),
+    slot: z.string().trim().min(1).max(120),
+    pageSlug: z.string().trim().min(1).max(120),
+    role: z.string().trim().min(1).max(60),
+
+    fromAssetId: z.string().trim().max(128).nullable().optional(),
+    fromVersionId: z.string().trim().max(128).nullable().optional(),
+    fromBinaryDigest: visualDigestSchema.nullable().optional(),
+    fromGovernanceDigest: visualDigestSchema.nullable().optional(),
+
+    toAssetId: z.string().trim().min(1).max(128),
+    toVersionId: z.string().trim().min(1).max(128),
+    toBinaryDigest: visualDigestSchema,
+    toGovernanceDigest: visualDigestSchema,
+
+    resolutionMode: visualResolutionModeSchema,
+
+    visualProviderConsumedSourceAsset: z.boolean().default(false),
+    visualProviderProducedAsset: z.boolean().default(false),
+
+    promptSnapshotId: z.string().trim().max(128).nullable().optional(),
+    generationRequestId: z.string().trim().max(128).nullable().optional(),
+    candidateId: z.string().trim().max(128).nullable().optional(),
+
+    createdAt: z.date().or(z.string()),
+  })
+  .strict();
+export type VisualSlotResolutionData = z.infer<typeof visualSlotResolutionSchema>;
+
+// ---------------------------------------------------------------------------
 // Prompt snapshot (immutable, digest-bound; human-approved before spend)
 // ---------------------------------------------------------------------------
 
@@ -460,6 +497,8 @@ export const VISUAL_ERROR_CODES = [
   "visual_set_immutable",
   /** Slot has no accepted resolution yet (set acceptance fail-closed). */
   "visual_slot_unresolved",
+  /** Conflicting slot resolution attempted for the same plan slot. */
+  "visual_slot_resolution_conflict",
   /** Follower timeout waiting for concurrent provider generation to complete. */
   "visual_generation_timeout",
 ] as const;

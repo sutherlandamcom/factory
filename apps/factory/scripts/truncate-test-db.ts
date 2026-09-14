@@ -29,7 +29,7 @@ const inst = createDatabaseInstance(
   resolveDatabaseConfig({ test: true, url: raw, requireConfigured: true }),
 );
 await inst.db.execute(
-  sql`TRUNCATE TABLE accepted_visual_asset_slots, accepted_visual_asset_sets, visual_asset_candidates, visual_generation_requests, visual_prompt_snapshots, visual_slot_classifications, visual_asset_plans, visual_budget_reservations, project_asset_settings, asset_page_assignments, asset_derivatives, asset_versions, assets, accepted_design_artifacts, design_candidates, design_input_snapshots, accepted_content_gap_snapshots, content_gap_decisions, content_gap_reports, competitor_page_analyses, competitor_classification_overrides, competitor_page_snapshots, competitor_runs, deployments, model_invocations, quality_results, attempts, tasks, runs, sites, projects, project_input_snapshots, project_input_drafts CASCADE;`,
+  sql`TRUNCATE TABLE visual_slot_resolutions, accepted_visual_asset_slots, accepted_visual_asset_sets, visual_asset_candidates, visual_generation_requests, visual_prompt_snapshots, visual_slot_classifications, visual_asset_plans, visual_budget_reservations, project_asset_settings, asset_page_assignments, asset_derivatives, asset_versions, assets, accepted_design_artifacts, design_candidates, design_input_snapshots, accepted_content_gap_snapshots, content_gap_decisions, content_gap_reports, competitor_page_analyses, competitor_classification_overrides, competitor_page_snapshots, competitor_runs, deployments, model_invocations, quality_results, attempts, tasks, runs, sites, projects, project_input_snapshots, project_input_drafts CASCADE;`,
 );
 console.log("[truncate-test-db] done");
 await inst.close();

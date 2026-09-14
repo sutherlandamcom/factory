@@ -632,6 +632,8 @@ export class AssetStore {
     expectedTargetBinaryDigest: string;
   }): Promise<AssignmentRow> {
     return await this.db.transaction(async (tx) => {
+      // Serialize against concurrent final design acceptance and authority writes (P1-03)
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
       const [assignment] = await tx
         .select()
         .from(assetPageAssignments)

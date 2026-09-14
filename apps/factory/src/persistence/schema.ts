@@ -1790,6 +1790,12 @@ export const acceptedVisualAssetSlots = pgTable(
       onDelete: "set null",
     }),
     candidateId: text("candidate_id").references(() => visualAssetCandidates.id, { onDelete: "set null" }),
+    visualProviderConsumedSourceAsset: boolean("visual_provider_consumed_source_asset")
+      .notNull()
+      .default(false),
+    visualProviderProducedAsset: boolean("visual_provider_produced_asset")
+      .notNull()
+      .default(false),
     acceptedAt: timestamp("accepted_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
@@ -1811,6 +1817,78 @@ export const acceptedVisualAssetSlots = pgTable(
       sql`NOT (${table.resolutionMode} = 'ai_generate' AND ${table.truthClass} IN ('documentary', 'documentary_edited', 'data_visualization'))`,
     ),
     index("accepted_visual_asset_slots_project_idx").on(table.projectId),
+  ],
+);
+
+/**
+ * Durable, plan-specific, slot-specific resolution authority (P1-01 / P1-02).
+ * Records exact resolution evidence for all 4 modes: reuse_real,
+ * deterministic_transform, ai_edit, ai_generate.
+ * Unique on (plan_id, slot).
+ */
+export const visualSlotResolutions = pgTable(
+  "visual_slot_resolutions",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    planId: text("plan_id")
+      .notNull()
+      .references(() => visualAssetPlans.id, { onDelete: "cascade" }),
+    slot: text("slot").notNull(),
+    pageSlug: text("page_slug").notNull(),
+    role: text("role").notNull(),
+
+    fromAssetId: text("from_asset_id"),
+    fromVersionId: text("from_version_id"),
+    fromBinaryDigest: text("from_binary_digest"),
+    fromGovernanceDigest: text("from_governance_digest"),
+
+    toAssetId: text("to_asset_id").notNull(),
+    toVersionId: text("to_version_id")
+      .notNull()
+      .references(() => assetVersions.id, { onDelete: "restrict" }),
+    toBinaryDigest: text("to_binary_digest").notNull(),
+    toGovernanceDigest: text("to_governance_digest").notNull(),
+
+    resolutionMode: text("resolution_mode").notNull(),
+
+    visualProviderConsumedSourceAsset: boolean("visual_provider_consumed_source_asset")
+      .notNull()
+      .default(false),
+    visualProviderProducedAsset: boolean("visual_provider_produced_asset")
+      .notNull()
+      .default(false),
+
+    promptSnapshotId: text("prompt_snapshot_id").references(() => visualPromptSnapshots.id, {
+      onDelete: "set null",
+    }),
+    generationRequestId: text("generation_request_id").references(() => visualGenerationRequests.id, {
+      onDelete: "set null",
+    }),
+    candidateId: text("candidate_id").references(() => visualAssetCandidates.id, {
+      onDelete: "set null",
+    }),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("visual_slot_resolutions_plan_slot_unique").on(table.planId, table.slot),
+    check(
+      "visual_slot_resolutions_to_digests_shape",
+      sql`${table.toBinaryDigest} ~ '^[0-9a-f]{64}$' AND ${table.toGovernanceDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "visual_slot_resolutions_from_digests_shape",
+      sql`(${table.fromBinaryDigest} IS NULL OR ${table.fromBinaryDigest} ~ '^[0-9a-f]{64}$')
+          AND (${table.fromGovernanceDigest} IS NULL OR ${table.fromGovernanceDigest} ~ '^[0-9a-f]{64}$')`,
+    ),
+    check(
+      "visual_slot_resolutions_resolution_mode_valid",
+      sql`${table.resolutionMode} IN ('reuse_real', 'deterministic_transform', 'ai_edit', 'ai_generate')`,
+    ),
+    index("visual_slot_resolutions_project_idx").on(table.projectId, table.planId),
   ],
 );
 
@@ -1859,6 +1937,8 @@ export type VisualGenerationRequestRecord = typeof visualGenerationRequests.$inf
 export type VisualAssetCandidateRecord = typeof visualAssetCandidates.$inferSelect;
 export type AcceptedVisualAssetSetRecord = typeof acceptedVisualAssetSets.$inferSelect;
 export type AcceptedVisualAssetSlotRecord = typeof acceptedVisualAssetSlots.$inferSelect;
+export type VisualSlotResolutionRecord = typeof visualSlotResolutions.$inferSelect;
+export type InsertVisualSlotResolution = typeof visualSlotResolutions.$inferInsert;
 export type VisualBudgetReservationRecord = typeof visualBudgetReservations.$inferSelect;
 
 export const searchBudgetReservations = pgTable(

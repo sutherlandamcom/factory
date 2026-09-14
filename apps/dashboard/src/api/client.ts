@@ -1172,6 +1172,10 @@ export interface VisualWorkspace {
       truthClass: string;
       /** TRUE only when the provider actually consumed the exact asset bytes. */
       providerConsumed: boolean;
+      visualProviderConsumedSourceAsset?: boolean;
+      visualProviderProducedAsset?: boolean;
+      designProviderReferencedFinalAsset?: boolean;
+      designProviderConsumedFinalAsset?: boolean;
     }>;
   } | null;
   budget: { accountedTodayMicros: number; activeReservationMicros: number };
@@ -1182,6 +1186,10 @@ export interface VisualWorkspace {
     designStalenessCode: string | null;
     /** TRUE only when the design provider actually consumed the bound assets. */
     providerConsumed: boolean | null;
+    visualProviderConsumedSourceAsset?: boolean | null;
+    visualProviderProducedAsset?: boolean | null;
+    designProviderReferencedFinalAsset?: boolean | null;
+    designProviderConsumedFinalAsset?: boolean | null;
   };
 }
 

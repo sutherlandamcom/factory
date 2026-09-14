@@ -110,18 +110,24 @@ export const designAssetSlotSchema = z
     /** Exact governance digest of the bound version (bind-time copy). */
     boundGovernanceDigest: designDigestSchema.optional(),
     /**
-     * TRUE only when the provider actually received/consumed the real asset.
-     * A slot may be bound (Factory knows the asset) without being consumed
-     * (the provider never saw it) — these states are never conflated.
+     * Explicit evidence dimensions (P2):
+     * - designProviderReferencedFinalAsset: TRUE when the design provider emitted a binding/reference (e.g. img tag or screen slot) to the final asset
+     * - designProviderConsumedFinalAsset: TRUE ONLY when the design provider actually ingested/consumed the final asset bytes
      */
-    providerConsumed: z.boolean(),
+    designProviderReferencedFinalAsset: z.boolean().default(false),
+    designProviderConsumedFinalAsset: z.boolean().default(false),
+    /**
+     * @deprecated Ambiguous legacy field retained for schema backwards compatibility.
+     * Narrowly represents whether the provider consumed the asset bytes.
+     */
+    providerConsumed: z.boolean().default(false),
     /** Placeholder handling (false when the provider consumes an approved asset). */
     placeholder: z.boolean(),
     /** Why the slot is unresolved, when it is (typed, bounded reason). */
     unresolvedReason: z.string().trim().max(300).optional(),
   })
   .strict()
-  .refine((slot) => slot.providerConsumed === false || (slot.boundAssetVersionId !== undefined && slot.boundBinaryDigest !== undefined), {
+  .refine((slot) => (slot.providerConsumed === false && slot.designProviderConsumedFinalAsset === false) || (slot.boundAssetVersionId !== undefined && slot.boundBinaryDigest !== undefined), {
     message: "providerConsumed=true requires a bound asset version and binary digest",
   });
 export type DesignAssetSlot = z.infer<typeof designAssetSlotSchema>;

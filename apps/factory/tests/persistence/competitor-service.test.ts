@@ -103,7 +103,7 @@ async function seedEnvironment() {
   });
   await inst.db.execute(sql`
     INSERT INTO search_intelligence_snapshots (id, run_id, project_id, accepted_input_snapshot_id, accepted_input_version, accepted_input_digest, query, model, provider, prompt_version, prompt_digest, serp_snapshot_id, evidence_digests, data, snapshot_digest)
-    VALUES ('intel-1', 'sr-1', 'proj-1', 'in-1', 1, 'd1', 'investissement immobilier chamonix', 'fixture-analyst', 'fixture', 'search-analyst-v1', 'pd', 'serp-1', '{}'::jsonb, ${intel}::jsonb, 'id-1')
+    VALUES ('intel-1', 'sr-1', 'proj-1', 'in-1', 1, 'd1', 'investissement immobilier chamonix', 'fixture-analyst', 'fixture', 'search-analyst-v1', 'pd', 'serp-1', ${JSON.stringify({ serp: 'a'.repeat(64) })}::jsonb, ${intel}::jsonb, 'id-1')
   `);
   return inst;
 }

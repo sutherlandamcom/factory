@@ -167,8 +167,9 @@ async function approveAndAssignHeroAsset(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Approve exact digest" }).first().click();
   await expect(page.getByText(/Version v1 approved and immutable/)).toBeVisible({ timeout: 15_000 });
   await page.getByRole("combobox", { name: "Accepted page" }).last().selectOption(PAGE_SLUG);
+  await page.getByRole("combobox", { name: "Slot/role" }).last().selectOption("background");
   await page.getByRole("button", { name: "Assign to page slot" }).click();
-  await expect(page.getByText(new RegExp(`Assigned v1 to ${PAGE_SLUG}/hero`))).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(new RegExp(`Assigned v1 to ${PAGE_SLUG}/background`))).toBeVisible({ timeout: 15_000 });
 }
 
 /** Accepted fixture design (the visual plan's upstream authority). */
@@ -181,7 +182,7 @@ async function acceptFixtureDesign(page: Page): Promise<void> {
   await expect(page.locator("h3", { hasText: "Candidate Design" })).toBeVisible({ timeout: 30_000 });
   await page.locator("#design-review-notes").fill("fixture acceptance — visual journey");
   await page.getByRole("button", { name: "Accept design" }).click();
-  await expect(page.locator("h3", { hasText: "Accepted Design" })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTitle("Accepted from a deterministic fixture candidate — NOT live Google Stitch evidence")).toBeVisible({ timeout: 15_000 });
 }
 
 test.describe("Visual assets journey", () => {

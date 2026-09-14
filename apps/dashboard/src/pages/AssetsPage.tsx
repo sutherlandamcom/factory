@@ -379,6 +379,7 @@ export function AssetsPage({ projectId }: { projectId: string }) {
                     <div>
                       <label className="block text-xs text-gray-600 mb-1">Slot/role</label>
                       <select
+                        aria-label="Slot/role"
                         value={assignForm?.versionId === version.id ? assignForm.role : "hero"}
                         onChange={(e) => setAssignForm({ versionId: version.id, pageSlug: assignForm?.versionId === version.id ? assignForm.pageSlug : "", role: e.target.value })}
                         className="rounded border border-gray-300 px-2 py-1 text-sm"

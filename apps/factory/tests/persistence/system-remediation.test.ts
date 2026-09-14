@@ -73,7 +73,9 @@ test("P1-C/D: cross-project cache and real concurrent UNKNOWN-cost ceiling", asy
     const a = await seedProjectWithAcceptedInputs(db, "system-a"), b = await seedProjectWithAcceptedInputs(db, "system-b");
     const search = new SearchStore(db.db);
     const run = (await search.listRuns(a.projectId))[0]!;
-    assert.equal(await search.findFreshSerp(b.projectId, run.requestDigest, 1000), null);
+    const cacheReads = await Promise.all([search.findFreshSerp(a.projectId, run.requestDigest, 1000), new SearchStore(other.db).findFreshSerp(b.projectId, run.requestDigest, 1000)]);
+    assert.equal(cacheReads[0]!.run.projectId, a.projectId);
+    assert.equal(cacheReads[1], null);
     const budget = new WriterBudgetStore(db.db, searchBudgetReservations), competing = new WriterBudgetStore(other.db, searchBudgetReservations);
     const input = { provider: "test", model: "test", authorizedMicros: 600000, invocationDigest: "a".repeat(64) };
     const outcomes = await Promise.allSettled([budget.reserveWriterBudget(input, 1), competing.reserveWriterBudget(input, 1)]);
@@ -185,4 +187,53 @@ test("P1-E/G: upstream commit while acceptance waits is rechecked under the proj
     await client.query("COMMIT");
     await rejection;
   } finally { await client.query("ROLLBACK"); client.release(); await db.close(); }
+});
+
+
+test("P1-B: historical malformed intelligence is inspectable but cannot retain page authority", async () => {
+  const db = await setupMigratedTestDatabase();
+  try {
+    const seed = await seedProjectWithAcceptedInputs(db, "system-malformed");
+    const page = await acceptFixturePage(db, seed.projectId, "home");
+    await db.pool.query("UPDATE search_intelligence_snapshots SET data = jsonb_set(data, '{evidenceRefs}', $1::jsonb) WHERE project_id = $2", [JSON.stringify([{ kind: "serp_snapshot", id: "historical", digest: "pending" }]), seed.projectId]);
+    await assert.rejects(new PageAuthorityReader(db.db).requireCurrent(seed.projectId, page), /evidence lineage/);
+    assert.equal((await new PageAuthorityReader(db.db).historical(seed.projectId, page.id))!.id, page.id);
+  } finally { await db.close(); }
+});
+
+
+test("P1-G: two proposals for the same approved snapshot serialize same-slug acceptance", async () => {
+  const db = await setupMigratedTestDatabase();
+  try {
+    const seed = await seedProjectWithAcceptedInputs(db, "system-same-slug-race");
+    const first = await prepareFixturePage(db, seed.projectId, "home");
+    const second = await first.service.generateProposal({ projectId: seed.projectId, snapshotId: first.proposal.snapshotId });
+    await first.service.runQa({ projectId: seed.projectId });
+    const accepted = await Promise.all([first.proposal, second].map(proposal => first.service.acceptContent({ projectId: seed.projectId, proposalId: proposal.id, expectedProposalDigest: proposal.digest })));
+    assert.deepEqual(accepted.map(page => page.version).sort(), [1, 2]);
+    assert.equal((await new PageAuthorityReader(db.db).currentPages(seed.projectId))[0]!.version, 2);
+  } finally { await db.close(); }
+});
+
+
+test("P1-I: evidence mutation during provider completion prevents a usable Design candidate", async () => {
+  const db = await setupMigratedTestDatabase();
+  try {
+    const seed = await seedProjectWithAcceptedInputs(db, "system-design-provider-race");
+    await acceptFixturePage(db, seed.projectId, "home");
+    const store = new DesignStore(db.db);
+    await store.deriveInputSnapshotDraft({ projectId: seed.projectId });
+    const { FixtureDesignProvider } = await import("../../src/design/fixture-provider.js");
+    const { DesignService } = await import("../../src/design/service.js");
+    const provider = new FixtureDesignProvider();
+    const generate = provider.generateDesignSystem.bind(provider);
+    provider.generateDesignSystem = async request => {
+      const result = await generate(request);
+      await db.pool.query("UPDATE serp_snapshots SET snapshot_digest = $1 WHERE project_id = $2", ["f".repeat(64), seed.projectId]);
+      return result;
+    };
+    const service = await DesignService.create({ store, provider });
+    await assert.rejects(service.generateCandidate({ projectId: seed.projectId }), /SERP/);
+    assert.equal((await db.pool.query("SELECT id FROM design_candidates WHERE project_id = $1", [seed.projectId])).rowCount, 0);
+  } finally { await db.close(); }
 });

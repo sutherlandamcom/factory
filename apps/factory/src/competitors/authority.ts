@@ -94,6 +94,22 @@ export class GapAuthorityReader {
       }
     }
 
+    if (boundIntel) {
+      const refs = (boundIntel.data as { evidenceRefs?: unknown })?.evidenceRefs;
+      const digests = boundIntel.evidenceDigests as Record<string, unknown> | null;
+      const expected = [{ kind: "serp_snapshot", id: boundIntel.serpSnapshotId, digest: boundSerp?.snapshotDigest }];
+      if (boundIntel.groundedSnapshotId) {
+        const grounded = await this.deps.competitorStore.getGroundedSnapshot(projectId, boundIntel.groundedSnapshotId);
+        expected.push({ kind: "grounded_snapshot", id: boundIntel.groundedSnapshotId, digest: grounded?.snapshotDigest });
+      }
+      if (!Array.isArray(refs) || refs.length !== expected.length || expected.some(ref =>
+        typeof ref.digest !== "string" || !/^[0-9a-f]{64}$/.test(ref.digest) ||
+        digests?.[ref.kind === "serp_snapshot" ? "serp" : "grounded"] !== ref.digest ||
+        !refs.some(actual => actual?.kind === ref.kind && actual?.id === ref.id && actual?.digest === ref.digest))) {
+        reasons.push("Search intelligence evidence lineage is malformed or no longer matches persisted evidence.");
+      }
+    }
+
     // 4. Bound competitor run supersession
     if (bound.competitorRunId) {
       const boundRun = await this.deps.competitorStore.getRun(projectId, bound.competitorRunId);

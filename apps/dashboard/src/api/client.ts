@@ -663,7 +663,7 @@ export interface WriterWorkspace {
   brief: { latest: ContentBriefView | null; versions: Array<{ id: string; version: number; state: string; digest: string; slug: string; createdAt: string }> };
   snapshot: { latest: WriterSnapshotView | null; versions: Array<{ id: string; version: number; state: string; digest: string; createdAt: string }> };
   proposal: { latest: WriterProposalView | null; versions: Array<{ id: string; version: number; digest: string; slug: string; createdAt: string }> };
-  accepted: { latest: AcceptedContentView | null; versions?: Array<{ id: string; version: number; slug: string; digest: string }> };
+  accepted: { latest: AcceptedContentView | null; currentPages?: Array<{ id: string; version: number; slug: string; digest: string }>; versions?: Array<{ id: string; version: number; slug: string; digest: string }> };
   devModelOverride: {
     active: boolean;
     roles: Array<{ roleId: string; model: string; championModel: string }>;

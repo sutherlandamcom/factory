@@ -586,9 +586,11 @@ export class WriterService {
     if (!this.qaStore) throw new FactoryError("internal_error", "QA store not configured.");
     const latest = await this.qaStore.latestAcceptedContent(projectId);
     const versions = (await this.qaStore.acceptedContentVersions(projectId)).map(row => ({ id: row.id, version: row.version, slug: row.slug, digest: row.contentDigest }));
-    if (!latest) return { latest: null, versions };
+    const currentPages = versions.filter((row, index) => versions.findIndex(other => other.slug === row.slug) === index);
+    if (!latest) return { latest: null, versions, currentPages };
     return {
       versions,
+      currentPages,
       latest: {
         id: latest.id,
         version: latest.version,

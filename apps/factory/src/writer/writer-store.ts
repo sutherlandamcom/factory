@@ -1036,7 +1036,7 @@ export class WriterQaStore {
       const [alreadyAccepted] = await tx.select().from(acceptedPageContent)
         .where(and(eq(acceptedPageContent.projectId, input.projectId), eq(acceptedPageContent.proposalId, input.proposalId)));
       if (alreadyAccepted) {
-        if (alreadyAccepted.proposalDigest !== input.expectedProposalDigest) throw staleError("Proposal digest mismatch.");
+        if (alreadyAccepted.proposalDigest !== input.expectedProposalDigest) throw new FactoryError("content_accept_failed", "Proposal digest mismatch.");
         return { ...alreadyAccepted, digest: alreadyAccepted.contentDigest };
       }
       const [proposal] = await tx

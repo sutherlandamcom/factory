@@ -163,31 +163,60 @@ AI edits of real photographs preserve `derivedFrom`, transformation/provider/mod
 
 Final design freeze occurs after actual assets are resolved so the design can adapt to the accepted real images. Freeze means the accepted Design + Content + VisualAsset authorities are mutually consistent by exact digests. If the selected DesignProvider cannot ingest the exact asset bytes (e.g. the current text-only Stitch seam), the design is still re-derived against the exact final asset lineage, `providerConsumed` stays false, and no UI or report may claim the provider generated with the actual assets.
 
+Run 7 resolution authority is durable and plan-specific for every visual slot.
+`reuse_real`, `deterministic_transform`, `ai_edit` and `ai_generate` must all
+record the exact old→new version/digest transition before a visual set can
+become accepted. `AcceptedVisualAssetSet` must be built from that exact
+plan/slot resolution evidence rather than reconstructed from project-wide
+candidate history. Final design acceptance must be serialized with competing
+project authority mutations so a design cannot become stale inside its own
+acceptance commit.
+
+Evidence must distinguish different provider claims. In particular, visual
+provider source-byte consumption, visual-provider output generation, design
+provider reference to a final asset and design-provider consumption of final
+asset bytes are different facts and must not be collapsed into one optimistic
+boolean.
+
 ## 12. Production should become deterministic at scale
 
 Do not invoke a code/design model for every routine page if an accepted design archetype plus structured content/assets can be rendered deterministically.
 
 Target pattern:
 
-`accepted archetype + AcceptedPageContent + ApprovedAssets + SEO/derivatives -> deterministic production`.
+`AcceptedDesignArtifact/archetype + AcceptedPageContent + AcceptedVisualAssetSet + SEO/derivatives -> deterministic Astro production`.
 
 Code workers become an exception path for custom/interactive functionality or genuinely non-template implementation work.
 
-## 13. Astro is transitional, not sacred
+## 13. Astro static is the selected ordinary production renderer
 
-Astro 7 + Tailwind CSS 4 is the **current accepted production path**. It remains protected until an explicit empirical bake-off compares:
+Run 8 selected Astro 7 + Tailwind CSS 4 as Factory's ordinary production
+renderer through an evidence-based architecture review rather than a duplicate
+throwaway production build.
 
-A. Design-provider HTML -> deterministic Factory normalization -> static production.
+Google Stitch remains the professional design authority. Accepted Stitch
+artifacts, DESIGN.md, screenshots and raw provider HTML may be retained as
+immutable implementation/design evidence, but they are not production content,
+asset or renderer authority.
 
-B. Design-provider output -> Astro implementation -> static production.
+Ordinary pages follow:
 
-Select on measurable implementation cost, token spend, semantic HTML, SEO, accessibility, Lighthouse/performance, JS/CSS weight, maintainability, archetype reuse and build complexity, plus one human visual calibration. Do not use expensive per-page multimodal screenshot comparison.
+`AcceptedPageContent + AcceptedDesignArtifact + AcceptedVisualAssetSet -> governed Astro archetype/component -> static HTML/CSS/assets`.
 
-If Astro does not create material value, remove it from the ordinary page-production path through a reviewed migration. Do not remove it by inference before that proof.
+Astro components implement accepted design; they do not redesign it. Client
+JavaScript remains opt-in for functionality that genuinely requires it.
+
+Factory does not maintain a parallel general-purpose Stitch-HTML/direct-static
+renderer. A later reviewed ADR may reverse this decision only if provider output
+offers a stable versioned semantic/slot contract and direct-static can
+demonstrably meet the same semantic HTML, SEO, accessibility, security,
+governance, visual-fidelity and 20/100-page maintenance requirements with
+materially lower total complexity.
 
 ## 14. Static production, SEO and performance
 
-Regardless of renderer, intended content pages should be static-first: complete semantic HTML at request time, minimal JavaScript and deterministic technical SEO.
+Production Astro pages should be static-first: complete semantic HTML at
+request time, minimal JavaScript and deterministic technical SEO.
 
 Factory owns/validates metadata, canonical identity, structured data, sitemap/robots/redirect semantics, internal links, image optimization and performance budgets.
 
@@ -308,7 +337,7 @@ Do not introduce or extend these patterns:
 10. VisualAssetProvider supplies synthetic/edited imagery where appropriate.
 11. Use AI once where possible; deterministic rendering/caching handles scale.
 12. Typical pages should eventually require no coding-model call.
-13. SEO, accessibility, performance, security and content integrity are deterministic gates where possible.
+13. SEO, accessibility, performance, security and content integrity are deterministic gates where possible; Astro is only the renderer and does not own those authorities.
 14. Dashboard is an operator console, never a second source of truth.
 15. Every additional model call, framework and transformation layer must justify its cost/complexity.
 16. Do not automate a mediocre process: choose the right specialist for each creative/intelligence stage, then automate the truthful handoff between them.

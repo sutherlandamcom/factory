@@ -16,35 +16,33 @@ the domain model.
 
 Every meaningful implementation PR ends at `IMPLEMENTATION COMPLETE — PENDING INDEPENDENT QA`; independent QA reviews an exact SHA, frozen P0/P1 findings are remediated narrowly, then the exact candidate is re-reviewed before merge.
 
-## Observed implementation status — 2026-09-06
+## Observed implementation status — 2026-09-14
 
-Verified main: `d6eeaaa593e45be3be259feb9cda61fa8b6567c4`.
-This entry supersedes the previous snapshot for navigation; the original
-2026-09-05 snapshot below remains historical evidence. Recheck live Git/PR state
-at session start. Merge, executed checks and independent acceptance remain
-distinct facts.
+Verified main: `15f38587b0d5caebfdcca38a94ae7dfaa179ac5e`.
+Recheck live Git/PR state at session start. Merge, executed checks and
+independent acceptance remain distinct facts; the table below is navigation,
+not a substitute for exact-SHA evidence.
 
 | Workstream | Observed state | Evidence / next gate |
 | --- | --- | --- |
-| Macro Run 1 — Operator Kernel / Intake | Implemented and merged | [PR #18](https://github.com/sutherlandamcom/factory/pull/18), final head `dd1cda5d5efe7394335c7bf0ca1678fde8ac5f15`; merged 2026-09-05; Operator code exists on inspected main |
-| Agent-instruction alignment | Merged; post-merge documentation inconsistencies require the present follow-up | [PR #19](https://github.com/sutherlandamcom/factory/pull/19), head `88c83e87cdbecb24d99839ab046790f9a615b5a2`; [candidate CI success](https://github.com/sutherlandamcom/factory/actions/runs/33989714882) |
-| Macro Run 2 — Live Search Intelligence | Implemented and merged | [PR #21](https://github.com/sutherlandamcom/factory/pull/21), merge commit `3bf9652e89f213c9ffd3b2fae2007d8ed155c68f`; Search Intelligence code merged into main |
-| Macro Run 3 — Competitors + Content Gap | Implemented and merged | [PR #24](https://github.com/sutherlandamcom/factory/pull/24), merge commit `46a556603047c4dce75ca3bbd05e1ed4b7ea817c`, merged 2026-09-11 |
-| Macro Run 4 — Content Constitution + Opus Writer | Implementation candidate; open, awaiting independent QA | Branch `feat/content-writer-v0`; deterministic QA green (unit, contracts, real-PostgreSQL persistence, Operator API, Dashboard unit, real-browser Content Writer E2E); see PR description for exact evidence |
-| Macro Runs 5–13 | Planned | Exit criteria below; no completion inferred from provider/eval scaffolding |
+| Macro Run 1 — Operator Kernel / Intake | Implemented and merged | [PR #18](https://github.com/sutherlandamcom/factory/pull/18), head `dd1cda5d5efe7394335c7bf0ca1678fde8ac5f15`, merge `263624c78d60779037543887eb60fcb617ba697f` |
+| Macro Run 2 — Live Search Intelligence | Implemented and merged | [PR #21](https://github.com/sutherlandamcom/factory/pull/21), merge `3bf9652e89f213c9ffd3b2fae2007d8ed155c68f`; later Runs 1–6 system remediation is present on current main |
+| Macro Run 3 — Competitors + Content Gap | Implemented and merged | [PR #24](https://github.com/sutherlandamcom/factory/pull/24), merge `46a556603047c4dce75ca3bbd05e1ed4b7ea817c`; later authority-chain remediation is present on current main |
+| Macro Run 4 — Content Constitution + Opus Writer | Implemented, independently QA'd and merged | [PR #25](https://github.com/sutherlandamcom/factory/pull/25), head `76d528c1a66ec3a4dbcaea87fa9787d246a6cdf2`, merge `590ed435c7d72a6e4f1e9289db337e837cdf534c` |
+| Macro Run 4.1 — QA Hardening | Implemented and merged | [PR #27](https://github.com/sutherlandamcom/factory/pull/27), merge `cd28a6af8ca4e82ecd140006d3f169d317271a74`; [PR #28](https://github.com/sutherlandamcom/factory/pull/28), merge `318661e590377c9deec44b98d933a641d7cc1d19` |
+| Macro Run 5 — Asset Foundation | Implemented, QA'd and merged | [PR #30](https://github.com/sutherlandamcom/factory/pull/30), head `062e9346bb6f26b2129a9c4b1037e985634f79c7`, merge `0d5e65f0db09fffa061f127674dc4014e6e0d692`; subsequent CAS/authority hardening is present on current main |
+| Macro Run 6 — Google Stitch Design Provider | Implemented, QA'd and merged | [PR #31](https://github.com/sutherlandamcom/factory/pull/31), head `660bdd11a3c27a687415f666aeb03649655b5074`, merge `928d8fab21d111dd6af89ea0c517db50baf6096b`; current Stitch seam is truthfully text-only for final local-asset byte ingestion |
+| Macro Run 7 — Final Visual Assets + Design/Asset Freeze | Implemented, remediated and merged | Core [PR #32](https://github.com/sutherlandamcom/factory/pull/32), main carry [PR #33](https://github.com/sutherlandamcom/factory/pull/33), E2E fix [PR #34](https://github.com/sutherlandamcom/factory/pull/34), seam remediation [PR #35](https://github.com/sutherlandamcom/factory/pull/35), final independent-QA remediation [PR #37](https://github.com/sutherlandamcom/factory/pull/37); current main `15f38587…` includes durable plan/slot resolution authority, cross-asset CAS, project-level advisory serialization and split provider evidence dimensions |
+| Macro Run 8 — Production Renderer Decision | Architecture decision accepted; no duplicate production prototype required | Evidence-based virtual bake-off selects **Astro static**. Stitch remains professional design authority; raw provider HTML is implementation/design evidence, not production authority. Direct-static is not maintained in parallel. |
+| Macro Run 9 — Production + SEO + Performance Engine | **NEXT implementation workstream** | Implement the selected Astro static production path over exact accepted Content + Design + VisualAsset authority with deterministic SEO/accessibility/performance/security gates |
+| Macro Runs 10–13 | Planned | Execute only after Run 9 exit criteria are independently accepted |
 
-Inspected main's [CI](https://github.com/sutherlandamcom/factory/actions/runs/33998967648)
-checked out the exact SHA above and passed: Factory unit 582, Dashboard unit 6,
-persistence 34, Operator 31, real-browser Operator E2E 2; site-starter 8 passed
-and 2 skipped. These are main results, not PR #21 acceptance or live-provider
-proof. The PR #21 author reports live structured SERP and native grounding
-blocked on credentials; this documentation update does not independently
-verify those claims or issue a GO.
-
-No separate exact-SHA independent GO for PR #19 was found in the inspected
-GitHub reviews/comments or repository audit records. This is an evidence gap,
-not proof that no external review occurred. PR #18's merge likewise must not
-be used as a substitute for its independent review evidence.
+Run 8 was intentionally resolved as an evidence-based architecture decision
+rather than by building two throwaway production stacks. The decision used the
+current Factory implementation, the already-existing Astro foundation, the
+Run 5–7 authority model, official/tooling capabilities and counterfactual
+4/20/100-page scaling analysis. This is a renderer policy decision, not a claim
+that two real production prototypes or field-performance measurements were run.
 
 ## Historical implementation snapshot — 2026-09-05
 
@@ -170,27 +168,77 @@ Resolve all visual slots into exact approved assets. Perform a final design/asse
 
 Exit: accepted copy + final accepted design + approved real/generated assets exist without page implementation ambiguity, with every slot's exact version/binary/governance digests provable across the accepted content, design and visual-asset authorities.
 
+Implemented-state invariant after the final Run 7 remediation:
+
+- every resolution mode (`reuse_real`, `deterministic_transform`, `ai_edit`,
+  `ai_generate`) records durable plan-specific/slot-specific resolution
+  authority;
+- `AcceptedVisualAssetSet` copies provenance only from that exact plan/slot
+  resolution, never from project-wide candidate history;
+- cross-asset assignment replacement is an exact old→new CAS operation;
+- final design freeze is serialized with competing project authority mutations
+  through the shared project-level PostgreSQL advisory transaction lock;
+- provider evidence distinguishes source consumption, produced assets, final
+  asset references and final-asset byte consumption instead of overloading one
+  boolean.
+
 ## Program IV — Production Architecture
 
-### Macro Run 8 — Astro vs Stitch-native Static Bake-off
+### Macro Run 8 — Production Renderer Decision
 
-Run the same accepted Sutherland design/content through two paths:
+Run 8 is complete as an evidence-based architecture decision. A duplicate
+production implementation was intentionally not built merely to discard one
+branch.
 
-A. Stitch/design-provider HTML -> deterministic Factory normalization -> static production.
+Decision:
 
-B. Stitch/design-provider output -> Astro implementation -> static production.
+`Stitch / AcceptedDesignArtifact -> Astro archetypes/components -> static HTML`
 
-Do not use multimodal LLM screenshot comparison. Use one human visual calibration plus engineering metrics: implementation time, coding-token spend, semantic HTML, SEO correctness, accessibility, Lighthouse/performance, JS/CSS weight, maintainability, reusable-archetype scaling and build complexity.
+Google Stitch remains professional design authority. `DESIGN.md`, screenshots
+and provider HTML are retained as design/implementation evidence; raw provider
+HTML is not ordinary production authority.
 
-Exit: reviewed ADR selects the ordinary production path. Astro is retained only if it creates material value.
+Astro 7 + Tailwind CSS 4 is the single ordinary production renderer because it
+preserves near-zero-JS static output while providing materially stronger
+semantic HTML, accessibility, SEO invariants, reusable archetypes, 20/100-page
+change propagation, AI-agent maintainability and lower proprietary normalization
+surface than a Factory-owned general Stitch HTML normalizer.
 
-### Macro Run 9 — Static Production/SEO/Performance Engine
+Do not maintain Path A and Path B in parallel.
 
-Implement the selected path. If direct-static wins, create a deliberately small deterministic normalizer/renderer for HTML sanitization, CSS/asset localization, accepted-content insertion, metadata/canonical/schema/sitemap/redirects, image optimization, cache policy and validation.
+Reconsider the renderer only through a later reviewed ADR if Stitch/provider
+output gains a stable versioned semantic/slot contract and a direct-static
+normalizer can demonstrably meet Factory SEO/accessibility/security/governance
+requirements with materially lower total complexity and maintenance cost.
 
-Regardless of renderer, add deterministic content-integrity, one-H1, canonical/schema/link, responsive/overflow, console-error and Lighthouse/performance gates.
+Exit: **Production Renderer = Astro static** is the normative ordinary-page
+decision; Run 9 implements and validates that path.
 
-Exit: ordinary page production is fast, static-first, SEO-complete and primarily deterministic.
+### Macro Run 9 — Production + SEO + Performance Engine
+
+Implement **Astro static only** as the selected ordinary production renderer.
+Production input binds exact `AcceptedPageContent` +
+`AcceptedDesignArtifact` + `AcceptedVisualAssetSet` + route/site identity.
+Rendering must not rewrite accepted copy, redesign accepted visual authority or
+substitute assets.
+
+Add deterministic gates for content integrity, semantic landmarks, exactly one
+intended H1, heading hierarchy, crawlable links, titles/descriptions,
+canonical/robots/sitemap/breadcrumbs/OpenGraph/structured data/internal links,
+redirect correctness, responsive image delivery, accessibility, broken links,
+responsive overflow, console errors, secrets/dependency vulnerabilities and
+Lighthouse/performance regression.
+
+Prefer mature commodity tooling (`schema-dts`, Lighthouse CI, axe-core,
+Lychee, Gitleaks, OSV Scanner, Playwright) over Factory-built scanners.
+
+Lab performance evidence must remain distinct from eventual field Core Web
+Vitals. Post-deploy field targets remain p75 LCP <= 2.5 s, INP <= 200 ms and
+CLS <= 0.1; do not fabricate those measurements before real traffic.
+
+Exit: exact accepted Content + Design + Assets deterministically produce a
+static, SEO-ready, accessible, inspectable production candidate with governed
+lineage and hard QA gates.
 
 ### Macro Run 10 — Page Derivatives: Summary + Audio
 

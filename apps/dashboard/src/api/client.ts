@@ -1379,3 +1379,142 @@ export const productionApi = {
       `/api/projects/${encodeURIComponent(projectId)}/production/candidates/${encodeURIComponent(candidateId)}`,
     ),
 };
+
+// ---------------------------------------------------------------------------
+// Run 10 — Page derivatives (summary + narration/audio)
+// ---------------------------------------------------------------------------
+
+export interface DerivativePolicyView {
+  id: string;
+  version: number;
+  digest: string;
+  summary: { enabled: boolean; language: string; policyVersion: string };
+  audio: { enabled: boolean; language: string; voiceId: string | null; policyVersion: string };
+}
+
+export interface DerivativePageStatus {
+  pageIdentity: string;
+  summary: { status: string; state: string; language: string; policyVersion: string };
+  audio: { status: string; state: string; language: string; voiceId: string | null; policyVersion: string };
+  intentSnapshotId: string | null;
+  set: { id: string; version: number; digest: string; summaryState: string; audioState: string } | null;
+}
+
+export interface DerivativeWorkspace {
+  projectId: string;
+  policy: DerivativePolicyView | null;
+  pages: DerivativePageStatus[];
+}
+
+export interface SummaryQaCheck {
+  checkId: string;
+  verdict: "PASS" | "REVIEW" | "FAIL";
+  detail: string;
+}
+
+export interface SummaryReview {
+  proposalId: string;
+  pageIdentity: string;
+  sourceContent: { id: string; version: number };
+  summaryText: string;
+  qa: { checks: SummaryQaCheck[]; overall: string } | null;
+  qaOverall: string | null;
+  provider: string;
+  model: string;
+  providerMode: string;
+  cost: { micros: number | null; currency: string };
+}
+
+export interface AudioReview {
+  candidateId: string;
+  pageIdentity: string;
+  sourceContent: { id: string | null; version: number | null };
+  narrationText: string | null;
+  narrationDigest: string | null;
+  voiceId: string;
+  provider: string;
+  engine: string;
+  providerMode: string;
+  mimeType: string;
+  sizeBytes: number;
+  durationSeconds: number | null;
+  cost: { micros: number | null; currency: string };
+}
+
+export const derivativesApi = {
+  workspace: (projectId: string) =>
+    request<DerivativeWorkspace>(
+      `/api/projects/${encodeURIComponent(projectId)}/derivatives/workspace`,
+    ),
+
+  updatePolicy: (
+    projectId: string,
+    input: {
+      summary: { enabled: boolean; language: string; policyVersion: string };
+      audio: { enabled: boolean; language: string; voiceId?: string; policyVersion: string };
+    },
+  ) =>
+    request<{ id: string; version: number; digest: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/derivatives/policy`,
+      { method: "PUT", body: JSON.stringify(input) },
+    ),
+
+  updateOverride: (
+    projectId: string,
+    pageIdentity: string,
+    input: {
+      summary: { mode: "inherit" | "enabled" | "disabled"; language?: string };
+      audio: { mode: "inherit" | "enabled" | "disabled"; language?: string; voiceId?: string };
+    },
+  ) =>
+    request<{ id: string; version: number; digest: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/derivatives/pages/${encodeURIComponent(pageIdentity)}/override`,
+      { method: "PUT", body: JSON.stringify(input) },
+    ),
+
+  deriveIntent: (projectId: string, pageIdentity: string) =>
+    request<{ id: string; digest: string; reused: boolean }>(
+      `/api/projects/${encodeURIComponent(projectId)}/derivatives/pages/${encodeURIComponent(pageIdentity)}/intent`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+
+  generateSummary: (projectId: string, pageIdentity: string) =>
+    request<{ proposalId: string; proposalDigest: string; qaOverall: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/derivatives/pages/${encodeURIComponent(pageIdentity)}/summary/generate`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+
+  summaryReview: (projectId: string, proposalId: string) =>
+    request<SummaryReview>(
+      `/api/projects/${encodeURIComponent(projectId)}/derivatives/summary/${encodeURIComponent(proposalId)}/review`,
+    ),
+
+  acceptSummary: (projectId: string, pageIdentity: string, proposalId: string) =>
+    request<{ id: string; version: number; digest: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/derivatives/pages/${encodeURIComponent(pageIdentity)}/summary/accept`,
+      { method: "POST", body: JSON.stringify({ proposalId }) },
+    ),
+
+  generateAudio: (projectId: string, pageIdentity: string) =>
+    request<{ candidateId: string; candidateDigest: string; binaryDigest: string; mimeType: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/derivatives/pages/${encodeURIComponent(pageIdentity)}/audio/generate`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+
+  audioReview: (projectId: string, candidateId: string) =>
+    request<AudioReview>(
+      `/api/projects/${encodeURIComponent(projectId)}/derivatives/audio/${encodeURIComponent(candidateId)}/review`,
+    ),
+
+  acceptAudio: (projectId: string, pageIdentity: string, candidateId: string) =>
+    request<{ id: string; version: number; digest: string; binaryDigest: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/derivatives/pages/${encodeURIComponent(pageIdentity)}/audio/accept`,
+      { method: "POST", body: JSON.stringify({ candidateId }) },
+    ),
+
+  acceptSet: (projectId: string, pageIdentity: string) =>
+    request<{ id: string; version: number; digest: string; reused: boolean }>(
+      `/api/projects/${encodeURIComponent(projectId)}/derivatives/pages/${encodeURIComponent(pageIdentity)}/set/accept`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+};

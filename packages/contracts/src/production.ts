@@ -26,6 +26,14 @@ import { qaVerdictSchema } from "./writer-content.js";
 
 export const PRODUCTION_SCHEMA_VERSION = "production-v1" as const;
 
+/**
+ * Run 10 derivative-aware production input schema. Historical production-v1
+ * inputs/manifests remain immutable historical truth; new derivative-aware
+ * inputs use production-v2 and additionally bind the exact
+ * AcceptedDerivativeSet identity (id/version/digest).
+ */
+export const PRODUCTION_SCHEMA_VERSION_V2 = "production-v2" as const;
+
 const boundedText = (max: number) => z.string().trim().min(1).max(max);
 export const productionDigestSchema = z.string().trim().regex(/^[0-9a-f]{64}$/);
 export const productionIdSchema = z.string().trim().min(1).max(128);
@@ -100,6 +108,33 @@ export const productionPageInputDataSchema = z
   })
   .strict();
 export type ProductionPageInputData = z.infer<typeof productionPageInputDataSchema>;
+
+// ---------------------------------------------------------------------------
+// production-v2 — Run 10 derivative-aware production input
+// ---------------------------------------------------------------------------
+
+export const productionPageInputV2DataSchema = productionPageInputDataSchema.extend({
+  schemaVersion: z.literal(PRODUCTION_SCHEMA_VERSION_V2),
+  /** Exact accepted derivative set bound into this production input. */
+  acceptedDerivativeSet: productionAuthorityRefSchema,
+});
+export type ProductionPageInputV2Data = z.infer<typeof productionPageInputV2DataSchema>;
+
+/** Parse the derivative-aware production-v2 input. */
+export function parseProductionPageInputV2Data(input: unknown): ProductionPageInputV2Data {
+  return productionPageInputV2DataSchema.parse(input);
+}
+
+/** Parse either schema version of a production page input. */
+export function parseProductionPageInputAnyVersion(
+  input: unknown,
+): ProductionPageInputData | ProductionPageInputV2Data {
+  const data = input as { schemaVersion?: unknown };
+  if (data?.schemaVersion === PRODUCTION_SCHEMA_VERSION_V2) {
+    return productionPageInputV2DataSchema.parse(input);
+  }
+  return productionPageInputDataSchema.parse(input);
+}
 
 /**
  * Canonical JSON: sorted keys, preserved array order, no whitespace.

@@ -1,0 +1,108 @@
+{
+ "schemaVersion": "production-v2",
+ "input": {
+  "id": "ppin-run10-run10-disabled",
+  "version": 1,
+  "digest": "1111111111111111111111111111111111111111111111111111111111111111",
+  "projectId": "proj-run10-e2e",
+  "pageIdentity": "run10-disabled",
+  "pageType": "service",
+  "route": "/run10-disabled",
+  "siteIdentity": {
+   "siteId": "sutherland-private-office",
+   "siteName": "Sutherland Private Office",
+   "canonicalOrigin": "https://sutherlandam.com",
+   "language": "en",
+   "profileDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  }
+ },
+ "seo": {
+  "fullTitle": "Run 10 derivative page run10-disabled | Sutherland Private Office",
+  "description": "Run 10 E2E page for run10-disabled with accepted derivative authority.",
+  "canonicalUrl": "https://sutherlandam.com/run10-disabled",
+  "ogTitle": "Run 10 derivative page run10-disabled",
+  "ogDescription": "Run 10 E2E page for run10-disabled.",
+  "ogUrl": "https://sutherlandam.com/run10-disabled"
+ },
+ "content": {
+  "acceptedId": "wprp-run10",
+  "acceptedVersion": 1,
+  "acceptedDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "title": "Run 10 derivative page run10-disabled",
+  "metaDescription": "Run 10 E2E page for run10-disabled with accepted derivative authority.",
+  "introduction": "RUN10_DERIVATIVE_PROOF - this page carries accepted derivative authority for run10-disabled.",
+  "sections": [
+   {
+    "heading": "What this page proves",
+    "body": "The page proves derivative rendering without visitor-time provider execution."
+   },
+   {
+    "heading": "How it proves it",
+    "body": "Visitor interactions are exercised against the built static output with provider counters at zero."
+   }
+  ],
+  "conclusion": "Derivatives are pre-generated accepted artifacts consumed statically.",
+  "cta": "Begin with a scoping conversation.",
+  "internalLinks": []
+ },
+ "design": {
+  "acceptedId": "dacc-run10",
+  "acceptedVersion": 1,
+  "acceptedDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "tokens": {
+   "colors": {
+    "primary": "#1a2e35",
+    "background": "#ffffff",
+    "surface": "#f6f5f2"
+   },
+   "typography": {
+    "headingFont": "Source Serif 4",
+    "bodyFont": "Public Sans",
+    "scaleNotes": "fixture"
+   },
+   "spacing": {
+    "md": "16px",
+    "lg": "32px"
+   },
+   "rounded": {
+    "md": "8px"
+   },
+   "ctaHierarchy": "text only",
+   "navigationLanguage": "plain",
+   "imageryTreatment": "none",
+   "sectionRhythm": "measured"
+  },
+  "archetype": {
+   "kind": "service",
+   "sectionPatterns": [
+    "page-header",
+    "article-body",
+    "cta"
+   ],
+   "contentRequirements": [],
+   "assetSlots": [],
+   "primaryCta": "",
+   "secondaryCta": "",
+   "responsiveBehavior": "stack",
+   "trustPresentation": "visible",
+   "rendererPrimitives": [
+    "page-header",
+    "article-body",
+    "cta"
+   ]
+  }
+ },
+ "links": [],
+ "breadcrumbs": [],
+ "assets": [],
+ "derivatives": {
+  "setDigest": "4444444444444444444444444444444444444444444444444444444444444444",
+  "summary": {
+   "state": "disabled"
+  },
+  "audio": {
+   "state": "disabled"
+  }
+ },
+ "manifestDigest": "8a27973f019acfa9a275d0bda81718c57d5dfce2595805385040902501fe5bd8"
+}

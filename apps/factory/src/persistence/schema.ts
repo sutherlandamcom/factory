@@ -5,6 +5,7 @@ import {
   integer,
   bigint,
   boolean,
+  doublePrecision,
   timestamp,
   jsonb,
   unique,
@@ -2225,3 +2226,445 @@ export type ProductionQaRunRecord = typeof productionQaRuns.$inferSelect;
 export type ProductionCandidateInputRecord = typeof productionCandidateInputs.$inferSelect;
 export type ProductionQaEvidenceRecord = typeof productionQaEvidence.$inferSelect;
 export type InsertProductionQaRun = typeof productionQaRuns.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Macro Run 10 — Page derivatives (summary + narration/audio authority)
+// ---------------------------------------------------------------------------
+
+export const projectDerivativePolicies = pgTable(
+  "project_derivative_policies",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    summaryEnabled: boolean("summary_enabled").notNull(),
+    summaryLanguage: text("summary_language").notNull(),
+    summaryPolicyVersion: text("summary_policy_version").notNull(),
+    audioEnabled: boolean("audio_enabled").notNull(),
+    audioLanguage: text("audio_language").notNull(),
+    audioVoiceId: text("audio_voice_id"),
+    audioPolicyVersion: text("audio_policy_version").notNull(),
+    data: jsonb("data").notNull(),
+    policyDigest: text("policy_digest").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check("project_derivative_policies_version_positive", sql`${table.version} >= 1`),
+    check("project_derivative_policies_digest_shape", sql`${table.policyDigest} ~ '^[0-9a-f]{64}$'`),
+    unique("project_derivative_policies_project_version_unique").on(table.projectId, table.version),
+    index("project_derivative_policies_project_idx").on(table.projectId, table.version),
+  ],
+);
+
+export const pageDerivativeOverrides = pgTable(
+  "page_derivative_overrides",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    version: integer("version").notNull(),
+    summaryMode: text("summary_mode").notNull(),
+    summaryLanguage: text("summary_language"),
+    audioMode: text("audio_mode").notNull(),
+    audioLanguage: text("audio_language"),
+    audioVoiceId: text("audio_voice_id"),
+    data: jsonb("data").notNull(),
+    overrideDigest: text("override_digest").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check("page_derivative_overrides_version_positive", sql`${table.version} >= 1`),
+    check("page_derivative_overrides_digest_shape", sql`${table.overrideDigest} ~ '^[0-9a-f]{64}$'`),
+    check(
+      "page_derivative_overrides_mode_valid",
+      sql`${table.summaryMode} IN ('inherit', 'enabled', 'disabled') AND ${table.audioMode} IN ('inherit', 'enabled', 'disabled')`,
+    ),
+    unique("page_derivative_overrides_project_page_version_unique").on(
+      table.projectId,
+      table.pageIdentity,
+      table.version,
+    ),
+    index("page_derivative_overrides_project_page_idx").on(table.projectId, table.pageIdentity, table.version),
+  ],
+);
+
+export const pageDerivativeIntentSnapshots = pgTable(
+  "page_derivative_intent_snapshots",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    acceptedContentId: text("accepted_content_id").notNull(),
+    acceptedContentVersion: integer("accepted_content_version").notNull(),
+    acceptedContentDigest: text("accepted_content_digest").notNull(),
+    projectPolicyId: text("project_policy_id"),
+    projectPolicyVersion: integer("project_policy_version"),
+    projectPolicyDigest: text("project_policy_digest"),
+    pageOverrideId: text("page_override_id"),
+    pageOverrideVersion: integer("page_override_version"),
+    pageOverrideDigest: text("page_override_digest"),
+    effectiveSummaryState: text("effective_summary_state").notNull(),
+    effectiveSummaryLanguage: text("effective_summary_language").notNull(),
+    effectiveSummaryPolicyVersion: text("effective_summary_policy_version").notNull(),
+    effectiveAudioState: text("effective_audio_state").notNull(),
+    effectiveAudioLanguage: text("effective_audio_language").notNull(),
+    effectiveAudioVoiceId: text("effective_audio_voice_id"),
+    effectiveAudioPolicyVersion: text("effective_audio_policy_version").notNull(),
+    data: jsonb("data").notNull(),
+    snapshotDigest: text("snapshot_digest").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check("page_derivative_intent_snapshots_digest_shape", sql`${table.snapshotDigest} ~ '^[0-9a-f]{64}$'`),
+    check("page_derivative_intent_snapshots_content_digest_shape", sql`${table.acceptedContentDigest} ~ '^[0-9a-f]{64}$'`),
+    check(
+      "page_derivative_intent_snapshots_effective_state_valid",
+      sql`${table.effectiveSummaryState} IN ('enabled', 'disabled') AND ${table.effectiveAudioState} IN ('enabled', 'disabled')`,
+    ),
+    unique(
+      "page_derivative_intent_snapshots_identity_unique",
+    ).on(
+      table.projectId,
+      table.pageIdentity,
+      table.acceptedContentId,
+      table.acceptedContentVersion,
+      table.projectPolicyId,
+      table.projectPolicyVersion,
+      table.pageOverrideId,
+      table.pageOverrideVersion,
+      table.effectiveSummaryState,
+      table.effectiveAudioState,
+      table.effectiveSummaryLanguage,
+      table.effectiveAudioLanguage,
+      table.effectiveAudioVoiceId,
+    ),
+    index("page_derivative_intent_snapshots_project_page_idx").on(table.projectId, table.pageIdentity),
+  ],
+);
+
+export const summaryPromptSnapshots = pgTable(
+  "summary_prompt_snapshots",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    intentSnapshotId: text("intent_snapshot_id")
+      .notNull()
+      .references(() => pageDerivativeIntentSnapshots.id, { onDelete: "restrict" }),
+    intentSnapshotDigest: text("intent_snapshot_digest").notNull(),
+    acceptedContentId: text("accepted_content_id").notNull(),
+    acceptedContentVersion: integer("accepted_content_version").notNull(),
+    acceptedContentDigest: text("accepted_content_digest").notNull(),
+    summaryPolicyVersion: text("summary_policy_version").notNull(),
+    language: text("language").notNull(),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    systemPrompt: text("system_prompt").notNull(),
+    userPrompt: text("user_prompt").notNull(),
+    maxOutputTokens: integer("max_output_tokens").notNull(),
+    promptDigest: text("prompt_digest").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check("summary_prompt_snapshots_digest_shape", sql`${table.promptDigest} ~ '^[0-9a-f]{64}$'`),
+    check("summary_prompt_snapshots_intent_digest_shape", sql`${table.intentSnapshotDigest} ~ '^[0-9a-f]{64}$'`),
+    check("summary_prompt_snapshots_content_digest_shape", sql`${table.acceptedContentDigest} ~ '^[0-9a-f]{64}$'`),
+    check("summary_prompt_snapshots_max_tokens_positive", sql`${table.maxOutputTokens} >= 1`),
+    unique("summary_prompt_snapshots_intent_unique").on(table.intentSnapshotId),
+  ],
+);
+
+export const summaryProposals = pgTable(
+  "summary_proposals",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    promptSnapshotId: text("prompt_snapshot_id")
+      .notNull()
+      .references(() => summaryPromptSnapshots.id, { onDelete: "restrict" }),
+    promptSnapshotDigest: text("prompt_snapshot_digest").notNull(),
+    acceptedContentId: text("accepted_content_id").notNull(),
+    acceptedContentVersion: integer("accepted_content_version").notNull(),
+    acceptedContentDigest: text("accepted_content_digest").notNull(),
+    providerMode: text("provider_mode").notNull(),
+    isTestDouble: boolean("is_test_double").notNull(),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    summaryText: text("summary_text").notNull(),
+    providerRequestId: text("provider_request_id").notNull(),
+    usagePromptTokens: integer("usage_prompt_tokens"),
+    usageCompletionTokens: integer("usage_completion_tokens"),
+    usageTotalTokens: integer("usage_total_tokens"),
+    usageCostMicros: integer("usage_cost_micros"),
+    usageCurrency: text("usage_currency").notNull().default("UNKNOWN"),
+    proposalDigest: text("proposal_digest").notNull(),
+    qaReport: jsonb("qa_report"),
+    qaReportDigest: text("qa_report_digest"),
+    qaOverall: text("qa_overall"),
+    state: text("state").notNull().default("generated"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check("summary_proposals_provider_mode_valid", sql`${table.providerMode} IN ('live', 'fixture')`),
+    check("summary_proposals_state_valid", sql`${table.state} IN ('generated', 'review', 'accepted', 'superseded')`),
+    check("summary_proposals_digest_shape", sql`${table.proposalDigest} ~ '^[0-9a-f]{64}$'`),
+    check("summary_proposals_content_digest_shape", sql`${table.acceptedContentDigest} ~ '^[0-9a-f]{64}$'`),
+    check("summary_proposals_prompt_digest_shape", sql`${table.promptSnapshotDigest} ~ '^[0-9a-f]{64}$'`),
+    check("summary_proposals_qa_digest_shape", sql`${table.qaReportDigest} IS NULL OR ${table.qaReportDigest} ~ '^[0-9a-f]{64}$'`),
+    check("summary_proposals_qa_overall_valid", sql`${table.qaOverall} IS NULL OR ${table.qaOverall} IN ('PASS', 'REVIEW', 'FAIL')`),
+    check("summary_proposals_currency_valid", sql`${table.usageCurrency} IN ('USD', 'UNKNOWN')`),
+    check("summary_proposals_cost_non_negative", sql`${table.usageCostMicros} IS NULL OR ${table.usageCostMicros} >= 0`),
+    index("summary_proposals_project_page_idx").on(table.projectId, table.pageIdentity),
+  ],
+);
+
+export const acceptedSummaryArtifacts = pgTable(
+  "accepted_summary_artifacts",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    version: integer("version").notNull(),
+    sourceContentId: text("source_content_id").notNull(),
+    sourceContentVersion: integer("source_content_version").notNull(),
+    sourceContentDigest: text("source_content_digest").notNull(),
+    intentSnapshotId: text("intent_snapshot_id")
+      .notNull()
+      .references(() => pageDerivativeIntentSnapshots.id, { onDelete: "restrict" }),
+    intentSnapshotDigest: text("intent_snapshot_digest").notNull(),
+    promptSnapshotId: text("prompt_snapshot_id")
+      .notNull()
+      .references(() => summaryPromptSnapshots.id, { onDelete: "restrict" }),
+    promptSnapshotDigest: text("prompt_snapshot_digest").notNull(),
+    proposalId: text("proposal_id")
+      .notNull()
+      .references(() => summaryProposals.id, { onDelete: "restrict" }),
+    proposalDigest: text("proposal_digest").notNull(),
+    providerMode: text("provider_mode").notNull(),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    language: text("language").notNull(),
+    summaryText: text("summary_text").notNull(),
+    qaReportDigest: text("qa_report_digest").notNull(),
+    qaOverall: text("qa_overall").notNull(),
+    artifactDigest: text("artifact_digest").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check("accepted_summary_artifacts_version_positive", sql`${table.version} >= 1`),
+    check("accepted_summary_artifacts_provider_mode_valid", sql`${table.providerMode} IN ('live', 'fixture')`),
+    check(
+      "accepted_summary_artifacts_digests_shape",
+      sql`${table.artifactDigest} ~ '^[0-9a-f]{64}$' AND ${table.sourceContentDigest} ~ '^[0-9a-f]{64}$' AND ${table.intentSnapshotDigest} ~ '^[0-9a-f]{64}$' AND ${table.promptSnapshotDigest} ~ '^[0-9a-f]{64}$' AND ${table.proposalDigest} ~ '^[0-9a-f]{64}$' AND ${table.qaReportDigest} ~ '^[0-9a-f]{64}$`,
+    ),
+    check("accepted_summary_artifacts_qa_overall_valid", sql`${table.qaOverall} IN ('PASS', 'REVIEW')`),
+    unique("accepted_summary_artifacts_project_version_unique").on(table.projectId, table.version),
+    index("accepted_summary_artifacts_project_page_idx").on(table.projectId, table.pageIdentity, table.version),
+  ],
+);
+
+export const narrationTextSnapshots = pgTable(
+  "narration_text_snapshots",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    sourceContentId: text("source_content_id").notNull(),
+    sourceContentVersion: integer("source_content_version").notNull(),
+    sourceContentDigest: text("source_content_digest").notNull(),
+    narrationPolicyVersion: text("narration_policy_version").notNull(),
+    language: text("language").notNull(),
+    narrationText: text("narration_text").notNull(),
+    narrationDigest: text("narration_digest").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check("narration_text_snapshots_digest_shape", sql`${table.narrationDigest} ~ '^[0-9a-f]{64}$'`),
+    check("narration_text_snapshots_content_digest_shape", sql`${table.sourceContentDigest} ~ '^[0-9a-f]{64}$'`),
+    unique("narration_text_snapshots_identity_unique").on(
+      table.projectId,
+      table.pageIdentity,
+      table.sourceContentId,
+      table.sourceContentVersion,
+      table.narrationPolicyVersion,
+      table.language,
+    ),
+    index("narration_text_snapshots_project_page_idx").on(table.projectId, table.pageIdentity),
+  ],
+);
+
+export const audioCandidates = pgTable(
+  "audio_candidates",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    narrationSnapshotId: text("narration_snapshot_id")
+      .notNull()
+      .references(() => narrationTextSnapshots.id, { onDelete: "restrict" }),
+    narrationSnapshotDigest: text("narration_snapshot_digest").notNull(),
+    providerMode: text("provider_mode").notNull(),
+    isTestDouble: boolean("is_test_double").notNull(),
+    provider: text("provider").notNull(),
+    engine: text("engine").notNull(),
+    voiceId: text("voice_id").notNull(),
+    language: text("language").notNull(),
+    providerRequestId: text("provider_request_id").notNull(),
+    binaryDigest: text("binary_digest").notNull(),
+    mimeType: text("mime_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    durationSeconds: doublePrecision("duration_seconds"),
+    usageCharacters: integer("usage_characters"),
+    usageCostMicros: integer("usage_cost_micros"),
+    usageCurrency: text("usage_currency").notNull().default("UNKNOWN"),
+    candidateDigest: text("candidate_digest").notNull(),
+    state: text("state").notNull().default("generated"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check("audio_candidates_provider_mode_valid", sql`${table.providerMode} IN ('live', 'fixture')`),
+    check("audio_candidates_state_valid", sql`${table.state} IN ('generated', 'review', 'accepted', 'superseded')`),
+    check(
+      "audio_candidates_digests_shape",
+      sql`${table.binaryDigest} ~ '^[0-9a-f]{64}$' AND ${table.candidateDigest} ~ '^[0-9a-f]{64}$' AND ${table.narrationSnapshotDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check("audio_candidates_mime_type_valid", sql`${table.mimeType} IN ('audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4')`),
+    check("audio_candidates_size_positive", sql`${table.sizeBytes} >= 1`),
+    check("audio_candidates_currency_valid", sql`${table.usageCurrency} IN ('USD', 'UNKNOWN')`),
+    check("audio_candidates_cost_non_negative", sql`${table.usageCostMicros} IS NULL OR ${table.usageCostMicros} >= 0`),
+    index("audio_candidates_project_page_idx").on(table.projectId, table.pageIdentity),
+  ],
+);
+
+export const acceptedAudioArtifacts = pgTable(
+  "accepted_audio_artifacts",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    version: integer("version").notNull(),
+    sourceContentId: text("source_content_id").notNull(),
+    sourceContentVersion: integer("source_content_version").notNull(),
+    sourceContentDigest: text("source_content_digest").notNull(),
+    narrationSnapshotId: text("narration_snapshot_id")
+      .notNull()
+      .references(() => narrationTextSnapshots.id, { onDelete: "restrict" }),
+    narrationSnapshotDigest: text("narration_snapshot_digest").notNull(),
+    candidateId: text("candidate_id")
+      .notNull()
+      .references(() => audioCandidates.id, { onDelete: "restrict" }),
+    candidateDigest: text("candidate_digest").notNull(),
+    providerMode: text("provider_mode").notNull(),
+    provider: text("provider").notNull(),
+    engine: text("engine").notNull(),
+    voiceId: text("voice_id").notNull(),
+    language: text("language").notNull(),
+    binaryDigest: text("binary_digest").notNull(),
+    mimeType: text("mime_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    durationSeconds: doublePrecision("duration_seconds"),
+    artifactDigest: text("artifact_digest").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check("accepted_audio_artifacts_version_positive", sql`${table.version} >= 1`),
+    check("accepted_audio_artifacts_provider_mode_valid", sql`${table.providerMode} IN ('live', 'fixture')`),
+    check(
+      "accepted_audio_artifacts_digests_shape",
+      sql`${table.artifactDigest} ~ '^[0-9a-f]{64}$' AND ${table.sourceContentDigest} ~ '^[0-9a-f]{64}$' AND ${table.narrationSnapshotDigest} ~ '^[0-9a-f]{64}$' AND ${table.candidateDigest} ~ '^[0-9a-f]{64}$' AND ${table.binaryDigest} ~ '^[0-9a-f]{64}$`,
+    ),
+    check("accepted_audio_artifacts_mime_type_valid", sql`${table.mimeType} IN ('audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4')`),
+    unique("accepted_audio_artifacts_project_version_unique").on(table.projectId, table.version),
+    index("accepted_audio_artifacts_project_page_idx").on(table.projectId, table.pageIdentity, table.version),
+  ],
+);
+
+export const acceptedDerivativeSets = pgTable(
+  "accepted_derivative_sets",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    version: integer("version").notNull(),
+    sourceContentId: text("source_content_id").notNull(),
+    sourceContentVersion: integer("source_content_version").notNull(),
+    sourceContentDigest: text("source_content_digest").notNull(),
+    intentSnapshotId: text("intent_snapshot_id")
+      .notNull()
+      .references(() => pageDerivativeIntentSnapshots.id, { onDelete: "restrict" }),
+    intentSnapshotDigest: text("intent_snapshot_digest").notNull(),
+    summaryState: text("summary_state").notNull(),
+    summaryArtifactId: text("summary_artifact_id"),
+    summaryVersion: integer("summary_version"),
+    summaryDigest: text("summary_digest"),
+    audioState: text("audio_state").notNull(),
+    audioArtifactId: text("audio_artifact_id"),
+    audioVersion: integer("audio_version"),
+    audioDigest: text("audio_digest"),
+    audioBinaryDigest: text("audio_binary_digest"),
+    data: jsonb("data").notNull(),
+    setDigest: text("set_digest").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check(
+      "accepted_derivative_sets_version_positive",
+      sql`${table.version} >= 1`,
+    ),
+    check(
+      "accepted_derivative_sets_state_valid",
+      sql`${table.summaryState} IN ('disabled', 'accepted') AND ${table.audioState} IN ('disabled', 'accepted')`,
+    ),
+    check(
+      "accepted_derivative_sets_digests_shape",
+      sql`${table.setDigest} ~ '^[0-9a-f]{64}$' AND ${table.sourceContentDigest} ~ '^[0-9a-f]{64}$' AND ${table.intentSnapshotDigest} ~ '^[0-9a-f]{64}$' AND (${table.summaryDigest} IS NULL OR ${table.summaryDigest} ~ '^[0-9a-f]{64}$') AND (${table.audioDigest} IS NULL OR ${table.audioDigest} ~ '^[0-9a-f]{64}$') AND (${table.audioBinaryDigest} IS NULL OR ${table.audioBinaryDigest} ~ '^[0-9a-f]{64}$')`,
+    ),
+    check(
+      "accepted_derivative_sets_summary_identity",
+      sql`(${table.summaryState} = 'disabled' AND ${table.summaryArtifactId} IS NULL AND ${table.summaryDigest} IS NULL) OR (${table.summaryState} = 'accepted' AND ${table.summaryArtifactId} IS NOT NULL AND ${table.summaryDigest} IS NOT NULL AND ${table.summaryVersion} IS NOT NULL)`,
+    ),
+    check(
+      "accepted_derivative_sets_audio_identity",
+      sql`(${table.audioState} = 'disabled' AND ${table.audioArtifactId} IS NULL AND ${table.audioDigest} IS NULL AND ${table.audioBinaryDigest} IS NULL) OR (${table.audioState} = 'accepted' AND ${table.audioArtifactId} IS NOT NULL AND ${table.audioDigest} IS NOT NULL AND ${table.audioVersion} IS NOT NULL AND ${table.audioBinaryDigest} IS NOT NULL)`,
+    ),
+    unique("accepted_derivative_sets_project_version_unique").on(table.projectId, table.version),
+    unique("accepted_derivative_sets_project_page_version_unique").on(
+      table.projectId,
+      table.pageIdentity,
+      table.version,
+    ),
+    index("accepted_derivative_sets_project_page_idx").on(table.projectId, table.pageIdentity, table.version),
+  ],
+);
+
+export type ProjectDerivativePolicyRecord = typeof projectDerivativePolicies.$inferSelect;
+export type PageDerivativeOverrideRecord = typeof pageDerivativeOverrides.$inferSelect;
+export type PageDerivativeIntentSnapshotRecord = typeof pageDerivativeIntentSnapshots.$inferSelect;
+export type SummaryPromptSnapshotRecord = typeof summaryPromptSnapshots.$inferSelect;
+export type SummaryProposalRecord = typeof summaryProposals.$inferSelect;
+export type AcceptedSummaryArtifactRecord = typeof acceptedSummaryArtifacts.$inferSelect;
+export type NarrationTextSnapshotRecord = typeof narrationTextSnapshots.$inferSelect;
+export type AudioCandidateRecord = typeof audioCandidates.$inferSelect;
+export type AcceptedAudioArtifactRecord = typeof acceptedAudioArtifacts.$inferSelect;
+export type AcceptedDerivativeSetRecord = typeof acceptedDerivativeSets.$inferSelect;

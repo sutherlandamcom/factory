@@ -25,6 +25,9 @@ import type {
 } from "../persistence/schema.js";
 import {
   parseProductionPageInputData,
+  parseProductionPageInputV2Data,
+  type ProductionPageInputV2Data,
+  type AcceptedDerivativeSetData,
   parseProductionQaReportData,
   qaOverallVerdict,
   type ProductionPageInputData,
@@ -33,6 +36,10 @@ import {
 } from "@factory/contracts";
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
+import { acceptedDerivativeSets } from "../persistence/schema.js";
+import { DerivativesStore } from "../derivatives/store.js";
+import { resolveEffectiveDerivativeSettings } from "../derivatives/core.js";
+import type { ProjectDerivativePolicyData, PageDerivativeOverrideData } from "@factory/contracts";
 import { assertCompleteProductionQa, hasValidQaExecutionDigest, TRUSTED_PRODUCTION_QA_GATES } from "./qa/registry.js";
 import { PageAuthorityReader } from "../writer/page-authority.js";
 import { DesignStore } from "../design/design-store.js";
@@ -304,35 +311,136 @@ export class ProductionStore {
       });
     }
 
-    const data: ProductionPageInputData = {
-      schemaVersion: "production-v1",
-      projectId: input.projectId,
-      pageIdentity: input.pageSlug,
-      pageType: pageType as ProductionPageInputData["pageType"],
-      route,
-      siteIdentity: input.siteIdentity,
-      acceptedContent: {
-        id: bundle.content.id,
-        version: bundle.content.version,
-        digest: bundle.content.digest,
-      },
-      acceptedDesign: {
-        id: bundle.design.id,
-        version: bundle.design.version,
-        digest: bundle.design.candidateDigest,
-      },
-      acceptedVisualSet: {
-        id: bundle.visualSet.id,
-        version: bundle.visualSet.version,
-        digest: bundle.visualSet.digest,
-      },
-      renderer: {
-        id: "astro-static",
-        version: input.rendererVersion,
-        policyVersion: input.rendererPolicyVersion,
-      },
-    };
-    parseProductionPageInputData(data);
+    // Run 10: bind the exact current AcceptedDerivativeSet. Absence of any
+    // derivative policy resolves to explicit disabled (pre-Run-10 projects
+    // keep building unchanged); enabled-but-missing-current derivative
+    // artifacts FAIL derivation (readiness rule).
+    const currentDerivativePolicy = await new DerivativesStore(this.db).currentPolicy(input.projectId);
+    const currentDerivativeOverride = await new DerivativesStore(this.db).currentOverride(input.projectId, input.pageSlug);
+    const effectiveDerivatives = resolveEffectiveDerivativeSettings({
+      projectPolicy: currentDerivativePolicy ? (currentDerivativePolicy.data as ProjectDerivativePolicyData) : null,
+      pageOverride: currentDerivativeOverride ? (currentDerivativeOverride.data as PageDerivativeOverrideData) : null,
+    });
+    const [derivativeSet] = await this.db
+      .select()
+      .from(acceptedDerivativeSets)
+      .where(
+        and(
+          eq(acceptedDerivativeSets.projectId, input.projectId),
+          eq(acceptedDerivativeSets.pageIdentity, input.pageSlug),
+        ),
+      )
+      .orderBy(desc(acceptedDerivativeSets.version))
+      .limit(1);
+    let derivativeSetRef: { id: string; version: number; digest: string } | null = null;
+    if (derivativeSet) {
+      if (derivativeSet.sourceContentId !== bundle.content.id || derivativeSet.sourceContentVersion !== bundle.content.version || derivativeSet.sourceContentDigest !== bundle.content.digest) {
+        throw productionError(
+          "production_authority_stale",
+          "AcceptedDerivativeSet is stale versus current accepted content; re-accept derivatives.",
+        );
+      }
+      const setData = derivativeSet.data as AcceptedDerivativeSetData;
+      const intentSnapshot = derivativeSet.intentSnapshotDigest;
+      if (setData.intentSnapshot.digest !== intentSnapshot) {
+        throw productionError(
+          "derivative_authority_digest_mismatch",
+          "AcceptedDerivativeSet intent snapshot digest mismatch (forged binding).",
+        );
+      }
+      if (setData.summary.state === "accepted" && setData.summary.digest !== derivativeSet.summaryDigest) {
+        throw productionError("derivative_authority_digest_mismatch", "Derivative set summary digest mismatch.");
+      }
+      if (setData.audio.state === "accepted" && setData.audio.digest !== derivativeSet.audioDigest) {
+        throw productionError("derivative_authority_digest_mismatch", "Derivative set audio digest mismatch.");
+      }
+      // Intent snapshot must still be the current effective policy for this
+      // content (staleness propagation from policy/override mutation).
+      const currentIntent = await new DerivativesStore(this.db).currentIntentSnapshot(input.projectId, input.pageSlug);
+      if (!currentIntent || currentIntent.id !== derivativeSet.intentSnapshotId || currentIntent.snapshotDigest !== derivativeSet.intentSnapshotDigest) {
+        throw productionError(
+          "derivative_authority_stale",
+          "AcceptedDerivativeSet intent snapshot is stale versus current effective derivative policy; re-accept derivatives.",
+        );
+      }
+      derivativeSetRef = {
+        id: derivativeSet.id,
+        version: derivativeSet.version,
+        digest: derivativeSet.setDigest,
+      };
+    } else if (effectiveDerivatives.summary.state === "enabled" || effectiveDerivatives.audio.state === "enabled") {
+      // Readiness rule: enabled policy with NO accepted derivative set at all
+      // fails derivation — a required derivative must not be silently omitted.
+      throw productionError(
+        "derivative_required_artifact_missing",
+        `Effective derivative policy enables ${effectiveDerivatives.summary.state === "enabled" ? "summary" : "audio"} but no accepted derivative set exists for this page.`,
+      );
+    }
+
+    const hasDerivativeSet = derivativeSetRef !== null;
+    const data: ProductionPageInputData | ProductionPageInputV2Data = hasDerivativeSet
+      ? {
+          schemaVersion: "production-v2",
+          projectId: input.projectId,
+          pageIdentity: input.pageSlug,
+          pageType: pageType as ProductionPageInputData["pageType"],
+          route,
+          siteIdentity: input.siteIdentity,
+          acceptedContent: {
+            id: bundle.content.id,
+            version: bundle.content.version,
+            digest: bundle.content.digest,
+          },
+          acceptedDesign: {
+            id: bundle.design.id,
+            version: bundle.design.version,
+            digest: bundle.design.candidateDigest,
+          },
+          acceptedVisualSet: {
+            id: bundle.visualSet.id,
+            version: bundle.visualSet.version,
+            digest: bundle.visualSet.digest,
+          },
+          acceptedDerivativeSet: derivativeSetRef!,
+          renderer: {
+            id: "astro-static",
+            version: input.rendererVersion,
+            policyVersion: input.rendererPolicyVersion,
+          },
+        }
+      : {
+          schemaVersion: "production-v1",
+          projectId: input.projectId,
+          pageIdentity: input.pageSlug,
+          pageType: pageType as ProductionPageInputData["pageType"],
+          route,
+          siteIdentity: input.siteIdentity,
+          acceptedContent: {
+            id: bundle.content.id,
+            version: bundle.content.version,
+            digest: bundle.content.digest,
+          },
+          acceptedDesign: {
+            id: bundle.design.id,
+            version: bundle.design.version,
+            digest: bundle.design.candidateDigest,
+          },
+          acceptedVisualSet: {
+            id: bundle.visualSet.id,
+            version: bundle.visualSet.version,
+            digest: bundle.visualSet.digest,
+          },
+          renderer: {
+            id: "astro-static",
+            version: input.rendererVersion,
+            policyVersion: input.rendererPolicyVersion,
+          },
+        };
+    if (hasDerivativeSet) {
+      parseProductionPageInputV2Data(data);
+    } else {
+      parseProductionPageInputData(data);
+    }
     // Digest over the proven canonical JSON serializer (Run 4.1 RFC 8785
     // verification applies to this exact implementation).
     const digest = deterministicDigest(data);
@@ -499,6 +607,67 @@ export class ProductionStore {
       const version = await new AssetStore(this.db).getVersion(input.projectId, slot.resolvedVersionId);
       if (!version || version.binaryDigest !== slot.binaryDigest || version.governanceDigest !== slot.governanceDigest) {
         return { stale: true, reason: `Visual slot ${slot.slot} no longer resolves to its bound asset version.` };
+      }
+    }
+
+    // Run 10: a derivative-aware (production-v2) input is stale when its bound
+    // AcceptedDerivativeSet is superseded or no longer current. No hidden
+    // exceptions: staleness propagates through the existing candidate rules.
+    const inputData = input.data as { schemaVersion?: string };
+    if (inputData.schemaVersion === "production-v2") {
+      const [currentSet] = await this.db
+        .select()
+        .from(acceptedDerivativeSets)
+        .where(
+          and(
+            eq(acceptedDerivativeSets.projectId, input.projectId),
+            eq(acceptedDerivativeSets.pageIdentity, input.pageIdentity),
+          ),
+        )
+        .orderBy(desc(acceptedDerivativeSets.version))
+        .limit(1);
+      if (!currentSet) {
+        return { stale: true, reason: "Bound AcceptedDerivativeSet no longer exists." };
+      }
+      if (currentSet.id !== (input.data as { acceptedDerivativeSet?: { id?: string } }).acceptedDerivativeSet?.id || currentSet.setDigest !== (input.data as { acceptedDerivativeSet?: { digest?: string } }).acceptedDerivativeSet?.digest) {
+        return { stale: true, reason: "AcceptedDerivativeSet changed or was superseded." };
+      }
+      if (currentSet.sourceContentId !== input.acceptedContentId || currentSet.sourceContentVersion !== input.acceptedContentVersion || currentSet.sourceContentDigest !== input.acceptedContentDigest) {
+        return { stale: true, reason: "AcceptedDerivativeSet is stale versus current accepted content." };
+      }
+      // Policy/override mutation staleness: re-resolve the EFFECTIVE policy
+      // from the current policy + override and compare with the intent the
+      // set was accepted against. A policy/voice/override change makes the
+      // set stale even though no new intent snapshot has been derived yet.
+      const setData = currentSet.data as AcceptedDerivativeSetData;
+      const freshPolicyRow = await new DerivativesStore(this.db).currentPolicy(input.projectId);
+      const freshOverrideRow = await new DerivativesStore(this.db).currentOverride(input.projectId, input.pageIdentity);
+      const freshEffective = resolveEffectiveDerivativeSettings({
+        projectPolicy: freshPolicyRow ? (freshPolicyRow.data as ProjectDerivativePolicyData) : null,
+        pageOverride: freshOverrideRow ? (freshOverrideRow.data as PageDerivativeOverrideData) : null,
+      });
+      const boundIntent = setData.intentSnapshot;
+      const freshIntentData = {
+        schemaVersion: "derivatives-v1",
+        projectId: input.projectId,
+        pageIdentity: input.pageIdentity,
+        acceptedContent: {
+          id: input.acceptedContentId,
+          version: input.acceptedContentVersion,
+          digest: input.acceptedContentDigest,
+        },
+        projectPolicy: freshPolicyRow
+          ? { id: freshPolicyRow.id, version: freshPolicyRow.version, digest: freshPolicyRow.policyDigest }
+          : null,
+        pageOverride: freshOverrideRow
+          ? { id: freshOverrideRow.id, version: freshOverrideRow.version, digest: freshOverrideRow.overrideDigest }
+          : null,
+        effectiveSummary: freshEffective.summary,
+        effectiveAudio: freshEffective.audio,
+      };
+      const freshIntentDigest = deterministicDigest(freshIntentData);
+      if (freshIntentDigest !== boundIntent.digest) {
+        return { stale: true, reason: "AcceptedDerivativeSet intent snapshot is stale versus current effective derivative policy." };
       }
     }
 

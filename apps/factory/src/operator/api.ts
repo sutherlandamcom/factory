@@ -45,6 +45,8 @@ export interface OperatorApiDeps {
   readonly visual?: VisualService;
   /** Production pipeline v0 (Macro Run 9); optional for backward compatibility. */
   readonly production?: ProductionApiFacade;
+  /** Page derivatives v0 (Macro Run 10); optional for backward compatibility. */
+  readonly derivatives?: import("../derivatives/api-facade.js").DerivativesApiFacade;
 }
 
 const projectKeySchema = z
@@ -295,6 +297,46 @@ function parseOr400<T extends z.ZodTypeAny>(schema: T, input: unknown): z.infer<
   return result.data;
 }
 
+// Run 10 derivative request schemas (Dashboard is not provider config authority:
+// only bounded, narrow settings are accepted).
+const derivativePolicySchema = z
+  .object({
+    summary: z.object({
+      enabled: z.boolean(),
+      language: z.string().trim().regex(/^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$/),
+      policyVersion: z.string().trim().min(1).max(60),
+    }).strict(),
+    audio: z.object({
+      enabled: z.boolean(),
+      language: z.string().trim().regex(/^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$/),
+      voiceId: z.string().trim().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/).max(120).optional(),
+      policyVersion: z.string().trim().min(1).max(60),
+    }).strict(),
+  })
+  .strict();
+
+const derivativeOverrideSchema = z
+  .object({
+    summary: z.object({
+      mode: z.enum(["inherit", "enabled", "disabled"]),
+      language: z.string().trim().regex(/^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$/).optional(),
+    }).strict(),
+    audio: z.object({
+      mode: z.enum(["inherit", "enabled", "disabled"]),
+      language: z.string().trim().regex(/^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$/).optional(),
+      voiceId: z.string().trim().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/).max(120).optional(),
+    }).strict(),
+  })
+  .strict();
+
+const derivativeAcceptSchema = z
+  .object({ proposalId: z.string().trim().min(1).max(128) })
+  .strict();
+
+const derivativeAudioAcceptSchema = z
+  .object({ candidateId: z.string().trim().min(1).max(128) })
+  .strict();
+
 /**
  * FactoryError codes that follow the stable operator error contract map
  * directly onto the contract's status table. Any other code is treated as
@@ -525,6 +567,76 @@ export function createOperatorApi(deps: OperatorApiDeps) {
       }
 
       // ---- Assets (Macro Run 5) ----------------------------------------------
+
+      // ---- Run 10: Page derivatives --------------------------------------
+      if (segments.length >= 4 && segments[0] === "projects" && segments[2] === "derivatives") {
+        if (!deps.derivatives) return sendError(res, "not_found", "Derivatives are not available.");
+        const derivatives = deps.derivatives;
+        const projectId = segments[1]!;
+
+        // GET /api/projects/:id/derivatives/workspace
+        if (req.method === "GET" && segments.length === 4 && segments[3] === "workspace") {
+          return sendJson(res, 200, await derivatives.workspace(projectId));
+        }
+
+        // PUT /api/projects/:id/derivatives/policy
+        if (req.method === "PUT" && segments.length === 4 && segments[3] === "policy") {
+          const input = parseOr400(derivativePolicySchema, parseJsonBody(body));
+          const row = await derivatives.updatePolicy({ projectId, ...input });
+          return sendJson(res, 201, { id: row.id, version: row.version, digest: row.policyDigest });
+        }
+
+        // PUT /api/projects/:id/derivatives/pages/:page/override
+        if (req.method === "PUT" && segments.length === 6 && segments[3] === "pages" && segments[5] === "override") {
+          const input = parseOr400(derivativeOverrideSchema, parseJsonBody(body));
+          const row = await derivatives.updateOverride({ projectId, pageIdentity: segments[4]!, ...input });
+          return sendJson(res, 201, { id: row.id, version: row.version, digest: row.overrideDigest });
+        }
+
+        // POST /api/projects/:id/derivatives/pages/:page/intent
+        if (req.method === "POST" && segments.length === 6 && segments[3] === "pages" && segments[5] === "intent") {
+          return sendJson(res, 200, await derivatives.deriveIntent({ projectId, pageIdentity: segments[4]! }));
+        }
+
+        // POST /api/projects/:id/derivatives/pages/:page/summary/generate
+        if (req.method === "POST" && segments.length === 7 && segments[3] === "pages" && segments[5] === "summary" && segments[6] === "generate") {
+          return sendJson(res, 201, await derivatives.generateSummary({ projectId, pageIdentity: segments[4]! }));
+        }
+
+        // POST /api/projects/:id/derivatives/pages/:page/summary/accept
+        if (req.method === "POST" && segments.length === 7 && segments[3] === "pages" && segments[5] === "summary" && segments[6] === "accept") {
+          const input = parseOr400(derivativeAcceptSchema, parseJsonBody(body));
+          return sendJson(res, 201, await derivatives.acceptSummary({ projectId, pageIdentity: segments[4]!, proposalId: input.proposalId }));
+        }
+
+        // GET /api/projects/:id/derivatives/summary/:proposalId/review
+        if (req.method === "GET" && segments.length === 7 && segments[3] === "summary" && segments[5] === "review") {
+          return sendJson(res, 200, await derivatives.summaryReview(projectId, segments[4]!));
+        }
+
+        // POST /api/projects/:id/derivatives/pages/:page/audio/generate
+        if (req.method === "POST" && segments.length === 7 && segments[3] === "pages" && segments[5] === "audio" && segments[6] === "generate") {
+          return sendJson(res, 201, await derivatives.generateAudio({ projectId, pageIdentity: segments[4]! }));
+        }
+
+        // POST /api/projects/:id/derivatives/pages/:page/audio/accept
+        if (req.method === "POST" && segments.length === 7 && segments[3] === "pages" && segments[5] === "audio" && segments[6] === "accept") {
+          const input = parseOr400(derivativeAudioAcceptSchema, parseJsonBody(body));
+          return sendJson(res, 201, await derivatives.acceptAudio({ projectId, pageIdentity: segments[4]!, candidateId: input.candidateId }));
+        }
+
+        // GET /api/projects/:id/derivatives/audio/:candidateId/review
+        if (req.method === "GET" && segments.length === 7 && segments[3] === "audio" && segments[5] === "review") {
+          return sendJson(res, 200, await derivatives.audioReview(projectId, segments[4]!));
+        }
+
+        // POST /api/projects/:id/derivatives/pages/:page/set/accept
+        if (req.method === "POST" && segments.length === 7 && segments[3] === "pages" && segments[5] === "set" && segments[6] === "accept") {
+          return sendJson(res, 201, await derivatives.acceptSet({ projectId, pageIdentity: segments[4]! }));
+        }
+
+        return sendError(res, "not_found", "Derivatives route not found.");
+      }
 
       if (segments.length >= 4 && segments[0] === "projects" && segments[2] === "assets") {
         const project = await deps.store.getProjectById(segments[1]!);

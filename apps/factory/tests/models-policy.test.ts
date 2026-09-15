@@ -24,17 +24,18 @@ const EXPECTED_MATRIX: Record<string, { model: string; status: string }> = {
   visual_critic: { model: "openai/gpt-5.6-sol", status: "future" },
   cheap_repair: { model: "z-ai/glm-5.3-flash", status: "future" },
   image_generator: { model: "openai/gpt-image-2", status: "future" },
+  page_summarizer: { model: "google/gemini-3.7-flash", status: "future" },
 };
 
-test("policy version is the explicit v0.1 successor of the accepted v0 policy", () => {
-  // Model-policy semantics changed (code-worker routing v0); the version
-  // string distinguishes old and new provenance — never a silent swap.
-  assert.equal(FACTORY_MODEL_POLICY_VERSION, "factory-model-policy-v0.1");
+test("policy version is the explicit v0.2 successor of the accepted v0 policy", () => {
+  // Model-policy semantics changed (Run 10 page_summarizer role); the
+  // version string distinguishes old and new provenance — never a silent swap.
+  assert.equal(FACTORY_MODEL_POLICY_VERSION, "factory-model-policy-v0.2");
 });
 
-test("the full intended role set is machine-readable with 11 unique ids", () => {
-  assert.equal(FACTORY_ROLE_IDS.length, 11);
-  assert.equal(new Set<string>(FACTORY_ROLE_IDS).size, 11);
+test("the full intended role set is machine-readable with 12 unique ids", () => {
+  assert.equal(FACTORY_ROLE_IDS.length, 12);
+  assert.equal(new Set<string>(FACTORY_ROLE_IDS).size, 12);
   for (const expected of [
     "bulk_research_extraction",
     "competitor_site_analysis",
@@ -47,13 +48,14 @@ test("the full intended role set is machine-readable with 11 unique ids", () => 
     "code_worker",
     "cheap_repair",
     "image_generator",
+    "page_summarizer",
   ] as const satisfies readonly FactoryRoleId[]) {
     assert.ok(FACTORY_ROLE_IDS.includes(expected), `missing role ${expected}`);
   }
 });
 
 test("every operator-fixed assignment matches the authoritative matrix exactly", () => {
-  assert.equal(MODEL_ROLE_IDS.length, 10, "code_worker is a model+runtime pair, not an OpenRouter role");
+  assert.equal(MODEL_ROLE_IDS.length, 11, "code_worker is a model+runtime pair, not an OpenRouter role");
   for (const [roleId, expected] of Object.entries(EXPECTED_MATRIX)) {
     const policy = MODEL_ROLE_POLICY[roleId as keyof typeof MODEL_ROLE_POLICY];
     assert.ok(policy, `missing policy for ${roleId}`);

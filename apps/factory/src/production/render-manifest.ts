@@ -19,6 +19,7 @@ import {
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
 import { createAssetStorage, type AssetStorage } from "../assets/storage.js";
+import { acceptedDerivativeSets, acceptedSummaryArtifacts, acceptedAudioArtifacts } from "../persistence/schema.js";
 import { ProductionStore } from "./store.js";
 
 /**
@@ -42,7 +43,7 @@ import { ProductionStore } from "./store.js";
  */
 
 export interface ProductionRenderManifest {
-  schemaVersion: "production-v1";
+  schemaVersion: "production-v1" | "production-v2";
   input: {
     id: string;
     version: number;
@@ -118,6 +119,38 @@ export interface ProductionRenderManifest {
     /** Probable LCP image: eager loading, no lazy attribute. */
     isProbableLcp: boolean;
   }>;
+  /**
+   * Run 10 derivative authority (production-v2 manifests only). Summary
+   * text is copied VERBATIM from the accepted summary artifact at manifest
+   * compile time; the Astro renderer never queries the database. Audio
+   * binds the exact accepted binary digest + deterministic delivery path.
+   */
+  derivatives?: {
+    setDigest: string;
+    summary:
+      | { state: "disabled" }
+      | {
+          state: "accepted";
+          acceptedId: string;
+          acceptedVersion: number;
+          acceptedDigest: string;
+          language: string;
+          summaryText: string;
+        };
+    audio:
+      | { state: "disabled" }
+      | {
+          state: "accepted";
+          acceptedId: string;
+          acceptedVersion: number;
+          acceptedDigest: string;
+          binaryDigest: string;
+          mimeType: string;
+          durationSeconds: number | null;
+          /** Public path of the materialized audio delivery artifact. */
+          publicPath: string;
+        };
+  };
   /** Deterministic manifest digest (binds the whole render surface). */
   manifestDigest: string;
 }
@@ -259,6 +292,78 @@ export class ProductionRenderCompiler {
       });
     }
 
+    // Run 10: for production-v2 inputs, bind the exact accepted derivative
+    // set and materialize the audio delivery artifact deterministically.
+    let derivatives: ProductionRenderManifest["derivatives"];
+    const inputData = productionInput.data as { schemaVersion?: string; acceptedDerivativeSet?: { id: string; version: number; digest: string } };
+    if (inputData.schemaVersion === "production-v2") {
+      const bound = inputData.acceptedDerivativeSet;
+      if (!bound) throw renderError("production_build_rejected", "production-v2 input is missing its acceptedDerivativeSet binding.");
+      const [setRow] = await this.db
+        .select()
+        .from(acceptedDerivativeSets)
+        .where(and(eq(acceptedDerivativeSets.id, bound.id), eq(acceptedDerivativeSets.projectId, input.projectId)));
+      if (!setRow || setRow.version !== bound.version || setRow.setDigest !== bound.digest) {
+        throw renderError("production_authority_digest_mismatch", "Bound AcceptedDerivativeSet digest drifted from the production input.");
+      }
+      const summaryMember = setRow.summaryState === "accepted"
+        ? await (async () => {
+            const [artifact] = await this.db
+              .select()
+              .from(acceptedSummaryArtifacts)
+              .where(and(eq(acceptedSummaryArtifacts.id, setRow.summaryArtifactId!), eq(acceptedSummaryArtifacts.projectId, input.projectId)));
+            if (!artifact || artifact.version !== setRow.summaryVersion || artifact.artifactDigest !== setRow.summaryDigest) {
+              throw renderError("production_authority_digest_mismatch", "Bound accepted summary drifted from the derivative set.");
+            }
+            return {
+              state: "accepted" as const,
+              acceptedId: artifact.id,
+              acceptedVersion: artifact.version,
+              acceptedDigest: artifact.artifactDigest,
+              language: artifact.language,
+              summaryText: artifact.summaryText,
+            };
+          })()
+        : ({ state: "disabled" } as const);
+      const audioMember = setRow.audioState === "accepted"
+        ? await (async () => {
+            const [artifact] = await this.db
+              .select()
+              .from(acceptedAudioArtifacts)
+              .where(and(eq(acceptedAudioArtifacts.id, setRow.audioArtifactId!), eq(acceptedAudioArtifacts.projectId, input.projectId)));
+            if (!artifact || artifact.version !== setRow.audioVersion || artifact.artifactDigest !== setRow.audioDigest || artifact.binaryDigest !== setRow.audioBinaryDigest) {
+              throw renderError("production_authority_digest_mismatch", "Bound accepted audio drifted from the derivative set.");
+            }
+            // Materialize the exact accepted binary at a content-addressed
+            // public path (same bytes -> same path; no provider hotlinks).
+            const bytes = await this.storage.getObject(this.storage.derivativeKey(artifact.binaryDigest));
+            const digest = sha256Bytes(bytes);
+            if (digest !== artifact.binaryDigest) {
+              throw renderError("derivative_binary_digest_mismatch", "Stored audio bytes do not match the accepted binary digest.");
+            }
+            const extension = artifact.mimeType === "audio/mpeg" ? "mp3" : artifact.mimeType === "audio/ogg" ? "ogg" : artifact.mimeType === "audio/mp4" ? "m4a" : "wav";
+            const publicPath = `/production-assets/${digest}.${extension}`;
+            await mkdir(input.assetSnapshotDir, { recursive: true });
+            await writeFile(path.join(input.assetSnapshotDir, `${digest}.${extension}`), bytes, { flag: "wx" }).catch(async (error: NodeJS.ErrnoException) => {
+              if (error.code !== "EEXIST") throw error;
+              const existing = await readFile(path.join(input.assetSnapshotDir, `${digest}.${extension}`));
+              if (sha256Bytes(existing) !== digest) throw renderError("production_build_rejected", "Content-addressed audio collision.");
+            });
+            return {
+              state: "accepted" as const,
+              acceptedId: artifact.id,
+              acceptedVersion: artifact.version,
+              acceptedDigest: artifact.artifactDigest,
+              binaryDigest: artifact.binaryDigest,
+              mimeType: artifact.mimeType,
+              durationSeconds: artifact.durationSeconds,
+              publicPath,
+            };
+          })()
+        : ({ state: "disabled" } as const);
+      derivatives = { setDigest: setRow.setDigest, summary: summaryMember, audio: audioMember };
+    }
+
     if (!productionInput.siteId || !productionInput.siteName || !productionInput.siteLanguage || !productionInput.siteProfileDigest) {
       throw renderError("production_build_rejected", "Production input has no immutable site identity.");
     }
@@ -274,7 +379,7 @@ export class ProductionRenderCompiler {
     const canonicalUrl = `${productionInput.canonicalOrigin.replace(/\/$/, "")}${productionInput.route === "/" ? "/" : productionInput.route}`;
     const fullTitle = `${content.title} | ${productionInput.siteName}`;
     const manifest: ProductionRenderManifest = {
-      schemaVersion: "production-v1",
+      schemaVersion: inputData.schemaVersion === "production-v2" ? "production-v2" : "production-v1",
       input: {
         id: productionInput.id,
         version: productionInput.version,
@@ -313,6 +418,7 @@ export class ProductionRenderCompiler {
       links,
       breadcrumbs,
       assets,
+      ...(derivatives ? { derivatives } : {}),
       manifestDigest: "",
     };
     manifest.manifestDigest = deterministicDigest({
@@ -336,6 +442,7 @@ export class ProductionRenderCompiler {
         altAuthorityComplete: asset.altAuthorityComplete,
         isProbableLcp: asset.isProbableLcp,
       })),
+      ...(manifest.derivatives ? { derivatives: manifest.derivatives } : {}),
     });
     return manifest;
   }
@@ -470,8 +577,15 @@ function deriveManifestBreadcrumbs(route: string, origin: string, titles: Map<st
 
 function assertManifest(value: unknown): ProductionRenderManifest {
   const manifest = value as ProductionRenderManifest;
-  if (!manifest || manifest.schemaVersion !== "production-v1" || !manifest.input || !manifest.content || !manifest.design || !manifest.seo || !Array.isArray(manifest.assets)) {
+  const validVersion = manifest?.schemaVersion === "production-v1" || manifest?.schemaVersion === "production-v2";
+  if (!manifest || !validVersion || !manifest.input || !manifest.content || !manifest.design || !manifest.seo || !Array.isArray(manifest.assets)) {
     throw renderError("production_build_rejected", "Production manifest schema is invalid.");
+  }
+  if (manifest.schemaVersion === "production-v2" && !manifest.derivatives) {
+    throw renderError("production_build_rejected", "production-v2 manifest is missing its derivatives authority.");
+  }
+  if (manifest.schemaVersion === "production-v1" && manifest.derivatives) {
+    throw renderError("production_build_rejected", "production-v1 manifest must not carry derivatives authority.");
   }
   const expected = deterministicDigest({
     input: manifest.input,

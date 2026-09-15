@@ -14,7 +14,7 @@ import { canonicalProductionJson } from "@factory/contracts";
  */
 
 export interface ProductionRenderManifest {
-  schemaVersion: "production-v1";
+  schemaVersion: "production-v1" | "production-v2";
   input: {
     id: string;
     version: number;
@@ -80,6 +80,32 @@ export interface ProductionRenderManifest {
     altAuthorityComplete: boolean;
     isProbableLcp: boolean;
   }>;
+  /** Run 10 derivative authority (production-v2 manifests only). */
+  derivatives?: {
+    setDigest: string;
+    summary:
+      | { state: "disabled" }
+      | {
+          state: "accepted";
+          acceptedId: string;
+          acceptedVersion: number;
+          acceptedDigest: string;
+          language: string;
+          summaryText: string;
+        };
+    audio:
+      | { state: "disabled" }
+      | {
+          state: "accepted";
+          acceptedId: string;
+          acceptedVersion: number;
+          acceptedDigest: string;
+          binaryDigest: string;
+          mimeType: string;
+          durationSeconds: number | null;
+          publicPath: string;
+        };
+  };
   manifestDigest: string;
 }
 
@@ -102,8 +128,15 @@ function assertManifestShape(value: unknown): ProductionRenderManifest {
   if (!manifest || typeof manifest !== "object") {
     throw new Error("Production manifest is not an object.");
   }
-  if (manifest.schemaVersion !== "production-v1") {
-    throw new Error(`Production manifest schemaVersion must be "production-v1" (got ${String((manifest as { schemaVersion?: unknown }).schemaVersion)}).`);
+  const validVersion = manifest.schemaVersion === "production-v1" || manifest.schemaVersion === "production-v2";
+  if (!validVersion) {
+    throw new Error(`Production manifest schemaVersion must be "production-v1" or "production-v2" (got ${String((manifest as { schemaVersion?: unknown }).schemaVersion)}).`);
+  }
+  if (manifest.schemaVersion === "production-v2" && manifest.derivatives === undefined) {
+    throw new Error('production-v2 manifest is missing its derivatives authority.');
+  }
+  if (manifest.schemaVersion === "production-v1" && manifest.derivatives !== undefined) {
+    throw new Error('production-v1 manifest must not carry derivatives authority.');
   }
   for (const key of ["input", "seo", "content", "design", "links", "breadcrumbs", "assets", "manifestDigest"] as const) {
     if (manifest[key] === undefined) {
@@ -130,6 +163,7 @@ function assertManifestShape(value: unknown): ProductionRenderManifest {
     links: manifest.links,
     breadcrumbs: manifest.breadcrumbs,
     assets: manifest.assets,
+    ...(manifest.derivatives ? { derivatives: manifest.derivatives } : {}),
   })).digest("hex");
   if (manifest.manifestDigest !== expectedDigest) throw new Error("Production manifest digest mismatch.");
   return manifest;

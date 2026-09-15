@@ -13,12 +13,13 @@ import { AssetsPage } from "./AssetsPage";
 import { DesignPage } from "./DesignPage";
 import { VisualAssetsPage } from "./VisualAssetsPage";
 import { ProductionPage } from "./ProductionPage";
+import { DerivativesPage } from "./DerivativesPage";
 
 const TABS = [
   "Overview", "Business", "Offering", "Audience", "Markets", "Site Identity",
   "Conversion", "Evidence & Claims", "Search Seeds", "Competitor Seeds", "Brand",
   "References", "Assets", "Constraints", "Content Constitution", "Review",
-  "Versions", "Search", "Competitors Research", "Content Gaps", "Content", "Asset Library", "Design", "Visual Assets", "Production",
+  "Versions", "Search", "Competitors Research", "Content Gaps", "Content", "Asset Library", "Design", "Visual Assets", "Derivatives", "Production",
 ] as const;
 
 type Tab = (typeof TABS)[number];
@@ -165,6 +166,7 @@ export function ProjectDetailPage({ projectId, onBack }: { projectId: string; on
         {tab === "Asset Library" && <AssetsPage projectId={projectId} />}
         {tab === "Design" && <DesignPage projectId={projectId} />}
         {tab === "Visual Assets" && <VisualAssetsPage projectId={projectId} />}
+        {tab === "Derivatives" && <DerivativesPage projectId={projectId} />}
         {tab === "Production" && <ProductionPage projectId={projectId} />}
         {tab === "Content Constitution" && <Constitution form={form} setForm={setForm} />}
         {["Business","Offering","Audience","Markets","Site Identity","Conversion","Evidence & Claims","Search Seeds","Competitors","Brand","References","Assets","Constraints"].includes(tab) && (

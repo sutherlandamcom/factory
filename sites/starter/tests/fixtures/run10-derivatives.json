@@ -1,0 +1,120 @@
+{
+ "schemaVersion": "production-v2",
+ "input": {
+  "id": "ppin-run10-run10-derivatives",
+  "version": 1,
+  "digest": "1111111111111111111111111111111111111111111111111111111111111111",
+  "projectId": "proj-run10-e2e",
+  "pageIdentity": "run10-derivatives",
+  "pageType": "service",
+  "route": "/run10-derivatives",
+  "siteIdentity": {
+   "siteId": "sutherland-private-office",
+   "siteName": "Sutherland Private Office",
+   "canonicalOrigin": "https://sutherlandam.com",
+   "language": "en",
+   "profileDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  }
+ },
+ "seo": {
+  "fullTitle": "Run 10 derivative page run10-derivatives | Sutherland Private Office",
+  "description": "Run 10 E2E page for run10-derivatives with accepted derivative authority.",
+  "canonicalUrl": "https://sutherlandam.com/run10-derivatives",
+  "ogTitle": "Run 10 derivative page run10-derivatives",
+  "ogDescription": "Run 10 E2E page for run10-derivatives.",
+  "ogUrl": "https://sutherlandam.com/run10-derivatives"
+ },
+ "content": {
+  "acceptedId": "wprp-run10",
+  "acceptedVersion": 1,
+  "acceptedDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "title": "Run 10 derivative page run10-derivatives",
+  "metaDescription": "Run 10 E2E page for run10-derivatives with accepted derivative authority.",
+  "introduction": "RUN10_DERIVATIVE_PROOF - this page carries accepted derivative authority for run10-derivatives.",
+  "sections": [
+   {
+    "heading": "What this page proves",
+    "body": "The page proves derivative rendering without visitor-time provider execution."
+   },
+   {
+    "heading": "How it proves it",
+    "body": "Visitor interactions are exercised against the built static output with provider counters at zero."
+   }
+  ],
+  "conclusion": "Derivatives are pre-generated accepted artifacts consumed statically.",
+  "cta": "Begin with a scoping conversation.",
+  "internalLinks": []
+ },
+ "design": {
+  "acceptedId": "dacc-run10",
+  "acceptedVersion": 1,
+  "acceptedDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "tokens": {
+   "colors": {
+    "primary": "#1a2e35",
+    "background": "#ffffff",
+    "surface": "#f6f5f2"
+   },
+   "typography": {
+    "headingFont": "Source Serif 4",
+    "bodyFont": "Public Sans",
+    "scaleNotes": "fixture"
+   },
+   "spacing": {
+    "md": "16px",
+    "lg": "32px"
+   },
+   "rounded": {
+    "md": "8px"
+   },
+   "ctaHierarchy": "text only",
+   "navigationLanguage": "plain",
+   "imageryTreatment": "none",
+   "sectionRhythm": "measured"
+  },
+  "archetype": {
+   "kind": "service",
+   "sectionPatterns": [
+    "page-header",
+    "article-body",
+    "cta"
+   ],
+   "contentRequirements": [],
+   "assetSlots": [],
+   "primaryCta": "",
+   "secondaryCta": "",
+   "responsiveBehavior": "stack",
+   "trustPresentation": "visible",
+   "rendererPrimitives": [
+    "page-header",
+    "article-body",
+    "cta"
+   ]
+  }
+ },
+ "links": [],
+ "breadcrumbs": [],
+ "assets": [],
+ "derivatives": {
+  "setDigest": "1111111111111111111111111111111111111111111111111111111111111111",
+  "summary": {
+   "state": "accepted",
+   "acceptedId": "accepted_summary_run10",
+   "acceptedVersion": 1,
+   "acceptedDigest": "2222222222222222222222222222222222222222222222222222222222222222",
+   "language": "en",
+   "summaryText": "This page proves derivative rendering without visitor-time provider execution. Visitor interactions are exercised against the built static output with provider counters at zero. Derivatives are pre-generated accepted artifacts consumed statically."
+  },
+  "audio": {
+   "state": "accepted",
+   "acceptedId": "accepted_audio_run10",
+   "acceptedVersion": 1,
+   "acceptedDigest": "3333333333333333333333333333333333333333333333333333333333333333",
+   "binaryDigest": "a4c049d34d17eaa0ad554c0528c743d9adad575dafcfbfb96cc5d9e8d7688818",
+   "mimeType": "audio/wav",
+   "durationSeconds": 1,
+   "publicPath": "/production-assets/a4c049d34d17eaa0ad554c0528c743d9adad575dafcfbfb96cc5d9e8d7688818.wav"
+  }
+ },
+ "manifestDigest": "8e50a246e0ff8a9c0d0b7abdb76d84e11227e73f5a93dfdea45549dbb10ec84d"
+}

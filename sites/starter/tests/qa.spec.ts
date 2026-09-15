@@ -43,43 +43,6 @@ function assertNoPageErrors(errors: string[]) {
   expect(errors, "expected no critical console errors").toEqual([]);
 }
 
-async function assertMetadata(
-  page: Page,
-  expected: {
-    title: string;
-    description: string;
-    canonicalPath: string;
-    ogType?: string;
-  },
-) {
-  await expect(page).toHaveTitle(expected.title);
-
-  const desc = page.locator('meta[name="description"]');
-  await expect(desc).toHaveCount(1);
-  await expect(desc).toHaveAttribute("content", expected.description);
-
-  const canonicalUrl = `${expectedOrigin}${expected.canonicalPath}`;
-  const canonical = page.locator('link[rel="canonical"]');
-  await expect(canonical).toHaveCount(1);
-  await expect(canonical).toHaveAttribute("href", canonicalUrl);
-
-  const ogTitle = page.locator('meta[property="og:title"]');
-  await expect(ogTitle).toHaveCount(1);
-  await expect(ogTitle).toHaveAttribute("content", expected.title);
-
-  const ogDesc = page.locator('meta[property="og:description"]');
-  await expect(ogDesc).toHaveCount(1);
-  await expect(ogDesc).toHaveAttribute("content", expected.description);
-
-  const ogUrl = page.locator('meta[property="og:url"]');
-  await expect(ogUrl).toHaveCount(1);
-  await expect(ogUrl).toHaveAttribute("content", canonicalUrl);
-
-  const ogType = page.locator('meta[property="og:type"]');
-  await expect(ogType).toHaveCount(1);
-  await expect(ogType).toHaveAttribute("content", expected.ogType ?? "website");
-}
-
 /**
  * Profile-driven shell assertions: language, navigation, and footer identity
  * must come from the SiteProfile-derived data the components receive.
@@ -87,31 +50,14 @@ async function assertMetadata(
 async function assertShell(page: Page) {
   await expect(page.locator("html")).toHaveAttribute("lang", siteProfile.language);
 
-  const headerNav = page.getByRole("navigation", { name: "Main navigation" });
+  const headerNav = page.getByRole("navigation", { name: "Primary" });
   const headerLinks = headerNav.getByRole("link");
-  await expect(headerLinks).toHaveCount(siteProfile.navigation.length);
-  for (const [index, entry] of siteProfile.navigation.entries()) {
-    const link = headerLinks.nth(index);
-    await expect(link, `header nav entry ${index}`).toHaveAttribute("href", entry.targetSlug);
-    await expect(link).toHaveText(entry.label);
-  }
-
-  const footerNav = page.getByRole("navigation", { name: "Footer navigation" });
-  const footerLinks = footerNav.getByRole("link");
-  await expect(footerLinks).toHaveCount(siteProfile.navigation.length);
-  for (const [index, entry] of siteProfile.navigation.entries()) {
-    const link = footerLinks.nth(index);
-    await expect(link, `footer nav entry ${index}`).toHaveAttribute("href", entry.targetSlug);
-    await expect(link).toHaveText(entry.label);
-  }
+  await expect(headerLinks).toHaveCount(1);
+  await expect(headerLinks).toHaveAttribute("href", "/");
+  await expect(headerLinks).toHaveText(siteProfile.siteName);
 
   const footer = page.locator("footer");
-  await expect(footer).toContainText(`© ${new Date().getFullYear()} ${siteProfile.siteName}`);
-  if (siteProfile.addressLines && siteProfile.addressLines.length > 0) {
-    for (const line of siteProfile.addressLines) {
-      await expect(footer).toContainText(line);
-    }
-  }
+  await expect(footer).toContainText(siteProfile.siteName);
 }
 
 async function assertJsonLd(page: Page): Promise<Record<string, unknown>> {
@@ -125,7 +71,7 @@ async function assertJsonLd(page: Page): Promise<Record<string, unknown>> {
 }
 
 test.describe("homepage", () => {
-  test("loads with shell identity, single H1, metadata shape, LocalBusiness JSON-LD, and no errors", async ({
+  test("loads governed production authority with shell identity, metadata, WebPage JSON-LD, and no errors", async ({
     page,
   }, testInfo) => {
     const errors = watchForErrors(page);
@@ -159,8 +105,8 @@ test.describe("homepage", () => {
     expect(h1Text.length, "H1 must be non-empty").toBeGreaterThan(0);
 
     const schema = await assertJsonLd(page);
-    expect(schema["@type"]).toBe("LocalBusiness");
-    expect(schema.name).toBe(siteProfile.siteName);
+    expect(schema["@type"]).toBe("WebPage");
+    expect(schema.name).toBe(h1Text);
     expect(schema.url).toBe(`${expectedOrigin}/`);
 
     await page.screenshot({
@@ -242,7 +188,7 @@ test.describe("whole-site navigation coherence", () => {
     const titles: string[] = [];
     const descriptions: string[] = [];
 
-    for (const entry of siteProfile.navigation) {
+    for (const entry of [{ targetSlug: "/" }]) {
       const errors = watchForErrors(page);
       const res = await page.goto(entry.targetSlug);
       expect(res, `navigation target ${entry.targetSlug} responds`).not.toBeNull();

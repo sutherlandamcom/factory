@@ -11,6 +11,7 @@ import {
   check,
   index,
   foreignKey,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 
 export const projects = pgTable("projects", {
@@ -1977,3 +1978,250 @@ export const assetAssignmentHistory = pgTable("asset_assignment_history", {
   binding: jsonb("binding").notNull(),
   recordedAt: timestamp("recorded_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+// ---------------------------------------------------------------------------
+// Production authority: ProductionPageInput + ProductionCandidate + QA
+// (Macro Run 9 — Production + SEO + Performance Engine)
+// ---------------------------------------------------------------------------
+
+/**
+ * Immutable, versioned, digest-bound manifest of the exact accepted
+ * authorities (content + design + visual set + route/site identity +
+ * renderer identity) that a production build consumes. NOT a copy of
+ * editable page data — the renderer reads authority artifacts by exact
+ * id/version/digest lineage.
+ */
+export const productionPageInputs = pgTable(
+  "production_page_inputs",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    /** Accepted page identity: the bound AcceptedPageContent slug. */
+    pageIdentity: text("page_identity").notNull(),
+    pageType: text("page_type").notNull(),
+    route: text("route").notNull(),
+    canonicalOrigin: text("canonical_origin").notNull(),
+    siteId: text("site_id"),
+    siteName: text("site_name"),
+    siteLanguage: text("site_language"),
+    siteProfileDigest: text("site_profile_digest"),
+    acceptedContentId: text("accepted_content_id").notNull(),
+    acceptedContentVersion: integer("accepted_content_version").notNull(),
+    acceptedContentDigest: text("accepted_content_digest").notNull(),
+    acceptedDesignId: text("accepted_design_id").notNull(),
+    acceptedDesignVersion: integer("accepted_design_version").notNull(),
+    acceptedDesignDigest: text("accepted_design_digest").notNull(),
+    acceptedVisualSetId: text("accepted_visual_set_id").notNull(),
+    acceptedVisualSetVersion: integer("accepted_visual_set_version").notNull(),
+    acceptedVisualSetDigest: text("accepted_visual_set_digest").notNull(),
+    rendererId: text("renderer_id").notNull(),
+    rendererVersion: text("renderer_version").notNull(),
+    rendererPolicyVersion: text("renderer_policy_version").notNull(),
+    data: jsonb("data").notNull(),
+    inputDigest: text("input_digest").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("production_page_inputs_project_version_unique").on(table.projectId, table.version),
+    unique("production_page_inputs_project_page_version_unique").on(table.projectId, table.pageIdentity, table.version),
+    check("production_page_inputs_version_positive", sql`${table.version} >= 1`),
+    check("production_page_inputs_digest_shape", sql`${table.inputDigest} ~ '^[0-9a-f]{64}$'`),
+    check(
+      "production_page_inputs_authority_digests_shape",
+      sql`${table.acceptedContentDigest} ~ '^[0-9a-f]{64}$' AND ${table.acceptedDesignDigest} ~ '^[0-9a-f]{64}$' AND ${table.acceptedVisualSetDigest} ~ '^[0-9a-f]{64}$' AND (${table.siteProfileDigest} IS NULL OR ${table.siteProfileDigest} ~ '^[0-9a-f]{64}$')`,
+    ),
+    check(
+      "production_page_inputs_renderer_valid",
+      sql`${table.rendererId} = 'astro-static'`,
+    ),
+    check(
+      "production_page_inputs_page_type_valid",
+      sql`${table.pageType} IN ('homepage', 'service', 'location', 'editorial', 'investment_advisory')`,
+    ),
+    index("production_page_inputs_project_idx").on(table.projectId, table.version),
+  ],
+);
+
+/** Stable route owner; immutable input versions may reuse their page's route. */
+export const productionRouteAuthorities = pgTable(
+  "production_route_authorities",
+  {
+    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    route: text("route").notNull(),
+    pageIdentity: text("page_identity").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.projectId, table.route] }),
+    unique("production_route_authorities_project_page_unique").on(table.projectId, table.pageIdentity),
+  ],
+);
+
+/**
+ * Immutable production build result. A candidate proves exactly which
+ * authority versions/digests it was built from, the rendered artifact
+ * digest, and its QA state. Upstream mutation never mutates a historical
+ * candidate — it becomes STALE and a new candidate is required.
+ */
+export const productionCandidates = pgTable(
+  "production_candidates",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    productionInputId: text("production_input_id")
+      .notNull()
+      .references(() => productionPageInputs.id, { onDelete: "restrict" }),
+    productionInputVersion: integer("production_input_version").notNull(),
+    productionInputDigest: text("production_input_digest").notNull(),
+    pageIdentity: text("page_identity").notNull(),
+    route: text("route").notNull(),
+    canonicalUrl: text("canonical_url").notNull(),
+    /** Digest over the rendered production artifacts (normalized surface). */
+    artifactDigest: text("artifact_digest"),
+    /** Build output directory/manifest reference (runtime evidence). */
+    artifactRef: text("artifact_ref"),
+    assetReferences: jsonb("asset_references"),
+    manifestSetDigest: text("manifest_set_digest"),
+    redirectSnapshotDigest: text("redirect_snapshot_digest"),
+    siteProfileDigest: text("site_profile_digest"),
+    rendererVersion: text("renderer_version"),
+    repositorySha: text("repository_sha"),
+    lockfileDigest: text("lockfile_digest"),
+    /** pending | built | qa_passed | qa_failed | stale */
+    state: text("state").notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check("production_candidates_state_valid", sql`${table.state} IN ('pending', 'built', 'qa_passed', 'qa_failed', 'stale')`),
+    check("production_candidates_input_digest_shape", sql`${table.productionInputDigest} ~ '^[0-9a-f]{64}$'`),
+    check("production_candidates_artifact_digest_shape", sql`${table.artifactDigest} IS NULL OR ${table.artifactDigest} ~ '^[0-9a-f]{64}$'`),
+    check("production_candidates_snapshot_digests_shape", sql`(${table.manifestSetDigest} IS NULL OR ${table.manifestSetDigest} ~ '^[0-9a-f]{64}$') AND (${table.redirectSnapshotDigest} IS NULL OR ${table.redirectSnapshotDigest} ~ '^[0-9a-f]{64}$') AND (${table.siteProfileDigest} IS NULL OR ${table.siteProfileDigest} ~ '^[0-9a-f]{64}$') AND (${table.lockfileDigest} IS NULL OR ${table.lockfileDigest} ~ '^[0-9a-f]{64}$')`),
+    check("production_candidates_repository_sha_shape", sql`${table.repositorySha} IS NULL OR ${table.repositorySha} ~ '^[0-9a-f]{40}$'`),
+    check("production_candidates_canonical_shape", sql`${table.canonicalUrl} LIKE 'http%'`),
+    index("production_candidates_project_idx").on(table.projectId, table.createdAt),
+    index("production_candidates_input_idx").on(table.productionInputId),
+  ],
+);
+
+/** Exact site input set compiled for a candidate. Rows are insert-once. */
+export const productionCandidateInputs = pgTable(
+  "production_candidate_inputs",
+  {
+    candidateId: text("candidate_id").notNull().references(() => productionCandidates.id, { onDelete: "cascade" }),
+    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    productionInputId: text("production_input_id").notNull().references(() => productionPageInputs.id, { onDelete: "restrict" }),
+    productionInputVersion: integer("production_input_version").notNull(),
+    productionInputDigest: text("production_input_digest").notNull(),
+    pageIdentity: text("page_identity").notNull(),
+    route: text("route").notNull(),
+    manifestDigest: text("manifest_digest").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.candidateId, table.productionInputId] }),
+    unique("production_candidate_inputs_route_unique").on(table.candidateId, table.route),
+    check("production_candidate_inputs_digests_shape", sql`${table.productionInputDigest} ~ '^[0-9a-f]{64}$' AND ${table.manifestDigest} ~ '^[0-9a-f]{64}$'`),
+    index("production_candidate_inputs_project_idx").on(table.projectId, table.candidateId),
+  ],
+);
+
+/** Explicit candidate-bound redirect snapshot; zero rows plus digest means none. */
+export const productionCandidateRedirects = pgTable(
+  "production_candidate_redirects",
+  {
+    candidateId: text("candidate_id").notNull().references(() => productionCandidates.id, { onDelete: "cascade" }),
+    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    source: text("source").notNull(),
+    destination: text("destination").notNull(),
+    kind: text("kind").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.candidateId, table.source] }),
+    check("production_candidate_redirects_kind_valid", sql`${table.kind} IN ('permanent', 'temporary')`),
+  ],
+);
+
+/**
+ * One deterministic QA execution against one exact candidate. Reports are
+ * immutable evidence: re-running QA creates a new qa_run row.
+ */
+export const productionQaRuns = pgTable(
+  "production_qa_runs",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    candidateId: text("candidate_id")
+      .notNull()
+      .references(() => productionCandidates.id, { onDelete: "cascade" }),
+    candidateArtifactDigest: text("candidate_artifact_digest"),
+    data: jsonb("data").notNull(),
+    overall: text("overall").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check(
+      "production_qa_runs_overall_valid",
+      sql`${table.overall} IN ('PASS', 'REVIEW', 'FAIL')`,
+    ),
+    index("production_qa_runs_candidate_idx").on(table.candidateId, table.createdAt),
+  ],
+);
+
+/** Tool evidence accepted only from the trusted server/CLI runner. */
+export const productionQaEvidence = pgTable(
+  "production_qa_evidence",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    candidateId: text("candidate_id").notNull().references(() => productionCandidates.id, { onDelete: "cascade" }),
+    checkId: text("check_id").notNull(),
+    scope: text("scope").notNull(),
+    subject: text("subject").notNull(),
+    tool: text("tool").notNull(),
+    toolVersion: text("tool_version").notNull(),
+    executionDigest: text("execution_digest").notNull(),
+    artifactDigest: text("artifact_digest"),
+    repositorySha: text("repository_sha"),
+    lockfileDigest: text("lockfile_digest"),
+    verdict: text("verdict").notNull(),
+    data: jsonb("data").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("production_qa_evidence_candidate_check_subject_unique").on(table.candidateId, table.checkId, table.subject),
+    check("production_qa_evidence_scope_valid", sql`${table.scope} IN ('page', 'site', 'repository')`),
+    check("production_qa_evidence_verdict_valid", sql`${table.verdict} IN ('PASS', 'REVIEW', 'FAIL')`),
+    check("production_qa_evidence_digest_shape", sql`${table.executionDigest} ~ '^[0-9a-f]{64}$'`),
+  ],
+);
+
+/** Relational immutable check rows avoid truncating complete 100-page QA. */
+export const productionQaRunChecks = pgTable(
+  "production_qa_run_checks",
+  {
+    qaRunId: text("qa_run_id").notNull().references(() => productionQaRuns.id, { onDelete: "cascade" }),
+    checkId: text("check_id").notNull(),
+    scope: text("scope").notNull(),
+    subject: text("subject").notNull(),
+    verdict: text("verdict").notNull(),
+    data: jsonb("data").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.qaRunId, table.checkId, table.subject] }),
+  ],
+);
+
+export type ProductionPageInputRecord = typeof productionPageInputs.$inferSelect;
+export type InsertProductionPageInput = typeof productionPageInputs.$inferInsert;
+export type ProductionCandidateRecord = typeof productionCandidates.$inferSelect;
+export type InsertProductionCandidate = typeof productionCandidates.$inferInsert;
+export type ProductionQaRunRecord = typeof productionQaRuns.$inferSelect;
+export type ProductionCandidateInputRecord = typeof productionCandidateInputs.$inferSelect;
+export type ProductionQaEvidenceRecord = typeof productionQaEvidence.$inferSelect;
+export type InsertProductionQaRun = typeof productionQaRuns.$inferInsert;

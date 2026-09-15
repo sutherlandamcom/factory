@@ -1,0 +1,29 @@
+---
+import "../styles/global.css";
+import type { ProductionRenderManifest } from "../lib/production-manifest";
+interface Props { manifest: ProductionRenderManifest; jsonLd: Record<string, unknown>[] }
+const { manifest, jsonLd } = Astro.props;
+const { seo, input } = manifest;
+---
+<!doctype html>
+<html lang={input.siteIdentity.language}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{seo.fullTitle}</title>
+    <meta name="description" content={seo.description} />
+    <link rel="canonical" href={seo.canonicalUrl} />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={seo.ogTitle} />
+    <meta property="og:description" content={seo.ogDescription} />
+    <meta property="og:url" content={seo.ogUrl} />
+    {jsonLd.map((node) => <script type="application/ld+json" is:inline set:html={JSON.stringify(node)} />)}
+  </head>
+  <body class="min-h-screen bg-[var(--design-background)] font-[var(--design-body-font)] text-[var(--design-text)] antialiased">
+    <header class="border-b border-[var(--design-secondary)] px-6 py-[var(--space-md)]">
+      <nav aria-label="Primary"><a href="/" class="font-[var(--design-heading-font)] font-semibold text-[var(--design-primary)]">{input.siteIdentity.siteName}</a></nav>
+    </header>
+    <main><slot /></main>
+    <footer class="border-t border-[var(--design-secondary)] px-6 py-[var(--space-lg)]">{input.siteIdentity.siteName}</footer>
+  </body>
+</html>

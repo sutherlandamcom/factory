@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { fileURLToPath } from "node:url";
 import { resolveCanonicalOrigin } from "@factory/contracts";
 import { siteProfile } from "./src/lib/site-profile.js";
 
@@ -18,6 +19,9 @@ function resolvePort(): number {
 
 const port = resolvePort();
 const remoteBaseUrl = process.env.FACTORY_QA_BASE_URL;
+const immutableArtifactDir = process.env.FACTORY_QA_ARTIFACT_DIR?.trim();
+const governedQaManifestDir = process.env.FACTORY_PRODUCTION_MANIFEST_DIR?.trim()
+  || fileURLToPath(new URL("./tests/fixtures", import.meta.url));
 function resolveBaseUrl(): string {
   if (!remoteBaseUrl) return `http://localhost:${port}`;
   const url = new URL(remoteBaseUrl);
@@ -77,7 +81,7 @@ export default defineConfig({
   webServer: remoteBaseUrl
     ? undefined
     : {
-        command: `pnpm run build && pnpm run preview --port ${port}`,
+        command: immutableArtifactDir ? `pnpm run preview --port ${port}` : `pnpm run build && pnpm run preview --port ${port}`,
         url: baseUrl,
         reuseExistingServer: false,
         timeout: 180_000,
@@ -85,6 +89,12 @@ export default defineConfig({
           ...process.env,
           ASTRO_PREVIEW_BACKGROUND: "0",
           PUBLIC_SITE_URL: testOrigin,
+          ...(immutableArtifactDir
+            ? { FACTORY_PRODUCTION_OUT_DIR: immutableArtifactDir }
+            : {
+                FACTORY_PRODUCTION_MANIFEST_DIR: governedQaManifestDir,
+                FACTORY_PRODUCTION_SITE_PROFILE_DIGEST: "f".repeat(64),
+              }),
         },
       },
 });

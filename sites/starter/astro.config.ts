@@ -24,7 +24,26 @@ for (const dir of [rootDir, siteDir]) {
 // validation as SiteProfile.canonicalOrigin; otherwise the validated profile
 // value is used. Invalid overrides fail the build; they never silently fall
 // back. SiteTask content and model output have no path to this decision.
-const site = resolveCanonicalOrigin({
+const productionManifestDir = process.env.FACTORY_PRODUCTION_MANIFEST_DIR?.trim();
+const productionOutDir = process.env.FACTORY_PRODUCTION_OUT_DIR?.trim();
+const productionManifests = productionManifestDir
+  ? fs.readdirSync(productionManifestDir).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(fs.readFileSync(`${productionManifestDir}/${name}`, "utf8")) as {
+      input: { route: string; siteIdentity: { canonicalOrigin: string; profileDigest: string } };
+    })
+  : [];
+if (productionManifestDir && productionManifests.length === 0) throw new Error("Governed production build requires at least one manifest.");
+const productionOrigins = new Set(productionManifests.map((manifest) => manifest.input.siteIdentity.canonicalOrigin));
+const productionProfileDigests = new Set(productionManifests.map((manifest) => manifest.input.siteIdentity.profileDigest));
+if (productionOrigins.size > 1 || productionProfileDigests.size > 1) throw new Error("Production manifests disagree on site identity.");
+const boundOrigin = productionManifests[0]?.input.siteIdentity.canonicalOrigin;
+const boundProfileDigest = productionManifests[0]?.input.siteIdentity.profileDigest;
+if (boundProfileDigest && process.env.FACTORY_PRODUCTION_SITE_PROFILE_DIGEST !== boundProfileDigest) {
+  throw new Error("Production site profile digest does not match the candidate snapshot.");
+}
+if (boundOrigin && process.env.PUBLIC_SITE_URL && new URL(process.env.PUBLIC_SITE_URL).origin !== boundOrigin) {
+  throw new Error("PUBLIC_SITE_URL contradicts the candidate site identity.");
+}
+const site = boundOrigin ?? resolveCanonicalOrigin({
   override: process.env.PUBLIC_SITE_URL,
   profile: siteProfile,
 });
@@ -72,10 +91,28 @@ function staticSitemapAndRobots(origin: string): AstroIntegration {
   };
 }
 
+function rejectProductionRouteShadows(): AstroIntegration {
+  const governedRoutes = new Set(productionManifests.map((manifest) => manifest.input.route));
+  return {
+    name: "factory-production-route-authority",
+    hooks: {
+      "astro:routes:resolved": ({ routes }) => {
+        if (!productionManifestDir) return;
+        for (const route of routes) {
+          if (route.pathname && governedRoutes.has(route.pathname === "" ? "/" : `/${route.pathname.replace(/^\/|\/$/g, "")}`) && !route.entrypoint.endsWith("[...prodRoute].astro")) {
+            throw new Error(`Static route ${route.pathname} shadows governed production authority (${route.entrypoint}).`);
+          }
+        }
+      },
+    },
+  };
+}
+
 export default defineConfig({
   site,
+  ...(productionOutDir ? { outDir: productionOutDir } : {}),
   vite: {
     plugins: [tailwindcss()],
   },
-  integrations: [staticSitemapAndRobots(site)],
+  integrations: [rejectProductionRouteShadows(), staticSitemapAndRobots(site)],
 });

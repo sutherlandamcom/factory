@@ -382,7 +382,13 @@ export async function startOperatorServer(): Promise<http.Server> {
     provider: visualProvider,
     designService: design,
   });
-  const deps: OperatorApiDeps = { store, intake, search, competitors, writer, assets, design, visual };
+  const { resolveRepositoryRoot } = await import("../repo-root.js");
+  const { ProductionApiFacade } = await import("../production/api-facade.js");
+  const repoRoot = await resolveRepositoryRoot();
+  const deps: OperatorApiDeps = {
+    store, intake, search, competitors, writer, assets, design, visual,
+    production: new ProductionApiFacade(dbInstance.db, repoRoot),
+  };
   const server = createOperatorServer(deps);
   const host = process.env.FACTORY_OPERATOR_HOST ?? "127.0.0.1";
   const port = Number(process.env.FACTORY_OPERATOR_PORT ?? 3000);

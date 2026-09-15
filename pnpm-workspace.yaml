@@ -12,3 +12,13 @@ allowBuilds:
   workerd: true
 minimumReleaseAgeExclude:
   - astro@7.2.9
+overrides:
+  tslib@>=1 <2: "2.8.1"
+  sharp: "0.35.4"
+  js-yaml: "^4.3.2"
+  qs: "^6.16.0"
+  tmp: "^0.2.7"
+  uuid: "^11.1.1"
+  "@esbuild-kit/core-utils>esbuild": "0.25.12"
+  "@puppeteer/browsers": "3.2.2"
+

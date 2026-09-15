@@ -28,3 +28,7 @@ node_modules/
 # Local QA screenshot artifacts
 /qa-artifacts/
 /test-results/
+.lighthouseci/
+
+# Run 9: production render manifests are trusted-compiler runtime output, not source
+/sites/starter/.factory-production/

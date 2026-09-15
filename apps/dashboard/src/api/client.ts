@@ -1280,3 +1280,102 @@ export const visualApi = {
   candidateUrl: (projectId: string, candidateId: string) =>
     `/api/projects/${encodeURIComponent(projectId)}/visual/candidates/${encodeURIComponent(candidateId)}/bytes`,
 };
+
+// ---------------------------------------------------------------------------
+// Production (Macro Run 9) — thin operator surface over the governed
+// production pipeline. No Publish action (publication belongs to Run 13).
+// ---------------------------------------------------------------------------
+
+export interface ProductionInputView {
+  id: string;
+  version: number;
+  pageIdentity: string;
+  pageType: string;
+  route: string;
+  canonicalOrigin: string;
+  inputDigest: string;
+  acceptedContent: { id: string; version: number };
+  acceptedDesign: { id: string; version: number };
+  acceptedVisualSet: { id: string; version: number };
+  renderer: { id: string; version: string; policyVersion: string };
+  stale: boolean;
+  staleReason: string | null;
+}
+
+export interface ProductionCandidateView {
+  id: string;
+  route: string;
+  canonicalUrl: string;
+  state: string;
+  artifactDigest: string | null;
+  productionInputVersion: number;
+  createdAt: string;
+}
+
+export interface ProductionWorkspace {
+  projectId: string;
+  inputs: ProductionInputView[];
+  candidates: ProductionCandidateView[];
+}
+
+export interface ProductionQaCheckView {
+  checkId: string;
+  group: string;
+  verdict: "PASS" | "REVIEW" | "FAIL";
+  detail: string;
+  evidence: Array<{ kind: string; ref: string; note?: string }>;
+}
+
+export interface ProductionCandidateDetail {
+  id: string;
+  route: string;
+  canonicalUrl: string;
+  state: string;
+  artifactDigest: string | null;
+  productionInputId: string;
+  productionInputVersion: number;
+  productionInputDigest: string;
+  qa: {
+    id: string;
+    overall: "PASS" | "REVIEW" | "FAIL";
+    checks: ProductionQaCheckView[];
+    createdAt: string;
+  } | null;
+  createdAt: string;
+}
+
+export const productionApi = {
+  workspace: (projectId: string) =>
+    request<ProductionWorkspace>(
+      `/api/projects/${encodeURIComponent(projectId)}/production/workspace`,
+    ),
+
+  deriveInput: (projectId: string, pageSlug: string) =>
+    request<{ id: string; version: number; route: string; inputDigest: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/production/derive-input`,
+      { method: "POST", body: JSON.stringify({ pageSlug }) },
+    ),
+
+  prepareCandidate: (projectId: string, pageSlug: string) =>
+    request<{ candidateId: string; inputId: string; inputVersion: number; stale: boolean }>(
+      `/api/projects/${encodeURIComponent(projectId)}/production/prepare-candidate`,
+      { method: "POST", body: JSON.stringify({ pageSlug }) },
+    ),
+
+  buildCandidate: (projectId: string, candidateId: string) =>
+    request<{ candidateId: string; artifactDigest: string; routeCount: number; buildDurationMs: number }>(
+      `/api/projects/${encodeURIComponent(projectId)}/production/candidates/${encodeURIComponent(candidateId)}/build`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+
+  runQa: (projectId: string, candidateId: string) =>
+    request<{ qaRunId: string; overall: string; checks: ProductionQaCheckView[]; digest: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/production/candidates/${encodeURIComponent(candidateId)}/qa`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+
+  candidateDetail: (projectId: string, candidateId: string) =>
+    request<ProductionCandidateDetail>(
+      `/api/projects/${encodeURIComponent(projectId)}/production/candidates/${encodeURIComponent(candidateId)}`,
+    ),
+};

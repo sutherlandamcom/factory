@@ -1,0 +1,14 @@
+---
+import ProductionPageRenderer from "../components/production/ProductionPageRenderer.astro";
+import { loadProductionManifests, type ProductionRenderManifest } from "../lib/production-manifest";
+
+export async function getStaticPaths() {
+  return (await loadProductionManifests()).map((manifest) => ({
+    params: { prodRoute: manifest.input.route.replace(/^\//, "").replace(/\/$/, "") || undefined },
+    props: { manifest },
+  }));
+}
+interface Props { manifest: ProductionRenderManifest }
+const { manifest } = Astro.props;
+---
+<ProductionPageRenderer manifest={manifest} />

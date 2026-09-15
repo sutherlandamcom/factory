@@ -9,8 +9,8 @@ interface Props {
   /** Page title without the site-name suffix. */
   title: string;
   description: string;
-  /** Optional JSON-LD object, rendered as application/ld+json. */
-  jsonLd?: Record<string, unknown>;
+  /** Optional JSON-LD object (schema-dts typed), rendered as application/ld+json. */
+  jsonLd?: Record<string, unknown> | { "@context": string; [key: string]: unknown };
 }
 
 const { title, description, jsonLd } = Astro.props;

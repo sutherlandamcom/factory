@@ -24,6 +24,10 @@ import { createVisualCandidateStorage } from "../../src/visual/candidate-storage
 import type { FactoryDatabaseInstance } from "../../src/persistence/db.js";
 import { bindQaCheck, REQUIRED_PRODUCTION_QA_GATES, TRUSTED_PRODUCTION_QA_GATES } from "../../src/production/qa/registry.js";
 
+/**
+ * Real VisualService + real PostgreSQL lifecycle test double.
+ * Deterministic live-mode provider double with zero external network calls.
+ */
 class OfflineLiveVisualAssetProvider extends FixtureVisualAssetProvider {
   override readonly providerMode = "live" as const;
 }
@@ -52,6 +56,13 @@ const REDIRECT_DIGEST = deterministicDigest({ projectId: "fixture", rules: [] })
 const CANDIDATE_IDENTITY = { repositorySha: REPOSITORY_SHA, lockfileDigest: LOCKFILE_DIGEST };
 function siteIdentity() {
   return { siteId: "site-fixture", siteName: "Fixture Site", canonicalOrigin: "https://example.com", language: "en", profileDigest: "4".repeat(64) };
+}
+function defaultCandidateEnv(overrides?: { siteProfileDigest?: string; rendererVersion?: string; rendererPolicyVersion?: string }) {
+  return {
+    siteProfileDigest: overrides?.siteProfileDigest ?? siteIdentity().profileDigest,
+    rendererVersion: overrides?.rendererVersion ?? "astro-7.2.9",
+    rendererPolicyVersion: overrides?.rendererPolicyVersion ?? "production-policy-v1",
+  };
 }
 function completeQaChecks(route: string, manifestSetDigest: string, repositorySha: string, failingCheck?: string): ProductionQaCheckResult[] {
   return REQUIRED_PRODUCTION_QA_GATES.map((gate) => {
@@ -424,7 +435,12 @@ test("PG: candidate creation is refused for stale authority and succeeds for cur
 
     // Candidate creation from the stale input fails closed.
     await assert.rejects(
-      env.production.createCandidate({ projectId: env.projectId, productionInputId: reread.id, ...CANDIDATE_IDENTITY }),
+      env.production.createCandidate({
+        projectId: env.projectId,
+        productionInputId: reread.id,
+        currentEnvironment: defaultCandidateEnv(),
+        ...CANDIDATE_IDENTITY,
+      }),
       (e) => isCode(e, "production_authority_stale"),
     );
   } finally {
@@ -445,6 +461,7 @@ test("PG: candidate lifecycle — create, build-record, QA record, state transit
     const candidate = await env.production.createCandidate({
       projectId: env.projectId,
       productionInputId: input.id,
+      currentEnvironment: defaultCandidateEnv(),
       ...CANDIDATE_IDENTITY,
     });
     assert.equal(candidate.state, "pending");
@@ -568,8 +585,18 @@ test("PG: concurrent candidate creation serializes through the project advisory 
       rendererPolicyVersion: "production-policy-v1",
     });
     const [a, b] = await Promise.all([
-      env.production.createCandidate({ projectId: env.projectId, productionInputId: input.id, ...CANDIDATE_IDENTITY }),
-      env.production.createCandidate({ projectId: env.projectId, productionInputId: input.id, ...CANDIDATE_IDENTITY }),
+      env.production.createCandidate({
+        projectId: env.projectId,
+        productionInputId: input.id,
+        currentEnvironment: defaultCandidateEnv(),
+        ...CANDIDATE_IDENTITY,
+      }),
+      env.production.createCandidate({
+        projectId: env.projectId,
+        productionInputId: input.id,
+        currentEnvironment: defaultCandidateEnv(),
+        ...CANDIDATE_IDENTITY,
+      }),
     ]);
     assert.notEqual(a.id, b.id);
     assert.equal(a.productionInputId, input.id);
@@ -594,7 +621,12 @@ test("PG: stale accepted content blocks candidate creation (negative authority t
     const staleness = await env.production.inputStaleness(input);
     assert.equal(staleness.stale, true, "new accepted content version must make old input stale");
     await assert.rejects(
-      env.production.createCandidate({ projectId: env.projectId, productionInputId: input.id, ...CANDIDATE_IDENTITY }),
+      env.production.createCandidate({
+        projectId: env.projectId,
+        productionInputId: input.id,
+        currentEnvironment: defaultCandidateEnv(),
+        ...CANDIDATE_IDENTITY,
+      }),
       (e) => isCode(e, "production_authority_stale"),
     );
   } finally {
@@ -800,11 +832,11 @@ test("PG INTEGRATION: real Run7 accepted visual set roundtrips through productio
   }
 });
 
-test("PG INTEGRATION: real Run7 provider/generated visual set with populated provenance roundtrips into Run9", async () => {
+test("PG INTEGRATION: real VisualService + real PostgreSQL lifecycle with deterministic live-mode provider double roundtrips into Run9", async () => {
   const dbInst = await setupMigratedTestDatabase();
   const env = await setupLiveVisualService(dbInst, "r7r9-gen", "home", { preBound: false });
   try {
-    // Run 7 real service path: Case B (ai_generate with real provenance)
+    // Run 7 VisualService lifecycle: Case B (ai_generate using an offline live-mode provider test double with real provenance)
     const plan = await env.visual.derivePlan({ projectId: env.projectId });
     await env.visual.confirmClassification({
       projectId: env.projectId,
@@ -931,6 +963,11 @@ test("PG: repository SHA change makes candidate build/QA stale", async () => {
     const candidate = await env.production.createCandidate({
       projectId: env.projectId,
       productionInputId: input.id,
+      currentEnvironment: {
+        siteProfileDigest: siteIdentity().profileDigest,
+        rendererVersion: "7.2.9",
+        rendererPolicyVersion: "production-policy-v2",
+      },
       repositorySha: REPOSITORY_SHA,
       lockfileDigest: LOCKFILE_DIGEST,
     });
@@ -960,6 +997,11 @@ test("PG: lockfile digest change makes candidate build/QA stale", async () => {
     const candidate = await env.production.createCandidate({
       projectId: env.projectId,
       productionInputId: input.id,
+      currentEnvironment: {
+        siteProfileDigest: siteIdentity().profileDigest,
+        rendererVersion: "7.2.9",
+        rendererPolicyVersion: "production-policy-v2",
+      },
       repositorySha: REPOSITORY_SHA,
       lockfileDigest: LOCKFILE_DIGEST,
     });
@@ -971,6 +1013,126 @@ test("PG: lockfile digest change makes candidate build/QA stale", async () => {
     });
     assert.equal(staleness.stale, true);
     assert.equal(staleness.reason, "Lockfile digest changed after candidate preparation.");
+  } finally {
+    await closeEnv(env);
+  }
+});
+
+test("PG STORE BOUNDARY: site profile mutation blocks candidate creation at store level", async () => {
+  const env = await setupLiveAuthority(await setupMigratedTestDatabase(), "store-site-profile-stale", "home");
+  try {
+    const input = await env.production.deriveProductionInput({
+      projectId: env.projectId,
+      pageSlug: "home",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "astro-7.2.9",
+      rendererPolicyVersion: "production-policy-v1",
+    });
+    await assert.rejects(
+      env.production.createCandidate({
+        projectId: env.projectId,
+        productionInputId: input.id,
+        currentEnvironment: defaultCandidateEnv({ siteProfileDigest: "f".repeat(64) }),
+        ...CANDIDATE_IDENTITY,
+      }),
+      (e) => isCode(e, "production_authority_stale"),
+    );
+  } finally {
+    await closeEnv(env);
+  }
+});
+
+test("PG STORE BOUNDARY: renderer version mutation blocks candidate creation at store level", async () => {
+  const env = await setupLiveAuthority(await setupMigratedTestDatabase(), "store-renderer-ver-stale", "home");
+  try {
+    const input = await env.production.deriveProductionInput({
+      projectId: env.projectId,
+      pageSlug: "home",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "astro-7.2.9",
+      rendererPolicyVersion: "production-policy-v1",
+    });
+    await assert.rejects(
+      env.production.createCandidate({
+        projectId: env.projectId,
+        productionInputId: input.id,
+        currentEnvironment: defaultCandidateEnv({ rendererVersion: "astro-8.0.0" }),
+        ...CANDIDATE_IDENTITY,
+      }),
+      (e) => isCode(e, "production_authority_stale"),
+    );
+  } finally {
+    await closeEnv(env);
+  }
+});
+
+test("PG STORE BOUNDARY: renderer policy mutation blocks candidate creation at store level", async () => {
+  const env = await setupLiveAuthority(await setupMigratedTestDatabase(), "store-renderer-policy-stale", "home");
+  try {
+    const input = await env.production.deriveProductionInput({
+      projectId: env.projectId,
+      pageSlug: "home",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "astro-7.2.9",
+      rendererPolicyVersion: "production-policy-v1",
+    });
+    await assert.rejects(
+      env.production.createCandidate({
+        projectId: env.projectId,
+        productionInputId: input.id,
+        currentEnvironment: defaultCandidateEnv({ rendererPolicyVersion: "production-policy-v99" }),
+        ...CANDIDATE_IDENTITY,
+      }),
+      (e) => isCode(e, "production_authority_stale"),
+    );
+  } finally {
+    await closeEnv(env);
+  }
+});
+
+test("PG STORE BOUNDARY: matching current environment creates candidate at store level", async () => {
+  const env = await setupLiveAuthority(await setupMigratedTestDatabase(), "store-env-matching", "home");
+  try {
+    const input = await env.production.deriveProductionInput({
+      projectId: env.projectId,
+      pageSlug: "home",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "astro-7.2.9",
+      rendererPolicyVersion: "production-policy-v1",
+    });
+    const candidate = await env.production.createCandidate({
+      projectId: env.projectId,
+      productionInputId: input.id,
+      currentEnvironment: defaultCandidateEnv(),
+      ...CANDIDATE_IDENTITY,
+    });
+    assert.equal(candidate.state, "pending");
+    assert.equal(candidate.productionInputId, input.id);
+    assert.equal(candidate.siteProfileDigest, input.siteProfileDigest);
+    assert.equal(candidate.rendererVersion, input.rendererVersion);
+  } finally {
+    await closeEnv(env);
+  }
+});
+
+test("PG STORE BOUNDARY: missing current environment rejects candidate creation", async () => {
+  const env = await setupLiveAuthority(await setupMigratedTestDatabase(), "store-env-missing", "home");
+  try {
+    const input = await env.production.deriveProductionInput({
+      projectId: env.projectId,
+      pageSlug: "home",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "astro-7.2.9",
+      rendererPolicyVersion: "production-policy-v1",
+    });
+    await assert.rejects(
+      (env.production as any).createCandidate({
+        projectId: env.projectId,
+        productionInputId: input.id,
+        ...CANDIDATE_IDENTITY,
+      }),
+      (e) => isCode(e, "production_authority_stale"),
+    );
   } finally {
     await closeEnv(env);
   }

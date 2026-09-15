@@ -50,6 +50,11 @@ export class ProductionBuildService {
     const candidate = await store.createCandidate({
       projectId: input.projectId,
       productionInputId: productionInput.id,
+      currentEnvironment: {
+        siteProfileDigest: identity.siteIdentity.profileDigest,
+        rendererVersion: identity.rendererVersion,
+        rendererPolicyVersion: identity.rendererPolicyVersion,
+      },
       repositorySha: identity.repositorySha,
       lockfileDigest: identity.lockfileDigest,
     });

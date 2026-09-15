@@ -83,6 +83,19 @@ export interface ProductionAuthorityBundle {
   }>;
 }
 
+export interface CreateProductionCandidateInput {
+  projectId: string;
+  productionInputId: string;
+  currentEnvironment: {
+    siteIdentity?: { profileDigest?: string | null };
+    siteProfileDigest?: string | null;
+    rendererVersion: string;
+    rendererPolicyVersion: string;
+  };
+  repositorySha: string;
+  lockfileDigest: string;
+}
+
 export class ProductionStore {
   constructor(private readonly db: FactoryDb) {}
 
@@ -513,15 +526,13 @@ export class ProductionStore {
 
   /**
    * Create a new immutable ProductionCandidate for an input. Serialized by
-   * the shared project advisory lock. Stale inputs are refused: upstream
-   * mutation requires re-derivation (a new input), never a silent rebuild.
+   * the shared project advisory lock. Stale inputs are refused: caller must
+   * supply current environment identity (site profile, renderer version,
+   * renderer policy version) and upstream authority (content, design, visual set)
+   * must remain fresh. Upstream mutation requires re-derivation (a new input),
+   * never a silent rebuild.
    */
-  async createCandidate(input: {
-    projectId: string;
-    productionInputId: string;
-    repositorySha: string;
-    lockfileDigest: string;
-  }): Promise<ProductionCandidateRecord> {
+  async createCandidate(input: CreateProductionCandidateInput): Promise<ProductionCandidateRecord> {
     const result = await this.db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
       return new ProductionStore(tx as unknown as FactoryDb).createCandidateLocked(input);
@@ -529,12 +540,28 @@ export class ProductionStore {
     return result;
   }
 
-  private async createCandidateLocked(input: {
-    projectId: string;
-    productionInputId: string;
-    repositorySha: string;
-    lockfileDigest: string;
-  }): Promise<ProductionCandidateRecord> {
+  private async createCandidateLocked(input: CreateProductionCandidateInput): Promise<ProductionCandidateRecord> {
+    const profileDigest =
+      input.currentEnvironment?.siteProfileDigest ??
+      input.currentEnvironment?.siteIdentity?.profileDigest;
+    if (
+      !input.currentEnvironment ||
+      !profileDigest ||
+      !input.currentEnvironment.rendererVersion ||
+      !input.currentEnvironment.rendererPolicyVersion
+    ) {
+      throw productionError(
+        "production_authority_stale",
+        "Candidate creation requires current site profile, renderer version, and renderer policy version.",
+      );
+    }
+    if (!input.repositorySha || !input.lockfileDigest) {
+      throw productionError(
+        "production_build_rejected",
+        "Candidate creation requires repository SHA and lockfile digest.",
+      );
+    }
+
     const [productionInput] = await this.db
       .select()
       .from(productionPageInputs)
@@ -547,7 +574,7 @@ export class ProductionStore {
     if (!productionInput) {
       throw productionError("production_input_immutable", "ProductionPageInput not found for this project.");
     }
-    const staleness = await new ProductionStore(this.db).inputStaleness(productionInput);
+    const staleness = await new ProductionStore(this.db).inputStaleness(productionInput, input.currentEnvironment);
     if (staleness.stale) {
       throw productionError("production_authority_stale", staleness.reason ?? "Production input is stale.");
     }

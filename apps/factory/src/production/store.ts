@@ -25,6 +25,9 @@ import type {
 } from "../persistence/schema.js";
 import {
   parseProductionPageInputData,
+  parseProductionPageInputV2Data,
+  type ProductionPageInputV2Data,
+  type AcceptedDerivativeSetData,
   parseProductionQaReportData,
   qaOverallVerdict,
   type ProductionPageInputData,
@@ -33,6 +36,11 @@ import {
 } from "@factory/contracts";
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
+import { acceptedDerivativeSets } from "../persistence/schema.js";
+import { DerivativesStore } from "../derivatives/store.js";
+import { resolveEffectiveDerivativeSettings } from "../derivatives/core.js";
+import { requireProductionDerivativeSet } from "../derivatives/production-verifier.js";
+import type { ProjectDerivativePolicyData, PageDerivativeOverrideData } from "@factory/contracts";
 import { assertCompleteProductionQa, hasValidQaExecutionDigest, TRUSTED_PRODUCTION_QA_GATES } from "./qa/registry.js";
 import { PageAuthorityReader } from "../writer/page-authority.js";
 import { DesignStore } from "../design/design-store.js";
@@ -304,35 +312,120 @@ export class ProductionStore {
       });
     }
 
-    const data: ProductionPageInputData = {
-      schemaVersion: "production-v1",
-      projectId: input.projectId,
-      pageIdentity: input.pageSlug,
-      pageType: pageType as ProductionPageInputData["pageType"],
-      route,
-      siteIdentity: input.siteIdentity,
-      acceptedContent: {
-        id: bundle.content.id,
-        version: bundle.content.version,
-        digest: bundle.content.digest,
-      },
-      acceptedDesign: {
-        id: bundle.design.id,
-        version: bundle.design.version,
-        digest: bundle.design.candidateDigest,
-      },
-      acceptedVisualSet: {
-        id: bundle.visualSet.id,
-        version: bundle.visualSet.version,
-        digest: bundle.visualSet.digest,
-      },
-      renderer: {
-        id: "astro-static",
-        version: input.rendererVersion,
-        policyVersion: input.rendererPolicyVersion,
-      },
-    };
-    parseProductionPageInputData(data);
+    // Run 10: bind the exact current AcceptedDerivativeSet. Absence of any
+    // derivative policy resolves to explicit disabled (pre-Run-10 projects
+    // keep building unchanged); enabled-but-missing-current derivative
+    // artifacts FAIL derivation (readiness rule).
+    const currentDerivativePolicy = await new DerivativesStore(this.db).currentPolicy(input.projectId);
+    const currentDerivativeOverride = await new DerivativesStore(this.db).currentOverride(input.projectId, input.pageSlug);
+    const effectiveDerivatives = resolveEffectiveDerivativeSettings({
+      projectPolicy: currentDerivativePolicy ? (currentDerivativePolicy.data as ProjectDerivativePolicyData) : null,
+      pageOverride: currentDerivativeOverride ? (currentDerivativeOverride.data as PageDerivativeOverrideData) : null,
+    });
+    const [derivativeSet] = await this.db
+      .select()
+      .from(acceptedDerivativeSets)
+      .where(
+        and(
+          eq(acceptedDerivativeSets.projectId, input.projectId),
+          eq(acceptedDerivativeSets.pageIdentity, input.pageSlug),
+        ),
+      )
+      .orderBy(desc(acceptedDerivativeSets.version))
+      .limit(1);
+    let derivativeSetRef: { id: string; version: number; digest: string } | null = null;
+    if (derivativeSet) {
+      const verified = await requireProductionDerivativeSet({
+        db: this.db,
+        projectId: input.projectId,
+        pageIdentity: input.pageSlug,
+        setId: derivativeSet.id,
+        setVersion: derivativeSet.version,
+        setDigest: derivativeSet.setDigest,
+        currentContent: {
+          id: bundle.content.id,
+          version: bundle.content.version,
+          digest: bundle.content.digest,
+        },
+      });
+      derivativeSetRef = {
+        id: verified.set.id,
+        version: verified.set.version,
+        digest: verified.set.setDigest,
+      };
+    } else if (effectiveDerivatives.summary.state === "enabled" || effectiveDerivatives.audio.state === "enabled") {
+      // Readiness rule: enabled policy with NO accepted derivative set at all
+      // fails derivation — a required derivative must not be silently omitted.
+      throw productionError(
+        "derivative_required_artifact_missing",
+        `Effective derivative policy enables ${effectiveDerivatives.summary.state === "enabled" ? "summary" : "audio"} but no accepted derivative set exists for this page.`,
+      );
+    }
+
+    const hasDerivativeSet = derivativeSetRef !== null;
+    const data: ProductionPageInputData | ProductionPageInputV2Data = hasDerivativeSet
+      ? {
+          schemaVersion: "production-v2",
+          projectId: input.projectId,
+          pageIdentity: input.pageSlug,
+          pageType: pageType as ProductionPageInputData["pageType"],
+          route,
+          siteIdentity: input.siteIdentity,
+          acceptedContent: {
+            id: bundle.content.id,
+            version: bundle.content.version,
+            digest: bundle.content.digest,
+          },
+          acceptedDesign: {
+            id: bundle.design.id,
+            version: bundle.design.version,
+            digest: bundle.design.candidateDigest,
+          },
+          acceptedVisualSet: {
+            id: bundle.visualSet.id,
+            version: bundle.visualSet.version,
+            digest: bundle.visualSet.digest,
+          },
+          acceptedDerivativeSet: derivativeSetRef!,
+          renderer: {
+            id: "astro-static",
+            version: input.rendererVersion,
+            policyVersion: input.rendererPolicyVersion,
+          },
+        }
+      : {
+          schemaVersion: "production-v1",
+          projectId: input.projectId,
+          pageIdentity: input.pageSlug,
+          pageType: pageType as ProductionPageInputData["pageType"],
+          route,
+          siteIdentity: input.siteIdentity,
+          acceptedContent: {
+            id: bundle.content.id,
+            version: bundle.content.version,
+            digest: bundle.content.digest,
+          },
+          acceptedDesign: {
+            id: bundle.design.id,
+            version: bundle.design.version,
+            digest: bundle.design.candidateDigest,
+          },
+          acceptedVisualSet: {
+            id: bundle.visualSet.id,
+            version: bundle.visualSet.version,
+            digest: bundle.visualSet.digest,
+          },
+          renderer: {
+            id: "astro-static",
+            version: input.rendererVersion,
+            policyVersion: input.rendererPolicyVersion,
+          },
+        };
+    if (hasDerivativeSet) {
+      parseProductionPageInputV2Data(data);
+    } else {
+      parseProductionPageInputData(data);
+    }
     // Digest over the proven canonical JSON serializer (Run 4.1 RFC 8785
     // verification applies to this exact implementation).
     const digest = deterministicDigest(data);
@@ -499,6 +592,34 @@ export class ProductionStore {
       const version = await new AssetStore(this.db).getVersion(input.projectId, slot.resolvedVersionId);
       if (!version || version.binaryDigest !== slot.binaryDigest || version.governanceDigest !== slot.governanceDigest) {
         return { stale: true, reason: `Visual slot ${slot.slot} no longer resolves to its bound asset version.` };
+      }
+    }
+
+    // Run 10: a derivative-aware (production-v2) input is stale when its bound
+    // AcceptedDerivativeSet is superseded or no longer current. No hidden
+    // exceptions: staleness propagates through the existing candidate rules.
+    const inputData = input.data as { schemaVersion?: string };
+    if (inputData.schemaVersion === "production-v2") {
+      const boundSet = (input.data as { acceptedDerivativeSet?: { id: string; version: number; digest: string } }).acceptedDerivativeSet;
+      if (!boundSet) {
+        return { stale: true, reason: "production-v2 input missing acceptedDerivativeSet binding." };
+      }
+      try {
+        await requireProductionDerivativeSet({
+          db: this.db,
+          projectId: input.projectId,
+          pageIdentity: input.pageIdentity,
+          setId: boundSet.id,
+          setVersion: boundSet.version,
+          setDigest: boundSet.digest,
+          currentContent: {
+            id: input.acceptedContentId,
+            version: input.acceptedContentVersion,
+            digest: input.acceptedContentDigest,
+          },
+        });
+      } catch (err) {
+        return { stale: true, reason: err instanceof Error ? err.message : String(err) };
       }
     }
 

@@ -170,8 +170,15 @@ test.describe("sitemap and robots crawler baseline", () => {
     // No duplicate URLs in sitemap
     expect(new Set(locMatches).size, "sitemap must contain no duplicate URLs").toBe(locMatches.length);
 
-    // One-page launch scope: the sitemap contains exactly the launch route.
-    expect(locMatches, "sitemap must contain exactly the one-page launch scope").toEqual([`${expectedOrigin}/`]);
+    // Governed fixture scope: the sitemap contains exactly the governed
+    // fixture routes (Run 9 launch page + Run 10 derivative fixture pages).
+    expect(locMatches.slice().sort(), "sitemap must contain exactly the governed fixture scope").toEqual(
+      [
+        `${expectedOrigin}/`,
+        `${expectedOrigin}/run10-derivatives/`,
+        `${expectedOrigin}/run10-disabled/`,
+      ].sort(),
+    );
 
     // 404 is absent from sitemap and all URLs use effective canonical origin
     for (const url of locMatches) {

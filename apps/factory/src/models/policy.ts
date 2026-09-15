@@ -23,7 +23,7 @@ import type { ModelGateway } from "@factory/contracts";
  */
 
 /** The authoritative version of this frozen policy. */
-export const FACTORY_MODEL_POLICY_VERSION = "factory-model-policy-v0.1";
+export const FACTORY_MODEL_POLICY_VERSION = "factory-model-policy-v0.2";
 
 /**
  * The full intended Factory role set (machine-readable identifiers). All 11
@@ -43,6 +43,7 @@ export const FACTORY_ROLE_IDS = [
   "code_worker",
   "cheap_repair",
   "image_generator",
+  "page_summarizer",
 ] as const;
 
 export type FactoryRoleId = (typeof FACTORY_ROLE_IDS)[number];
@@ -63,6 +64,7 @@ export const MODEL_ROLE_IDS = [
   "visual_critic",
   "cheap_repair",
   "image_generator",
+  "page_summarizer",
 ] as const;
 
 export type ModelRoleId = (typeof MODEL_ROLE_IDS)[number];
@@ -203,6 +205,21 @@ export const MODEL_ROLE_POLICY: Readonly<Record<ModelRoleId, ModelRolePolicy>> =
     // Claim/factuality criticism — deliberately a different model from the
     // writer; the writer is never its own factuality authority.
     implementationStatus: "active",
+    timeoutMs: BOUNDED_GENERATION_TIMEOUT_MS,
+    maxAttempts: 2,
+  },
+  page_summarizer: {
+    roleId: "page_summarizer",
+    championModel: "google/gemini-3.7-flash",
+    challengerModels: [],
+    gateway: "openrouter",
+    requiredCapabilities: ["longContext"],
+    sensitiveDataPolicy: "proprietary_unpublished",
+    // Run 10 page-derivative summarization. The role may ONLY summarize
+    // exact AcceptedPageContent; it has no authority to rewrite or mutate
+    // it. Fixture/offline execution covers all tests and CI; live activation
+    // remains pending explicit provider-policy confirmation.
+    implementationStatus: "future",
     timeoutMs: BOUNDED_GENERATION_TIMEOUT_MS,
     maxAttempts: 2,
   },

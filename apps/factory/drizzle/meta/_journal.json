@@ -204,6 +204,13 @@
       "when": 1789680000000,
       "tag": "0028_production_authority",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1789690000000,
+      "tag": "0029_run9_authority_snapshots",
+      "breakpoints": true
     }
   ]
 }

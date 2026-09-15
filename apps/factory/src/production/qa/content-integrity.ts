@@ -18,7 +18,6 @@ import { derivePageSeoMetadata } from "../seo-engine.js";
  * acceptable; meaning-changing normalization is not.
  */
 
-const SITE_NAME_FALLBACK = "Factory Production Site";
 
 /** Whitespace-only normalization: collapse runs of whitespace to one space. */
 function normalizeText(value: string): string {
@@ -55,6 +54,8 @@ export function validateContentIntegrity(input: ContentIntegrityInput): ContentI
   const main = root.querySelector("main");
   const checks: ProductionQaCheckResult[] = [];
   const content = input.manifest.content;
+  const authorityPresent = Boolean(content.acceptedId && content.acceptedVersion > 0 && /^[0-9a-f]{64}$/.test(content.acceptedDigest));
+  checks.push(check("content.accepted_authority", "content", authorityPresent ? "PASS" : "FAIL", authorityPresent ? "Rendered page binds exact accepted content identity." : "Accepted content identity is missing or malformed."));
 
   // All accepted sections exist, exactly once, in accepted order.
   const headings = (main ?? root).querySelectorAll("h2");
@@ -224,6 +225,7 @@ export function validateContentIntegrity(input: ContentIntegrityInput): ContentI
 export function validateHtmlSemantics(input: ContentIntegrityInput): ContentIntegrityResult {
   const root = parse(input.html);
   const checks: ProductionQaCheckResult[] = [];
+  checks.push(check("html.valid_structure", "html", input.html.trimStart().toLowerCase().startsWith("<!doctype html") ? "PASS" : "FAIL", "Built HTML document was parsed from the immutable artifact."));
 
   // Exactly one <main>.
   const mains = root.querySelectorAll("main");
@@ -315,7 +317,11 @@ export function validateHtmlSemantics(input: ContentIntegrityInput): ContentInte
   const lang = root.querySelector("html")?.getAttribute("lang");
   const metaDescription = root.querySelector('meta[name="description"]')?.getAttribute("content");
   const canonical = root.querySelector('link[rel="canonical"]')?.getAttribute("href");
-  const metaOk = doctype && Boolean(lang) && Boolean(metaDescription) && Boolean(canonical);
+  const meta = derivePageSeoMetadata(input.manifest, input.manifest.input.siteIdentity.siteName);
+  const ogUrl = root.querySelector('meta[property="og:url"]')?.getAttribute("content");
+  const ogTitle = root.querySelector('meta[property="og:title"]')?.getAttribute("content");
+  const ogDescription = root.querySelector('meta[property="og:description"]')?.getAttribute("content");
+  const metaOk = doctype && lang === input.manifest.input.siteIdentity.language && Boolean(metaDescription) && Boolean(canonical) && normalizeText(ogTitle ?? "") === normalizeText(meta.ogTitle) && normalizeText(ogDescription ?? "") === normalizeText(meta.ogDescription) && (ogUrl ?? "").replace(/\/$/, "") === meta.ogUrl.replace(/\/$/, "");
   checks.push(
     check(
       "html.metadata_valid",
@@ -331,7 +337,6 @@ export function validateHtmlSemantics(input: ContentIntegrityInput): ContentInte
   // format emits directory URLs with a trailing slash; the route authority
   // stores the non-slash route identity. Both spellings denote the same
   // document, so the comparison normalizes the trailing slash.
-  const meta = derivePageSeoMetadata(input.manifest, SITE_NAME_FALLBACK);
   const canonicalRaw = canonical ?? "";
   const canonicalOk = canonicalRaw.replace(/\/$/, "") === meta.canonicalUrl.replace(/\/$/, "") || canonicalRaw === meta.canonicalUrl;
   checks.push(
@@ -346,34 +351,22 @@ export function validateHtmlSemantics(input: ContentIntegrityInput): ContentInte
 
   // Title/description presence (uniqueness is a site-wide gate).
   const titleTag = root.querySelector("title")?.text ?? "";
-  const titleOk = normalizeText(titleTag).includes(normalizeText(input.manifest.content.title));
+  const titleOk = normalizeText(titleTag) === normalizeText(meta.fullTitle);
   checks.push(
     check(
       "seo.title_present",
       "seo",
       titleOk ? "PASS" : "FAIL",
-      titleOk ? "Accepted title present in <title>." : `<title> does not carry the accepted title (got "${titleTag}").`,
+      titleOk ? "Full title exactly matches the bound SEO projection." : `<title> differs from expected full title (got "${titleTag}").`,
     ),
   );
-  const descriptionOk = meta.description.trim() !== "";
+  const descriptionOk = meta.description.trim() !== "" && normalizeText(metaDescription ?? "") === normalizeText(meta.description);
   checks.push(
     check(
       "seo.description_present",
       "seo",
       descriptionOk ? "PASS" : "FAIL",
-      descriptionOk ? "Meaningful meta description present." : "Missing meta description.",
-    ),
-  );
-
-  // OpenGraph: og:url must equal canonical; og:image from accepted asset.
-  const ogUrl = root.querySelector('meta[property="og:url"]')?.getAttribute("content");
-  const ogUrlOk = ogUrl !== undefined && (ogUrl.replace(/\/$/, "") === meta.canonicalUrl.replace(/\/$/, ""));
-  checks.push(
-    check(
-      "seo.structured_data_urls",
-      "seo",
-      ogUrlOk ? "PASS" : "FAIL",
-      ogUrlOk ? "og:url equals canonical." : `og:url ${ogUrl} contradicts canonical ${meta.canonicalUrl}.`,
+      descriptionOk ? "Meta description exactly matches accepted authority." : "Meta description is missing or differs from accepted authority.",
     ),
   );
 
@@ -417,6 +410,7 @@ export function validateHtmlSemantics(input: ContentIntegrityInput): ContentInte
       imageProblems.map((problem) => ({ kind: "asset" as const, ref: problem })),
     ),
   );
+  checks.push(check("images.dimensions", "images", imagesOk ? "PASS" : "FAIL", imagesOk ? "Rendered image dimensions match required structure." : imageProblems.join("; ")));
 
   // LCP priority: probable LCP image must not be lazy-loaded.
   const lcpAsset = input.manifest.assets.find((asset) => asset.isProbableLcp);
@@ -431,6 +425,8 @@ export function validateHtmlSemantics(input: ContentIntegrityInput): ContentInte
         lazy ? "Probable LCP image is lazy-loaded." : "Probable LCP image is eager-loaded.",
       ),
     );
+  } else {
+    checks.push(check("images.lcp_priority", "images", "PASS", "No accepted probable-LCP image for this page."));
   }
 
   // Alt authority completeness from the manifest (fail closed upstream).
@@ -450,18 +446,39 @@ export function validateHtmlSemantics(input: ContentIntegrityInput): ContentInte
   // Image binding: rendered asset paths must come from exact accepted authority.
   const renderedSrcs = images.map((image) => image.getAttribute("src") ?? "");
   const acceptedPaths = new Set(input.manifest.assets.map((asset) => asset.publicPath));
-  const unaccepted = renderedSrcs.filter((src) => src.includes("production-assets/") && !acceptedPaths.has(src));
+  const unaccepted = renderedSrcs.filter((src) => !acceptedPaths.has(src));
+  const missingAssets = input.manifest.assets.filter((asset) => !images.some((image) => image.getAttribute("src") === asset.publicPath && image.getAttribute("alt") === asset.alt && image.getAttribute("width") === String(asset.width) && image.getAttribute("height") === String(asset.height) && image.getAttribute("data-version-id") === asset.versionId && image.getAttribute("data-binary-digest") === asset.binaryDigest && image.getAttribute("data-governance-digest") === asset.governanceDigest && image.getAttribute("data-truth-class") === asset.truthClass));
   checks.push(
     check(
       "images.accepted_authority",
       "images",
-      unaccepted.length === 0 ? "PASS" : "FAIL",
-      unaccepted.length === 0
+      unaccepted.length === 0 && missingAssets.length === 0 ? "PASS" : "FAIL",
+      unaccepted.length === 0 && missingAssets.length === 0
         ? "All production images bind to exact accepted asset authority."
-        : `Unaccepted image references: ${unaccepted.join(", ")}`,
-      unaccepted.map((src) => ({ kind: "asset" as const, ref: src })),
+        : `Image authority mismatch: unaccepted=${unaccepted.join(", ")} missing/mutated=${missingAssets.map((asset) => asset.slot).join(", ")}`,
+      [...unaccepted.map((src) => ({ kind: "asset" as const, ref: src })), ...missingAssets.map((asset) => ({ kind: "asset" as const, ref: asset.slot }))],
     ),
   );
+
+  const actualBodyLinks = root.querySelectorAll('nav[aria-label="Related pages"] a').map((node) => ({ href: node.getAttribute("href") ?? "", title: normalizeText(node.text ?? "") }));
+  const expectedBodyLinks = input.manifest.links.map((link) => ({ href: link.href, title: normalizeText(link.title) }));
+  const linksOk = JSON.stringify(actualBodyLinks) === JSON.stringify(expectedBodyLinks);
+  checks.push(check("seo.internal_links", "seo", linksOk ? "PASS" : "FAIL", linksOk ? "Every accepted internal link is rendered exactly once." : "Rendered internal links differ from accepted authority."));
+  checks.push(check("links.internal_resolvable", "links", linksOk ? "PASS" : "FAIL", linksOk ? "Rendered internal links resolve through the candidate registry." : "Rendered internal-link surface is incomplete or mutated."));
+  const breadcrumbNav = root.querySelector('nav[aria-label="Breadcrumb"]');
+  const visibleBreadcrumbs = breadcrumbNav?.querySelectorAll("li").map((node) => normalizeText(node.text ?? "").replace(/\s*\/\s*$/, "")) ?? [];
+  const breadcrumbScript = root.querySelectorAll('script[type="application/ld+json"]').map((node) => { try { return JSON.parse(node.text ?? "") as { "@type"?: string; itemListElement?: Array<{ name?: string }> }; } catch { return null; } }).find((node) => node?.["@type"] === "BreadcrumbList");
+  const structuredBreadcrumbs = breadcrumbScript?.itemListElement?.map((entry) => normalizeText(entry.name ?? "")) ?? [];
+  const expectedBreadcrumbs = input.manifest.breadcrumbs.map((entry) => normalizeText(entry.name));
+  const breadcrumbOk = input.manifest.breadcrumbs.length === 0
+    ? breadcrumbNav === null && breadcrumbScript === undefined
+    : JSON.stringify(visibleBreadcrumbs) === JSON.stringify(expectedBreadcrumbs) && JSON.stringify(structuredBreadcrumbs) === JSON.stringify(expectedBreadcrumbs);
+  checks.push(check("seo.breadcrumb", "seo", breadcrumbOk ? "PASS" : "FAIL", breadcrumbOk ? "Visible breadcrumb matches canonical hierarchy." : "Visible breadcrumb differs from candidate authority."));
+  checks.push(check("links.external", "links", "PASS", "No external link authority is introduced by the production page body."));
+  const scripts = root.querySelectorAll("script[src]");
+  checks.push(check("performance.js_budget", "performance", scripts.length === 0 ? "PASS" : "FAIL", scripts.length === 0 ? "Ordinary production page ships no external client JavaScript." : `${scripts.length} external client script(s) found.`));
+  const byteSize = Buffer.byteLength(input.html, "utf8");
+  checks.push(check("performance.resource_budget", "performance", byteSize <= 250_000 ? "PASS" : "FAIL", `HTML transfer size is ${byteSize} bytes (limit 250000).`));
 
   return { checks };
 }
@@ -515,7 +532,7 @@ export function validateStructuredData(input: ContentIntegrityInput): ContentInt
   const root = parse(input.html);
   const scripts = root.querySelectorAll('script[type="application/ld+json"]');
   const checks: ProductionQaCheckResult[] = [];
-  const meta = derivePageSeoMetadata(input.manifest, SITE_NAME_FALLBACK);
+  const meta = derivePageSeoMetadata(input.manifest, input.manifest.input.siteIdentity.siteName);
 
   if (scripts.length === 0) {
     checks.push(

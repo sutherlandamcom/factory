@@ -8,9 +8,14 @@ import {
   acceptedVisualAssetSlots,
   assetPageAssignments,
   designInputSnapshots,
+  productionCandidateInputs,
+  productionCandidateRedirects,
   productionCandidates,
   productionPageInputs,
+  productionQaRunChecks,
+  productionQaEvidence,
   productionQaRuns,
+  productionRouteAuthorities,
 } from "../persistence/schema.js";
 import type {
   AcceptedDesignArtifactRecord,
@@ -24,9 +29,11 @@ import {
   qaOverallVerdict,
   type ProductionPageInputData,
   type ProductionQaCheckResult,
+  type ProductionSiteIdentity,
 } from "@factory/contracts";
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
+import { assertCompleteProductionQa, hasValidQaExecutionDigest, TRUSTED_PRODUCTION_QA_GATES } from "./qa/registry.js";
 import { PageAuthorityReader } from "../writer/page-authority.js";
 import { DesignStore } from "../design/design-store.js";
 import { VisualStore } from "../visual/store.js";
@@ -221,7 +228,7 @@ export class ProductionStore {
   async deriveProductionInput(input: {
     projectId: string;
     pageSlug: string;
-    canonicalOrigin: string;
+    siteIdentity: ProductionSiteIdentity;
     rendererVersion: string;
     rendererPolicyVersion: string;
   }): Promise<ProductionPageInputRecord> {
@@ -234,7 +241,7 @@ export class ProductionStore {
   private async deriveProductionInputLocked(input: {
     projectId: string;
     pageSlug: string;
-    canonicalOrigin: string;
+    siteIdentity: ProductionSiteIdentity;
     rendererVersion: string;
     rendererPolicyVersion: string;
   }): Promise<ProductionPageInputRecord> {
@@ -268,13 +275,20 @@ export class ProductionStore {
     // different page identity.
     const [routeOwner] = await this.db
       .select()
-      .from(productionPageInputs)
-      .where(and(eq(productionPageInputs.projectId, input.projectId), eq(productionPageInputs.route, route)));
+      .from(productionRouteAuthorities)
+      .where(and(eq(productionRouteAuthorities.projectId, input.projectId), eq(productionRouteAuthorities.route, route)));
     if (routeOwner && routeOwner.pageIdentity !== input.pageSlug) {
       throw productionError(
         "production_route_conflict",
         `Route ${route} is already claimed by page ${routeOwner.pageIdentity}.`,
       );
+    }
+    if (!routeOwner) {
+      await this.db.insert(productionRouteAuthorities).values({
+        projectId: input.projectId,
+        route,
+        pageIdentity: input.pageSlug,
+      });
     }
 
     const data: ProductionPageInputData = {
@@ -283,7 +297,7 @@ export class ProductionStore {
       pageIdentity: input.pageSlug,
       pageType: pageType as ProductionPageInputData["pageType"],
       route,
-      canonicalOrigin: input.canonicalOrigin,
+      siteIdentity: input.siteIdentity,
       acceptedContent: {
         id: bundle.content.id,
         version: bundle.content.version,
@@ -343,7 +357,11 @@ export class ProductionStore {
           pageIdentity: input.pageSlug,
           pageType: data.pageType,
           route: data.route,
-          canonicalOrigin: input.canonicalOrigin,
+          canonicalOrigin: input.siteIdentity.canonicalOrigin,
+          siteId: input.siteIdentity.siteId,
+          siteName: input.siteIdentity.siteName,
+          siteLanguage: input.siteIdentity.language,
+          siteProfileDigest: input.siteIdentity.profileDigest,
           acceptedContentId: data.acceptedContent.id,
           acceptedContentVersion: data.acceptedContent.version,
           acceptedContentDigest: data.acceptedContent.digest,
@@ -416,40 +434,37 @@ export class ProductionStore {
       return { stale: true, reason: "AcceptedPageContent changed or was superseded." };
     }
 
-    // Design: exact id/version/digest.
-    const [design] = await this.db
-      .select()
-      .from(acceptedDesignArtifacts)
-      .where(
-        and(
-          eq(acceptedDesignArtifacts.projectId, input.projectId),
-          eq(acceptedDesignArtifacts.id, input.acceptedDesignId),
-        ),
-      );
-    if (!design || design.version !== input.acceptedDesignVersion || design.candidateDigest !== input.acceptedDesignDigest) {
+    // Design: historical existence is insufficient; compare with the exact
+    // latest accepted production authority and execute its full verifier.
+    const latestDesign = await new DesignStore(this.db).latestAcceptedDesign(input.projectId);
+    const design = latestDesign?.artifact;
+    if (!design || latestDesign.staleness.stale || design.id !== input.acceptedDesignId || design.version !== input.acceptedDesignVersion || design.candidateDigest !== input.acceptedDesignDigest) {
       return { stale: true, reason: "AcceptedDesignArtifact changed or was superseded." };
     }
+    try {
+      await new DesignStore(this.db).requireProductionDesign(input.projectId, design.id, input.acceptedDesignDigest);
+    } catch {
+      return { stale: true, reason: "AcceptedDesignArtifact is no longer valid production authority." };
+    }
 
-    // Visual set: exact id/version/digest.
-    const [set] = await this.db
-      .select()
-      .from(acceptedVisualAssetSets)
-      .where(
-        and(
-          eq(acceptedVisualAssetSets.projectId, input.projectId),
-          eq(acceptedVisualAssetSets.id, input.acceptedVisualSetId),
-        ),
-      );
-    if (!set || set.version !== input.acceptedVisualSetVersion || set.setDigest !== input.acceptedVisualSetDigest) {
+    // Visual set: require the latest exact set and its current design binding.
+    const visualStore = new VisualStore(this.db);
+    const set = await visualStore.latestAcceptedSet(input.projectId);
+    if (!set || set.id !== input.acceptedVisualSetId || set.version !== input.acceptedVisualSetVersion || set.setDigest !== input.acceptedVisualSetDigest) {
       return { stale: true, reason: "AcceptedVisualAssetSet changed or was superseded." };
+    }
+    if (set.designArtifactId !== design.id || set.designArtifactVersion !== design.version || set.designCandidateDigest !== design.candidateDigest) {
+      return { stale: true, reason: "AcceptedVisualAssetSet no longer binds the current accepted design." };
+    }
+    let verifiedSlots;
+    try {
+      verifiedSlots = (await visualStore.requireProductionVisualSet(input.projectId, set.id, set.setDigest)).slots;
+    } catch {
+      return { stale: true, reason: "AcceptedVisualAssetSet is no longer valid production authority." };
     }
 
     // Per-slot lineage for this page must still match the accepted slots.
-    const slots = await this.db
-      .select()
-      .from(acceptedVisualAssetSlots)
-      .where(eq(acceptedVisualAssetSlots.setId, input.acceptedVisualSetId));
-    const pageSlots = slots.filter((slot) => slot.pageSlug === input.pageIdentity);
+    const pageSlots = verifiedSlots.filter((slot) => slot.pageSlug === input.pageIdentity);
     for (const slot of pageSlots) {
       const version = await new AssetStore(this.db).getVersion(input.projectId, slot.resolvedVersionId);
       if (!version || version.binaryDigest !== slot.binaryDigest || version.governanceDigest !== slot.governanceDigest) {
@@ -467,16 +482,24 @@ export class ProductionStore {
    * the shared project advisory lock. Stale inputs are refused: upstream
    * mutation requires re-derivation (a new input), never a silent rebuild.
    */
-  async createCandidate(input: { projectId: string; productionInputId: string }): Promise<ProductionCandidateRecord> {
-    return this.db.transaction(async (tx) => {
+  async createCandidate(input: {
+    projectId: string;
+    productionInputId: string;
+    repositorySha: string;
+    lockfileDigest: string;
+  }): Promise<ProductionCandidateRecord> {
+    const result = await this.db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
       return new ProductionStore(tx as unknown as FactoryDb).createCandidateLocked(input);
     });
+    return result;
   }
 
   private async createCandidateLocked(input: {
     projectId: string;
     productionInputId: string;
+    repositorySha: string;
+    lockfileDigest: string;
   }): Promise<ProductionCandidateRecord> {
     const [productionInput] = await this.db
       .select()
@@ -495,6 +518,9 @@ export class ProductionStore {
       throw productionError("production_authority_stale", staleness.reason ?? "Production input is stale.");
     }
 
+    if (!productionInput.siteProfileDigest) {
+      throw productionError("production_build_rejected", "Production input predates immutable site identity; derive a new input.");
+    }
     const canonicalUrl = `${productionInput.canonicalOrigin.replace(/\/$/, "")}${productionInput.route === "/" ? "/" : productionInput.route}`;
     const id = `pcand-${randomUUID()}`;
     const [row] = await this.db
@@ -508,6 +534,10 @@ export class ProductionStore {
         pageIdentity: productionInput.pageIdentity,
         route: productionInput.route,
         canonicalUrl,
+        siteProfileDigest: productionInput.siteProfileDigest,
+        rendererVersion: productionInput.rendererVersion,
+        repositorySha: input.repositorySha,
+        lockfileDigest: input.lockfileDigest,
         state: "pending",
       })
       .returning();
@@ -560,8 +590,19 @@ export class ProductionStore {
     artifactDigest: string;
     artifactRef: string;
     assetReferences: unknown;
+    manifestSetDigest: string;
+    candidateInputs: Array<{
+      productionInputId: string;
+      productionInputVersion: number;
+      productionInputDigest: string;
+      pageIdentity: string;
+      route: string;
+      manifestDigest: string;
+    }>;
+    redirectRules: Array<{ source: string; destination: string; kind: "permanent" | "temporary" }>;
+    redirectSnapshotDigest: string;
   }): Promise<ProductionCandidateRecord> {
-    return this.db.transaction(async (tx) => {
+    const result = await this.db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
       const [candidate] = await tx
         .select()
@@ -593,7 +634,36 @@ export class ProductionStore {
           .update(productionCandidates)
           .set({ state: "stale" })
           .where(eq(productionCandidates.id, candidate.id));
-        throw productionError("production_authority_stale", staleness.reason ?? "Authority changed during build.");
+        return { staleReason: staleness.reason ?? "Authority changed during build." } as const;
+      }
+      for (const binding of input.candidateInputs) {
+        const [boundInput] = await tx.select().from(productionPageInputs).where(and(
+          eq(productionPageInputs.projectId, input.projectId),
+          eq(productionPageInputs.id, binding.productionInputId),
+        ));
+        if (!boundInput || boundInput.version !== binding.productionInputVersion || boundInput.inputDigest !== binding.productionInputDigest) {
+          throw productionError("production_authority_digest_mismatch", `Candidate input ${binding.productionInputId} drifted.`);
+        }
+        const boundStaleness = await new ProductionStore(tx as unknown as FactoryDb).inputStaleness(boundInput);
+        if (boundStaleness.stale) {
+          await tx.update(productionCandidates).set({ state: "stale" }).where(eq(productionCandidates.id, candidate.id));
+          return { staleReason: boundStaleness.reason ?? "A site input changed during build." } as const;
+        }
+      }
+      if (input.candidateInputs.length === 0 || !input.candidateInputs.some((entry) => entry.productionInputId === candidate.productionInputId)) {
+        throw productionError("production_build_rejected", "Candidate site snapshot does not include its target input.");
+      }
+      await tx.insert(productionCandidateInputs).values(input.candidateInputs.map((binding) => ({
+        candidateId: candidate.id,
+        projectId: input.projectId,
+        ...binding,
+      })));
+      if (input.redirectRules.length > 0) {
+        await tx.insert(productionCandidateRedirects).values(input.redirectRules.map((rule) => ({
+          candidateId: candidate.id,
+          projectId: input.projectId,
+          ...rule,
+        })));
       }
       const [updated] = await tx
         .update(productionCandidates)
@@ -601,12 +671,80 @@ export class ProductionStore {
           artifactDigest: input.artifactDigest,
           artifactRef: input.artifactRef,
           assetReferences: input.assetReferences as never,
+          manifestSetDigest: input.manifestSetDigest,
+          redirectSnapshotDigest: input.redirectSnapshotDigest,
           state: "built",
         })
         .where(eq(productionCandidates.id, candidate.id))
         .returning();
-      return updated!;
+      return { row: updated! } as const;
     });
+    if ("staleReason" in result) throw productionError("production_authority_stale", result.staleReason ?? "Candidate authority is stale.");
+    return result.row;
+  }
+
+  async listCandidateInputs(projectId: string, candidateId: string) {
+    return await this.db.select().from(productionCandidateInputs).where(and(
+      eq(productionCandidateInputs.projectId, projectId),
+      eq(productionCandidateInputs.candidateId, candidateId),
+    )).orderBy(productionCandidateInputs.route);
+  }
+
+  async listCandidateRedirects(projectId: string, candidateId: string) {
+    return await this.db.select().from(productionCandidateRedirects).where(and(
+      eq(productionCandidateRedirects.projectId, projectId),
+      eq(productionCandidateRedirects.candidateId, candidateId),
+    )).orderBy(productionCandidateRedirects.source);
+  }
+
+  async recordTrustedQaEvidence(input: {
+    projectId: string;
+    candidateId: string;
+    check: ProductionQaCheckResult;
+    artifactDigest?: string;
+    repositorySha?: string;
+    lockfileDigest?: string;
+  }) {
+    if (!hasValidQaExecutionDigest(input.check)) {
+      throw productionError("production_qa_failed", "Trusted QA evidence is missing execution identity.");
+    }
+    const gate = TRUSTED_PRODUCTION_QA_GATES.find((entry) => entry.checkId === input.check.checkId);
+    if (!gate || input.check.scope !== gate.scope) throw productionError("production_qa_failed", "Unsupported trusted QA gate or scope.");
+    const candidate = await this.getCandidate(input.projectId, input.candidateId);
+    if (!candidate) throw productionError("production_candidate_not_found", "Candidate not found.");
+    const expectedSubject = gate.scope === "site" ? candidate.manifestSetDigest : gate.scope === "repository" ? candidate.repositorySha : input.check.subject;
+    if (!expectedSubject || input.check.subject !== expectedSubject) throw productionError("production_qa_failed", "Trusted QA evidence subject does not match candidate identity.");
+    if (gate.scope === "page") {
+      const bindings = await this.listCandidateInputs(input.projectId, input.candidateId);
+      if (!bindings.some((binding) => binding.route === input.check.subject)) throw productionError("production_qa_failed", "Page evidence route is not in the candidate snapshot.");
+    }
+    if (input.check.scope === "repository") {
+      if (input.repositorySha !== candidate.repositorySha || input.lockfileDigest !== candidate.lockfileDigest) throw productionError("production_qa_failed", "Repository evidence identity mismatch.");
+    } else if (input.artifactDigest !== candidate.artifactDigest) {
+      throw productionError("production_qa_failed", "Artifact evidence identity mismatch.");
+    }
+    const [row] = await this.db.insert(productionQaEvidence).values({
+      id: `pqae-${randomUUID()}`,
+      projectId: input.projectId,
+      candidateId: input.candidateId,
+      checkId: input.check.checkId,
+      scope: input.check.scope,
+      subject: input.check.subject,
+      tool: input.check.tool,
+      toolVersion: input.check.toolVersion,
+      executionDigest: input.check.executionDigest,
+      artifactDigest: input.artifactDigest,
+      repositorySha: input.repositorySha,
+      lockfileDigest: input.lockfileDigest,
+      verdict: input.check.verdict,
+      data: input.check,
+    }).onConflictDoNothing().returning();
+    return row ?? null;
+  }
+
+  async listTrustedQaEvidence(projectId: string, candidateId: string): Promise<ProductionQaCheckResult[]> {
+    const rows = await this.db.select().from(productionQaEvidence).where(and(eq(productionQaEvidence.projectId, projectId), eq(productionQaEvidence.candidateId, candidateId)));
+    return rows.map((row) => row.data as ProductionQaCheckResult);
   }
 
   /**
@@ -646,43 +784,65 @@ export class ProductionStore {
     projectId: string;
     candidateId: string;
     checks: ProductionQaCheckResult[];
+    evaluatedArtifactDigest: string;
+    manifestSetDigest: string;
+    redirectSnapshotDigest: string;
+    repositorySha: string;
+    lockfileDigest: string;
+    pageRoutes: string[];
   }): Promise<ProductionQaRunRecord> {
-    const candidate = await this.getCandidate(input.projectId, input.candidateId);
-    if (!candidate) throw productionError("production_candidate_not_found", "Candidate not found.");
-    if (candidate.state !== "built" && candidate.state !== "qa_passed" && candidate.state !== "qa_failed") {
-      throw productionError("production_qa_not_found", "Candidate has no completed build to QA.");
-    }
+    const completeness = assertCompleteProductionQa({ checks: input.checks, pageRoutes: input.pageRoutes, manifestSetDigest: input.manifestSetDigest, repositorySha: input.repositorySha });
+    if (!completeness.complete) throw productionError("production_qa_failed", `Required QA evidence missing or duplicated: ${completeness.missing.join(", ")}`);
     const overall = qaOverallVerdict(input.checks);
     const data = {
       schemaVersion: "production-v1" as const,
-      candidateId: candidate.id,
+      candidateId: input.candidateId,
       checks: input.checks,
       overall,
     };
     parseProductionQaReportData(data);
-    const id = `pqa-${randomUUID()}`;
-    const [row] = await this.db
-      .insert(productionQaRuns)
-      .values({
-        id,
-        projectId: input.projectId,
-        candidateId: candidate.id,
-        candidateArtifactDigest: candidate.artifactDigest,
-        data,
-        overall,
-      })
-      .returning();
-    // QA state transition: qa_passed/qa_failed. Stale candidates are frozen:
-    // guard against the DB-level state space (recordQaRun only allows built/
-    // qa_passed/qa_failed candidates, but re-check defensively at runtime).
-    const nextState = overall === "PASS" ? "qa_passed" : overall === "FAIL" ? "qa_failed" : null;
-    if (nextState !== null && (candidate.state as string) !== "stale") {
-      await this.db
-        .update(productionCandidates)
-        .set({ state: nextState })
-        .where(eq(productionCandidates.id, candidate.id));
-    }
-    return row!;
+    const result = await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
+      const [candidate] = await tx.select().from(productionCandidates).where(and(eq(productionCandidates.projectId, input.projectId), eq(productionCandidates.id, input.candidateId)));
+      if (!candidate) throw productionError("production_candidate_not_found", "Candidate not found.");
+      if (candidate.state !== "built" && candidate.state !== "qa_passed" && candidate.state !== "qa_failed") throw productionError("production_qa_not_found", "Candidate has no completed build to QA.");
+      if (candidate.artifactDigest !== input.evaluatedArtifactDigest || candidate.manifestSetDigest !== input.manifestSetDigest || candidate.redirectSnapshotDigest !== input.redirectSnapshotDigest || candidate.repositorySha !== input.repositorySha || candidate.lockfileDigest !== input.lockfileDigest) {
+        throw productionError("production_qa_failed", "QA evidence does not bind the candidate artifact, manifest, redirect, repository, and lockfile identities exactly.");
+      }
+      const bindings = await tx.select().from(productionCandidateInputs).where(and(eq(productionCandidateInputs.projectId, input.projectId), eq(productionCandidateInputs.candidateId, candidate.id)));
+      if (bindings.length === 0 || bindings.length !== input.pageRoutes.length || [...bindings.map((entry) => entry.route)].sort().join("\0") !== [...input.pageRoutes].sort().join("\0")) {
+        throw productionError("production_qa_failed", "Candidate input snapshot is incomplete for the evaluated route set.");
+      }
+      for (const binding of bindings) {
+        const [boundInput] = await tx.select().from(productionPageInputs).where(and(eq(productionPageInputs.projectId, input.projectId), eq(productionPageInputs.id, binding.productionInputId)));
+        if (!boundInput || boundInput.version !== binding.productionInputVersion || boundInput.inputDigest !== binding.productionInputDigest) throw productionError("production_authority_digest_mismatch", `Candidate input ${binding.productionInputId} no longer matches its immutable binding.`);
+        const staleness = await new ProductionStore(tx as unknown as FactoryDb).inputStaleness(boundInput);
+        if (staleness.stale) {
+          await tx.update(productionCandidates).set({ state: "stale" }).where(eq(productionCandidates.id, candidate.id));
+          return { staleReason: staleness.reason ?? `Candidate input ${binding.productionInputId} is stale.` } as const;
+        }
+      }
+      const trustedRows = await tx.select().from(productionQaEvidence).where(and(eq(productionQaEvidence.projectId, input.projectId), eq(productionQaEvidence.candidateId, candidate.id)));
+      const trustedCheckIds = new Set<ProductionQaCheckResult["checkId"]>(TRUSTED_PRODUCTION_QA_GATES.map((entry) => entry.checkId));
+      for (const check of input.checks.filter((entry) => trustedCheckIds.has(entry.checkId))) {
+        if (!hasValidQaExecutionDigest(check)) throw productionError("production_qa_failed", `Trusted QA execution digest is invalid for ${check.checkId}.`);
+        const evidence = trustedRows.find((row) => row.checkId === check.checkId && row.scope === check.scope && row.subject === check.subject);
+        if (!evidence || evidence.executionDigest !== check.executionDigest || evidence.verdict !== check.verdict) throw productionError("production_qa_failed", `Trusted QA evidence is not the persisted candidate-bound execution for ${check.checkId}@${check.subject}.`);
+        if (check.scope === "repository") {
+          if (evidence.repositorySha !== candidate.repositorySha || evidence.lockfileDigest !== candidate.lockfileDigest) throw productionError("production_qa_failed", `Repository evidence binding mismatch for ${check.checkId}.`);
+        } else if (evidence.artifactDigest !== candidate.artifactDigest) {
+          throw productionError("production_qa_failed", `Artifact evidence binding mismatch for ${check.checkId}.`);
+        }
+      }
+      const id = `pqa-${randomUUID()}`;
+      const [row] = await tx.insert(productionQaRuns).values({ id, projectId: input.projectId, candidateId: candidate.id, candidateArtifactDigest: candidate.artifactDigest, data, overall }).returning();
+      await tx.insert(productionQaRunChecks).values(input.checks.map((entry) => ({ qaRunId: id, checkId: entry.checkId, scope: entry.scope!, subject: entry.subject!, verdict: entry.verdict, data: entry })));
+      const nextState = overall === "PASS" ? "qa_passed" : overall === "FAIL" ? "qa_failed" : "built";
+      await tx.update(productionCandidates).set({ state: nextState }).where(eq(productionCandidates.id, candidate.id));
+      return { row: row! } as const;
+    });
+    if ("staleReason" in result) throw productionError("production_authority_stale", result.staleReason ?? "Candidate authority is stale.");
+    return result.row;
   }
 
   async latestQaRun(projectId: string, candidateId: string): Promise<ProductionQaRunRecord | null> {

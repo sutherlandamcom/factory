@@ -1,5 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
+import { canonicalProductionJson } from "@factory/contracts";
 
 /**
  * Production manifest loader for the Astro build (Run 9).
@@ -21,8 +23,9 @@ export interface ProductionRenderManifest {
     pageIdentity: string;
     pageType: string;
     route: string;
-    canonicalOrigin: string;
+    siteIdentity: { siteId: string; siteName: string; canonicalOrigin: string; language: string; profileDigest: string };
   };
+  seo: { fullTitle: string; description: string; canonicalUrl: string; ogTitle: string; ogDescription: string; ogUrl: string };
   content: {
     acceptedId: string;
     acceptedVersion: number;
@@ -35,9 +38,38 @@ export interface ProductionRenderManifest {
     cta: string;
     internalLinks: string[];
   };
+  design: {
+    acceptedId: string;
+    acceptedVersion: number;
+    acceptedDigest: string;
+    tokens: {
+      colors: Record<string, string | undefined>;
+      typography: { headingFont: string; bodyFont: string; scaleNotes: string };
+      spacing: Record<string, string>;
+      rounded: Record<string, string>;
+      ctaHierarchy: string;
+      navigationLanguage: string;
+      imageryTreatment: string;
+      sectionRhythm: string;
+    };
+    archetype: {
+      kind: "homepage" | "service" | "location" | "editorial" | "investment_advisory";
+      sectionPatterns: string[];
+      contentRequirements: string[];
+      assetSlots: Array<{ slot: string; role: string; requiredRole: string }>;
+      primaryCta: string;
+      secondaryCta: string;
+      responsiveBehavior: string;
+      trustPresentation: string;
+      rendererPrimitives: string[];
+    };
+  };
+  links: Array<{ href: string; title: string }>;
+  breadcrumbs: Array<{ name: string; url: string }>;
   assets: Array<{
     slot: string;
     role: string;
+    truthClass: string;
     versionId: string;
     binaryDigest: string;
     governanceDigest: string;
@@ -73,7 +105,7 @@ function assertManifestShape(value: unknown): ProductionRenderManifest {
   if (manifest.schemaVersion !== "production-v1") {
     throw new Error(`Production manifest schemaVersion must be "production-v1" (got ${String((manifest as { schemaVersion?: unknown }).schemaVersion)}).`);
   }
-  for (const key of ["input", "content", "assets", "manifestDigest"] as const) {
+  for (const key of ["input", "seo", "content", "design", "links", "breadcrumbs", "assets", "manifestDigest"] as const) {
     if (manifest[key] === undefined) {
       throw new Error(`Production manifest is missing "${key}".`);
     }
@@ -90,6 +122,16 @@ function assertManifestShape(value: unknown): ProductionRenderManifest {
   if (!Array.isArray(manifest.assets)) {
     throw new Error("Production manifest assets must be an array.");
   }
+  const expectedDigest = createHash("sha256").update(canonicalProductionJson({
+    input: manifest.input,
+    seo: manifest.seo,
+    content: manifest.content,
+    design: manifest.design,
+    links: manifest.links,
+    breadcrumbs: manifest.breadcrumbs,
+    assets: manifest.assets,
+  })).digest("hex");
+  if (manifest.manifestDigest !== expectedDigest) throw new Error("Production manifest digest mismatch.");
   return manifest;
 }
 
@@ -113,6 +155,12 @@ export async function loadProductionManifests(): Promise<ProductionRenderManifes
     const raw = await readFile(path.join(manifestDir, file), "utf8");
     manifests.push(assertManifestShape(JSON.parse(raw)));
   }
+  for (const key of ["id", "pageIdentity", "route"] as const) {
+    const values = manifests.map((manifest) => manifest.input[key]);
+    if (new Set(values).size !== values.length) throw new Error(`Duplicate production manifest ${key}.`);
+  }
+  const canonicals = manifests.map((manifest) => manifest.seo.canonicalUrl);
+  if (new Set(canonicals).size !== canonicals.length) throw new Error("Duplicate production canonical URL.");
   return manifests.sort((a, b) => (a.input.route < b.input.route ? -1 : a.input.route > b.input.route ? 1 : 0));
 }
 

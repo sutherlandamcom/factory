@@ -10,12 +10,13 @@
     "check": "astro check",
     "test": "playwright test",
     "test:axe": "playwright test tests/axe.production.spec.ts",
+    "test:keyboard": "playwright test tests/keyboard.production.spec.ts",
     "test:lhci": "lhci autorun"
   },
   "dependencies": {
     "@factory/contracts": "workspace:*",
     "@tailwindcss/vite": "^4.3.3",
-    "astro": "^7.2.9",
+    "astro": "7.2.9",
     "sharp": "^0.35.4",
     "tailwindcss": "^4.3.3"
   },

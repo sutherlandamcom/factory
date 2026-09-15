@@ -15,6 +15,7 @@ import {
   checkInternalLinks,
 } from "../src/production/seo-engine.js";
 import type { ProductionRenderManifest } from "../src/production/render-manifest.js";
+import { validateCandidateRedirects } from "../src/production/qa/site-wide.js";
 
 // ---------------------------------------------------------------------------
 // Fixture: a valid manifest + a rendered page that faithfully materializes it
@@ -30,8 +31,9 @@ const manifest: ProductionRenderManifest = {
     pageIdentity: "sutherland-home",
     pageType: "homepage",
     route: "/",
-    canonicalOrigin: "https://sutherlandam.com",
+    siteIdentity: { siteId: "sutherland-private-office", siteName: "Sutherland Private Office", canonicalOrigin: "https://sutherlandam.com", language: "en", profileDigest: "f".repeat(64) },
   },
+  seo: { fullTitle: "Independent advice for consequential French Alps property decisions | Sutherland Private Office", description: "Evidence-led acquisition and asset advisory for international buyers.", canonicalUrl: "https://sutherlandam.com/", ogTitle: "Independent advice for consequential French Alps property decisions | Sutherland Private Office", ogDescription: "Evidence-led acquisition and asset advisory for international buyers.", ogUrl: "https://sutherlandam.com/" },
   content: {
     acceptedId: "wprp-1",
     acceptedVersion: 1,
@@ -47,10 +49,14 @@ const manifest: ProductionRenderManifest = {
     cta: "Begin with a scoping conversation.",
     internalLinks: ["/", "/services/asset-review"],
   },
+  design: { acceptedId: "dacc-1", acceptedVersion: 1, acceptedDigest: "9".repeat(64), tokens: { colors: { primary: "#1A2E35" }, typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans", scaleNotes: "fixture" }, spacing: { md: "16px", lg: "32px" }, rounded: { md: "8px" }, ctaHierarchy: "text only", navigationLanguage: "plain", imageryTreatment: "documentary", sectionRhythm: "measured" }, archetype: { kind: "homepage", sectionPatterns: ["hero", "evidence", "cta"], contentRequirements: [], assetSlots: [{ slot: "hero.primary", role: "hero", requiredRole: "hero" }], primaryCta: "", secondaryCta: "", responsiveBehavior: "stack", trustPresentation: "visible", rendererPrimitives: ["hero", "evidence", "cta"] } },
+  links: [{ href: "/", title: "Home" }, { href: "/services/asset-review", title: "Asset Review" }],
+  breadcrumbs: [],
   assets: [
     {
       slot: "hero.primary",
       role: "hero",
+      truthClass: "illustrative",
       versionId: "asv-1",
       binaryDigest: "c".repeat(64),
       governanceDigest: "d".repeat(64),
@@ -67,14 +73,14 @@ const manifest: ProductionRenderManifest = {
 
 function renderFaithfulPage(manifest: ProductionRenderManifest): string {
   return `<!doctype html>
-<html lang="en">
+<html lang="${manifest.input.siteIdentity.language}">
 <head>
   <meta charset="utf-8" />
-  <title>${manifest.content.title} | Factory Production Site</title>
+  <title>${manifest.seo.fullTitle}</title>
   <meta name="description" content="${manifest.content.metaDescription}" />
   <link rel="canonical" href="https://sutherlandam.com/" />
   <meta property="og:url" content="https://sutherlandam.com/" />
-  <meta property="og:title" content="${manifest.content.title}" />
+  <meta property="og:title" content="${manifest.seo.ogTitle}" />
   <meta property="og:description" content="${manifest.content.metaDescription}" />
   <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebPage","name":"${manifest.content.title}","url":"https://sutherlandam.com/"}</script>
 </head>
@@ -83,10 +89,11 @@ function renderFaithfulPage(manifest: ProductionRenderManifest): string {
   <main>
     <h1>${manifest.content.title}</h1>
     <p>${manifest.content.introduction}</p>
-    <img src="${manifest.assets[0]!.publicPath}" alt="${manifest.assets[0]!.alt}" width="1600" height="900" loading="eager" />
+    <img src="${manifest.assets[0]!.publicPath}" alt="${manifest.assets[0]!.alt}" width="1600" height="900" loading="eager" data-version-id="${manifest.assets[0]!.versionId}" data-binary-digest="${manifest.assets[0]!.binaryDigest}" data-governance-digest="${manifest.assets[0]!.governanceDigest}" data-truth-class="${manifest.assets[0]!.truthClass}" />
     ${manifest.content.sections.map((section) => `<section><h2>${section.heading}</h2><p>${section.body}</p></section>`).join("\n    ")}
     <p>${manifest.content.conclusion}</p>
     <p>${manifest.content.cta}</p>
+    <nav aria-label="Related pages">${manifest.links.map((link) => `<a href="${link.href}">${link.title}</a>`).join("")}</nav>
   </main>
   <footer>Factory Production Site</footer>
 </body>
@@ -190,13 +197,22 @@ test("MUTATION: wrong canonical fails seo.canonical", () => {
   assert.equal(verdictOf(result.checks, "seo.canonical"), "FAIL");
 });
 
-test("MUTATION: wrong og:url fails seo.structured_data_urls", () => {
+test("MUTATION: wrong og:url fails exact metadata equality", () => {
   const mutated = renderFaithfulPage(manifest).replace(
     '<meta property="og:url" content="https://sutherlandam.com/" />',
     '<meta property="og:url" content="https://sutherlandam.com/alias" />',
   );
   const result = validateHtmlSemantics({ route: "/", html: mutated, manifest });
-  assert.equal(verdictOf(result.checks, "seo.structured_data_urls"), "FAIL");
+  assert.equal(verdictOf(result.checks, "html.metadata_valid"), "FAIL");
+});
+
+test("MUTATION: title suffix injection fails exact title equality", () => {
+  const mutated = renderFaithfulPage(manifest).replace(
+    `<title>${manifest.seo.fullTitle}</title>`,
+    `<title>${manifest.seo.fullTitle} | Injected</title>`,
+  );
+  const result = validateHtmlSemantics({ route: "/", html: mutated, manifest });
+  assert.equal(verdictOf(result.checks, "seo.title_present"), "FAIL");
 });
 
 test("MUTATION: structured-data URL contradicting canonical fails", () => {
@@ -246,6 +262,22 @@ test("MUTATION: unaccepted image substitution fails images.accepted_authority", 
   );
   const result = validateHtmlSemantics({ route: "/", html: mutated, manifest });
   assert.equal(verdictOf(result.checks, "images.accepted_authority"), "FAIL");
+});
+
+test("MUTATION: changed or removed rendered alt fails exact image authority", () => {
+  for (const replacement of ['alt="Changed authority"', ""]) {
+    const mutated = renderFaithfulPage(manifest).replace(`alt="${manifest.assets[0]!.alt}"`, replacement);
+    const result = validateHtmlSemantics({ route: "/", html: mutated, manifest });
+    assert.equal(verdictOf(result.checks, "images.accepted_authority"), "FAIL");
+  }
+});
+
+test("MUTATION: accepted internal anchor missing from rendered HTML fails", () => {
+  const accepted = manifest.links[1]!;
+  const mutated = renderFaithfulPage(manifest).replace(`<a href="${accepted.href}">${accepted.title}</a>`, "");
+  const result = validateHtmlSemantics({ route: "/", html: mutated, manifest });
+  assert.equal(verdictOf(result.checks, "seo.internal_links"), "FAIL");
+  assert.equal(verdictOf(result.checks, "links.internal_resolvable"), "FAIL");
 });
 
 test("MUTATION: duplicate main content across routes is detected", () => {
@@ -306,8 +338,9 @@ test("sitemap includes only canonical indexable pages; every URL equals canonica
   const second: ProductionRenderManifest = {
     ...manifest,
     input: { ...manifest.input, route: "/services/asset-review" },
+    seo: { ...manifest.seo, canonicalUrl: "https://sutherlandam.com/services/asset-review", ogUrl: "https://sutherlandam.com/services/asset-review" },
   };
-  const result = generateSitemapAndRobots({ manifests: [manifest, second], siteName: "Sutherland" });
+  const result = generateSitemapAndRobots({ manifests: [manifest, second], siteName: "Sutherland Private Office" });
   assert.deepEqual(result.includedUrls.sort(), [
     "https://sutherlandam.com/",
     "https://sutherlandam.com/services/asset-review",
@@ -320,8 +353,9 @@ test("site-wide SEO check detects duplicate titles/descriptions", () => {
   const second: ProductionRenderManifest = {
     ...manifest,
     input: { ...manifest.input, route: "/services/asset-review" },
+    seo: { ...manifest.seo, canonicalUrl: "https://sutherlandam.com/services/asset-review", ogUrl: "https://sutherlandam.com/services/asset-review" },
   };
-  const result = checkSiteWideSeo([manifest, second], "Sutherland");
+  const result = checkSiteWideSeo([manifest, second], "Sutherland Private Office");
   assert.equal(result.duplicateTitles.length, 1);
   assert.equal(result.duplicateDescriptions.length, 1);
 });
@@ -366,4 +400,15 @@ test("breadcrumbs derive from real route hierarchy only; homepage exempt", () =>
   assert.equal(real.entries.length, 3);
   assert.equal(real.entries[2]!.url, "", "leaf breadcrumb is the current page (no self-link)");
   assert.deepEqual(breadcrumbJsonLd(real.entries)?.["@type"], "BreadcrumbList");
+});
+
+test("candidate redirect snapshot rejects loops, chains, and route collisions but accepts one-hop rules", () => {
+  const routes = new Set(["/", "/current"]);
+  assert.match(validateCandidateRedirects([{ source: "/old", destination: "/old", kind: "permanent" }], routes)[0]!, /loop/i);
+  assert.ok(validateCandidateRedirects([
+    { source: "/a", destination: "/b", kind: "permanent" },
+    { source: "/b", destination: "/current", kind: "permanent" },
+  ], routes).some((problem) => /chain/i.test(problem)));
+  assert.ok(validateCandidateRedirects([{ source: "/current", destination: "/", kind: "permanent" }], routes).some((problem) => /collides/i.test(problem)));
+  assert.deepEqual(validateCandidateRedirects([{ source: "/old", destination: "/current", kind: "permanent" }], routes), []);
 });

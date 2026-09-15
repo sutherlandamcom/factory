@@ -1,4 +1,4 @@
-import { mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -30,16 +30,17 @@ const manifest: ProductionRenderManifest = {
     projectId: "proj-seam",
     pageIdentity: "asset-review",
     pageType: "service",
-    route: "/services/asset-review",
-    canonicalOrigin: "https://sutherlandam.com",
+    route: "/",
+    siteIdentity: { siteId: "sutherland-private-office", siteName: "Sutherland Private Office", canonicalOrigin: "https://sutherlandam.com", language: "en", profileDigest: "f".repeat(64) },
   },
+  seo: { fullTitle: "Asset Review — structured evidence for a specific property | Sutherland Private Office", description: "A documented, buyer-side assessment of a specific Alpine property through structured evidence and risk review.", canonicalUrl: "https://sutherlandam.com/", ogTitle: "Asset Review — structured evidence for a specific property | Sutherland Private Office", ogDescription: "A documented, buyer-side assessment of a specific Alpine property through structured evidence and risk review.", ogUrl: "https://sutherlandam.com/" },
   content: {
     acceptedId: "wprp-seam",
     acceptedVersion: 1,
     acceptedDigest: deterministicDigest({ content: "seam" }),
     title: "Asset Review — structured evidence for a specific property",
     metaDescription: "A documented, buyer-side assessment of a specific Alpine property through structured evidence and risk review.",
-    introduction: "An Asset Review addresses a specific property through structured evidence and risk review.",
+    introduction: "RUN9_ROOT_AUTHORITY_PROOF — an Asset Review addresses a specific property through structured evidence and risk review.",
     sections: [
       { heading: "What the review examines", body: "The review examines the specific asset: its documents, its measured condition, and its market context." },
       { heading: "What the review produces", body: "The review produces a documented assessment that supports the go or no-go decision." },
@@ -48,15 +49,19 @@ const manifest: ProductionRenderManifest = {
     cta: "Begin with a scoping conversation.",
     internalLinks: [],
   },
+  design: { acceptedId: "dacc-seam", acceptedVersion: 1, acceptedDigest: "9".repeat(64), tokens: { colors: { primary: "#1A2E35" }, typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans", scaleNotes: "fixture" }, spacing: { md: "16px", lg: "32px" }, rounded: { md: "8px" }, ctaHierarchy: "text only", navigationLanguage: "plain", imageryTreatment: "documentary", sectionRhythm: "measured" }, archetype: { kind: "service", sectionPatterns: ["page-header", "service-overview", "cta"], contentRequirements: [], assetSlots: [], primaryCta: "", secondaryCta: "", responsiveBehavior: "stack", trustPresentation: "visible", rendererPrimitives: ["page-header", "narrative", "cta"] } },
+  links: [],
+  breadcrumbs: [],
   assets: [],
   manifestDigest: "",
 };
+manifest.manifestDigest = deterministicDigest({ input: manifest.input, seo: manifest.seo, content: manifest.content, design: manifest.design, links: manifest.links, breadcrumbs: manifest.breadcrumbs, assets: manifest.assets });
 
 function astroBuild(): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn("pnpm", ["run", "build"], {
       cwd: siteDir,
-      env: { ...process.env, FACTORY_PRODUCTION_MANIFEST_DIR: manifestDir },
+      env: { ...process.env, FACTORY_PRODUCTION_MANIFEST_DIR: manifestDir, FACTORY_PRODUCTION_OUT_DIR: distDir, FACTORY_PRODUCTION_SITE_PROFILE_DIGEST: manifest.input.siteIdentity.profileDigest, PUBLIC_SITE_URL: manifest.input.siteIdentity.canonicalOrigin },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";
@@ -75,12 +80,17 @@ test("BUILD SEAM: manifest -> Astro build -> site-wide QA PASS on built output",
   await writeFile(`${manifestDir}/asset-review.json`, JSON.stringify(manifest, null, 2));
   try {
     await astroBuild();
+    const rootHtml = await readFile(`${distDir}/index.html`, "utf8");
+    assert.match(rootHtml, /RUN9_ROOT_AUTHORITY_PROOF/);
+    assert.doesNotMatch(rootHtml, /Independent advice for consequential French Alps property decisions/);
     await emitSitemapAndRobots({ manifests: [manifest], distDir, siteName: "Sutherland Private Office" });
     const qa = await runSiteWideQa({
       distDir,
       manifests: [manifest],
       redirectRules: [],
       siteName: "Sutherland Private Office",
+      manifestSetDigest: deterministicDigest([{ inputId: manifest.input.id, route: manifest.input.route, manifestDigest: manifest.manifestDigest }]),
+      repositorySha: "1".repeat(40),
     });
     const failures = qa.checks.filter((check) => check.verdict === "FAIL");
     assert.deepEqual(

@@ -1,0 +1,63 @@
+---
+import ProductionLayout from "../../layouts/ProductionLayout.astro";
+import type { ProductionRenderManifest } from "../../lib/production-manifest";
+interface Props { manifest: ProductionRenderManifest }
+const { manifest } = Astro.props;
+const { content, design, assets, links, breadcrumbs } = manifest;
+function archetypeClasses(kind: typeof design.archetype.kind): { shell: string; hero: string; content: string } {
+  switch (kind) {
+    case "homepage": return { shell: "max-w-7xl", hero: "md:grid md:grid-cols-2 md:gap-16", content: "max-w-6xl" };
+    case "service": return { shell: "max-w-6xl", hero: "border-l-4 pl-8", content: "max-w-5xl" };
+    case "location": return { shell: "max-w-7xl", hero: "md:grid md:grid-cols-[2fr_3fr] md:gap-12", content: "max-w-6xl" };
+    case "editorial": return { shell: "max-w-4xl", hero: "border-b pb-12", content: "max-w-3xl" };
+    case "investment_advisory": return { shell: "max-w-6xl", hero: "rounded-[var(--radius-md)] border p-8", content: "max-w-4xl" };
+  }
+}
+function primitiveClass(primitive: string): string {
+  switch (primitive) {
+    case "article-body": return "bg-[var(--design-background)] text-lg";
+    case "evidence": return "bg-[var(--design-surface)] border-y border-[var(--design-secondary)]";
+    case "trust": return "bg-[var(--design-surface)] border-l-4 border-[var(--design-accent)]";
+    case "structured": return "bg-[var(--design-background)] md:grid md:grid-cols-[1fr_2fr] md:gap-10";
+    default: return "bg-[var(--design-background)]";
+  }
+}
+const classes = archetypeClasses(design.archetype.kind);
+const bodyPrimitives = design.archetype.rendererPrimitives.filter((entry) => !["hero", "page-header", "article-header", "cta"].includes(entry));
+if (content.sections.length > 0 && bodyPrimitives.length === 0) throw new Error("Accepted design has no body primitive for accepted sections.");
+const renderedSections = content.sections.map((section, index) => ({
+  ...section,
+  paragraphs: section.body.split(/\n{2,}/),
+  primitive: bodyPrimitives[index % bodyPrimitives.length]!,
+  pattern: design.archetype.sectionPatterns.filter((pattern) => pattern !== "cta")[index + 1],
+}));
+const conclusionParagraphs = content.conclusion.split(/\n{2,}/);
+const probableLcp = assets.find((asset) => asset.isProbableLcp);
+const inlineAssets = assets.filter((asset) => !asset.isProbableLcp);
+const colors = design.tokens.colors;
+const style = [`--design-primary:${colors.primary}`, `--design-secondary:${colors.secondary || colors.neutral || colors.primary}`, `--design-accent:${colors.accent || colors.primary}`, `--design-background:${colors.background || "#fff"}`, `--design-surface:${colors.surface || colors.background || "#fff"}`, `--design-text:${colors.textPrimary || colors.primary}`, `--design-heading-font:'${design.tokens.typography.headingFont.replaceAll("'", "\\'")}'`, `--design-body-font:'${design.tokens.typography.bodyFont.replaceAll("'", "\\'")}'`, `--space-md:${design.tokens.spacing.md || "1rem"}`, `--space-lg:${design.tokens.spacing.lg || "2rem"}`, `--radius-md:${design.tokens.rounded.md || "0"}`].join(";");
+const pageJsonLd = { "@context": "https://schema.org", "@type": "WebPage", name: content.title, description: manifest.seo.description, url: manifest.seo.canonicalUrl };
+const breadcrumbJsonLd = breadcrumbs.length === 0 ? null : { "@context": "https://schema.org", "@type": "BreadcrumbList", itemListElement: breadcrumbs.map((entry, index) => ({ "@type": "ListItem", position: index + 1, name: entry.name, ...(entry.url ? { item: entry.url } : {}) })) };
+const jsonLd = breadcrumbJsonLd ? [pageJsonLd, breadcrumbJsonLd] : [pageJsonLd];
+---
+<ProductionLayout manifest={manifest} jsonLd={jsonLd}>
+  <article style={style} data-design-digest={design.acceptedDigest} data-archetype={design.archetype.kind} class={`mx-auto ${classes.shell}`}>
+    {breadcrumbs.length > 0 && <nav aria-label="Breadcrumb" class="px-6 py-4"><ol class="flex flex-wrap gap-2">{breadcrumbs.map((entry, index) => <li>{entry.url ? <a href={entry.url}>{entry.name}</a> : <span aria-current="page">{entry.name}</span>}{index < breadcrumbs.length - 1 && <span aria-hidden="true"> / </span>}</li>)}</ol></nav>}
+    <section class={`px-6 py-16 md:py-24 ${classes.hero}`} data-pattern={design.archetype.sectionPatterns[0]}>
+      <div><h1 class="font-[var(--design-heading-font)] text-4xl font-semibold text-[var(--design-primary)] md:text-6xl">{content.title}</h1><p class="mt-8 text-lg leading-relaxed">{content.introduction}</p></div>
+      {probableLcp && <img src={probableLcp.publicPath} alt={probableLcp.alt} width={probableLcp.width} height={probableLcp.height} loading="eager" decoding="async" data-version-id={probableLcp.versionId} data-binary-digest={probableLcp.binaryDigest} data-governance-digest={probableLcp.governanceDigest} data-truth-class={probableLcp.truthClass} class="mt-10 h-auto w-full rounded-[var(--radius-md)] object-cover" />}
+    </section>
+    {renderedSections.map((section) => (
+      <section class={`mx-auto px-6 py-[var(--space-lg)] ${classes.content} ${primitiveClass(section.primitive)}`} data-pattern={section.pattern}>
+        <h2 class="font-[var(--design-heading-font)] text-3xl font-semibold text-[var(--design-primary)]">{section.heading}</h2>
+        {section.paragraphs.map((paragraph) => <p class="mt-6 leading-relaxed">{paragraph}</p>)}
+      </section>
+    ))}
+    {inlineAssets.map((asset) => <figure class="mx-auto max-w-4xl px-6 py-8" data-slot={asset.slot}><img src={asset.publicPath} alt={asset.alt} width={asset.width} height={asset.height} loading="lazy" decoding="async" data-version-id={asset.versionId} data-binary-digest={asset.binaryDigest} data-governance-digest={asset.governanceDigest} data-truth-class={asset.truthClass} class="h-auto w-full rounded-[var(--radius-md)]" /></figure>)}
+    <section class="mx-auto max-w-3xl bg-[var(--design-surface)] px-6 py-16">
+      {conclusionParagraphs.map((paragraph) => <p class="mt-6 text-xl leading-relaxed">{paragraph}</p>)}
+    </section>
+    {links.length > 0 && <nav aria-label="Related pages" class="mx-auto max-w-3xl px-6 py-10"><ul>{links.map((link) => <li><a href={link.href} class="text-[var(--design-accent)] underline">{link.title}</a></li>)}</ul></nav>}
+    {content.cta.trim() !== "" && <section class="px-6 py-12 text-center" data-pattern="cta"><p class="text-lg leading-relaxed">{content.cta}</p></section>}
+  </article>
+</ProductionLayout>

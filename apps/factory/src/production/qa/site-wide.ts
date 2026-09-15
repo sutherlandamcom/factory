@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { parse } from "node-html-parser";
 import { deterministicDigest } from "../../intelligence/digest.js";
 import type { ProductionQaCheckResult } from "./types.js";
 import type { ProductionRenderManifest } from "../render-manifest.js";
@@ -10,8 +9,9 @@ import {
   validateStructuredData,
   detectDuplicateMainContent,
 } from "./content-integrity.js";
-import { checkSiteWideSeo, checkInternalLinks } from "../seo-engine.js";
+import { checkSiteWideSeo } from "../seo-engine.js";
 import { qaOverallVerdict } from "@factory/contracts";
+import { bindQaCheck } from "./registry.js";
 
 /**
  * SITE-WIDE PRODUCTION QA — Macro Run 9 (Phase 4).
@@ -31,6 +31,9 @@ export interface SiteWideQaInput {
   /** Redirect authority rules (renderer-neutral). */
   redirectRules: Array<{ source: string; destination: string; kind: string }>;
   siteName: string;
+  manifestSetDigest: string;
+  repositorySha: string;
+  trustedChecks?: ProductionQaCheckResult[];
 }
 
 export interface SiteWideQaResult {
@@ -80,7 +83,9 @@ export async function runSiteWideQa(input: SiteWideQaInput): Promise<SiteWideQaR
     });
   }
   for (const result of pageResults) {
-    checks.push(...result.content.checks, ...result.html.checks, ...result.structured.checks);
+    checks.push(...[...result.content.checks, ...result.html.checks, ...result.structured.checks].map((entry) => bindQaCheck(entry, {
+      scope: "page", subject: result.route, tool: "factory-html-qa", toolVersion: "production-v2",
+    })));
   }
 
   // Duplicate main content across distinct routes.
@@ -122,17 +127,6 @@ export async function runSiteWideQa(input: SiteWideQaInput): Promise<SiteWideQaR
         : `Duplicate descriptions: ${siteWide.duplicateDescriptions.length}; missing: ${siteWide.missingDescriptions.join(", ")}`,
     ),
   );
-  checks.push(
-    check(
-      "seo.canonical",
-      "seo",
-      siteWide.canonicalMismatches.length === 0 ? "PASS" : "FAIL",
-      siteWide.canonicalMismatches.length === 0
-        ? "All canonicals agree with route authority."
-        : `Canonical contradictions: ${siteWide.canonicalMismatches.map((mismatch) => `${mismatch.route} -> ${mismatch.canonicalUrl}`).join("; ")}`,
-      siteWide.canonicalMismatches.map((mismatch) => ({ kind: "url" as const, ref: mismatch.route })),
-    ),
-  );
 
   // Sitemap consistency: every sitemap URL equals an intended canonical
   // (trailing-slash-normalized: Astro's directory format emits slash URLs).
@@ -141,7 +135,7 @@ export async function runSiteWideQa(input: SiteWideQaInput): Promise<SiteWideQaR
     const sitemapXml = await readFile(sitemapPath, "utf8");
     const locs = [...sitemapXml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1]!.replace(/\/$/, ""));
     const expectedCanonicals = input.manifests.map(
-      (manifest) => `${manifest.input.canonicalOrigin.replace(/\/$/, "")}${manifest.input.route}`.replace(/\/$/, "") || manifest.input.canonicalOrigin,
+      (manifest) => manifest.seo.canonicalUrl.replace(/\/$/, ""),
     );
     const sortedExpected = [...expectedCanonicals].sort();
     const sortedLocs = [...locs].sort();
@@ -160,37 +154,20 @@ export async function runSiteWideQa(input: SiteWideQaInput): Promise<SiteWideQaR
   } catch {
     checks.push(check("seo.sitemap", "seo", "FAIL", "sitemap.xml missing from built output."));
   }
+  try {
+    const robots = await readFile(path.join(input.distDir, "robots.txt"), "utf8");
+    const expected = new URL("/sitemap.xml", input.manifests[0]!.input.siteIdentity.canonicalOrigin).href;
+    checks.push(check("seo.robots", "seo", robots.includes(`Sitemap: ${expected}`) ? "PASS" : "FAIL", "robots.txt binds the candidate sitemap authority."));
+  } catch {
+    checks.push(check("seo.robots", "seo", "FAIL", "robots.txt missing from built output."));
+  }
 
-  // Internal links resolve.
+  // Internal-link existence and visible anchor equality are page gates. The
+  // compiler has already resolved them against this complete registry.
   const knownRoutes = new Set(input.manifests.map((manifest) => manifest.input.route));
-  const linkChecks = checkInternalLinks({ manifests: input.manifests, knownRoutes });
-  const brokenLinks = linkChecks.filter((link) => link.problem === "missing_target");
-  checks.push(
-    check(
-      "seo.internal_links",
-      "seo",
-      brokenLinks.length === 0 ? "PASS" : "FAIL",
-      brokenLinks.length === 0
-        ? `All ${linkChecks.length} accepted internal links resolve to production routes.`
-        : `Broken internal links: ${brokenLinks.map((link) => `${link.route} -> ${link.href}`).join("; ")}`,
-      brokenLinks.map((link) => ({ kind: "url" as const, ref: `${link.route}${link.href}` })),
-    ),
-  );
 
   // Redirect authority: no loops, no chains, no sitemap inclusion of sources.
-  const redirectProblems: string[] = [];
-  for (const rule of input.redirectRules) {
-    if (rule.source === rule.destination) {
-      redirectProblems.push(`Redirect loop: ${rule.source} -> ${rule.destination}`);
-    }
-    // One-hop preference: destination must not be another redirect source.
-    if (input.redirectRules.some((other) => other.source === rule.destination)) {
-      redirectProblems.push(`Redirect chain: ${rule.source} -> ${rule.destination} (destination is itself a redirect source)`);
-    }
-    if (knownRoutes.has(rule.source)) {
-      redirectProblems.push(`Redirect source ${rule.source} collides with a production route`);
-    }
-  }
+  const redirectProblems = validateCandidateRedirects(input.redirectRules, knownRoutes);
   checks.push(
     check(
       "links.canonical_destination",
@@ -233,28 +210,28 @@ export async function runSiteWideQa(input: SiteWideQaInput): Promise<SiteWideQaR
     ),
   );
 
-  // JS budget: zero client JS on ordinary production pages.
-  const jsReferences: string[] = [];
-  for (const page of pages) {
-    const root = parse(page.html);
-    for (const script of root.querySelectorAll("script[src]")) {
-      const src = script.getAttribute("src") ?? "";
-      if (!src.includes("ld+json")) jsReferences.push(`${page.route}: ${src}`);
-    }
-  }
-  checks.push(
-    check(
-      "performance.js_budget",
-      "performance",
-      jsReferences.length === 0 ? "PASS" : "REVIEW",
-      jsReferences.length === 0
-        ? "Zero external client JS on all production pages."
-        : `External client JS references (justify each): ${jsReferences.join("; ")}`,
-      jsReferences.map((ref) => ({ kind: "route" as const, ref: ref.split(":")[0] ?? ref })),
-    ),
-  );
+  const siteCheckIds = new Set(["content.no_duplicate_pages", "seo.title_unique", "seo.description_unique", "seo.robots", "seo.sitemap", "links.canonical_destination", "security.public_output"]);
+  const boundChecks = checks.map((entry) => entry.scope ? entry : bindQaCheck(entry, {
+    scope: siteCheckIds.has(entry.checkId) ? "site" : "page",
+    subject: siteCheckIds.has(entry.checkId) ? input.manifestSetDigest : input.manifests[0]!.input.route,
+    tool: "factory-site-qa",
+    toolVersion: "production-v2",
+  }));
+  boundChecks.push(...(input.trustedChecks ?? []));
+  return { checks: boundChecks, overall: qaOverallVerdict(boundChecks) };
+}
 
-  return { checks, overall: qaOverallVerdict(checks) };
+export function validateCandidateRedirects(
+  rules: Array<{ source: string; destination: string; kind: string }>,
+  knownRoutes: ReadonlySet<string>,
+): string[] {
+  const problems: string[] = [];
+  for (const rule of rules) {
+    if (rule.source === rule.destination) problems.push(`Redirect loop: ${rule.source} -> ${rule.destination}`);
+    if (rules.some((other) => other.source === rule.destination)) problems.push(`Redirect chain: ${rule.source} -> ${rule.destination} (destination is itself a redirect source)`);
+    if (knownRoutes.has(rule.source)) problems.push(`Redirect source ${rule.source} collides with a production route`);
+  }
+  return problems;
 }
 
 /** Deterministic digest over the site-wide QA result (evidence identity). */

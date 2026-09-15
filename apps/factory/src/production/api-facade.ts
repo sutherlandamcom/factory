@@ -1,11 +1,12 @@
 import type { FactoryDb } from "../persistence/db.js";
 import { FactoryError } from "../executor/errors.js";
 import { ProductionStore } from "./store.js";
-import { ProductionBuildService } from "./build-service.js";
+import { computeArtifactDigest, ProductionBuildService } from "./build-service.js";
 import { runSiteWideQa } from "./qa/site-wide.js";
-import { ProductionRenderCompiler } from "./render-manifest.js";
 import { deterministicDigest } from "../intelligence/digest.js";
 import type { ProductionQaCheckResult } from "@factory/contracts";
+import { loadProductionBuildIdentity } from "./identity.js";
+import { assertCompleteProductionQa } from "./qa/registry.js";
 
 /**
  * PRODUCTION API FACADE — Macro Run 9 operator surface.
@@ -46,7 +47,6 @@ export interface ProductionWorkspaceView {
 export class ProductionApiFacade {
   private readonly store: ProductionStore;
   private readonly build: ProductionBuildService;
-  private readonly compiler: ProductionRenderCompiler;
 
   constructor(
     private readonly db: FactoryDb,
@@ -54,7 +54,6 @@ export class ProductionApiFacade {
   ) {
     this.store = new ProductionStore(db);
     this.build = new ProductionBuildService(db, repoRoot);
-    this.compiler = new ProductionRenderCompiler(db, repoRoot);
   }
 
   async workspace(projectId: string): Promise<ProductionWorkspaceView> {
@@ -94,13 +93,14 @@ export class ProductionApiFacade {
     };
   }
 
-  async deriveInput(input: { projectId: string; pageSlug: string; canonicalOrigin: string }) {
+  async deriveInput(input: { projectId: string; pageSlug: string }) {
+    const identity = await loadProductionBuildIdentity(this.repoRoot);
     const productionInput = await this.store.deriveProductionInput({
       projectId: input.projectId,
       pageSlug: input.pageSlug,
-      canonicalOrigin: input.canonicalOrigin,
-      rendererVersion: "astro-7.2.9",
-      rendererPolicyVersion: "production-policy-v1",
+      siteIdentity: identity.siteIdentity,
+      rendererVersion: identity.rendererVersion,
+      rendererPolicyVersion: identity.rendererPolicyVersion,
     });
     return {
       id: productionInput.id,
@@ -126,7 +126,7 @@ export class ProductionApiFacade {
   }
 
   /** Prepare (derive input + create candidate) in one operator action. */
-  async prepareCandidate(input: { projectId: string; pageSlug: string; canonicalOrigin: string }) {
+  async prepareCandidate(input: { projectId: string; pageSlug: string }) {
     return this.build.prepareCandidate(input);
   }
 
@@ -142,20 +142,47 @@ export class ProductionApiFacade {
     if (!candidate.artifactRef || candidate.state !== "built" && candidate.state !== "qa_passed" && candidate.state !== "qa_failed") {
       throw new FactoryError("production_qa_not_found", "Candidate has no completed build to QA.");
     }
-    const manifest = await this.compiler.compileManifest({
-      projectId: input.projectId,
-      productionInputId: candidate.productionInputId,
-    });
+    if (!candidate.artifactDigest || !candidate.manifestSetDigest || !candidate.redirectSnapshotDigest || !candidate.repositorySha || !candidate.lockfileDigest) {
+      throw new FactoryError("production_qa_failed", "Candidate is missing immutable build identity.");
+    }
+    const currentIdentity = await loadProductionBuildIdentity(this.repoRoot);
+    if (currentIdentity.siteIdentity.profileDigest !== candidate.siteProfileDigest || currentIdentity.rendererVersion !== candidate.rendererVersion || currentIdentity.repositorySha !== candidate.repositorySha || currentIdentity.lockfileDigest !== candidate.lockfileDigest) {
+      throw new FactoryError("production_authority_stale", "Candidate repository, site profile, renderer, or lockfile identity is no longer current.");
+    }
+    const manifests = await this.build.loadManifests(input);
+    const manifestSetDigest = deterministicDigest(manifests.map((manifest) => ({ inputId: manifest.input.id, route: manifest.input.route, manifestDigest: manifest.manifestDigest })));
+    const artifactDigest = await computeArtifactDigest(candidate.artifactRef);
+    const bindings = await this.store.listCandidateInputs(input.projectId, candidate.id);
+    if (manifestSetDigest !== candidate.manifestSetDigest || artifactDigest !== candidate.artifactDigest || bindings.length !== manifests.length || manifests.some((manifest) => !bindings.some((binding) => binding.productionInputId === manifest.input.id && binding.manifestDigest === manifest.manifestDigest))) {
+      throw new FactoryError("production_qa_failed", "Immutable candidate bytes or manifest bindings do not match persistence.");
+    }
+    const redirects = await this.store.listCandidateRedirects(input.projectId, candidate.id);
+    const redirectRules = redirects.map(({ source, destination, kind }) => ({ source, destination, kind }));
+    const redirectSnapshotDigest = deterministicDigest({ projectId: input.projectId, rules: redirectRules });
+    if (redirectSnapshotDigest !== candidate.redirectSnapshotDigest) throw new FactoryError("production_qa_failed", "Redirect snapshot digest mismatch.");
+    const trustedChecks = await this.store.listTrustedQaEvidence(input.projectId, candidate.id);
     const qa = await runSiteWideQa({
       distDir: candidate.artifactRef,
-      manifests: [manifest],
-      redirectRules: [],
-      siteName: "Factory Production Site",
+      manifests,
+      redirectRules,
+      siteName: manifests[0]!.input.siteIdentity.siteName,
+      manifestSetDigest,
+      repositorySha: candidate.repositorySha,
+      trustedChecks,
     });
+    const pageRoutes = manifests.map((manifest) => manifest.input.route);
+    const complete = assertCompleteProductionQa({ checks: qa.checks, pageRoutes, manifestSetDigest, repositorySha: candidate.repositorySha });
+    if (!complete.complete) throw new FactoryError("production_qa_failed", `Required QA evidence missing or duplicated: ${complete.missing.join(", ")}`);
     const run = await this.store.recordQaRun({
       projectId: input.projectId,
       candidateId: candidate.id,
       checks: qa.checks as ProductionQaCheckResult[],
+      evaluatedArtifactDigest: artifactDigest,
+      manifestSetDigest,
+      redirectSnapshotDigest,
+      repositorySha: candidate.repositorySha,
+      lockfileDigest: candidate.lockfileDigest,
+      pageRoutes,
     });
     return {
       qaRunId: run.id,

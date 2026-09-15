@@ -607,6 +607,7 @@ export {
   productionRouteSchema,
   productionRendererIdSchema,
   productionAuthorityRefSchema,
+  productionSiteIdentitySchema,
   productionRendererIdentitySchema,
   productionPageInputDataSchema,
   parseProductionPageInputData,
@@ -628,6 +629,7 @@ export {
 } from "./production.js";
 export type {
   ProductionAuthorityRef,
+  ProductionSiteIdentity,
   ProductionRendererIdentity,
   ProductionPageInputData,
   ProductionErrorCode,

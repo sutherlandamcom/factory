@@ -1145,14 +1145,12 @@ export function createOperatorApi(deps: OperatorApiDeps) {
           const input = parseOr400(
             z.object({
               pageSlug: z.string().trim().min(1).max(200),
-              canonicalOrigin: z.string().trim().min(1).max(200),
-            }),
+            }).strict(),
             parsed,
           );
           const result = await production.deriveInput({
             projectId: project.id,
             pageSlug: input.pageSlug,
-            canonicalOrigin: input.canonicalOrigin,
           });
           return sendJson(res, 201, result);
         }
@@ -1164,14 +1162,12 @@ export function createOperatorApi(deps: OperatorApiDeps) {
           const input = parseOr400(
             z.object({
               pageSlug: z.string().trim().min(1).max(200),
-              canonicalOrigin: z.string().trim().min(1).max(200),
-            }),
+            }).strict(),
             parsed,
           );
           const result = await production.prepareCandidate({
             projectId: project.id,
             pageSlug: input.pageSlug,
-            canonicalOrigin: input.canonicalOrigin,
           });
           return sendJson(res, 201, result);
         }

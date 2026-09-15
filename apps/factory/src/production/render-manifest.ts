@@ -11,7 +11,10 @@ import {
 import type { ProductionPageInputRecord } from "../persistence/schema.js";
 import {
   parseAcceptedPageContentData,
+  parseDesignCandidateData,
   type AcceptedPageContentData,
+  type DesignArchetypeKind,
+  type DesignSystemTokens,
 } from "@factory/contracts";
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
@@ -31,7 +34,7 @@ import { ProductionStore } from "./store.js";
  *  3. binds exact Run 5/7 asset authority per slot (binary digest +
  *     governance digest + alt authority), materializing delivery
  *     derivatives via the existing deterministic sharp pipeline;
- *  4. writes a manifest JSON the Astro build consumes at build time.
+   *  4. writes a manifest JSON the Astro build consumes at build time.
  *
  * The manifest is a projection, not a second source of truth: its digest is
  * recorded on the ProductionCandidate and any authority change makes the
@@ -48,7 +51,21 @@ export interface ProductionRenderManifest {
     pageIdentity: string;
     pageType: string;
     route: string;
-    canonicalOrigin: string;
+    siteIdentity: {
+      siteId: string;
+      siteName: string;
+      canonicalOrigin: string;
+      language: string;
+      profileDigest: string;
+    };
+  };
+  seo: {
+    fullTitle: string;
+    description: string;
+    canonicalUrl: string;
+    ogTitle: string;
+    ogDescription: string;
+    ogUrl: string;
   };
   /** Accepted copy VERBATIM (title/meta/intro/sections/conclusion/cta/links). */
   content: {
@@ -63,10 +80,30 @@ export interface ProductionRenderManifest {
     cta: string;
     internalLinks: string[];
   };
+  design: {
+    acceptedId: string;
+    acceptedVersion: number;
+    acceptedDigest: string;
+    tokens: DesignSystemTokens;
+    archetype: {
+      kind: DesignArchetypeKind;
+      sectionPatterns: string[];
+      contentRequirements: string[];
+      assetSlots: Array<{ slot: string; role: string; requiredRole: string }>;
+      primaryCta: string;
+      secondaryCta: string;
+      responsiveBehavior: string;
+      trustPresentation: string;
+      rendererPrimitives: string[];
+    };
+  };
+  links: Array<{ href: string; title: string }>;
+  breadcrumbs: Array<{ name: string; url: string }>;
   /** Exact asset authority per slot with alt semantics resolved upstream. */
   assets: Array<{
     slot: string;
     role: string;
+    truthClass: string;
     versionId: string;
     binaryDigest: string;
     governanceDigest: string;
@@ -85,7 +122,16 @@ export interface ProductionRenderManifest {
   manifestDigest: string;
 }
 
-const MEANINGFUL_ROLES = new Set(["hero", "inline", "chart", "illustration"]);
+const SUPPORTED_PATTERNS = new Map<string, string>([
+  ["hero", "hero"], ["page-header", "page-header"], ["article-header", "article-header"],
+  ["value-statement", "narrative"], ["service-overview", "narrative"], ["location-intro", "narrative"],
+  ["article-body", "article-body"], ["approach", "narrative"], ["evidence", "evidence"],
+  ["local-evidence", "evidence"], ["trust-signals", "trust"], ["methodology", "trust"],
+  ["sources", "trust"], ["assumptions", "trust"], ["disclaimer", "trust"],
+  ["services-overview", "structured"], ["process", "structured"], ["faq", "structured"],
+  ["coverage", "structured"], ["byline", "structured"], ["related", "structured"],
+  ["scenarios", "structured"], ["contact", "structured"], ["cta", "cta"],
+]);
 
 /** Roles that plausibly carry the largest above-fold visual. */
 const LCP_CANDIDATE_ROLES = new Set(["hero", "background"]);
@@ -103,9 +149,14 @@ export class ProductionRenderCompiler {
   /**
    * Build the render manifest for one ProductionPageInput. Fails closed on
    * stale authority. Materializes delivery derivatives into the site's
-   * public asset directory (deterministic, content-addressed filenames).
+   * candidate asset staging directory (deterministic, content-addressed filenames).
    */
-  async compileManifest(input: { projectId: string; productionInputId: string }): Promise<ProductionRenderManifest> {
+  async compileManifest(input: {
+    projectId: string;
+    productionInputId: string;
+    assetSnapshotDir: string;
+    registry?: Array<{ route: string; title: string }>;
+  }): Promise<ProductionRenderManifest> {
     const store = new ProductionStore(this.db);
     const [productionInput] = await this.db
       .select()
@@ -145,6 +196,31 @@ export class ProductionRenderCompiler {
       projectId: input.projectId,
       pageSlug: productionInput.pageIdentity,
     });
+    const designData = parseDesignCandidateData(bundle.design.data);
+    const matches = designData.archetypes.filter((entry) => entry.kind === productionInput.pageType);
+    if (matches.length !== 1) {
+      throw renderError("production_build_rejected", `Accepted design must contain exactly one ${productionInput.pageType} archetype.`);
+    }
+    const archetype = matches[0]!;
+    const rendererPrimitives = archetype.sectionPatterns.map((pattern) => {
+      const primitive = SUPPORTED_PATTERNS.get(pattern);
+      if (!primitive) throw renderError("production_build_rejected", `Unsupported accepted design pattern: ${pattern}`);
+      return primitive;
+    });
+    validateDesignTokens(designData.tokens);
+    const requiredSlots = archetype.assetSlots.filter((slot) => slot.pageSlug === productionInput.pageIdentity);
+    const actualSlots = new Set(bundle.visualSlots.map((slot) => slot.slot));
+    for (const slot of requiredSlots) {
+      if (!actualSlots.has(slot.slot)) throw renderError("production_build_rejected", `Accepted design slot ${slot.slot} has no accepted visual resolution.`);
+    }
+    const declaredSlots = new Map(requiredSlots.map((slot) => [slot.slot, slot]));
+    for (const slot of bundle.visualSlots) {
+      const declared = declaredSlots.get(slot.slot);
+      if (!declared || declared.requiredRole !== slot.role) throw renderError("production_build_rejected", `Accepted visual slot ${slot.slot} cannot be placed by the selected archetype.`);
+    }
+    if (rendererPrimitives.some((primitive) => ["narrative", "article-body", "evidence", "trust", "structured"].includes(primitive)) && content.sections.length === 0) {
+      throw renderError("production_build_rejected", "Accepted design requires structured body content that is absent from AcceptedPageContent.");
+    }
 
     const assets: ProductionRenderManifest["assets"] = [];
     for (const slot of bundle.visualSlots) {
@@ -164,12 +240,13 @@ export class ProductionRenderCompiler {
 
       // Materialize the deterministic web derivative into the site public
       // assets (content-addressed filename: same bytes -> same path).
-      const webDerivative = await this.materializeWebDerivative(version.storageKey, version.mediaType);
-      const meaningful = MEANINGFUL_ROLES.has(slot.role);
+      const webDerivative = await this.materializeWebDerivative(version.storageKey, input.assetSnapshotDir);
+      const meaningful = slot.truthClass !== "decorative";
       const altAuthorityComplete = meaningful ? Boolean(version.altIntent && version.altIntent.trim() !== "") : true;
       assets.push({
         slot: slot.slot,
         role: slot.role,
+        truthClass: slot.truthClass,
         versionId: version.id,
         binaryDigest: version.binaryDigest,
         governanceDigest: slot.governanceDigest,
@@ -182,6 +259,20 @@ export class ProductionRenderCompiler {
       });
     }
 
+    if (!productionInput.siteId || !productionInput.siteName || !productionInput.siteLanguage || !productionInput.siteProfileDigest) {
+      throw renderError("production_build_rejected", "Production input has no immutable site identity.");
+    }
+    const registry = input.registry ?? [{ route: productionInput.route, title: content.title }];
+    const titleByRoute = new Map(registry.map((entry) => [entry.route, entry.title]));
+    const links = content.internalLinks.map((href) => {
+      const route = normalizeInternalRoute(href);
+      const title = route ? titleByRoute.get(route) : undefined;
+      if (!route || !title) throw renderError("production_build_rejected", `Accepted internal link ${href} has no production target.`);
+      return { href: route, title };
+    });
+    const breadcrumbs = deriveManifestBreadcrumbs(productionInput.route, productionInput.canonicalOrigin, titleByRoute);
+    const canonicalUrl = `${productionInput.canonicalOrigin.replace(/\/$/, "")}${productionInput.route === "/" ? "/" : productionInput.route}`;
+    const fullTitle = `${content.title} | ${productionInput.siteName}`;
     const manifest: ProductionRenderManifest = {
       schemaVersion: "production-v1",
       input: {
@@ -192,18 +283,49 @@ export class ProductionRenderCompiler {
         pageIdentity: productionInput.pageIdentity,
         pageType: productionInput.pageType,
         route: productionInput.route,
-        canonicalOrigin: productionInput.canonicalOrigin,
+        siteIdentity: {
+          siteId: productionInput.siteId,
+          siteName: productionInput.siteName,
+          canonicalOrigin: productionInput.canonicalOrigin,
+          language: productionInput.siteLanguage,
+          profileDigest: productionInput.siteProfileDigest,
+        },
       },
+      seo: { fullTitle, description: content.metaDescription, canonicalUrl, ogTitle: fullTitle, ogDescription: content.metaDescription, ogUrl: canonicalUrl },
       content,
+      design: {
+        acceptedId: bundle.design.id,
+        acceptedVersion: bundle.design.version,
+        acceptedDigest: bundle.design.candidateDigest,
+        tokens: designData.tokens,
+        archetype: {
+          kind: archetype.kind,
+          sectionPatterns: [...archetype.sectionPatterns],
+          contentRequirements: [...archetype.contentRequirements],
+          assetSlots: requiredSlots.map((slot) => ({ slot: slot.slot, role: slot.role, requiredRole: slot.requiredRole })),
+          primaryCta: archetype.primaryCta,
+          secondaryCta: archetype.secondaryCta,
+          responsiveBehavior: archetype.responsiveBehavior,
+          trustPresentation: archetype.trustPresentation,
+          rendererPrimitives,
+        },
+      },
+      links,
+      breadcrumbs,
       assets,
       manifestDigest: "",
     };
     manifest.manifestDigest = deterministicDigest({
       input: manifest.input,
+      seo: manifest.seo,
       content: manifest.content,
+      design: manifest.design,
+      links: manifest.links,
+      breadcrumbs: manifest.breadcrumbs,
       assets: manifest.assets.map((asset) => ({
         slot: asset.slot,
         role: asset.role,
+        truthClass: asset.truthClass,
         versionId: asset.versionId,
         binaryDigest: asset.binaryDigest,
         governanceDigest: asset.governanceDigest,
@@ -251,7 +373,7 @@ export class ProductionRenderCompiler {
    */
   private async materializeWebDerivative(
     storageKey: string,
-    mediaType: string,
+    assetSnapshotDir: string,
   ): Promise<{ publicPath: string; width: number; height: number }> {
     const bytes = await this.storage.getObject(storageKey);
     const sharpModule = await import("sharp");
@@ -270,9 +392,12 @@ export class ProductionRenderCompiler {
     const webMeta = await sharp(webBytes).metadata();
     const digest = deterministicDigestOfBytes(webBytes);
     const publicPath = `/production-assets/${digest}.jpg`;
-    const outDir = path.join(this.repoRoot, "sites", "starter", "public", "production-assets");
-    await mkdir(outDir, { recursive: true });
-    await writeFile(path.join(outDir, `${digest}.jpg`), webBytes);
+    await mkdir(assetSnapshotDir, { recursive: true });
+    await writeFile(path.join(assetSnapshotDir, `${digest}.jpg`), webBytes, { flag: "wx" }).catch(async (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EEXIST") throw error;
+      const existing = await readFile(path.join(assetSnapshotDir, `${digest}.jpg`));
+      if (sha256Bytes(existing) !== digest) throw renderError("production_build_rejected", "Content-addressed derivative collision.");
+    });
     return {
       publicPath,
       width: webMeta.width ?? targetWidth,
@@ -281,11 +406,10 @@ export class ProductionRenderCompiler {
   }
 
   /** Write the manifest JSON for the Astro build and return its path. */
-  async writeManifest(manifest: ProductionRenderManifest): Promise<string> {
-    const dir = path.join(this.repoRoot, "sites", "starter", ".factory-production");
+  async writeManifest(manifest: ProductionRenderManifest, dir: string): Promise<string> {
     await mkdir(dir, { recursive: true });
-    const filePath = path.join(dir, `${sanitize(manifest.input.pageIdentity)}.json`);
-    await writeFile(filePath, JSON.stringify(manifest, null, 2), "utf8");
+    const filePath = path.join(dir, `${manifest.input.id}.json`);
+    await writeFile(filePath, JSON.stringify(manifest, null, 2), { encoding: "utf8", flag: "wx" });
     return filePath;
   }
 
@@ -295,14 +419,86 @@ export class ProductionRenderCompiler {
     const manifests: ProductionRenderManifest[] = [];
     for (const entry of entries.filter((name: string) => name.endsWith(".json")).sort()) {
       const raw = await readFile(path.join(manifestDir, entry), "utf8");
-      manifests.push(JSON.parse(raw) as ProductionRenderManifest);
+      manifests.push(assertManifest(JSON.parse(raw)));
     }
-    return manifests;
+    assertUniqueManifests(manifests);
+    return manifests.sort((a, b) => a.input.route.localeCompare(b.input.route));
   }
 
   async readManifest(filePath: string): Promise<ProductionRenderManifest> {
     const raw = await readFile(filePath, "utf8");
-    return JSON.parse(raw) as ProductionRenderManifest;
+    return assertManifest(JSON.parse(raw));
+  }
+}
+
+function validateDesignTokens(tokens: DesignSystemTokens): void {
+  const colorValues = Object.values(tokens.colors).filter((value): value is string => typeof value === "string" && value !== "");
+  const safeColor = /^(#[0-9a-f]{3,8}|(?:rgb|hsl)a?\([0-9.% ,/-]+\)|[a-z]+)$/i;
+  if (colorValues.some((value) => !safeColor.test(value))) {
+    throw renderError("production_build_rejected", "Accepted design contains an unsafe or unsupported color token.");
+  }
+  const safeFont = /^[a-z0-9 ',.-]+$/i;
+  if (!safeFont.test(tokens.typography.headingFont) || !safeFont.test(tokens.typography.bodyFont)) {
+    throw renderError("production_build_rejected", "Accepted design contains an unsafe font token.");
+  }
+  const safeLength = /^(0|\d+(?:\.\d+)?(?:px|rem|em))$/;
+  if ([...Object.values(tokens.spacing), ...Object.values(tokens.rounded)].some((value) => !safeLength.test(value))) {
+    throw renderError("production_build_rejected", "Accepted design spacing/radius tokens must be deterministic CSS lengths.");
+  }
+}
+
+function normalizeInternalRoute(href: string): string | null {
+  if (!href.startsWith("/") || href.startsWith("//")) return null;
+  const route = href.split(/[?#]/, 1)[0]!.replace(/\/+$/, "");
+  return route === "" ? "/" : route;
+}
+
+function deriveManifestBreadcrumbs(route: string, origin: string, titles: Map<string, string>) {
+  if (route === "/") return [];
+  if (!titles.has("/")) throw renderError("production_build_rejected", "Non-root production pages require a real homepage breadcrumb target.");
+  const entries: Array<{ name: string; url: string }> = [{ name: titles.get("/")!, url: `${origin.replace(/\/$/, "")}/` }];
+  const segments = route.split("/").filter(Boolean);
+  let current = "";
+  for (const segment of segments) {
+    current += `/${segment}`;
+    const title = titles.get(current);
+    if (!title) throw renderError("production_build_rejected", `Breadcrumb route ${current} is not in the candidate snapshot.`);
+    entries.push({ name: title, url: current === route ? "" : `${origin.replace(/\/$/, "")}${current}` });
+  }
+  return entries;
+}
+
+function assertManifest(value: unknown): ProductionRenderManifest {
+  const manifest = value as ProductionRenderManifest;
+  if (!manifest || manifest.schemaVersion !== "production-v1" || !manifest.input || !manifest.content || !manifest.design || !manifest.seo || !Array.isArray(manifest.assets)) {
+    throw renderError("production_build_rejected", "Production manifest schema is invalid.");
+  }
+  const expected = deterministicDigest({
+    input: manifest.input,
+    seo: manifest.seo,
+    content: manifest.content,
+    design: manifest.design,
+    links: manifest.links,
+    breadcrumbs: manifest.breadcrumbs,
+    assets: manifest.assets,
+  });
+  if (manifest.manifestDigest !== expected) throw renderError("production_authority_digest_mismatch", "Production manifest digest mismatch.");
+  return manifest;
+}
+
+function assertUniqueManifests(manifests: ProductionRenderManifest[]): void {
+  for (const key of ["id", "pageIdentity", "route"] as const) {
+    const seen = new Set<string>();
+    for (const manifest of manifests) {
+      const value = manifest.input[key];
+      if (seen.has(value)) throw renderError("production_route_conflict", `Duplicate production manifest ${key}: ${value}`);
+      seen.add(value);
+    }
+  }
+  const canonicals = new Set<string>();
+  for (const manifest of manifests) {
+    if (canonicals.has(manifest.seo.canonicalUrl)) throw renderError("production_route_conflict", `Duplicate canonical URL: ${manifest.seo.canonicalUrl}`);
+    canonicals.add(manifest.seo.canonicalUrl);
   }
 }
 
@@ -313,10 +509,6 @@ function deterministicDigestOfBytes(bytes: Uint8Array): string {
 
 function sha256Bytes(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
-}
-
-function sanitize(pageSlug: string): string {
-  return pageSlug.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") || "index";
 }
 
 function renderError(code: string, message: string): FactoryError {

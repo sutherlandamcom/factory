@@ -42,19 +42,21 @@ const SITE_NAME_FALLBACK = "Factory Production Site";
  * function never rewrites them.
  */
 export function derivePageSeoMetadata(manifest: ProductionRenderManifest, siteName: string): PageSeoMetadata {
-  const canonicalUrl = joinUrl(manifest.input.canonicalOrigin, manifest.input.route);
+  if (siteName !== manifest.input.siteIdentity.siteName) {
+    throw seoError("production_authority_digest_mismatch", "SEO site name contradicts bound site identity.");
+  }
   const heroAsset = manifest.assets.find((asset) => asset.isProbableLcp);
   return {
     route: manifest.input.route,
-    canonicalUrl,
+    canonicalUrl: manifest.seo.canonicalUrl,
     title: manifest.content.title,
-    fullTitle: `${manifest.content.title} | ${siteName}`,
-    description: manifest.content.metaDescription,
+    fullTitle: manifest.seo.fullTitle,
+    description: manifest.seo.description,
     ogType: "website",
-    ogUrl: canonicalUrl,
-    ogTitle: manifest.content.title,
-    ogDescription: manifest.content.metaDescription,
-    ogImage: heroAsset ? new URL(heroAsset.publicPath, manifest.input.canonicalOrigin).href : null,
+    ogUrl: manifest.seo.ogUrl,
+    ogTitle: manifest.seo.ogTitle,
+    ogDescription: manifest.seo.ogDescription,
+    ogImage: heroAsset ? new URL(heroAsset.publicPath, manifest.input.siteIdentity.canonicalOrigin).href : null,
     robotsDirectives: "index, follow",
     indexable: true,
   };
@@ -117,7 +119,7 @@ export function generateSitemapAndRobots(input: {
   const urls = sorted.map((entry) => `  <url><loc>${escapeXml(entry.loc)}</loc></url>`).join("\n");
   const sitemapXml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`;
 
-  const origin = input.manifests[0]?.input.canonicalOrigin ?? "";
+  const origin = input.manifests[0]?.input.siteIdentity.canonicalOrigin ?? "";
   const robotsTxt = origin
     ? `User-agent: *\nAllow: /\n\nSitemap: ${new URL("/sitemap.xml", origin).href}\n`
     : `User-agent: *\nAllow: /\n`;
@@ -236,7 +238,7 @@ export function checkSiteWideSeo(manifests: ProductionRenderManifest[], siteName
 
   for (const manifest of manifests) {
     const meta = derivePageSeoMetadata(manifest, siteName);
-    const expected = joinUrl(manifest.input.canonicalOrigin, manifest.input.route);
+    const expected = joinUrl(manifest.input.siteIdentity.canonicalOrigin, manifest.input.route);
     if (meta.canonicalUrl !== expected) {
       canonicalMismatches.push({ route: meta.route, canonicalUrl: meta.canonicalUrl, expectedUrl: expected });
     }

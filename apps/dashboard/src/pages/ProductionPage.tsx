@@ -87,7 +87,6 @@ export function ProductionPage({ projectId }: { projectId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [pageSlug, setPageSlug] = useState("home");
-  const [canonicalOrigin, setCanonicalOrigin] = useState("https://sutherlandam.com");
   const [detail, setDetail] = useState<ProductionCandidateDetail | null>(null);
 
   const load = useCallback(async () => {
@@ -116,14 +115,14 @@ export function ProductionPage({ projectId }: { projectId: string }) {
     setBusy(true);
     setError(null);
     try {
-      await productionApi.prepareCandidate(projectId, pageSlug.trim(), canonicalOrigin.trim());
+      await productionApi.prepareCandidate(projectId, pageSlug.trim());
       await load();
     } catch (err) {
       setError(productionErrorMessage(err, "Failed to prepare candidate."));
     } finally {
       setBusy(false);
     }
-  }, [projectId, pageSlug, canonicalOrigin, load]);
+  }, [projectId, pageSlug, load]);
 
   const build = useCallback(async (candidateId: string) => {
     setBusy(true);
@@ -162,7 +161,7 @@ export function ProductionPage({ projectId }: { projectId: string }) {
       <Section title="Derive production input + create candidate">
         <p className="mb-3 text-sm text-gray-600">
           Binds the exact accepted Content + Design + Visual Asset authorities for a page into an immutable
-          production input, then creates a build candidate. Fails closed on any stale upstream authority.
+          production input, then creates a build candidate. Site identity and canonical origin come from the validated repository profile. Fails closed on any stale upstream authority.
         </p>
         <div className="flex flex-wrap items-end gap-3">
           <label className="flex flex-col text-xs font-medium text-gray-700">
@@ -174,19 +173,10 @@ export function ProductionPage({ projectId }: { projectId: string }) {
               placeholder="home"
             />
           </label>
-          <label className="flex flex-col text-xs font-medium text-gray-700">
-            Canonical origin
-            <input
-              className="mt-1 w-72 rounded border px-2 py-1.5 text-sm"
-              value={canonicalOrigin}
-              onChange={(event) => setCanonicalOrigin(event.target.value)}
-              placeholder="https://sutherlandam.com"
-            />
-          </label>
           <button
             className="rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
             onClick={prepare}
-            disabled={busy || pageSlug.trim() === "" || canonicalOrigin.trim() === ""}
+            disabled={busy || pageSlug.trim() === ""}
           >
             {busy ? "Working…" : "Prepare candidate"}
           </button>

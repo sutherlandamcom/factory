@@ -14,10 +14,11 @@ import { FactoryStore } from "../../src/persistence/store.js";
 import { ProjectIntakeStore } from "../../src/operator/intake-store.js";
 import { buildIntakePayload } from "../fixtures/intake-payloads.js";
 import { FactoryError } from "../../src/executor/errors.js";
-import { parseDesignCandidateData, type DesignCandidateData } from "@factory/contracts";
+import { parseDesignCandidateData, type DesignCandidateData, type ProductionQaCheckResult } from "@factory/contracts";
 import { VisualStore } from "../../src/visual/store.js";
 import { ProductionStore } from "../../src/production/store.js";
 import type { FactoryDatabaseInstance } from "../../src/persistence/db.js";
+import { bindQaCheck, REQUIRED_PRODUCTION_QA_GATES, TRUSTED_PRODUCTION_QA_GATES } from "../../src/production/qa/registry.js";
 
 /**
  * Run 9 persistence suite — real PostgreSQL (dedicated factory_test DB).
@@ -34,6 +35,22 @@ import type { FactoryDatabaseInstance } from "../../src/persistence/db.js";
 
 function isCode(err: unknown, code: string): boolean {
   return err instanceof FactoryError && err.code === code;
+}
+
+const REPOSITORY_SHA = "1".repeat(40);
+const LOCKFILE_DIGEST = "2".repeat(64);
+const MANIFEST_SET_DIGEST = "3".repeat(64);
+const REDIRECT_DIGEST = deterministicDigest({ projectId: "fixture", rules: [] });
+const CANDIDATE_IDENTITY = { repositorySha: REPOSITORY_SHA, lockfileDigest: LOCKFILE_DIGEST };
+function siteIdentity() {
+  return { siteId: "site-fixture", siteName: "Fixture Site", canonicalOrigin: "https://example.com", language: "en", profileDigest: "4".repeat(64) };
+}
+function completeQaChecks(route: string, manifestSetDigest: string, repositorySha: string, failingCheck?: string): ProductionQaCheckResult[] {
+  return REQUIRED_PRODUCTION_QA_GATES.map((gate) => {
+    const subject = gate.scope === "page" ? route : gate.scope === "site" ? manifestSetDigest : repositorySha;
+    const group = gate.checkId.split(".")[0] as ProductionQaCheckResult["group"];
+    return bindQaCheck({ checkId: gate.checkId, group, verdict: gate.checkId === failingCheck ? "FAIL" : "PASS", detail: "test evidence", evidence: [] }, { scope: gate.scope, subject, tool: "test-runner", toolVersion: "1" });
+  });
 }
 
 async function seedProject(dbInst: Awaited<ReturnType<typeof setupMigratedTestDatabase>>, key: string) {
@@ -191,16 +208,16 @@ async function setupLiveAuthority(
   const planId = `vap-${key}`;
   await dbInst.db.execute(sql`
     INSERT INTO visual_asset_plans (id, project_id, version, design_artifact_id, design_artifact_version, design_candidate_digest, design_input_digest, design_provider_mode, slots, plan_digest)
-    VALUES (${planId}, ${projectId}, 1, ${designId}, 1, ${"a".repeat(64)}, ${"b".repeat(64)}, 'live', '[]'::jsonb, ${"c".repeat(64)})
+    VALUES (${planId}, ${projectId}, 1, ${designId}, ${accepted.version}, ${accepted.candidateDigest}, ${accepted.inputDigest}, 'live', '[]'::jsonb, ${"c".repeat(64)})
   `);
   const set = await visualStore.createAcceptedSetAtomic({
     projectId,
     planId,
     providerMode: "live",
     designArtifactId: designId,
-    designArtifactVersion: 1,
-    designCandidateDigest: "a".repeat(64),
-    designInputDigest: "b".repeat(64),
+    designArtifactVersion: accepted.version,
+    designCandidateDigest: accepted.candidateDigest,
+    designInputDigest: accepted.inputDigest,
     slots: [
       {
         slot: "hero.primary",
@@ -242,7 +259,7 @@ test("PG: production input derivation fails closed without accepted content", as
       production.deriveProductionInput({
         projectId,
         pageSlug: "home",
-        canonicalOrigin: "https://example.com",
+        siteIdentity: siteIdentity(),
         rendererVersion: "astro-7.2.9",
         rendererPolicyVersion: "production-policy-v1",
       }),
@@ -259,7 +276,7 @@ test("PG: production input derives from the exact accepted authority chain and i
     const input1 = await env.production.deriveProductionInput({
       projectId: env.projectId,
       pageSlug: "home",
-      canonicalOrigin: "https://example.com",
+      siteIdentity: siteIdentity(),
       rendererVersion: "astro-7.2.9",
       rendererPolicyVersion: "production-policy-v1",
     });
@@ -274,7 +291,7 @@ test("PG: production input derives from the exact accepted authority chain and i
     const input2 = await env.production.deriveProductionInput({
       projectId: env.projectId,
       pageSlug: "home",
-      canonicalOrigin: "https://example.com",
+      siteIdentity: siteIdentity(),
       rendererVersion: "astro-7.2.9",
       rendererPolicyVersion: "production-policy-v1",
     });
@@ -298,7 +315,7 @@ test("PG: fixture authority cannot masquerade as production authority (fail clos
       env.production.deriveProductionInput({
         projectId: env.projectId,
         pageSlug: "home",
-        canonicalOrigin: "https://example.com",
+        siteIdentity: siteIdentity(),
         rendererVersion: "astro-7.2.9",
         rendererPolicyVersion: "production-policy-v1",
       }),
@@ -349,7 +366,7 @@ test("PG: route authority conflict — a different page identity cannot claim a 
     const homeInput = await env.production.deriveProductionInput({
       projectId: env.projectId,
       pageSlug: "home",
-      canonicalOrigin: "https://example.com",
+      siteIdentity: siteIdentity(),
       rendererVersion: "astro-7.2.9",
       rendererPolicyVersion: "production-policy-v1",
     });
@@ -359,18 +376,18 @@ test("PG: route authority conflict — a different page identity cannot claim a 
       env.production.deriveProductionInput({
         projectId: env.projectId,
         pageSlug: "home-alt",
-        canonicalOrigin: "https://example.com",
+        siteIdentity: siteIdentity(),
         rendererVersion: "astro-7.2.9",
         rendererPolicyVersion: "production-policy-v1",
       }),
       (e) => isCode(e, "production_route_conflict") || isCode(e, "production_authority_stale"),
     );
-    // DB-level route uniqueness backstop: a second page identity claiming
-    // the same route violates the UNIQUE(project_id, route) constraint.
+    // DB-level stable route owner backstop: historical input versions may
+    // coexist, but a different page identity cannot claim the route.
     await assert.rejects(
       env.dbInst.db.execute(sql`
-        INSERT INTO production_page_inputs (id, project_id, version, page_identity, page_type, route, canonical_origin, accepted_content_id, accepted_content_version, accepted_content_digest, accepted_design_id, accepted_design_version, accepted_design_digest, accepted_visual_set_id, accepted_visual_set_version, accepted_visual_set_digest, renderer_id, renderer_version, renderer_policy_version, data, input_digest)
-        VALUES ('ppin-conflict', ${env.projectId}, 99, 'home-alt', 'homepage', '/home', 'https://example.com', 'wacc-x', 1, ${"1".repeat(64)}, ${env.designId}, 1, ${env.designDigest}, ${env.setId}, 1, ${env.setDigest}, 'astro-static', 'astro-7.2.9', 'production-policy-v1', '{}'::jsonb, ${"2".repeat(64)})
+        INSERT INTO production_route_authorities (project_id, route, page_identity)
+        VALUES (${env.projectId}, '/home', 'home-alt')
       `),
     );
   } finally {
@@ -384,7 +401,7 @@ test("PG: candidate creation is refused for stale authority and succeeds for cur
     const input = await env.production.deriveProductionInput({
       projectId: env.projectId,
       pageSlug: "home",
-      canonicalOrigin: "https://example.com",
+      siteIdentity: siteIdentity(),
       rendererVersion: "astro-7.2.9",
       rendererPolicyVersion: "production-policy-v1",
     });
@@ -399,7 +416,7 @@ test("PG: candidate creation is refused for stale authority and succeeds for cur
 
     // Candidate creation from the stale input fails closed.
     await assert.rejects(
-      env.production.createCandidate({ projectId: env.projectId, productionInputId: reread.id }),
+      env.production.createCandidate({ projectId: env.projectId, productionInputId: reread.id, ...CANDIDATE_IDENTITY }),
       (e) => isCode(e, "production_authority_stale"),
     );
   } finally {
@@ -413,13 +430,14 @@ test("PG: candidate lifecycle — create, build-record, QA record, state transit
     const input = await env.production.deriveProductionInput({
       projectId: env.projectId,
       pageSlug: "home",
-      canonicalOrigin: "https://example.com",
+      siteIdentity: siteIdentity(),
       rendererVersion: "astro-7.2.9",
       rendererPolicyVersion: "production-policy-v1",
     });
     const candidate = await env.production.createCandidate({
       projectId: env.projectId,
       productionInputId: input.id,
+      ...CANDIDATE_IDENTITY,
     });
     assert.equal(candidate.state, "pending");
     assert.equal(candidate.canonicalUrl, "https://example.com/home");
@@ -431,6 +449,10 @@ test("PG: candidate lifecycle — create, build-record, QA record, state transit
       artifactDigest: "a".repeat(64),
       artifactRef: "/tmp/dist",
       assetReferences: [],
+      manifestSetDigest: MANIFEST_SET_DIGEST,
+      candidateInputs: [{ productionInputId: input.id, productionInputVersion: input.version, productionInputDigest: input.inputDigest, pageIdentity: input.pageIdentity, route: input.route, manifestDigest: "5".repeat(64) }],
+      redirectRules: [],
+      redirectSnapshotDigest: deterministicDigest({ projectId: env.projectId, rules: [] }),
     });
     await assert.rejects(
       env.production.recordBuild({
@@ -439,17 +461,55 @@ test("PG: candidate lifecycle — create, build-record, QA record, state transit
         artifactDigest: "b".repeat(64),
         artifactRef: "/tmp/dist2",
         assetReferences: [],
+        manifestSetDigest: MANIFEST_SET_DIGEST,
+        candidateInputs: [{ productionInputId: input.id, productionInputVersion: input.version, productionInputDigest: input.inputDigest, pageIdentity: input.pageIdentity, route: input.route, manifestDigest: "5".repeat(64) }],
+        redirectRules: [],
+        redirectSnapshotDigest: deterministicDigest({ projectId: env.projectId, rules: [] }),
       }),
       (e) => isCode(e, "production_build_rejected"),
     );
 
-    // QA PASS transitions to qa_passed.
+    await assert.rejects(
+      env.production.recordQaRun({
+        projectId: env.projectId, candidateId: candidate.id,
+        checks: [bindQaCheck({ checkId: "content.sections_complete", group: "content", verdict: "PASS", detail: "incomplete", evidence: [] }, { scope: "page", subject: input.route, tool: "test-runner", toolVersion: "1" })],
+        evaluatedArtifactDigest: "a".repeat(64), manifestSetDigest: MANIFEST_SET_DIGEST,
+        redirectSnapshotDigest: deterministicDigest({ projectId: env.projectId, rules: [] }), repositorySha: REPOSITORY_SHA, lockfileDigest: LOCKFILE_DIGEST, pageRoutes: [input.route],
+      }),
+      (e) => isCode(e, "production_qa_failed"),
+      "a partial PASS report must never accept the candidate",
+    );
+
+    const passingChecks = completeQaChecks(input.route, MANIFEST_SET_DIGEST, REPOSITORY_SHA);
+    await assert.rejects(
+      env.production.recordQaRun({
+        projectId: env.projectId, candidateId: candidate.id, checks: passingChecks,
+        evaluatedArtifactDigest: "a".repeat(64), manifestSetDigest: MANIFEST_SET_DIGEST,
+        redirectSnapshotDigest: deterministicDigest({ projectId: env.projectId, rules: [] }),
+        repositorySha: REPOSITORY_SHA, lockfileDigest: LOCKFILE_DIGEST, pageRoutes: [input.route],
+      }),
+      (e) => isCode(e, "production_qa_failed"),
+      "caller-supplied trusted verdicts must not substitute for persisted candidate-bound evidence",
+    );
+    for (const check of passingChecks.filter((entry) => TRUSTED_PRODUCTION_QA_GATES.some((gate) => gate.checkId === entry.checkId))) {
+      await env.production.recordTrustedQaEvidence({
+        projectId: env.projectId,
+        candidateId: candidate.id,
+        check,
+        artifactDigest: check.scope === "repository" ? undefined : "a".repeat(64),
+        repositorySha: check.scope === "repository" ? REPOSITORY_SHA : undefined,
+        lockfileDigest: check.scope === "repository" ? LOCKFILE_DIGEST : undefined,
+      });
+    }
+
+    // QA PASS transitions to qa_passed only after trusted evidence exists.
     await env.production.recordQaRun({
       projectId: env.projectId,
       candidateId: candidate.id,
-      checks: [
-        { checkId: "content.sections_complete", group: "content", verdict: "PASS", detail: "ok", evidence: [] },
-      ],
+      checks: passingChecks,
+      evaluatedArtifactDigest: "a".repeat(64), manifestSetDigest: MANIFEST_SET_DIGEST,
+      redirectSnapshotDigest: deterministicDigest({ projectId: env.projectId, rules: [] }),
+      repositorySha: REPOSITORY_SHA, lockfileDigest: LOCKFILE_DIGEST, pageRoutes: [input.route],
     });
     const passed = (await env.production.getCandidate(env.projectId, candidate.id))!;
     assert.equal(passed.state, "qa_passed");
@@ -458,9 +518,10 @@ test("PG: candidate lifecycle — create, build-record, QA record, state transit
     await env.production.recordQaRun({
       projectId: env.projectId,
       candidateId: candidate.id,
-      checks: [
-        { checkId: "seo.canonical", group: "seo", verdict: "FAIL", detail: "canonical mismatch", evidence: [] },
-      ],
+      checks: completeQaChecks(input.route, MANIFEST_SET_DIGEST, REPOSITORY_SHA, "seo.canonical"),
+      evaluatedArtifactDigest: "a".repeat(64), manifestSetDigest: MANIFEST_SET_DIGEST,
+      redirectSnapshotDigest: deterministicDigest({ projectId: env.projectId, rules: [] }),
+      repositorySha: REPOSITORY_SHA, lockfileDigest: LOCKFILE_DIGEST, pageRoutes: [input.route],
     });
     const failed = (await env.production.getCandidate(env.projectId, candidate.id))!;
     assert.equal(failed.state, "qa_failed");
@@ -494,13 +555,13 @@ test("PG: concurrent candidate creation serializes through the project advisory 
     const input = await env.production.deriveProductionInput({
       projectId: env.projectId,
       pageSlug: "home",
-      canonicalOrigin: "https://example.com",
+      siteIdentity: siteIdentity(),
       rendererVersion: "astro-7.2.9",
       rendererPolicyVersion: "production-policy-v1",
     });
     const [a, b] = await Promise.all([
-      env.production.createCandidate({ projectId: env.projectId, productionInputId: input.id }),
-      env.production.createCandidate({ projectId: env.projectId, productionInputId: input.id }),
+      env.production.createCandidate({ projectId: env.projectId, productionInputId: input.id, ...CANDIDATE_IDENTITY }),
+      env.production.createCandidate({ projectId: env.projectId, productionInputId: input.id, ...CANDIDATE_IDENTITY }),
     ]);
     assert.notEqual(a.id, b.id);
     assert.equal(a.productionInputId, input.id);
@@ -516,7 +577,7 @@ test("PG: stale accepted content blocks candidate creation (negative authority t
     const input = await env.production.deriveProductionInput({
       projectId: env.projectId,
       pageSlug: "home",
-      canonicalOrigin: "https://example.com",
+      siteIdentity: siteIdentity(),
       rendererVersion: "astro-7.2.9",
       rendererPolicyVersion: "production-policy-v1",
     });
@@ -525,10 +586,37 @@ test("PG: stale accepted content blocks candidate creation (negative authority t
     const staleness = await env.production.inputStaleness(input);
     assert.equal(staleness.stale, true, "new accepted content version must make old input stale");
     await assert.rejects(
-      env.production.createCandidate({ projectId: env.projectId, productionInputId: input.id }),
+      env.production.createCandidate({ projectId: env.projectId, productionInputId: input.id, ...CANDIDATE_IDENTITY }),
       (e) => isCode(e, "production_authority_stale"),
     );
   } finally {
     await closeEnv(env);
   }
+});
+
+test("PG: a newer accepted design makes retained historical production input stale", async () => {
+  const env = await setupLiveAuthority(await setupMigratedTestDatabase(), "prod-design-stale", "home");
+  try {
+    const input = await env.production.deriveProductionInput({ projectId: env.projectId, pageSlug: "home", siteIdentity: siteIdentity(), rendererVersion: "7.2.9", rendererPolicyVersion: "production-policy-v2" });
+    const designStore = new DesignStore(env.dbInst.db);
+    const snapshot = await designStore.deriveInputSnapshotDraft({ projectId: env.projectId });
+    const candidate = await designStore.createCandidate({ projectId: env.projectId, inputSnapshot: snapshot, data: parseDesignCandidateData({ ...candidateData("home"), providerMode: "live", providerProjectName: "projects/live-new" }) });
+    await env.dbInst.db.execute(sql`UPDATE design_candidates SET provider_mode = 'live' WHERE id = ${candidate.id}`);
+    await designStore.acceptCandidate({ projectId: env.projectId, candidateId: candidate.id, expectedCandidateDigest: candidate.candidateDigest, reviewNotes: "superseding live design" });
+    assert.equal((await env.production.inputStaleness(input)).stale, true);
+  } finally { await closeEnv(env); }
+});
+
+test("PG: a newer accepted visual set makes retained historical production input stale", async () => {
+  const env = await setupLiveAuthority(await setupMigratedTestDatabase(), "prod-visual-stale", "home");
+  try {
+    const input = await env.production.deriveProductionInput({ projectId: env.projectId, pageSlug: "home", siteIdentity: siteIdentity(), rendererVersion: "7.2.9", rendererPolicyVersion: "production-policy-v2" });
+    const visual = new VisualStore(env.dbInst.db);
+    const currentSet = (await visual.latestAcceptedSet(env.projectId))!;
+    const [slot] = await visual.listAcceptedSlots(currentSet.id);
+    const planId = "vap-prod-visual-stale-2";
+    await env.dbInst.db.execute(sql`INSERT INTO visual_asset_plans (id, project_id, version, design_artifact_id, design_artifact_version, design_candidate_digest, design_input_digest, design_provider_mode, slots, plan_digest) VALUES (${planId}, ${env.projectId}, 2, ${currentSet.designArtifactId}, ${currentSet.designArtifactVersion}, ${currentSet.designCandidateDigest}, ${currentSet.designInputDigest}, 'live', '[]'::jsonb, ${"6".repeat(64)})`);
+    await visual.createAcceptedSetAtomic({ projectId: env.projectId, planId, providerMode: "live", designArtifactId: currentSet.designArtifactId, designArtifactVersion: currentSet.designArtifactVersion, designCandidateDigest: currentSet.designCandidateDigest, designInputDigest: currentSet.designInputDigest, slots: [{ slot: slot!.slot, pageSlug: slot!.pageSlug, role: slot!.role, resolvedVersionId: slot!.resolvedVersionId, binaryDigest: slot!.binaryDigest, governanceDigest: slot!.governanceDigest, resolutionMode: slot!.resolutionMode as "reuse_real", truthClass: slot!.truthClass as "documentary" | "documentary_edited" | "illustrative" | "decorative" | "data_visualization" }] });
+    assert.equal((await env.production.inputStaleness(input)).stale, true);
+  } finally { await closeEnv(env); }
 });

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { canonicalOriginSchema } from "./site-profile.js";
+import { siteProfileLanguageSchema, siteNameSchema } from "./site-profile.js";
 import { designArchetypeKindSchema } from "./design.js";
 import { qaVerdictSchema } from "./writer-content.js";
 
@@ -58,6 +59,17 @@ export const productionAuthorityRefSchema = z
   .strict();
 export type ProductionAuthorityRef = z.infer<typeof productionAuthorityRefSchema>;
 
+export const productionSiteIdentitySchema = z
+  .object({
+    siteId: productionIdSchema,
+    siteName: siteNameSchema,
+    canonicalOrigin: canonicalOriginSchema,
+    language: siteProfileLanguageSchema,
+    profileDigest: productionDigestSchema,
+  })
+  .strict();
+export type ProductionSiteIdentity = z.infer<typeof productionSiteIdentitySchema>;
+
 export const productionRendererIdentitySchema = z
   .object({
     id: productionRendererIdSchema,
@@ -79,8 +91,8 @@ export const productionPageInputDataSchema = z
     pageType: designArchetypeKindSchema,
     /** The single production route for this page. */
     route: productionRouteSchema,
-    /** Production origin for canonical/OG/sitemap/structured-data URLs. */
-    canonicalOrigin: canonicalOriginSchema,
+    /** Exact validated repository-owned site identity used by the build. */
+    siteIdentity: productionSiteIdentitySchema,
     acceptedContent: productionAuthorityRefSchema,
     acceptedDesign: productionAuthorityRefSchema,
     acceptedVisualSet: productionAuthorityRefSchema,
@@ -236,6 +248,12 @@ export const productionQaCheckResultSchema = z
     checkId: productionQaCheckIdSchema,
     group: qaGateGroupSchema,
     verdict: qaVerdictSchema,
+    scope: z.enum(["page", "site", "repository"]).optional(),
+    /** Route for page scope; manifest-set digest or repository SHA otherwise. */
+    subject: z.string().trim().min(1).max(300).optional(),
+    tool: z.string().trim().min(1).max(100).optional(),
+    toolVersion: z.string().trim().min(1).max(100).optional(),
+    executionDigest: productionDigestSchema.optional(),
     detail: z.string().min(1).max(2000),
     evidence: z.array(qaCheckEvidenceRefSchema).max(50),
   })
@@ -246,7 +264,7 @@ export const productionQaReportDataSchema = z
   .object({
     schemaVersion: z.literal(PRODUCTION_SCHEMA_VERSION),
     candidateId: productionIdSchema,
-    checks: z.array(productionQaCheckResultSchema).max(200),
+    checks: z.array(productionQaCheckResultSchema).max(10_000),
     /** Overall verdict: FAIL if any FAIL; REVIEW if any REVIEW; else PASS. */
     overall: qaVerdictSchema,
   })

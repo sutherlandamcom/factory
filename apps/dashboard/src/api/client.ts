@@ -1350,16 +1350,16 @@ export const productionApi = {
       `/api/projects/${encodeURIComponent(projectId)}/production/workspace`,
     ),
 
-  deriveInput: (projectId: string, pageSlug: string, canonicalOrigin: string) =>
+  deriveInput: (projectId: string, pageSlug: string) =>
     request<{ id: string; version: number; route: string; inputDigest: string }>(
       `/api/projects/${encodeURIComponent(projectId)}/production/derive-input`,
-      { method: "POST", body: JSON.stringify({ pageSlug, canonicalOrigin }) },
+      { method: "POST", body: JSON.stringify({ pageSlug }) },
     ),
 
-  prepareCandidate: (projectId: string, pageSlug: string, canonicalOrigin: string) =>
+  prepareCandidate: (projectId: string, pageSlug: string) =>
     request<{ candidateId: string; inputId: string; inputVersion: number; stale: boolean }>(
       `/api/projects/${encodeURIComponent(projectId)}/production/prepare-candidate`,
-      { method: "POST", body: JSON.stringify({ pageSlug, canonicalOrigin }) },
+      { method: "POST", body: JSON.stringify({ pageSlug }) },
     ),
 
   buildCandidate: (projectId: string, candidateId: string) =>

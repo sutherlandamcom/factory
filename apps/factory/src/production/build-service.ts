@@ -1,287 +1,200 @@
-import { readFile, readdir, stat } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { cp, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import type { FactoryDb } from "../persistence/db.js";
 import { FactoryError } from "../executor/errors.js";
 import { runProcess } from "../executor/process.js";
 import { deterministicDigest } from "../intelligence/digest.js";
+import { parseAcceptedPageContentData } from "@factory/contracts";
 import { ProductionStore } from "./store.js";
-import {
-  ProductionRenderCompiler,
-  type ProductionRenderManifest,
-} from "./render-manifest.js";
+import { ProductionRenderCompiler, type ProductionRenderManifest } from "./render-manifest.js";
 import { emitSitemapAndRobots } from "./seo-engine.js";
-
-/**
- * PRODUCTION BUILD SERVICE — Macro Run 9 (Phase 2).
- *
- * Orchestrates the deterministic production build:
- *
- *   ProductionPageInput (validated, current)
- *     -> ProductionCandidate (immutable, pending)
- *     -> ProductionRenderManifest (verbatim authority projection)
- *     -> `astro build` (static renderer; the ONLY ordinary renderer per Run 8)
- *     -> normalized artifact digest + cache-policy metadata
- *     -> candidate marked built
- *
- * No LLM/provider call happens anywhere in this path. The build is a pure
- * deterministic function of the accepted authority + renderer version.
- */
+import { loadProductionBuildIdentity } from "./identity.js";
+import { PageAuthorityReader } from "../writer/page-authority.js";
 
 export interface ProductionBuildResult {
   candidateId: string;
   artifactDigest: string;
+  manifestSetDigest: string;
   routeCount: number;
   htmlRoutes: string[];
   buildDurationMs: number;
 }
 
-const RENDERER_VERSION = "astro-7.2.9";
-const RENDERER_POLICY_VERSION = "production-policy-v1";
-
 export class ProductionBuildService {
   private readonly compiler: ProductionRenderCompiler;
-
-  constructor(
-    private readonly db: FactoryDb,
-    private readonly repoRoot: string,
-  ) {
+  constructor(private readonly db: FactoryDb, private readonly repoRoot: string) {
     this.compiler = new ProductionRenderCompiler(db, repoRoot);
   }
 
-  /**
-   * Derive (or reuse) the ProductionPageInput for a page and create its
-   * candidate. Stale upstream authority fails closed — never silently
-   * rebuilds under new authority while preserving candidate identity.
-   */
-  async prepareCandidate(input: {
-    projectId: string;
-    pageSlug: string;
-    canonicalOrigin: string;
-  }): Promise<{ candidateId: string; inputId: string; inputVersion: number; stale: boolean }> {
+  async prepareCandidate(input: { projectId: string; pageSlug: string }) {
+    const identity = await loadProductionBuildIdentity(this.repoRoot);
     const store = new ProductionStore(this.db);
     const productionInput = await store.deriveProductionInput({
       projectId: input.projectId,
       pageSlug: input.pageSlug,
-      canonicalOrigin: input.canonicalOrigin,
-      rendererVersion: RENDERER_VERSION,
-      rendererPolicyVersion: RENDERER_POLICY_VERSION,
+      siteIdentity: identity.siteIdentity,
+      rendererVersion: identity.rendererVersion,
+      rendererPolicyVersion: identity.rendererPolicyVersion,
     });
     const staleness = await store.inputStaleness(productionInput);
-    if (staleness.stale) {
-      throw buildError("production_authority_stale", staleness.reason ?? "Production input is stale.");
-    }
+    if (staleness.stale) throw buildError("production_authority_stale", staleness.reason ?? "Production input is stale.");
     const candidate = await store.createCandidate({
       projectId: input.projectId,
       productionInputId: productionInput.id,
+      repositorySha: identity.repositorySha,
+      lockfileDigest: identity.lockfileDigest,
     });
-    return {
-      candidateId: candidate.id,
-      inputId: productionInput.id,
-      inputVersion: productionInput.version,
-      stale: false,
-    };
+    return { candidateId: candidate.id, inputId: productionInput.id, inputVersion: productionInput.version, stale: false };
   }
 
-  /**
-   * Build one candidate: compile the render manifest, run the Astro build,
-   * compute the normalized artifact digest, and mark the candidate built.
-   */
   async buildCandidate(input: { projectId: string; candidateId: string }): Promise<ProductionBuildResult> {
-    const store = new ProductionStore(this.db);
-    const candidate = await store.getCandidate(input.projectId, input.candidateId);
-    if (!candidate) {
-      throw buildError("production_candidate_not_found", "Candidate not found.");
-    }
-    if (candidate.state !== "pending") {
-      throw buildError(
-        "production_build_rejected",
-        `Candidate ${candidate.id} is ${candidate.state}; only pending candidates can build.`,
-      );
-    }
-
     const startedAt = Date.now();
-    const manifest = await this.compiler.compileManifest({
-      projectId: input.projectId,
-      productionInputId: candidate.productionInputId,
-    });
-    await this.compiler.writeManifest(manifest);
-
-    // Deterministic Astro static build (Run 8 renderer authority). The
-    // manifest directory is passed explicitly: the renderer consumes ONLY
-    // manifests produced by the trusted compiler.
-    const siteDir = path.join(this.repoRoot, "sites", "starter");
-    const manifestDir = path.join(siteDir, ".factory-production");
-    const result = await runProcess("pnpm", ["run", "build"], {
-      cwd: siteDir,
-      env: {
-        ...process.env,
-        FACTORY_PRODUCTION_MANIFEST_DIR: manifestDir,
-      },
-      timeoutMs: 300_000,
-    });
-    if (result.exitCode !== 0) {
-      throw buildError(
-        "production_build_rejected",
-        `Astro build failed (exit ${result.exitCode}): ${result.stderr.slice(-2000)}`,
-      );
-    }
-
-    const distDir = path.join(siteDir, "dist");
-    const htmlRoutes = await collectHtmlRoutes(distDir);
-
-    // Authority-derived sitemap/robots: regenerate from ALL manifests the
-    // build consumed (route authority), never from filesystem routes. This
-    // overwrites the generic Astro-integration output for production builds.
-    const allManifests = await this.compiler.readAllManifests(manifestDir);
-    await emitSitemapAndRobots({
-      manifests: allManifests,
-      distDir,
-      siteName: "Factory Production Site",
-    });
-
-    const artifactDigest = await computeArtifactDigest(distDir);
-    const assetReferences = manifest.assets.map((asset) => ({
-      slot: asset.slot,
-      role: asset.role,
-      versionId: asset.versionId,
-      binaryDigest: asset.binaryDigest,
-      governanceDigest: asset.governanceDigest,
-      publicPath: asset.publicPath,
-    }));
-
-    await store.recordBuild({
-      projectId: input.projectId,
-      candidateId: candidate.id,
-      artifactDigest,
-      artifactRef: distDir,
-      assetReferences,
-    });
-
-    await writeCachePolicyMetadata(this.repoRoot, {
-      projectId: input.projectId,
-      routes: htmlRoutes,
-    });
-
-    return {
-      candidateId: candidate.id,
-      artifactDigest,
-      routeCount: htmlRoutes.length,
-      htmlRoutes,
-      buildDurationMs: Date.now() - startedAt,
-    };
-  }
-
-  async loadManifest(input: { projectId: string; candidateId: string }): Promise<ProductionRenderManifest> {
     const store = new ProductionStore(this.db);
     const candidate = await store.getCandidate(input.projectId, input.candidateId);
     if (!candidate) throw buildError("production_candidate_not_found", "Candidate not found.");
-    const manifest = await this.compiler.compileManifest({
-      projectId: input.projectId,
-      productionInputId: candidate.productionInputId,
-    });
-    return manifest;
+    if (candidate.state !== "pending") throw buildError("production_build_rejected", `Candidate ${candidate.id} is ${candidate.state}; only pending candidates can build.`);
+    if (!candidate.siteProfileDigest || !candidate.rendererVersion || !candidate.repositorySha || !candidate.lockfileDigest) {
+      throw buildError("production_build_rejected", "Candidate predates immutable build identity.");
+    }
+    const currentIdentity = await loadProductionBuildIdentity(this.repoRoot);
+    if (currentIdentity.siteIdentity.profileDigest !== candidate.siteProfileDigest || currentIdentity.rendererVersion !== candidate.rendererVersion || currentIdentity.repositorySha !== candidate.repositorySha || currentIdentity.lockfileDigest !== candidate.lockfileDigest) {
+      throw buildError("production_authority_stale", "Repository, site profile, renderer, or lockfile identity changed after candidate preparation.");
+    }
+
+    const candidatesDir = path.join(this.repoRoot, ".factory", "production", "projects", safeSegment(input.projectId), "candidates");
+    const finalDir = path.join(candidatesDir, safeSegment(candidate.id));
+    const stagingDir = path.join(candidatesDir, `.${safeSegment(candidate.id)}.staging-${randomUUID()}`);
+    if (await exists(finalDir)) throw buildError("production_build_rejected", `Immutable candidate directory already exists: ${candidate.id}`);
+    const manifestDir = path.join(stagingDir, "manifests");
+    const assetDir = path.join(stagingDir, "assets");
+    const distDir = path.join(stagingDir, "dist");
+    await mkdir(manifestDir, { recursive: true });
+    try {
+      const allInputs = await store.listProductionInputs(input.projectId);
+      const latestByPage = new Map<string, typeof allInputs[number]>();
+      for (const row of allInputs) if (!latestByPage.has(row.pageIdentity)) latestByPage.set(row.pageIdentity, row);
+      const siteInputs = [...latestByPage.values()].sort((a, b) => a.route.localeCompare(b.route));
+      const currentPages = await new PageAuthorityReader(this.db).currentPages(input.projectId);
+      const currentPageIdentities = [...currentPages.map((page) => page.slug)].sort();
+      const inputPageIdentities = [...siteInputs.map((row) => row.pageIdentity)].sort();
+      if (currentPageIdentities.join("\0") !== inputPageIdentities.join("\0")) {
+        throw buildError("production_authority_stale", "Current accepted pages and current production inputs do not form one complete site snapshot.");
+      }
+      if (!siteInputs.some((row) => row.id === candidate.productionInputId)) {
+        throw buildError("production_authority_stale", "Candidate target is no longer in the current site input set.");
+      }
+      const registry: Array<{ route: string; title: string }> = [];
+      for (const row of siteInputs) {
+        if (row.siteProfileDigest !== candidate.siteProfileDigest || row.rendererVersion !== candidate.rendererVersion) {
+          throw buildError("production_authority_stale", `Site input ${row.id} uses a different site or renderer identity.`);
+        }
+        const bundle = await store.deriveAuthorityBundle({ projectId: input.projectId, pageSlug: row.pageIdentity });
+        registry.push({ route: row.route, title: parseAcceptedPageContentData(bundle.content.data).content.title });
+      }
+      const manifests: ProductionRenderManifest[] = [];
+      for (const row of siteInputs) {
+        const manifest = await this.compiler.compileManifest({
+          projectId: input.projectId,
+          productionInputId: row.id,
+          assetSnapshotDir: assetDir,
+          registry,
+        });
+        await this.compiler.writeManifest(manifest, manifestDir);
+        manifests.push(manifest);
+      }
+      const manifestSetDigest = deterministicDigest(manifests.map((manifest) => ({ inputId: manifest.input.id, route: manifest.input.route, manifestDigest: manifest.manifestDigest })));
+      const redirectRules: Array<{ source: string; destination: string; kind: "permanent" | "temporary" }> = [];
+      const redirectSnapshotDigest = deterministicDigest({ projectId: input.projectId, rules: redirectRules });
+
+      const siteDir = path.join(this.repoRoot, "sites", "starter");
+      const result = await runProcess("pnpm", ["run", "build"], {
+        cwd: siteDir,
+        env: {
+          ...process.env,
+          FACTORY_PRODUCTION_MANIFEST_DIR: manifestDir,
+          FACTORY_PRODUCTION_OUT_DIR: distDir,
+          FACTORY_PRODUCTION_SITE_PROFILE_DIGEST: candidate.siteProfileDigest,
+          PUBLIC_SITE_URL: manifests[0]!.input.siteIdentity.canonicalOrigin,
+        },
+        timeoutMs: 300_000,
+      });
+      if (result.exitCode !== 0) throw buildError("production_build_rejected", `Astro build failed (exit ${result.exitCode}): ${result.stderr.slice(-2000)}`);
+      if (await exists(assetDir)) await cp(assetDir, path.join(distDir, "production-assets"), { recursive: true, errorOnExist: true, force: false });
+      await emitSitemapAndRobots({ manifests, distDir, siteName: manifests[0]!.input.siteIdentity.siteName });
+      const htmlRoutes = await collectHtmlRoutes(distDir);
+      const expectedRoutes = manifests.map((manifest) => manifest.input.route).sort();
+      if (htmlRoutes.filter((route) => route !== "/404").join("\0") !== expectedRoutes.join("\0")) {
+        throw buildError("production_build_rejected", `Astro route set differs from candidate snapshot: ${htmlRoutes.join(", ")}`);
+      }
+      const artifactDigest = await computeArtifactDigest(distDir);
+      const finalIdentity = await loadProductionBuildIdentity(this.repoRoot);
+      if (finalIdentity.siteIdentity.profileDigest !== candidate.siteProfileDigest || finalIdentity.rendererVersion !== candidate.rendererVersion || finalIdentity.repositorySha !== candidate.repositorySha || finalIdentity.lockfileDigest !== candidate.lockfileDigest) {
+        throw buildError("production_authority_stale", "Repository, site profile, renderer, or lockfile identity changed during candidate build.");
+      }
+      await writeFile(path.join(stagingDir, "build-metadata.json"), JSON.stringify({ candidateId: candidate.id, projectId: input.projectId, repositorySha: candidate.repositorySha, lockfileDigest: candidate.lockfileDigest, rendererVersion: candidate.rendererVersion, siteProfileDigest: candidate.siteProfileDigest, manifestSetDigest, redirectSnapshotDigest, artifactDigest }, null, 2), { encoding: "utf8", flag: "wx" });
+      await mkdir(candidatesDir, { recursive: true });
+      await rename(stagingDir, finalDir);
+      const finalDistDir = path.join(finalDir, "dist");
+      await store.recordBuild({
+        projectId: input.projectId,
+        candidateId: candidate.id,
+        artifactDigest,
+        artifactRef: finalDistDir,
+        assetReferences: manifests.flatMap((manifest) => manifest.assets.map((asset) => ({ ...asset, route: manifest.input.route }))),
+        manifestSetDigest,
+        candidateInputs: manifests.map((manifest) => ({ productionInputId: manifest.input.id, productionInputVersion: manifest.input.version, productionInputDigest: manifest.input.digest, pageIdentity: manifest.input.pageIdentity, route: manifest.input.route, manifestDigest: manifest.manifestDigest })),
+        redirectRules,
+        redirectSnapshotDigest,
+      });
+      return { candidateId: candidate.id, artifactDigest, manifestSetDigest, routeCount: expectedRoutes.length, htmlRoutes: expectedRoutes, buildDurationMs: Date.now() - startedAt };
+    } catch (error) {
+      if (await exists(stagingDir)) await rm(stagingDir, { recursive: true, force: true });
+      throw error;
+    }
+  }
+
+  async loadManifests(input: { projectId: string; candidateId: string }): Promise<ProductionRenderManifest[]> {
+    const candidate = await new ProductionStore(this.db).getCandidate(input.projectId, input.candidateId);
+    if (!candidate?.artifactRef) throw buildError("production_candidate_not_found", "Built candidate not found.");
+    return await this.compiler.readAllManifests(path.join(path.dirname(candidate.artifactRef), "manifests"));
   }
 }
 
-// ---------------------------------------------------------------------------
-// Artifact digest (normalized deterministic surface)
-// ---------------------------------------------------------------------------
-
-async function collectHtmlRoutes(distDir: string): Promise<string[]> {
+export async function collectHtmlRoutes(distDir: string): Promise<string[]> {
   const routes: string[] = [];
   async function walk(dir: string, prefix: string): Promise<void> {
-    const entries = await readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await walk(full, `${prefix}/${entry.name}`);
-      } else if (entry.name === "index.html") {
-        // Astro directory format: <route>/index.html.
-        routes.push(prefix === "" ? "/" : prefix);
-      } else if (entry.name.endsWith(".html")) {
-        const relative = `${prefix}/${entry.name}`.replace(/\.html$/, "");
-        routes.push(relative === "/index" ? "/" : relative);
-      }
+      if (entry.isDirectory()) await walk(full, `${prefix}/${entry.name}`);
+      else if (entry.name === "index.html") routes.push(prefix === "" ? "/" : prefix);
+      else if (entry.name.endsWith(".html")) routes.push(`${prefix}/${entry.name}`.replace(/\.html$/, ""));
     }
   }
   await walk(distDir, "");
   return routes.sort();
 }
 
-/**
- * Normalized deterministic artifact digest: sha256 over the canonical JSON
- * of { routes, per-route normalized HTML }. The HTML normalization strips
- * Astro/Vite incidental nondeterminism (module hashes in asset URLs) while
- * keeping the semantic surface (structure, text, metadata, asset refs).
- * Byte-level HTML determinism is verified separately in the determinism test.
- */
-async function computeArtifactDigest(distDir: string): Promise<string> {
-  const routes = await collectHtmlRoutes(distDir);
-  const surface: Array<{ route: string; html: string }> = [];
-  for (const route of routes) {
-    const file = route === "/" ? path.join(distDir, "index.html") : path.join(distDir, route.slice(1) + ".html");
-    const html = await readFile(file, "utf8");
-    surface.push({ route, html: normalizeHtml(html) });
+export async function computeArtifactDigest(root: string): Promise<string> {
+  const files: Array<{ path: string; digest: string }> = [];
+  async function walk(dir: string): Promise<void> {
+    for (const entry of (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) await walk(full);
+      else if (entry.isFile()) files.push({ path: path.relative(root, full).split(path.sep).join("/"), digest: createHash("sha256").update(await readFile(full)).digest("hex") });
+    }
   }
-  return deterministicDigest(surface);
+  await walk(root);
+  return deterministicDigest(files);
 }
 
-function normalizeHtml(html: string): string {
-  return html
-    // Vite hashed asset references are incidental build data, not semantics.
-    .replace(/\/_astro\/[^"']+\.([a-zA-Z0-9]+)\.(css|js|woff2?|jpg|png|webp|svg)/g, "/_astro/norm.$2")
-    .replace(/production-assets\/[0-9a-f]{64}\.jpg/g, "production-assets/norm.jpg")
-    .replace(/\s+/g, " ");
+async function exists(target: string): Promise<boolean> {
+  try { await lstat(target); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
 }
 
-// ---------------------------------------------------------------------------
-// Cache-policy metadata artifact for Run 13 (no Publish action here)
-// ---------------------------------------------------------------------------
-
-async function writeCachePolicyMetadata(
-  repoRoot: string,
-  input: { projectId: string; routes: string[] },
-): Promise<void> {
-  const { mkdir, writeFile } = await import("node:fs/promises");
-  const entries = [
-    ...input.routes.map((route) => ({
-      target: route,
-      kind: "html" as const,
-      maxAgeSeconds: 0,
-    })),
-    {
-      target: "/_astro/*",
-      kind: "immutable_asset" as const,
-      maxAgeSeconds: 31536000,
-    },
-    {
-      target: "/production-assets/*",
-      kind: "immutable_asset" as const,
-      maxAgeSeconds: 31536000,
-    },
-  ];
-  const payload = {
-    schemaVersion: "production-v1" as const,
-    projectId: input.projectId,
-    entries,
-  };
-  const dir = path.join(repoRoot, ".factory", "production");
-  await mkdir(dir, { recursive: true });
-  await writeFile(
-    path.join(dir, `cache-policy-${sanitize(input.projectId)}.json`),
-    JSON.stringify(payload, null, 2),
-    "utf8",
-  );
+function safeSegment(value: string): string {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9-]{0,127}$/.test(value)) throw buildError("production_build_rejected", `Unsafe artifact identity: ${value}`);
+  return value;
 }
 
-function sanitize(value: string): string {
-  return value.replace(/[^a-z0-9-]+/gi, "-");
-}
-
-function buildError(code: string, message: string): FactoryError {
-  return new FactoryError(code, message);
-}
-
-// Re-export for tests asserting exact digest semantics.
-export { createHash };
+function buildError(code: string, message: string): FactoryError { return new FactoryError(code, message); }

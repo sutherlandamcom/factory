@@ -14,7 +14,9 @@ import assert from "node:assert/strict";
  * axe coverage is not a full WCAG conformance claim.
  */
 
-const distDir = path.resolve(import.meta.dirname, "../dist");
+const distDir = process.env.FACTORY_QA_ARTIFACT_DIR
+  ? path.resolve(process.env.FACTORY_QA_ARTIFACT_DIR)
+  : path.resolve(import.meta.dirname, "../dist");
 
 /** Collect built production routes from dist (directory format). */
 function collectRoutes(): string[] {

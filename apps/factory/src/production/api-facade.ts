@@ -57,11 +57,16 @@ export class ProductionApiFacade {
   }
 
   async workspace(projectId: string): Promise<ProductionWorkspaceView> {
+    const identity = await loadProductionBuildIdentity(this.repoRoot);
     const inputs = await this.store.listProductionInputs(projectId);
     const candidates = await this.store.listCandidates(projectId);
     const inputViews = [];
     for (const input of inputs) {
-      const staleness = await this.store.inputStaleness(input);
+      const staleness = await this.store.inputStaleness(input, {
+        siteProfileDigest: identity.siteIdentity.profileDigest,
+        rendererVersion: identity.rendererVersion,
+        rendererPolicyVersion: identity.rendererPolicyVersion,
+      });
       inputViews.push({
         id: input.id,
         version: input.version,
@@ -146,8 +151,9 @@ export class ProductionApiFacade {
       throw new FactoryError("production_qa_failed", "Candidate is missing immutable build identity.");
     }
     const currentIdentity = await loadProductionBuildIdentity(this.repoRoot);
-    if (currentIdentity.siteIdentity.profileDigest !== candidate.siteProfileDigest || currentIdentity.rendererVersion !== candidate.rendererVersion || currentIdentity.repositorySha !== candidate.repositorySha || currentIdentity.lockfileDigest !== candidate.lockfileDigest) {
-      throw new FactoryError("production_authority_stale", "Candidate repository, site profile, renderer, or lockfile identity is no longer current.");
+    const candidateStaleness = this.store.candidateStaleness(candidate, currentIdentity);
+    if (candidateStaleness.stale) {
+      throw new FactoryError("production_authority_stale", candidateStaleness.reason ?? "Candidate repository, site profile, renderer, or lockfile identity is no longer current.");
     }
     const manifests = await this.build.loadManifests(input);
     const manifestSetDigest = deterministicDigest(manifests.map((manifest) => ({ inputId: manifest.input.id, route: manifest.input.route, manifestDigest: manifest.manifestDigest })));

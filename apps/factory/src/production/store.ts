@@ -426,7 +426,24 @@ export class ProductionStore {
    */
   async inputStaleness(
     input: ProductionPageInputRecord,
+    currentEnvironment?: {
+      siteIdentity?: { profileDigest?: string | null };
+      siteProfileDigest?: string | null;
+      rendererVersion?: string | null;
+      rendererPolicyVersion?: string | null;
+    },
   ): Promise<{ stale: boolean; reason: string | null }> {
+    const profileDigest = currentEnvironment?.siteIdentity?.profileDigest ?? currentEnvironment?.siteProfileDigest;
+    if (profileDigest && input.siteProfileDigest && profileDigest !== input.siteProfileDigest) {
+      return { stale: true, reason: "Site profile changed or was superseded." };
+    }
+    if (currentEnvironment?.rendererVersion && input.rendererVersion && currentEnvironment.rendererVersion !== input.rendererVersion) {
+      return { stale: true, reason: "Renderer version changed or was superseded." };
+    }
+    if (currentEnvironment?.rendererPolicyVersion && input.rendererPolicyVersion && currentEnvironment.rendererPolicyVersion !== input.rendererPolicyVersion) {
+      return { stale: true, reason: "Renderer policy version changed or was superseded." };
+    }
+
     // Content: exact id/version/digest must still be the current accepted page.
     const pages = await new PageAuthorityReader(this.db).currentPages(input.projectId);
     const page = pages.find((row) => row.slug === input.pageIdentity);
@@ -473,6 +490,23 @@ export class ProductionStore {
     }
 
     return { stale: false, reason: null };
+  }
+
+  /**
+   * Check whether a candidate has become stale against the build identity
+   * (repositorySha, lockfileDigest, siteProfileDigest, rendererVersion).
+   */
+  candidateStaleness(
+    candidate: ProductionCandidateRecord,
+    currentIdentity: {
+      siteIdentity?: { profileDigest?: string | null };
+      siteProfileDigest?: string | null;
+      rendererVersion?: string | null;
+      repositorySha?: string | null;
+      lockfileDigest?: string | null;
+    },
+  ): { stale: boolean; reason: string | null } {
+    return candidateBuildStaleness(candidate, currentIdentity);
   }
 
   // ---- ProductionCandidate ---------------------------------------------------
@@ -887,6 +921,36 @@ function normalizeRoute(pageSlug: string): string {
 
 function productionError(code: string, message: string): FactoryError {
   return new FactoryError(code, message);
+}
+
+/**
+ * Check whether a candidate has become stale against the build identity
+ * (repositorySha, lockfileDigest, siteProfileDigest, rendererVersion).
+ */
+export function candidateBuildStaleness(
+  candidate: ProductionCandidateRecord,
+  currentIdentity: {
+    siteIdentity?: { profileDigest?: string | null };
+    siteProfileDigest?: string | null;
+    rendererVersion?: string | null;
+    repositorySha?: string | null;
+    lockfileDigest?: string | null;
+  },
+): { stale: boolean; reason: string | null } {
+  const profileDigest = currentIdentity.siteIdentity?.profileDigest ?? currentIdentity.siteProfileDigest;
+  if (profileDigest && candidate.siteProfileDigest && profileDigest !== candidate.siteProfileDigest) {
+    return { stale: true, reason: "Site profile changed after candidate preparation." };
+  }
+  if (currentIdentity.rendererVersion && candidate.rendererVersion && currentIdentity.rendererVersion !== candidate.rendererVersion) {
+    return { stale: true, reason: "Renderer version changed after candidate preparation." };
+  }
+  if (currentIdentity.repositorySha && candidate.repositorySha && currentIdentity.repositorySha !== candidate.repositorySha) {
+    return { stale: true, reason: "Repository SHA changed after candidate preparation." };
+  }
+  if (currentIdentity.lockfileDigest && candidate.lockfileDigest && currentIdentity.lockfileDigest !== candidate.lockfileDigest) {
+    return { stale: true, reason: "Lockfile digest changed after candidate preparation." };
+  }
+  return { stale: false, reason: null };
 }
 
 // Re-export digest helper for deterministic candidate artifact digests.

@@ -15,10 +15,18 @@ import { ProjectIntakeStore } from "../../src/operator/intake-store.js";
 import { buildIntakePayload } from "../fixtures/intake-payloads.js";
 import { FactoryError } from "../../src/executor/errors.js";
 import { parseDesignCandidateData, type DesignCandidateData, type ProductionQaCheckResult } from "@factory/contracts";
-import { VisualStore } from "../../src/visual/store.js";
-import { ProductionStore } from "../../src/production/store.js";
+import { VisualStore, visualSetDigest } from "../../src/visual/store.js";
+import { ProductionStore, candidateBuildStaleness } from "../../src/production/store.js";
+import { VisualService } from "../../src/visual/service.js";
+import { VisualBudgetStore } from "../../src/visual/budget.js";
+import { FixtureVisualAssetProvider } from "../../src/visual/fixture-adapter.js";
+import { createVisualCandidateStorage } from "../../src/visual/candidate-storage.js";
 import type { FactoryDatabaseInstance } from "../../src/persistence/db.js";
 import { bindQaCheck, REQUIRED_PRODUCTION_QA_GATES, TRUSTED_PRODUCTION_QA_GATES } from "../../src/production/qa/registry.js";
+
+class OfflineLiveVisualAssetProvider extends FixtureVisualAssetProvider {
+  override readonly providerMode = "live" as const;
+}
 
 /**
  * Run 9 persistence suite — real PostgreSQL (dedicated factory_test DB).
@@ -619,4 +627,351 @@ test("PG: a newer accepted visual set makes retained historical production input
     await visual.createAcceptedSetAtomic({ projectId: env.projectId, planId, providerMode: "live", designArtifactId: currentSet.designArtifactId, designArtifactVersion: currentSet.designArtifactVersion, designCandidateDigest: currentSet.designCandidateDigest, designInputDigest: currentSet.designInputDigest, slots: [{ slot: slot!.slot, pageSlug: slot!.pageSlug, role: slot!.role, resolvedVersionId: slot!.resolvedVersionId, binaryDigest: slot!.binaryDigest, governanceDigest: slot!.governanceDigest, resolutionMode: slot!.resolutionMode as "reuse_real", truthClass: slot!.truthClass as "documentary" | "documentary_edited" | "illustrative" | "decorative" | "data_visualization" }] });
     assert.equal((await env.production.inputStaleness(input)).stale, true);
   } finally { await closeEnv(env); }
+});
+
+async function setupLiveVisualService(
+  dbInst: Awaited<ReturnType<typeof setupMigratedTestDatabase>>,
+  key: string,
+  pageSlug: string,
+  options?: { preBound?: boolean },
+) {
+  const preBound = options?.preBound ?? true;
+  const { projectId } = await seedProjectWithAcceptedInputs(dbInst, key);
+  await acceptFixturePage(dbInst, projectId, pageSlug);
+  const root = await mkdtemp(path.join(tmpdir(), `prod-vis-svc-${key}-`));
+
+  const assetsModule = await import("../../src/assets/service.js");
+  const assetStorageModule = await import("../../src/assets/storage.js");
+  const sharp = (await import("sharp")).default;
+  const assets = new assetsModule.AssetService({
+    store: new (await import("../../src/assets/asset-store.js")).AssetStore(dbInst.db),
+    storage: assetStorageModule.createAssetStorage(root),
+  });
+
+  const bytes = await sharp({
+    create: { width: 1600, height: 900, channels: 3, background: { r: 40, g: 50, b: 60 } },
+  })
+    .jpeg()
+    .toBuffer();
+  const upload = await assets.uploadAsset(projectId, {
+    filename: "hero.jpg",
+    kind: "photo",
+    title: "Hero Image",
+    rightsStatus: "operator_owned",
+    dataBase64: bytes.toString("base64"),
+  });
+  const approved = await assets.approveVersion(projectId, upload.version.id, upload.version.binaryDigest);
+
+  if (preBound) {
+    await assets.assignVersion(projectId, {
+      ...(await assignmentPage(dbInst, projectId, pageSlug, approved.governanceDigest!)),
+      assetId: upload.asset.id,
+      versionId: approved.id,
+      pageSlug,
+      role: "hero",
+      expectedBinaryDigest: approved.binaryDigest,
+    });
+  }
+
+  const designStore = new DesignStore(dbInst.db);
+  const snapshot = await designStore.deriveInputSnapshotDraft({ projectId });
+  const fixtureData = candidateData(pageSlug);
+  if (preBound) {
+    fixtureData.archetypes[0]!.assetSlots[0] = {
+      slot: "hero.primary",
+      requirement: `Approved asset for ${pageSlug}/hero`,
+      pageSlug,
+      role: "hero",
+      requiredRole: "hero",
+      boundAssetVersionId: approved.id,
+      boundBinaryDigest: approved.binaryDigest,
+      boundGovernanceDigest: approved.governanceDigest!,
+      providerConsumed: false,
+      designProviderReferencedFinalAsset: true,
+      designProviderConsumedFinalAsset: false,
+      placeholder: false,
+    };
+  }
+  const liveData = parseDesignCandidateData({
+    ...fixtureData,
+    providerMode: "live",
+    providerProjectName: "projects/live",
+  });
+  const candidate = await designStore.createCandidate({
+    projectId,
+    inputSnapshot: snapshot,
+    data: liveData,
+  });
+  await dbInst.db.execute(
+    sql`UPDATE design_candidates SET provider_mode = 'live' WHERE id = ${candidate.id}`,
+  );
+  const acceptedDesign = await designStore.acceptCandidate({
+    projectId,
+    candidateId: candidate.id,
+    expectedCandidateDigest: candidate.candidateDigest,
+    reviewNotes: "live acceptance for visual service test",
+  });
+
+  const store = new VisualStore(dbInst.db);
+  const budget = new VisualBudgetStore(dbInst.db);
+  const provider = new OfflineLiveVisualAssetProvider();
+  const visual = new VisualService({
+    store,
+    designStore,
+    assets,
+    budget,
+    provider,
+    repoRoot: root,
+    storage: createVisualCandidateStorage(root),
+  });
+
+  return {
+    dbInst,
+    projectId,
+    root,
+    assets,
+    approved,
+    acceptedDesign,
+    visual,
+    store,
+    production: new ProductionStore(dbInst.db),
+  };
+}
+
+test("PG INTEGRATION: real Run7 accepted visual set roundtrips through production authority into Run9", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const env = await setupLiveVisualService(dbInst, "r7r9-reuse", "home", { preBound: true });
+  try {
+    // Run 7 real service path: Case A (reuse_real)
+    const plan = await env.visual.derivePlan({ projectId: env.projectId });
+    await env.visual.confirmClassification({
+      projectId: env.projectId,
+      planId: plan.id,
+      slot: "hero.primary",
+      truthClass: "documentary",
+    });
+    await env.visual.resolveReuse({
+      projectId: env.projectId,
+      planId: plan.id,
+      slot: "hero.primary",
+      versionId: env.approved.id,
+    });
+
+    const set = await env.visual.acceptSet({ projectId: env.projectId, planId: plan.id });
+    assert.equal(set.version, 1);
+    assert.ok(set.setDigest);
+
+    // Verify row verification via requireProductionVisualSet (checks canonical digest)
+    const verified = await env.store.requireProductionVisualSet(env.projectId, set.id, set.setDigest);
+    assert.equal(verified.set.id, set.id);
+    assert.equal(verified.slots.length, 1);
+    assert.equal(verified.slots[0]!.slot, "hero.primary");
+    assert.equal(verified.slots[0]!.resolvedVersionId, env.approved.id);
+    assert.equal(verified.slots[0]!.binaryDigest, env.approved.binaryDigest);
+    assert.equal(verified.slots[0]!.governanceDigest, env.approved.governanceDigest);
+    assert.equal(verified.slots[0]!.resolutionMode, "reuse_real");
+    assert.equal(verified.slots[0]!.truthClass, "documentary");
+    assert.equal(verified.slots[0]!.visualProviderConsumedSourceAsset, false);
+    assert.equal(verified.slots[0]!.visualProviderProducedAsset, false);
+    assert.equal(verified.slots[0]!.promptSnapshotId, null);
+    assert.equal(verified.slots[0]!.generationRequestId, null);
+    assert.equal(verified.slots[0]!.candidateId, null);
+
+    // Seam continuation into Run 9: ProductionStore deriveAuthorityBundle & deriveProductionInput
+    const bundle = await env.production.deriveAuthorityBundle({ projectId: env.projectId, pageSlug: "home" });
+    assert.equal(bundle.visualSet.id, set.id);
+    assert.equal(bundle.visualSet.digest, set.setDigest);
+
+    const productionInput = await env.production.deriveProductionInput({
+      projectId: env.projectId,
+      pageSlug: "home",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "7.2.9",
+      rendererPolicyVersion: "production-policy-v2",
+    });
+    assert.equal(productionInput.acceptedVisualSetId, set.id);
+    assert.equal(productionInput.acceptedVisualSetDigest, set.setDigest);
+
+    const staleness = await env.production.inputStaleness(productionInput);
+    assert.equal(staleness.stale, false, "derived production input from real Run 7 service must be fresh");
+  } finally {
+    await env.dbInst.close();
+    await rm(env.root, { recursive: true, force: true });
+  }
+});
+
+test("PG INTEGRATION: real Run7 provider/generated visual set with populated provenance roundtrips into Run9", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const env = await setupLiveVisualService(dbInst, "r7r9-gen", "home", { preBound: false });
+  try {
+    // Run 7 real service path: Case B (ai_generate with real provenance)
+    const plan = await env.visual.derivePlan({ projectId: env.projectId });
+    await env.visual.confirmClassification({
+      projectId: env.projectId,
+      planId: plan.id,
+      slot: "hero.primary",
+      truthClass: "illustrative",
+    });
+    const snapshot = await env.visual.compilePromptSnapshot({
+      projectId: env.projectId,
+      planId: plan.id,
+      slot: "hero.primary",
+      operation: "generate",
+    });
+    await env.visual.approvePromptSnapshot({
+      projectId: env.projectId,
+      snapshotId: snapshot.id,
+      expectedPromptDigest: snapshot.promptDigest,
+    });
+    const gen = await env.visual.generateForSlot({
+      projectId: env.projectId,
+      planId: plan.id,
+      slot: "hero.primary",
+    });
+    const candidate = gen.candidates[0]!;
+    await env.visual.acceptCandidate({
+      projectId: env.projectId,
+      planId: plan.id,
+      slot: "hero.primary",
+      candidateId: candidate.id,
+      expectedBinaryDigest: candidate.binaryDigest,
+    });
+
+    const set = await env.visual.acceptSet({ projectId: env.projectId, planId: plan.id });
+    assert.equal(set.version, 1);
+
+    // Verify slot rows contain real provenance (non-null candidateId, generationRequestId, promptSnapshotId)
+    // and that requireProductionVisualSet succeeds without digest divergence (P1-1 resolution)
+    const verified = await env.store.requireProductionVisualSet(env.projectId, set.id, set.setDigest);
+    assert.equal(verified.set.id, set.id);
+    assert.equal(verified.slots.length, 1);
+    assert.equal(verified.slots[0]!.slot, "hero.primary");
+    assert.equal(verified.slots[0]!.resolutionMode, "ai_generate");
+    assert.equal(verified.slots[0]!.truthClass, "illustrative");
+    assert.equal(verified.slots[0]!.visualProviderProducedAsset, true);
+    assert.ok(verified.slots[0]!.promptSnapshotId, "promptSnapshotId must be non-null");
+    assert.ok(verified.slots[0]!.generationRequestId, "generationRequestId must be non-null");
+    assert.ok(verified.slots[0]!.candidateId, "candidateId must be non-null");
+  } finally {
+    await env.dbInst.close();
+    await rm(env.root, { recursive: true, force: true });
+  }
+});
+
+test("PG: site profile change makes ProductionPageInput stale", async () => {
+  const env = await setupLiveAuthority(await setupMigratedTestDatabase(), "prod-site-profile-stale", "home");
+  try {
+    const input = await env.production.deriveProductionInput({
+      projectId: env.projectId,
+      pageSlug: "home",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "7.2.9",
+      rendererPolicyVersion: "production-policy-v2",
+    });
+    const staleness = await env.production.inputStaleness(input, {
+      siteProfileDigest: "f".repeat(64),
+    });
+    assert.equal(staleness.stale, true);
+    assert.equal(staleness.reason, "Site profile changed or was superseded.");
+  } finally {
+    await closeEnv(env);
+  }
+});
+
+test("PG: renderer version change makes ProductionPageInput stale", async () => {
+  const env = await setupLiveAuthority(await setupMigratedTestDatabase(), "prod-renderer-ver-stale", "home");
+  try {
+    const input = await env.production.deriveProductionInput({
+      projectId: env.projectId,
+      pageSlug: "home",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "7.2.9",
+      rendererPolicyVersion: "production-policy-v2",
+    });
+    const staleness = await env.production.inputStaleness(input, {
+      rendererVersion: "8.0.0",
+    });
+    assert.equal(staleness.stale, true);
+    assert.equal(staleness.reason, "Renderer version changed or was superseded.");
+  } finally {
+    await closeEnv(env);
+  }
+});
+
+test("PG: renderer policy change makes ProductionPageInput stale", async () => {
+  const env = await setupLiveAuthority(await setupMigratedTestDatabase(), "prod-renderer-policy-stale", "home");
+  try {
+    const input = await env.production.deriveProductionInput({
+      projectId: env.projectId,
+      pageSlug: "home",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "7.2.9",
+      rendererPolicyVersion: "production-policy-v2",
+    });
+    const staleness = await env.production.inputStaleness(input, {
+      rendererPolicyVersion: "production-policy-v99",
+    });
+    assert.equal(staleness.stale, true);
+    assert.equal(staleness.reason, "Renderer policy version changed or was superseded.");
+  } finally {
+    await closeEnv(env);
+  }
+});
+
+test("PG: repository SHA change makes candidate build/QA stale", async () => {
+  const env = await setupLiveAuthority(await setupMigratedTestDatabase(), "prod-repo-sha-stale", "home");
+  try {
+    const input = await env.production.deriveProductionInput({
+      projectId: env.projectId,
+      pageSlug: "home",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "7.2.9",
+      rendererPolicyVersion: "production-policy-v2",
+    });
+    const candidate = await env.production.createCandidate({
+      projectId: env.projectId,
+      productionInputId: input.id,
+      repositorySha: REPOSITORY_SHA,
+      lockfileDigest: LOCKFILE_DIGEST,
+    });
+    const staleness = env.production.candidateStaleness(candidate, {
+      siteProfileDigest: candidate.siteProfileDigest!,
+      rendererVersion: candidate.rendererVersion,
+      repositorySha: "9".repeat(40),
+      lockfileDigest: LOCKFILE_DIGEST,
+    });
+    assert.equal(staleness.stale, true);
+    assert.equal(staleness.reason, "Repository SHA changed after candidate preparation.");
+  } finally {
+    await closeEnv(env);
+  }
+});
+
+test("PG: lockfile digest change makes candidate build/QA stale", async () => {
+  const env = await setupLiveAuthority(await setupMigratedTestDatabase(), "prod-lockfile-stale", "home");
+  try {
+    const input = await env.production.deriveProductionInput({
+      projectId: env.projectId,
+      pageSlug: "home",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "7.2.9",
+      rendererPolicyVersion: "production-policy-v2",
+    });
+    const candidate = await env.production.createCandidate({
+      projectId: env.projectId,
+      productionInputId: input.id,
+      repositorySha: REPOSITORY_SHA,
+      lockfileDigest: LOCKFILE_DIGEST,
+    });
+    const staleness = env.production.candidateStaleness(candidate, {
+      siteProfileDigest: candidate.siteProfileDigest!,
+      rendererVersion: candidate.rendererVersion,
+      repositorySha: REPOSITORY_SHA,
+      lockfileDigest: "e".repeat(64),
+    });
+    assert.equal(staleness.stale, true);
+    assert.equal(staleness.reason, "Lockfile digest changed after candidate preparation.");
+  } finally {
+    await closeEnv(env);
+  }
 });

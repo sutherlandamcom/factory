@@ -6,7 +6,7 @@ import { FactoryError } from "../executor/errors.js";
 import { runProcess } from "../executor/process.js";
 import { deterministicDigest } from "../intelligence/digest.js";
 import { parseAcceptedPageContentData } from "@factory/contracts";
-import { ProductionStore } from "./store.js";
+import { ProductionStore, candidateBuildStaleness } from "./store.js";
 import { ProductionRenderCompiler, type ProductionRenderManifest } from "./render-manifest.js";
 import { emitSitemapAndRobots } from "./seo-engine.js";
 import { loadProductionBuildIdentity } from "./identity.js";
@@ -23,7 +23,11 @@ export interface ProductionBuildResult {
 
 export class ProductionBuildService {
   private readonly compiler: ProductionRenderCompiler;
-  constructor(private readonly db: FactoryDb, private readonly repoRoot: string) {
+
+  constructor(
+    private readonly db: FactoryDb,
+    private readonly repoRoot: string,
+  ) {
     this.compiler = new ProductionRenderCompiler(db, repoRoot);
   }
 
@@ -37,7 +41,11 @@ export class ProductionBuildService {
       rendererVersion: identity.rendererVersion,
       rendererPolicyVersion: identity.rendererPolicyVersion,
     });
-    const staleness = await store.inputStaleness(productionInput);
+    const staleness = await store.inputStaleness(productionInput, {
+      siteProfileDigest: identity.siteIdentity.profileDigest,
+      rendererVersion: identity.rendererVersion,
+      rendererPolicyVersion: identity.rendererPolicyVersion,
+    });
     if (staleness.stale) throw buildError("production_authority_stale", staleness.reason ?? "Production input is stale.");
     const candidate = await store.createCandidate({
       projectId: input.projectId,
@@ -58,8 +66,9 @@ export class ProductionBuildService {
       throw buildError("production_build_rejected", "Candidate predates immutable build identity.");
     }
     const currentIdentity = await loadProductionBuildIdentity(this.repoRoot);
-    if (currentIdentity.siteIdentity.profileDigest !== candidate.siteProfileDigest || currentIdentity.rendererVersion !== candidate.rendererVersion || currentIdentity.repositorySha !== candidate.repositorySha || currentIdentity.lockfileDigest !== candidate.lockfileDigest) {
-      throw buildError("production_authority_stale", "Repository, site profile, renderer, or lockfile identity changed after candidate preparation.");
+    const buildStaleness = candidateBuildStaleness(candidate, currentIdentity);
+    if (buildStaleness.stale) {
+      throw buildError("production_authority_stale", buildStaleness.reason ?? "Repository, site profile, renderer, or lockfile identity changed after candidate preparation.");
     }
 
     const candidatesDir = path.join(this.repoRoot, ".factory", "production", "projects", safeSegment(input.projectId), "candidates");
@@ -129,8 +138,9 @@ export class ProductionBuildService {
       }
       const artifactDigest = await computeArtifactDigest(distDir);
       const finalIdentity = await loadProductionBuildIdentity(this.repoRoot);
-      if (finalIdentity.siteIdentity.profileDigest !== candidate.siteProfileDigest || finalIdentity.rendererVersion !== candidate.rendererVersion || finalIdentity.repositorySha !== candidate.repositorySha || finalIdentity.lockfileDigest !== candidate.lockfileDigest) {
-        throw buildError("production_authority_stale", "Repository, site profile, renderer, or lockfile identity changed during candidate build.");
+      const finalStaleness = candidateBuildStaleness(candidate, finalIdentity);
+      if (finalStaleness.stale) {
+        throw buildError("production_authority_stale", finalStaleness.reason ?? "Repository, site profile, renderer, or lockfile identity changed during candidate build.");
       }
       await writeFile(path.join(stagingDir, "build-metadata.json"), JSON.stringify({ candidateId: candidate.id, projectId: input.projectId, repositorySha: candidate.repositorySha, lockfileDigest: candidate.lockfileDigest, rendererVersion: candidate.rendererVersion, siteProfileDigest: candidate.siteProfileDigest, manifestSetDigest, redirectSnapshotDigest, artifactDigest }, null, 2), { encoding: "utf8", flag: "wx" });
       await mkdir(candidatesDir, { recursive: true });

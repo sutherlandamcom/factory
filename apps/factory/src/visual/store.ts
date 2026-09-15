@@ -899,18 +899,7 @@ export class VisualStore {
     if (slots.length === 0) {
       throw visualError("visual_acceptance_failed", "Accepted visual set contains no slot rows.");
     }
-    const recomputedDigest = visualSetDigest(
-      slots.map((s) => ({
-        slot: s.slot,
-        pageSlug: s.pageSlug,
-        role: s.role,
-        resolvedVersionId: s.resolvedVersionId,
-        binaryDigest: s.binaryDigest,
-        governanceDigest: s.governanceDigest,
-        resolutionMode: s.resolutionMode,
-        truthClass: s.truthClass,
-      })),
-    );
+    const recomputedDigest = visualSetDigest(slots);
     if (recomputedDigest !== set.setDigest) {
       throw visualError(
         "visual_acceptance_failed",
@@ -950,26 +939,49 @@ export function visualRequestDigest(input: {
   });
 }
 
+export interface CanonicalVisualSetSlot {
+  slot: string;
+  pageSlug: string;
+  role: string;
+  resolvedVersionId: string;
+  binaryDigest: string;
+  governanceDigest: string;
+  resolutionMode: string;
+  truthClass: string;
+}
+
+/** Canonical authority projection for an accepted visual set slot. */
+export function canonicalVisualSetSlot(slot: CanonicalVisualSetSlot): CanonicalVisualSetSlot {
+  return {
+    slot: slot.slot,
+    pageSlug: slot.pageSlug,
+    role: slot.role,
+    resolvedVersionId: slot.resolvedVersionId,
+    binaryDigest: slot.binaryDigest,
+    governanceDigest: slot.governanceDigest,
+    resolutionMode: slot.resolutionMode,
+    truthClass: slot.truthClass,
+  };
+}
+
 /**
  * Compute the deterministic set digest from the EXACT accepted slot rows
  * (sorted by slot for order-stability). Both digests per slot are included
  * so binary/governance conflation is detectable at the digest level.
+ *
+ * Slots are explicitly normalized to the canonical authority projection
+ * before sorting and hashing, ensuring extra runtime/provenance keys
+ * (e.g. candidateId, promptSnapshotId, provider flags) cannot affect set identity.
  */
 export function visualSetDigest(
-  slots: Array<{
-    slot: string;
-    pageSlug: string;
-    role: string;
-    resolvedVersionId: string;
-    binaryDigest: string;
-    governanceDigest: string;
-    resolutionMode: string;
-    truthClass: string;
-  }>,
+  slots: CanonicalVisualSetSlot[],
 ): string {
+  const normalizedSlots = slots
+    .map((s) => canonicalVisualSetSlot(s))
+    .sort((a, b) => a.slot.localeCompare(b.slot));
   return deterministicDigest({
     setVersion: "visual-assets-v1",
-    slots: [...slots].sort((a, b) => a.slot.localeCompare(b.slot)),
+    slots: normalizedSlots,
   });
 }
 

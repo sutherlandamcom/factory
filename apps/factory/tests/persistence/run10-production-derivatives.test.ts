@@ -17,6 +17,8 @@ import { createAssetStorage } from "../../src/assets/storage.js";
 import { resolveRepositoryRoot } from "../../src/repo-root.js";
 import { parseDesignCandidateData, type DesignCandidateData } from "@factory/contracts";
 import type { FactoryDatabaseInstance } from "../../src/persistence/db.js";
+import { PageAuthorityReader } from "../../src/writer/page-authority.js";
+import { seedSyntheticProductionDerivativeSet } from "./run10-test-helpers.js";
 
 /**
  * RUN 10 PRODUCTION INTEGRATION — real PostgreSQL.
@@ -167,15 +169,9 @@ async function setupLiveAuthority(dbInst: FactoryDatabaseInstance, key: string, 
 }
 
 async function makeDerivativesService(dbInst: FactoryDatabaseInstance, repoRoot: string) {
-  const { FixtureAudioNarrationProvider: FixtureProvider } = await import("../../src/derivatives/audio-provider.js");
-  class OfflineLiveAudioProvider extends FixtureProvider {
-    override readonly providerMode = "live" as const;
-    override readonly isTestDouble = false as const;
-  }
   return new DerivativesService(dbInst.db, repoRoot, {
     budget: new WriterBudgetStore(dbInst.db),
     summary: { invoke: fixtureSummaryInvoke as never, dailyLimitUsd: 10 },
-    audioProvider: new OfflineLiveAudioProvider(),
     storage: createAssetStorage(repoRoot),
   });
 }
@@ -195,16 +191,14 @@ function fixtureSummaryInvoke(request: { prompt: string }) {
   };
 }
 
-async function acceptFullDerivatives(service: DerivativesService, projectId: string, pageIdentity: string) {
-  const { proposal } = await service.generateSummaryProposal({ projectId, pageIdentity });
-  await service.acceptSummary({ projectId, pageIdentity, proposalId: proposal.id });
-  // Generate/accept audio only when the effective policy enables it.
-  const { snapshot } = await service.deriveIntentSnapshot({ projectId, pageIdentity });
-  if (snapshot.effectiveAudioState === "enabled") {
-    const { candidate } = await service.generateAudioCandidate({ projectId, pageIdentity });
-    await service.acceptAudio({ projectId, pageIdentity, candidateId: candidate.id });
-  }
-  return service.acceptDerivativeSet({ projectId, pageIdentity });
+async function acceptFullDerivatives(dbInst: FactoryDatabaseInstance, repoRoot: string, projectId: string, pageIdentity: string) {
+  const pages = await new PageAuthorityReader(dbInst.db).currentPages(projectId);
+  const page = pages.find((p: { slug: string }) => p.slug === pageIdentity)!;
+  return seedSyntheticProductionDerivativeSet(dbInst.db, repoRoot, {
+    projectId,
+    pageIdentity,
+    sourceContent: { id: page.id, version: page.version, digest: page.contentDigest },
+  });
 }
 
 test("PG run10: no derivative policy → production-v1 input (Run 9 flow unchanged)", async () => {
@@ -238,7 +232,7 @@ test("PG run10: enabled policy + accepted derivatives → production-v2 binds ex
       summary: { enabled: true, language: "en", policyVersion: "summary-instructions-v1" },
       audio: { enabled: true, language: "en", voiceId: "fixture-voice-1", policyVersion: "narration-projection-v1" },
     });
-    const set = await acceptFullDerivatives(service, env.projectId, "home");
+    const set = await acceptFullDerivatives(dbInst, repoRoot, env.projectId, "home");
 
     const input = await env.production.deriveProductionInput({
       projectId: env.projectId,
@@ -305,7 +299,7 @@ test("PG run10: superseded derivative set → production input stale", async () 
       summary: { enabled: true, language: "en", policyVersion: "summary-instructions-v1" },
       audio: { enabled: false, language: "en", policyVersion: "narration-projection-v1" },
     });
-    await acceptFullDerivatives(service, env.projectId, "home");
+    await acceptFullDerivatives(dbInst, repoRoot, env.projectId, "home");
     const input1 = await env.production.deriveProductionInput({
       projectId: env.projectId,
       pageSlug: "home",
@@ -330,5 +324,43 @@ test("PG run10: superseded derivative set → production input stale", async () 
   } finally {
     await dbInst.close();
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("PG run10: policy drift makes deriveProductionInput fail immediately with production_authority_stale", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const env = await setupLiveAuthority(dbInst, "run10-pol-drift", "home");
+  try {
+    const repoRoot = await resolveRepositoryRoot();
+    const service = await makeDerivativesService(dbInst, repoRoot);
+    await service.updateProjectPolicy({
+      projectId: env.projectId,
+      summary: { enabled: true, language: "en", policyVersion: "summary-instructions-v1" },
+      audio: { enabled: false, language: "en", policyVersion: "narration-projection-v1" },
+    });
+    // Accept derivative set under policy v1
+    await acceptFullDerivatives(dbInst, repoRoot, env.projectId, "home");
+
+    // Policy mutates to v2 before deriveProductionInput is called:
+    await service.updateProjectPolicy({
+      projectId: env.projectId,
+      summary: { enabled: true, language: "en", policyVersion: "summary-instructions-v2" },
+      audio: { enabled: false, language: "en", policyVersion: "narration-projection-v1" },
+    });
+
+    // deriveProductionInput must verify fresh effective intent directly and fail early
+    await assert.rejects(
+      () =>
+        env.production.deriveProductionInput({
+          projectId: env.projectId,
+          pageSlug: "home",
+          siteIdentity: siteIdentity(),
+          rendererVersion: "astro-7.2.9",
+          rendererPolicyVersion: "production-policy-v1",
+        }),
+      (err: unknown) => isCode(err, "production_authority_stale"),
+    );
+  } finally {
+    await dbInst.close();
   }
 });

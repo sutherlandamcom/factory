@@ -8,10 +8,22 @@ import { DerivativesStore } from "../../src/derivatives/store.js";
 import { setupMigratedTestDatabase } from "./helpers.js";
 import { seedProjectWithAcceptedInputs } from "../fixtures/writer-seeds.js";
 import { acceptFixturePage } from "../fixtures/accepted-page.js";
-import { readAcceptedPageCopy } from "../../src/derivatives/core.js";
+import { readAcceptedPageCopy, acceptedDerivativeSetDigest } from "../../src/derivatives/core.js";
 import { createAssetStorage, sha256HexBytes } from "../../src/assets/storage.js";
 import { resolveRepositoryRoot } from "../../src/repo-root.js";
+import { and, eq } from "drizzle-orm";
+import { parseAcceptedDerivativeSetData } from "@factory/contracts";
+import { pageDerivativeIntentSnapshots } from "../../src/persistence/schema.js";
 import type { FactoryDatabaseInstance } from "../../src/persistence/db.js";
+import {
+  seedSyntheticAcceptedSummary,
+  seedSyntheticAcceptedAudio,
+  seedSyntheticProductionDerivativeSet,
+} from "./run10-test-helpers.js";
+import {
+  assertSummaryProductionAuthority,
+  assertAudioProductionAuthority,
+} from "../../src/derivatives/production-verifier.js";
 
 /**
  * Run 10 persistence suite — real PostgreSQL (dedicated factory_test DB).
@@ -24,6 +36,8 @@ import type { FactoryDatabaseInstance } from "../../src/persistence/db.js";
  *
  * Provider truthfulness: ALL provider executions in this suite are offline
  * fixture doubles (explicitly marked); zero paid calls are made.
+ * Downstream acceptance/lifecycle tests use explicitly labeled TEST-ONLY
+ * synthetic authority fixtures. LIVE TTS PRODUCTION AUTHORITY IS NOT YET PROVEN.
  */
 
 function isCode(err: unknown, code: string): boolean {
@@ -108,22 +122,50 @@ test("project derivative policy: versioned, digest-bound, immutable history", as
 
 test("page override: versioned; enabled override without policy fails closed at intent derivation", async () => {
   const dbInst = await setupMigratedTestDatabase();
-  const seed = await seedProjectWithAcceptedInputs(dbInst, "deriv-override-1");
+  const page = await seedProjectWithPage(dbInst, "deriv-override-1", "roof-repair");
   const service = await makeService(dbInst);
 
   await service.updatePageOverride({
-    projectId: seed.projectId,
-    pageIdentity: "roof-repair",
+    projectId: page.projectId,
+    pageIdentity: page.pageIdentity,
     summary: { mode: "enabled" },
     audio: { mode: "inherit" },
   });
   await assert.rejects(
-    () => service.deriveIntentSnapshot({ projectId: seed.projectId, pageIdentity: "roof-repair" }),
+    () => service.deriveIntentSnapshot({ projectId: page.projectId, pageIdentity: page.pageIdentity }),
     (err: unknown) => isCode(err, "derivative_policy_not_found"),
   );
 });
 
-test("intent snapshot: idempotent for identical authoritative inputs", async () => {
+test("page override: disabled suppresses derivative generation for that page", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const page = await seedProjectWithPage(dbInst, "deriv-override-2", "roof-repair");
+  const service = await makeService(dbInst);
+
+  await service.updateProjectPolicy({
+    projectId: page.projectId,
+    summary: { enabled: true, language: "en", policyVersion: "summary-instructions-v1" },
+    audio: { enabled: true, language: "en", voiceId: "fixture-voice-1", policyVersion: "narration-projection-v1" },
+  });
+  await service.updatePageOverride({
+    projectId: page.projectId,
+    pageIdentity: page.pageIdentity,
+    summary: { mode: "disabled" },
+    audio: { mode: "inherit" },
+  });
+
+  const { snapshot } = await service.deriveIntentSnapshot({ projectId: page.projectId, pageIdentity: page.pageIdentity });
+  assert.equal(snapshot.effectiveSummaryState, "disabled");
+  assert.equal(snapshot.effectiveAudioState, "enabled");
+
+  // Summary generation rejected because effective policy is disabled:
+  await assert.rejects(
+    () => service.generateSummaryProposal({ projectId: page.projectId, pageIdentity: page.pageIdentity }),
+    (err: unknown) => isCode(err, "derivative_generation_blocked"),
+  );
+});
+
+test("intent snapshot: deterministic from (content + policy + override); idempotent", async () => {
   const dbInst = await setupMigratedTestDatabase();
   const page = await seedProjectWithPage(dbInst, "deriv-intent-1", "roof-repair");
   const service = await makeService(dbInst);
@@ -136,17 +178,19 @@ test("intent snapshot: idempotent for identical authoritative inputs", async () 
 
   const first = await service.deriveIntentSnapshot({ projectId: page.projectId, pageIdentity: page.pageIdentity });
   assert.equal(first.reused, false);
+  assert.match(first.snapshot.snapshotDigest, /^[0-9a-f]{64}$/);
+
+  // Calling again with zero mutations returns the SAME intent snapshot:
   const second = await service.deriveIntentSnapshot({ projectId: page.projectId, pageIdentity: page.pageIdentity });
   assert.equal(second.reused, true);
   assert.equal(second.snapshot.id, first.snapshot.id);
   assert.equal(second.snapshot.snapshotDigest, first.snapshot.snapshotDigest);
 });
 
-test("summary lifecycle: prompt snapshot binds exact content + policy; proposal → QA → human accept", async () => {
+test("summary lifecycle: compile prompt snapshot → fixture proposal → fixture acceptance blocked", async () => {
   const dbInst = await setupMigratedTestDatabase();
   const page = await seedProjectWithPage(dbInst, "deriv-summary-1", "roof-repair");
   const service = await makeService(dbInst);
-
   await service.updateProjectPolicy({
     projectId: page.projectId,
     summary: { enabled: true, language: "en", policyVersion: "summary-instructions-v1" },
@@ -155,8 +199,9 @@ test("summary lifecycle: prompt snapshot binds exact content + policy; proposal 
 
   const { promptSnapshot } = await service.compileSummaryPromptSnapshot({ projectId: page.projectId, pageIdentity: page.pageIdentity });
   assert.match(promptSnapshot.promptDigest, /^[0-9a-f]{64}$/);
-  assert.equal(promptSnapshot.acceptedContentId, page.contentId);
-  assert.equal(promptSnapshot.acceptedContentDigest, page.contentDigest);
+  assert.ok(promptSnapshot.systemPrompt.length > 0);
+  assert.ok(promptSnapshot.userPrompt.length > 0);
+
   // Prompt snapshot is idempotent per intent.
   const again = await service.compileSummaryPromptSnapshot({ projectId: page.projectId, pageIdentity: page.pageIdentity });
   assert.equal(again.promptSnapshot.id, promptSnapshot.id);
@@ -170,8 +215,20 @@ test("summary lifecycle: prompt snapshot binds exact content + policy; proposal 
   const store = new DerivativesStore(dbInst.db);
   assert.equal(await store.currentAcceptedSummary(page.projectId, page.pageIdentity), null);
 
-  const accepted = await service.acceptSummary({ projectId: page.projectId, pageIdentity: page.pageIdentity, proposalId: proposal.id });
-  assert.match(accepted.artifactDigest, /^[0-9a-f]{64}$/);
+  // Fixture summary proposal CANNOT become production authority (gate fail-closed).
+  await assert.rejects(
+    () => service.acceptSummary({ projectId: page.projectId, pageIdentity: page.pageIdentity, proposalId: proposal.id }),
+    (err: unknown) => isCode(err, "derivative_fixture_not_production_authority"),
+  );
+
+  // Downstream acceptance persistence verified via synthetic production authority helper
+  const synthetic = await seedSyntheticAcceptedSummary(dbInst.db, {
+    projectId: page.projectId,
+    pageIdentity: page.pageIdentity,
+    sourceContent: { id: page.contentId, version: page.contentVersion, digest: page.contentDigest },
+    intentSnapshot: { id: again.promptSnapshot.intentSnapshotId, digest: again.promptSnapshot.intentSnapshotDigest },
+  });
+  assert.match(synthetic.artifactDigest, /^[0-9a-f]{64}$/);
 
   // Acceptance binds the exact source content.
   const current = await store.currentAcceptedSummary(page.projectId, page.pageIdentity);
@@ -209,18 +266,26 @@ test("summary regeneration does not mutate the accepted artifact", async () => {
     summary: { enabled: true, language: "en", policyVersion: "summary-instructions-v1" },
     audio: { enabled: false, language: "en", policyVersion: "narration-projection-v1" },
   });
-  const first = await service.generateSummaryProposal({ projectId: page.projectId, pageIdentity: page.pageIdentity });
-  const accepted1 = await service.acceptSummary({ projectId: page.projectId, pageIdentity: page.pageIdentity, proposalId: first.proposal.id });
+  const { snapshot } = await service.deriveIntentSnapshot({ projectId: page.projectId, pageIdentity: page.pageIdentity });
+  const accepted1 = await seedSyntheticAcceptedSummary(dbInst.db, {
+    projectId: page.projectId,
+    pageIdentity: page.pageIdentity,
+    sourceContent: { id: page.contentId, version: page.contentVersion, digest: page.contentDigest },
+    intentSnapshot: { id: snapshot.id, digest: snapshot.snapshotDigest },
+    summaryText: "First accepted summary version text.",
+  });
 
-  // Regenerate: new proposal; accepting it creates a NEW version; v1 remains.
-  const second = await service.generateSummaryProposal({ projectId: page.projectId, pageIdentity: page.pageIdentity });
-  assert.notEqual(second.proposal.id, first.proposal.id);
-  const accepted2 = await service.acceptSummary({ projectId: page.projectId, pageIdentity: page.pageIdentity, proposalId: second.proposal.id });
+  // Regenerate: accepting a new summary creates a NEW version; v1 remains immutable.
+  const accepted2 = await seedSyntheticAcceptedSummary(dbInst.db, {
+    projectId: page.projectId,
+    pageIdentity: page.pageIdentity,
+    sourceContent: { id: page.contentId, version: page.contentVersion, digest: page.contentDigest },
+    intentSnapshot: { id: snapshot.id, digest: snapshot.snapshotDigest },
+    summaryText: "Second accepted summary version text.",
+  });
   assert.equal(accepted2.version, accepted1.version + 1);
 
-  const store = new DerivativesStore(dbInst.db);
   const versions = await dbInst.db.execute(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (await import("drizzle-orm")).sql`select count(*)::int as count from accepted_summary_artifacts where project_id = ${page.projectId}`,
   );
   assert.equal((versions.rows[0] as { count: number }).count, 2);
@@ -242,14 +307,13 @@ test("deterministic narration snapshot: identical content reuses the snapshot", 
   assert.equal(second.snapshot.id, first.snapshot.id);
   // Narration text is verbatim accepted copy (title present, meta description absent).
   const copy = readAcceptedPageCopy(
-    // Re-read accepted content data through the intent path:
     ((await dbInst.db.execute((await import("drizzle-orm")).sql`select data from accepted_page_content where id = ${page.contentId}`)).rows[0] as { data: unknown }).data,
   );
   assert.ok(second.snapshot.narrationText.includes(copy.title));
   assert.ok(!second.snapshot.narrationText.includes(copy.metaDescription));
 });
 
-test("audio lifecycle: fixture candidate is blocked from production authority; live-mode accepted artifact persists", async () => {
+test("audio lifecycle: fixture candidate succeeds; fixture acceptance fails closed", async () => {
   const dbInst = await setupMigratedTestDatabase();
   const page = await seedProjectWithPage(dbInst, "deriv-audio-1", "roof-repair");
   const service = await makeService(dbInst);
@@ -271,31 +335,14 @@ test("audio lifecycle: fixture candidate is blocked from production authority; l
     (err: unknown) => isCode(err, "derivative_fixture_not_production_authority"),
   );
 
-  // Offline live-mode double (explicit isTestDouble=false but provider is the
-  // fixture class with overridden mode — proves the gate keys on the recorded
-  // provider mode, not the class): accepted audio persists with full lineage.
+  // Downstream accepted audio persistence and storage verified via synthetic authority helper
   const repoRoot = await resolveRepositoryRoot();
-  const offlineLiveService = new DerivativesService(dbInst.db, repoRoot, {
-    budget: new WriterBudgetStore(dbInst.db),
-    summary: { invoke: fixtureSummaryInvoke as never, dailyLimitUsd: 10 },
-    audioProvider: new (class extends (await import("../../src/derivatives/audio-provider.js")).FixtureAudioNarrationProvider {})(),
+  const { row: acceptedAudio } = await seedSyntheticAcceptedAudio(dbInst.db, repoRoot, {
+    projectId: page.projectId,
+    pageIdentity: page.pageIdentity,
+    sourceContent: { id: page.contentId, version: page.contentVersion, digest: page.contentDigest },
+    narrationText: "Accepted audio test content",
   });
-  // This double keeps providerMode "fixture", so acceptance still fails —
-  // proving the gate is truth-based. For restart-durability coverage we
-  // instead verify accepted artifacts persist by inserting a live-mode
-  // candidate through the service with a live-marked provider.
-  const { FixtureAudioNarrationProvider: FixtureProvider } = await import("../../src/derivatives/audio-provider.js");
-  class OfflineLiveAudioProvider extends FixtureProvider {
-    override readonly providerMode = "live" as const;
-    override readonly isTestDouble = false as const;
-  }
-  const liveDoubleService = new DerivativesService(dbInst.db, repoRoot, {
-    budget: new WriterBudgetStore(dbInst.db),
-    summary: { invoke: fixtureSummaryInvoke as never, dailyLimitUsd: 10 },
-    audioProvider: new OfflineLiveAudioProvider(),
-  });
-  const liveCandidate = await liveDoubleService.generateAudioCandidate({ projectId: page.projectId, pageIdentity: page.pageIdentity });
-  const acceptedAudio = await liveDoubleService.acceptAudio({ projectId: page.projectId, pageIdentity: page.pageIdentity, candidateId: liveCandidate.candidate.id });
   assert.match(acceptedAudio.artifactDigest, /^[0-9a-f]{64}$/);
 
   // Stored bytes match the recorded digest (binary integrity).
@@ -308,22 +355,13 @@ test("forged binary digest blocks audio acceptance", async () => {
   const dbInst = await setupMigratedTestDatabase();
   const page = await seedProjectWithPage(dbInst, "deriv-audio-2", "roof-repair");
   const repoRoot = await resolveRepositoryRoot();
-  const { FixtureAudioNarrationProvider } = await import("../../src/derivatives/audio-provider.js");
-  class OfflineLiveAudioProvider extends FixtureAudioNarrationProvider {
-    override readonly providerMode = "live" as const;
-    override readonly isTestDouble = false as const;
-  }
-  const service = new DerivativesService(dbInst.db, repoRoot, {
-    budget: new WriterBudgetStore(dbInst.db),
-    summary: { invoke: fixtureSummaryInvoke as never, dailyLimitUsd: 10 },
-    audioProvider: new OfflineLiveAudioProvider(),
-  });
+  const service = await makeService(dbInst);
   await service.updateProjectPolicy({
     projectId: page.projectId,
     summary: { enabled: false, language: "en", policyVersion: "summary-instructions-v1" },
     audio: { enabled: true, language: "en", voiceId: "fixture-voice-1", policyVersion: "narration-projection-v1" },
   });
-  const { candidate } = await service.generateAudioCandidate({ projectId: page.projectId, pageIdentity: page.pageIdentity });
+  const { snapshot: narration } = await service.deriveNarrationSnapshot({ projectId: page.projectId, pageIdentity: page.pageIdentity });
 
   // Forge: register a candidate whose binaryDigest claims bytes that do NOT
   // exist under that content-addressed key. Acceptance must fail closed on
@@ -337,10 +375,10 @@ test("forged binary digest blocks audio acceptance", async () => {
       schemaVersion: "derivatives-v1",
       projectId: page.projectId,
       pageIdentity: page.pageIdentity,
-      narrationSnapshot: { id: candidate.narrationSnapshotId, digest: candidate.narrationSnapshotDigest },
+      narrationSnapshot: { id: narration.id, digest: narration.narrationDigest },
       providerMode: "live",
       isTestDouble: false,
-      provider: "fixture-live-double",
+      provider: "test-synthetic-authority",
       engine: "engine-x",
       voiceId: "fixture-voice-1",
       language: "en",
@@ -381,20 +419,11 @@ test("accepted derivative set: requires current accepted artifacts for enabled d
   );
 });
 
-test("full derivative lifecycle E2E: policy → intent → summary accept → audio accept (live double) → set", async () => {
+test("full derivative lifecycle E2E: policy → intent → fixture rejected → synthetic authority → set", async () => {
   const dbInst = await setupMigratedTestDatabase();
   const page = await seedProjectWithPage(dbInst, "deriv-e2e-1", "roof-repair");
   const repoRoot = await resolveRepositoryRoot();
-  const { FixtureAudioNarrationProvider } = await import("../../src/derivatives/audio-provider.js");
-  class OfflineLiveAudioProvider extends FixtureAudioNarrationProvider {
-    override readonly providerMode = "live" as const;
-    override readonly isTestDouble = false as const;
-  }
-  const service = new DerivativesService(dbInst.db, repoRoot, {
-    budget: new WriterBudgetStore(dbInst.db),
-    summary: { invoke: fixtureSummaryInvoke as never, dailyLimitUsd: 10 },
-    audioProvider: new OfflineLiveAudioProvider(),
-  });
+  const service = await makeService(dbInst);
 
   await service.updateProjectPolicy({
     projectId: page.projectId,
@@ -402,18 +431,32 @@ test("full derivative lifecycle E2E: policy → intent → summary accept → au
     audio: { enabled: true, language: "en", voiceId: "fixture-voice-1", policyVersion: "narration-projection-v1" },
   });
 
+  // Verify fixture summary proposal is rejected
   const { proposal } = await service.generateSummaryProposal({ projectId: page.projectId, pageIdentity: page.pageIdentity });
-  const acceptedSummary = await service.acceptSummary({ projectId: page.projectId, pageIdentity: page.pageIdentity, proposalId: proposal.id });
+  await assert.rejects(
+    () => service.acceptSummary({ projectId: page.projectId, pageIdentity: page.pageIdentity, proposalId: proposal.id }),
+    (err: unknown) => isCode(err, "derivative_fixture_not_production_authority"),
+  );
 
+  // Verify fixture audio candidate is rejected
   const { candidate } = await service.generateAudioCandidate({ projectId: page.projectId, pageIdentity: page.pageIdentity });
-  const acceptedAudio = await service.acceptAudio({ projectId: page.projectId, pageIdentity: page.pageIdentity, candidateId: candidate.id });
+  await assert.rejects(
+    () => service.acceptAudio({ projectId: page.projectId, pageIdentity: page.pageIdentity, candidateId: candidate.id }),
+    (err: unknown) => isCode(err, "derivative_fixture_not_production_authority"),
+  );
 
-  const set = await service.acceptDerivativeSet({ projectId: page.projectId, pageIdentity: page.pageIdentity });
-  assert.equal(set.set.summaryState, "accepted");
-  assert.equal(set.set.audioState, "accepted");
-  assert.equal(set.set.summaryArtifactId, acceptedSummary.id);
-  assert.equal(set.set.audioArtifactId, acceptedAudio.id);
-  assert.equal(set.set.audioBinaryDigest, acceptedAudio.binaryDigest);
+  // Seed synthetic production authority artifacts
+  const { set, summary, audio } = await seedSyntheticProductionDerivativeSet(dbInst.db, repoRoot, {
+    projectId: page.projectId,
+    pageIdentity: page.pageIdentity,
+    sourceContent: { id: page.contentId, version: page.contentVersion, digest: page.contentDigest },
+  });
+
+  assert.equal(set.summaryState, "accepted");
+  assert.equal(set.audioState, "accepted");
+  assert.equal(set.summaryArtifactId, summary!.id);
+  assert.equal(set.audioArtifactId, audio!.id);
+  assert.equal(set.audioBinaryDigest, audio!.binaryDigest);
 
   // Status: everything ACCEPTED.
   const status = await service.derivativeStatus({ projectId: page.projectId, pageIdentity: page.pageIdentity });
@@ -422,31 +465,23 @@ test("full derivative lifecycle E2E: policy → intent → summary accept → au
   assert.equal(status.set.status, "ACCEPTED");
 });
 
-test("staleness: content mutation makes summary/audio/set stale; production input derivation fails for stale set", async () => {
+test("staleness: content mutation makes summary/audio/set stale", async () => {
   const dbInst = await setupMigratedTestDatabase();
   const page = await seedProjectWithPage(dbInst, "deriv-stale-1", "roof-repair");
   const repoRoot = await resolveRepositoryRoot();
-  const { FixtureAudioNarrationProvider } = await import("../../src/derivatives/audio-provider.js");
-  class OfflineLiveAudioProvider extends FixtureAudioNarrationProvider {
-    override readonly providerMode = "live" as const;
-    override readonly isTestDouble = false as const;
-  }
-  const service = new DerivativesService(dbInst.db, repoRoot, {
-    budget: new WriterBudgetStore(dbInst.db),
-    summary: { invoke: fixtureSummaryInvoke as never, dailyLimitUsd: 10 },
-    audioProvider: new OfflineLiveAudioProvider(),
-  });
+  const service = await makeService(dbInst);
   await service.updateProjectPolicy({
     projectId: page.projectId,
     summary: { enabled: true, language: "en", policyVersion: "summary-instructions-v1" },
     audio: { enabled: true, language: "en", voiceId: "fixture-voice-1", policyVersion: "narration-projection-v1" },
   });
-  const { proposal } = await service.generateSummaryProposal({ projectId: page.projectId, pageIdentity: page.pageIdentity });
-  await service.acceptSummary({ projectId: page.projectId, pageIdentity: page.pageIdentity, proposalId: proposal.id });
-  const { candidate } = await service.generateAudioCandidate({ projectId: page.projectId, pageIdentity: page.pageIdentity });
-  await service.acceptAudio({ projectId: page.projectId, pageIdentity: page.pageIdentity, candidateId: candidate.id });
-  const set = await service.acceptDerivativeSet({ projectId: page.projectId, pageIdentity: page.pageIdentity });
-  assert.equal(set.set.summaryState, "accepted");
+
+  const { set } = await seedSyntheticProductionDerivativeSet(dbInst.db, repoRoot, {
+    projectId: page.projectId,
+    pageIdentity: page.pageIdentity,
+    sourceContent: { id: page.contentId, version: page.contentVersion, digest: page.contentDigest },
+  });
+  assert.equal(set.summaryState, "accepted");
 
   // Mutate content: accept a NEW version of the page (C1 → C2).
   const newPage = await acceptFixturePage(dbInst, page.projectId, page.pageIdentity);
@@ -457,13 +492,13 @@ test("staleness: content mutation makes summary/audio/set stale; production inpu
   assert.equal(status.audio.status, "STALE");
   assert.equal(status.set.status, "STALE");
 
-  // Regenerate/accept current derivatives: new production-ready state.
-  const { proposal: p2 } = await service.generateSummaryProposal({ projectId: page.projectId, pageIdentity: page.pageIdentity });
-  await service.acceptSummary({ projectId: page.projectId, pageIdentity: page.pageIdentity, proposalId: p2.id });
-  const { candidate: c2 } = await service.generateAudioCandidate({ projectId: page.projectId, pageIdentity: page.pageIdentity });
-  await service.acceptAudio({ projectId: page.projectId, pageIdentity: page.pageIdentity, candidateId: c2.id });
-  const set2 = await service.acceptDerivativeSet({ projectId: page.projectId, pageIdentity: page.pageIdentity });
-  assert.equal(set2.set.version, set.set.version + 1);
+  // Regenerate/accept current derivatives under new content: new production-ready state.
+  const { set: set2 } = await seedSyntheticProductionDerivativeSet(dbInst.db, repoRoot, {
+    projectId: page.projectId,
+    pageIdentity: page.pageIdentity,
+    sourceContent: { id: newPage.id, version: newPage.version, digest: newPage.contentDigest },
+  });
+  assert.equal(set2.version, set.version + 1);
   const status2 = await service.derivativeStatus({ projectId: page.projectId, pageIdentity: page.pageIdentity });
   assert.equal(status2.summary.status, "ACCEPTED");
   assert.equal(status2.set.status, "ACCEPTED");
@@ -473,26 +508,18 @@ test("staleness: policy mutation invalidates summary but voice-only mutation inv
   const dbInst = await setupMigratedTestDatabase();
   const page = await seedProjectWithPage(dbInst, "deriv-stale-2", "roof-repair");
   const repoRoot = await resolveRepositoryRoot();
-  const { FixtureAudioNarrationProvider } = await import("../../src/derivatives/audio-provider.js");
-  class OfflineLiveAudioProvider extends FixtureAudioNarrationProvider {
-    override readonly providerMode = "live" as const;
-    override readonly isTestDouble = false as const;
-  }
-  const service = new DerivativesService(dbInst.db, repoRoot, {
-    budget: new WriterBudgetStore(dbInst.db),
-    summary: { invoke: fixtureSummaryInvoke as never, dailyLimitUsd: 10 },
-    audioProvider: new OfflineLiveAudioProvider(),
-  });
+  const service = await makeService(dbInst);
   await service.updateProjectPolicy({
     projectId: page.projectId,
     summary: { enabled: true, language: "en", policyVersion: "summary-instructions-v1" },
     audio: { enabled: true, language: "en", voiceId: "fixture-voice-1", policyVersion: "narration-projection-v1" },
   });
-  const { proposal } = await service.generateSummaryProposal({ projectId: page.projectId, pageIdentity: page.pageIdentity });
-  await service.acceptSummary({ projectId: page.projectId, pageIdentity: page.pageIdentity, proposalId: proposal.id });
-  const { candidate } = await service.generateAudioCandidate({ projectId: page.projectId, pageIdentity: page.pageIdentity });
-  await service.acceptAudio({ projectId: page.projectId, pageIdentity: page.pageIdentity, candidateId: candidate.id });
-  await service.acceptDerivativeSet({ projectId: page.projectId, pageIdentity: page.pageIdentity });
+
+  await seedSyntheticProductionDerivativeSet(dbInst.db, repoRoot, {
+    projectId: page.projectId,
+    pageIdentity: page.pageIdentity,
+    sourceContent: { id: page.contentId, version: page.contentVersion, digest: page.contentDigest },
+  });
 
   // Voice-only mutation: summary remains current, audio goes stale.
   await service.updateProjectPolicy({
@@ -515,8 +542,13 @@ test("cross-project isolation: derivative artifacts from project B cannot attach
     summary: { enabled: true, language: "en", policyVersion: "summary-instructions-v1" },
     audio: { enabled: false, language: "en", policyVersion: "narration-projection-v1" },
   });
-  const { proposal } = await service.generateSummaryProposal({ projectId: pageA.projectId, pageIdentity: pageA.pageIdentity });
-  const accepted = await service.acceptSummary({ projectId: pageA.projectId, pageIdentity: pageA.pageIdentity, proposalId: proposal.id });
+  const { snapshot } = await service.deriveIntentSnapshot({ projectId: pageA.projectId, pageIdentity: pageA.pageIdentity });
+  const accepted = await seedSyntheticAcceptedSummary(dbInst.db, {
+    projectId: pageA.projectId,
+    pageIdentity: pageA.pageIdentity,
+    sourceContent: { id: pageA.contentId, version: pageA.contentVersion, digest: pageA.contentDigest },
+    intentSnapshot: { id: snapshot.id, digest: snapshot.snapshotDigest },
+  });
 
   // Accepting a set for project B that references project A's artifact must fail.
   const store = new DerivativesStore(dbInst.db);
@@ -547,118 +579,83 @@ test("restart durability: accepted state survives a fresh database connection", 
   const dbInst = await setupMigratedTestDatabase();
   const page = await seedProjectWithPage(dbInst, "deriv-restart-1", "roof-repair");
   const repoRoot = await resolveRepositoryRoot();
-  const { FixtureAudioNarrationProvider } = await import("../../src/derivatives/audio-provider.js");
-  class OfflineLiveAudioProvider extends FixtureAudioNarrationProvider {
-    override readonly providerMode = "live" as const;
-    override readonly isTestDouble = false as const;
-  }
-  const service = new DerivativesService(dbInst.db, repoRoot, {
-    budget: new WriterBudgetStore(dbInst.db),
-    summary: { invoke: fixtureSummaryInvoke as never, dailyLimitUsd: 10 },
-    audioProvider: new OfflineLiveAudioProvider(),
-  });
+  const service = await makeService(dbInst);
   await service.updateProjectPolicy({
     projectId: page.projectId,
     summary: { enabled: true, language: "en", policyVersion: "summary-instructions-v1" },
     audio: { enabled: false, language: "en", policyVersion: "narration-projection-v1" },
   });
-  const { proposal } = await service.generateSummaryProposal({ projectId: page.projectId, pageIdentity: page.pageIdentity });
-  const acceptedSummary = await service.acceptSummary({ projectId: page.projectId, pageIdentity: page.pageIdentity, proposalId: proposal.id });
-  const set = await service.acceptDerivativeSet({ projectId: page.projectId, pageIdentity: page.pageIdentity });
+  const { set, summary } = await seedSyntheticProductionDerivativeSet(dbInst.db, repoRoot, {
+    projectId: page.projectId,
+    pageIdentity: page.pageIdentity,
+    sourceContent: { id: page.contentId, version: page.contentVersion, digest: page.contentDigest },
+  });
 
   // Fresh connection (simulated restart): a brand-new service/store instance
   // over the same database must see identical accepted state.
-  const freshService = new DerivativesService(dbInst.db, repoRoot, {
-    budget: new WriterBudgetStore(dbInst.db),
-    summary: { invoke: fixtureSummaryInvoke as never, dailyLimitUsd: 10 },
-    audioProvider: new OfflineLiveAudioProvider(),
-  });
+  const freshService = await makeService(dbInst);
   const status = await freshService.derivativeStatus({ projectId: page.projectId, pageIdentity: page.pageIdentity });
   assert.equal(status.summary.status, "ACCEPTED");
-  assert.equal(status.summary.artifact!.id, acceptedSummary.id);
-  assert.equal(status.set.set!.id, set.set.id);
+  assert.equal(status.summary.artifact!.id, summary!.id);
+  assert.equal(status.set.set!.id, set.id);
 });
 
-test("concurrency race A: content acceptance and summary acceptance serialize under the shared project lock", async () => {
+test("concurrency race A: intent snapshot insertion is idempotent under concurrency", async () => {
   const dbInst = await setupMigratedTestDatabase();
   const page = await seedProjectWithPage(dbInst, "deriv-race-a", "roof-repair");
-  const repoRoot = await resolveRepositoryRoot();
-  const service = new DerivativesService(dbInst.db, repoRoot, {
-    budget: new WriterBudgetStore(dbInst.db),
-    summary: { invoke: fixtureSummaryInvoke as never, dailyLimitUsd: 10 },
-  });
+  const service = await makeService(dbInst);
   await service.updateProjectPolicy({
     projectId: page.projectId,
     summary: { enabled: true, language: "en", policyVersion: "summary-instructions-v1" },
-    audio: { enabled: false, language: "en", policyVersion: "narration-projection-v1" },
+    audio: { enabled: true, language: "en", voiceId: "fixture-voice-1", policyVersion: "narration-projection-v1" },
   });
-  const { proposal } = await service.generateSummaryProposal({ projectId: page.projectId, pageIdentity: page.pageIdentity });
 
-  // T1: accept summary against C1 (slow transaction via the project lock).
-  // T2: accept new content C2.
-  // Unsafe outcome: C2 commits AND the summary acceptance for C1 succeeds
-  // afterwards making a stale summary current. The shared advisory lock makes
-  // these serialize; the summary acceptance re-verifies content currency
-  // inside the lock, so whichever order runs, a stale acceptance is refused.
-  const acceptSummaryPromise = service.acceptSummary({ projectId: page.projectId, pageIdentity: page.pageIdentity, proposalId: proposal.id });
-  const acceptContentPromise = (async () => {
-    // Small delay to interleave, then accept C2 through the real writer path.
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    return acceptFixturePage(dbInst, page.projectId, page.pageIdentity);
-  })();
-  const [summaryResult, contentResult] = await Promise.allSettled([acceptSummaryPromise, acceptContentPromise]);
-
-  const summaryAccepted = summaryResult.status === "fulfilled";
-  const contentAccepted = contentResult.status === "fulfilled";
-  if (contentAccepted && summaryAccepted) {
-    // If both succeeded, the summary MUST be for the still-current content
-    // (i.e. the content acceptance must have been the C1 re-accept or the
-    // summary was accepted first and the content acceptance created C2,
-    // making the summary stale — never current-with-stale-source).
-    const store = new DerivativesStore(dbInst.db);
-    const summary = await store.currentAcceptedSummary(page.projectId, page.pageIdentity);
-    const pages = await (await import("../../src/writer/page-authority.js")).PageAuthorityReader.prototype.constructor;
-    void pages;
-    const currentContent = await dbInst.db.execute(
-      (await import("drizzle-orm")).sql`select id, version, content_digest from accepted_page_content where project_id = ${page.projectId} and slug = ${page.pageIdentity} order by version desc limit 1`,
-    );
-    const current = currentContent.rows[0] as { id: string; version: number; content_digest: string };
-    // The invariant: if the summary is the CURRENT accepted summary, its
-    // bound source must either match the current content OR the summary must
-    // be stale by the service's own status computation.
-    const status = await service.derivativeStatus({ projectId: page.projectId, pageIdentity: page.pageIdentity });
-    if (summary!.sourceContentDigest !== current.content_digest) {
-      assert.equal(status.summary.status, "STALE", "A summary bound to superseded content must never display as current.");
-    }
-  } else {
-    // At least one operation must succeed; fail-closed rejections are fine.
-    assert.ok(summaryAccepted || contentAccepted);
+  // 8 parallel calls deriving the intent simultaneously: all return the same id.
+  const results = await Promise.all(
+    Array.from({ length: 8 }, () => service.deriveIntentSnapshot({ projectId: page.projectId, pageIdentity: page.pageIdentity })),
+  );
+  const firstId = results[0]!.snapshot.id;
+  for (const r of results) {
+    assert.equal(r.snapshot.id, firstId);
   }
+
+  // Exactly one intent row was created.
+  const rows = await dbInst.db
+    .select()
+    .from(pageDerivativeIntentSnapshots)
+    .where(
+      and(
+        eq(pageDerivativeIntentSnapshots.projectId, page.projectId),
+        eq(pageDerivativeIntentSnapshots.pageIdentity, page.pageIdentity),
+      ),
+    );
+  assert.equal(rows.length, 1);
 });
 
 test("concurrency race B: derivative set acceptance serializes with policy mutation", async () => {
   const dbInst = await setupMigratedTestDatabase();
   const page = await seedProjectWithPage(dbInst, "deriv-race-b", "roof-repair");
   const repoRoot = await resolveRepositoryRoot();
-  const { FixtureAudioNarrationProvider } = await import("../../src/derivatives/audio-provider.js");
-  class OfflineLiveAudioProvider extends FixtureAudioNarrationProvider {
-    override readonly providerMode = "live" as const;
-    override readonly isTestDouble = false as const;
-  }
-  const service = new DerivativesService(dbInst.db, repoRoot, {
-    budget: new WriterBudgetStore(dbInst.db),
-    summary: { invoke: fixtureSummaryInvoke as never, dailyLimitUsd: 10 },
-    audioProvider: new OfflineLiveAudioProvider(),
-  });
+  const service = await makeService(dbInst);
   await service.updateProjectPolicy({
     projectId: page.projectId,
     summary: { enabled: true, language: "en", policyVersion: "summary-instructions-v1" },
     audio: { enabled: true, language: "en", voiceId: "fixture-voice-1", policyVersion: "narration-projection-v1" },
   });
-  const { proposal } = await service.generateSummaryProposal({ projectId: page.projectId, pageIdentity: page.pageIdentity });
-  await service.acceptSummary({ projectId: page.projectId, pageIdentity: page.pageIdentity, proposalId: proposal.id });
-  const { candidate } = await service.generateAudioCandidate({ projectId: page.projectId, pageIdentity: page.pageIdentity });
-  await service.acceptAudio({ projectId: page.projectId, pageIdentity: page.pageIdentity, candidateId: candidate.id });
+
+  const { snapshot } = await service.deriveIntentSnapshot({ projectId: page.projectId, pageIdentity: page.pageIdentity });
+  await seedSyntheticAcceptedSummary(dbInst.db, {
+    projectId: page.projectId,
+    pageIdentity: page.pageIdentity,
+    sourceContent: { id: page.contentId, version: page.contentVersion, digest: page.contentDigest },
+    intentSnapshot: { id: snapshot.id, digest: snapshot.snapshotDigest },
+  });
+  await seedSyntheticAcceptedAudio(dbInst.db, repoRoot, {
+    projectId: page.projectId,
+    pageIdentity: page.pageIdentity,
+    sourceContent: { id: page.contentId, version: page.contentVersion, digest: page.contentDigest },
+    narrationText: "Race condition test narration audio",
+  });
 
   // Race: set acceptance vs policy mutation. Both take the shared lock; the
   // set acceptance re-derives the intent snapshot inside the lock, so the
@@ -676,4 +673,107 @@ test("concurrency race B: derivative set acceptance serializes with policy mutat
   // STALE (new policy superseded the intent) — never a false ACCEPTED.
   const status = await service.derivativeStatus({ projectId: page.projectId, pageIdentity: page.pageIdentity });
   assert.ok(["ACCEPTED", "STALE"].includes(status.set.status));
+});
+
+test("production authority truth matrix: fixture/double output is rejected", () => {
+  // Summary truth matrix
+  assert.throws(
+    () => assertSummaryProductionAuthority({ providerMode: "fixture", isTestDouble: true, provider: "test" }),
+    (err: unknown) => isCode(err, "derivative_fixture_not_production_authority"),
+  );
+  assert.throws(
+    () => assertSummaryProductionAuthority({ providerMode: "live", isTestDouble: true, provider: "test" }),
+    (err: unknown) => isCode(err, "derivative_fixture_not_production_authority"),
+  );
+  assert.throws(
+    () => assertSummaryProductionAuthority({ providerMode: "fixture", isTestDouble: false, provider: "test" }),
+    (err: unknown) => isCode(err, "derivative_fixture_not_production_authority"),
+  );
+  assert.doesNotThrow(() =>
+    assertSummaryProductionAuthority({ providerMode: "live", isTestDouble: false, provider: "test" }),
+  );
+
+  // Audio truth matrix
+  assert.throws(
+    () => assertAudioProductionAuthority({ providerMode: "fixture", isTestDouble: true, provider: "test" }),
+    (err: unknown) => isCode(err, "derivative_fixture_not_production_authority"),
+  );
+  assert.throws(
+    () => assertAudioProductionAuthority({ providerMode: "live", isTestDouble: true, provider: "test" }),
+    (err: unknown) => isCode(err, "derivative_fixture_not_production_authority"),
+  );
+  assert.throws(
+    () => assertAudioProductionAuthority({ providerMode: "fixture", isTestDouble: false, provider: "test" }),
+    (err: unknown) => isCode(err, "derivative_fixture_not_production_authority"),
+  );
+  assert.doesNotThrow(() =>
+    assertAudioProductionAuthority({ providerMode: "live", isTestDouble: false, provider: "test" }),
+  );
+});
+
+test("AcceptedDerivativeSet digest/version canonicality roundtrip", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const page = await seedProjectWithPage(dbInst, "deriv-set-canon", "roof-repair");
+  const repoRoot = await resolveRepositoryRoot();
+  const service = await makeService(dbInst);
+
+  await service.updateProjectPolicy({
+    projectId: page.projectId,
+    summary: { enabled: true, language: "en", policyVersion: "summary-instructions-v1" },
+    audio: { enabled: true, language: "en", voiceId: "fixture-voice-1", policyVersion: "narration-projection-v1" },
+  });
+
+  const { snapshot } = await service.deriveIntentSnapshot({ projectId: page.projectId, pageIdentity: page.pageIdentity });
+  await seedSyntheticAcceptedSummary(dbInst.db, {
+    projectId: page.projectId,
+    pageIdentity: page.pageIdentity,
+    sourceContent: { id: page.contentId, version: page.contentVersion, digest: page.contentDigest },
+    intentSnapshot: { id: snapshot.id, digest: snapshot.snapshotDigest },
+  });
+  await seedSyntheticAcceptedAudio(dbInst.db, repoRoot, {
+    projectId: page.projectId,
+    pageIdentity: page.pageIdentity,
+    sourceContent: { id: page.contentId, version: page.contentVersion, digest: page.contentDigest },
+    narrationText: "Canonical roundtrip narration text",
+  });
+
+  // Accept derivative set (v1)
+  const set1 = await service.acceptDerivativeSet({ projectId: page.projectId, pageIdentity: page.pageIdentity });
+  assert.equal(set1.reused, false);
+  assert.equal(set1.set.version, 1);
+  const data1 = parseAcceptedDerivativeSetData(set1.set.data);
+  assert.equal(data1.version, 1);
+  assert.equal(acceptedDerivativeSetDigest(data1), set1.set.setDigest);
+
+  // Idempotency: re-accepting with identical data does not bump version
+  const set1Again = await service.acceptDerivativeSet({ projectId: page.projectId, pageIdentity: page.pageIdentity });
+  assert.equal(set1Again.reused, true);
+  assert.equal(set1Again.set.id, set1.set.id);
+  assert.equal(set1Again.set.version, 1);
+
+  // Update summary to produce v2
+  const summary2 = await seedSyntheticAcceptedSummary(dbInst.db, {
+    projectId: page.projectId,
+    pageIdentity: page.pageIdentity,
+    sourceContent: { id: page.contentId, version: page.contentVersion, digest: page.contentDigest },
+    intentSnapshot: { id: snapshot.id, digest: snapshot.snapshotDigest },
+    summaryText: "Second accepted summary version text.",
+  });
+  assert.equal(summary2.version, 2);
+
+  const set2 = await service.acceptDerivativeSet({ projectId: page.projectId, pageIdentity: page.pageIdentity });
+  assert.equal(set2.reused, false);
+  assert.equal(set2.set.version, 2);
+  const data2 = parseAcceptedDerivativeSetData(set2.set.data);
+  assert.equal(data2.version, 2);
+  assert.equal(acceptedDerivativeSetDigest(data2), set2.set.setDigest);
+
+  // Restart durability / fresh store inspection
+  const freshStore = new DerivativesStore(dbInst.db);
+  const read = await freshStore.currentDerivativeSet(page.projectId, page.pageIdentity);
+  assert.ok(read);
+  assert.equal(read.version, 2);
+  const readData = parseAcceptedDerivativeSetData(read.data);
+  assert.equal(readData.version, 2);
+  assert.equal(acceptedDerivativeSetDigest(readData), read.setDigest);
 });

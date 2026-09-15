@@ -64,9 +64,9 @@ export interface AudioNarrationProvider {
  */
 export class FixtureAudioNarrationProvider implements AudioNarrationProvider {
   readonly providerId = AUDIO_FIXTURE_PROVIDER_ID;
-  /** Literal-typed as fixture; subclasses may widen to a live-marked offline double. */
-  readonly providerMode: "live" | "fixture" = "fixture";
-  readonly isTestDouble: boolean = true;
+  /** Deterministic fixture provider; providerMode is always "fixture" and isTestDouble is always true. NEVER production authority. */
+  readonly providerMode = "fixture" as const;
+  readonly isTestDouble = true as const;
 
   async preflight(): Promise<void> {
     // The fixture has no external dependency; preflight always succeeds.

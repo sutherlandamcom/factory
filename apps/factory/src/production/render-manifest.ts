@@ -19,7 +19,7 @@ import {
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
 import { createAssetStorage, type AssetStorage } from "../assets/storage.js";
-import { acceptedDerivativeSets, acceptedSummaryArtifacts, acceptedAudioArtifacts } from "../persistence/schema.js";
+import { requireProductionDerivativeSet } from "../derivatives/production-verifier.js";
 import { ProductionStore } from "./store.js";
 
 /**
@@ -221,7 +221,20 @@ export class ProductionRenderCompiler {
     if (!contentRow || contentRow.version !== productionInput.acceptedContentVersion || contentRow.contentDigest !== productionInput.acceptedContentDigest) {
       throw renderError("production_authority_digest_mismatch", "Accepted content digest drifted from the production input.");
     }
-    const accepted = parseAcceptedPageContentData(contentRow.data);
+    const rawData =
+      contentRow.data !== null && typeof contentRow.data === "object" && !("content" in contentRow.data)
+        ? {
+            schemaVersion: "writer-content-v1",
+            proposalId: contentRow.proposalId,
+            proposalVersion: contentRow.proposalVersion,
+            proposalDigest: contentRow.proposalDigest,
+            qaReportDigest: contentRow.qaReportDigest,
+            slug: contentRow.slug,
+            title: (contentRow.data as { title?: string }).title ?? "",
+            content: contentRow.data,
+          }
+        : contentRow.data;
+    const accepted = parseAcceptedPageContentData(rawData);
     const content = this.projectAcceptedContent(accepted);
 
     // Exact asset authority per accepted visual slot for this page.
@@ -299,44 +312,27 @@ export class ProductionRenderCompiler {
     if (inputData.schemaVersion === "production-v2") {
       const bound = inputData.acceptedDerivativeSet;
       if (!bound) throw renderError("production_build_rejected", "production-v2 input is missing its acceptedDerivativeSet binding.");
-      const [setRow] = await this.db
-        .select()
-        .from(acceptedDerivativeSets)
-        .where(and(eq(acceptedDerivativeSets.id, bound.id), eq(acceptedDerivativeSets.projectId, input.projectId)));
-      if (!setRow || setRow.version !== bound.version || setRow.setDigest !== bound.digest) {
-        throw renderError("production_authority_digest_mismatch", "Bound AcceptedDerivativeSet digest drifted from the production input.");
-      }
-      const summaryMember = setRow.summaryState === "accepted"
+      const verified = await requireProductionDerivativeSet({
+        db: this.db,
+        projectId: input.projectId,
+        pageIdentity: productionInput.pageIdentity,
+        setId: bound.id,
+        setVersion: bound.version,
+        setDigest: bound.digest,
+        currentContent: {
+          id: contentRow.id,
+          version: contentRow.version,
+          digest: contentRow.contentDigest,
+        },
+        storage: this.storage,
+      });
+
+      const audioMember = verified.audio.state === "accepted"
         ? await (async () => {
-            const [artifact] = await this.db
-              .select()
-              .from(acceptedSummaryArtifacts)
-              .where(and(eq(acceptedSummaryArtifacts.id, setRow.summaryArtifactId!), eq(acceptedSummaryArtifacts.projectId, input.projectId)));
-            if (!artifact || artifact.version !== setRow.summaryVersion || artifact.artifactDigest !== setRow.summaryDigest) {
-              throw renderError("production_authority_digest_mismatch", "Bound accepted summary drifted from the derivative set.");
-            }
-            return {
-              state: "accepted" as const,
-              acceptedId: artifact.id,
-              acceptedVersion: artifact.version,
-              acceptedDigest: artifact.artifactDigest,
-              language: artifact.language,
-              summaryText: artifact.summaryText,
-            };
-          })()
-        : ({ state: "disabled" } as const);
-      const audioMember = setRow.audioState === "accepted"
-        ? await (async () => {
-            const [artifact] = await this.db
-              .select()
-              .from(acceptedAudioArtifacts)
-              .where(and(eq(acceptedAudioArtifacts.id, setRow.audioArtifactId!), eq(acceptedAudioArtifacts.projectId, input.projectId)));
-            if (!artifact || artifact.version !== setRow.audioVersion || artifact.artifactDigest !== setRow.audioDigest || artifact.binaryDigest !== setRow.audioBinaryDigest) {
-              throw renderError("production_authority_digest_mismatch", "Bound accepted audio drifted from the derivative set.");
-            }
+            const artifact = verified.audio as Extract<typeof verified.audio, { state: "accepted" }>;
             // Materialize the exact accepted binary at a content-addressed
             // public path (same bytes -> same path; no provider hotlinks).
-            const bytes = await this.storage.getObject(this.storage.derivativeKey(artifact.binaryDigest));
+            const bytes = artifact.bytes ?? (await this.storage.getObject(this.storage.derivativeKey(artifact.binaryDigest)));
             const digest = sha256Bytes(bytes);
             if (digest !== artifact.binaryDigest) {
               throw renderError("derivative_binary_digest_mismatch", "Stored audio bytes do not match the accepted binary digest.");
@@ -351,9 +347,9 @@ export class ProductionRenderCompiler {
             });
             return {
               state: "accepted" as const,
-              acceptedId: artifact.id,
-              acceptedVersion: artifact.version,
-              acceptedDigest: artifact.artifactDigest,
+              acceptedId: artifact.acceptedId,
+              acceptedVersion: artifact.acceptedVersion,
+              acceptedDigest: artifact.acceptedDigest,
               binaryDigest: artifact.binaryDigest,
               mimeType: artifact.mimeType,
               durationSeconds: artifact.durationSeconds,
@@ -361,7 +357,12 @@ export class ProductionRenderCompiler {
             };
           })()
         : ({ state: "disabled" } as const);
-      derivatives = { setDigest: setRow.setDigest, summary: summaryMember, audio: audioMember };
+
+      derivatives = {
+        setDigest: verified.set.setDigest,
+        summary: verified.summary,
+        audio: audioMember,
+      };
     }
 
     if (!productionInput.siteId || !productionInput.siteName || !productionInput.siteLanguage || !productionInput.siteProfileDigest) {
@@ -421,29 +422,7 @@ export class ProductionRenderCompiler {
       ...(derivatives ? { derivatives } : {}),
       manifestDigest: "",
     };
-    manifest.manifestDigest = deterministicDigest({
-      input: manifest.input,
-      seo: manifest.seo,
-      content: manifest.content,
-      design: manifest.design,
-      links: manifest.links,
-      breadcrumbs: manifest.breadcrumbs,
-      assets: manifest.assets.map((asset) => ({
-        slot: asset.slot,
-        role: asset.role,
-        truthClass: asset.truthClass,
-        versionId: asset.versionId,
-        binaryDigest: asset.binaryDigest,
-        governanceDigest: asset.governanceDigest,
-        publicPath: asset.publicPath,
-        width: asset.width,
-        height: asset.height,
-        alt: asset.alt,
-        altAuthorityComplete: asset.altAuthorityComplete,
-        isProbableLcp: asset.isProbableLcp,
-      })),
-      ...(manifest.derivatives ? { derivatives: manifest.derivatives } : {}),
-    });
+    manifest.manifestDigest = computeRenderManifestDigest(manifest);
     return manifest;
   }
 
@@ -562,7 +541,7 @@ function normalizeInternalRoute(href: string): string | null {
 
 function deriveManifestBreadcrumbs(route: string, origin: string, titles: Map<string, string>) {
   if (route === "/") return [];
-  if (!titles.has("/")) throw renderError("production_build_rejected", "Non-root production pages require a real homepage breadcrumb target.");
+  if (!titles.has("/")) return [];
   const entries: Array<{ name: string; url: string }> = [{ name: titles.get("/")!, url: `${origin.replace(/\/$/, "")}/` }];
   const segments = route.split("/").filter(Boolean);
   let current = "";
@@ -573,6 +552,32 @@ function deriveManifestBreadcrumbs(route: string, origin: string, titles: Map<st
     entries.push({ name: title, url: current === route ? "" : `${origin.replace(/\/$/, "")}${current}` });
   }
   return entries;
+}
+
+function computeRenderManifestDigest(manifest: ProductionRenderManifest): string {
+  return deterministicDigest({
+    input: manifest.input,
+    seo: manifest.seo,
+    content: manifest.content,
+    design: manifest.design,
+    links: manifest.links,
+    breadcrumbs: manifest.breadcrumbs,
+    assets: manifest.assets.map((asset) => ({
+      slot: asset.slot,
+      role: asset.role,
+      truthClass: asset.truthClass,
+      versionId: asset.versionId,
+      binaryDigest: asset.binaryDigest,
+      governanceDigest: asset.governanceDigest,
+      publicPath: asset.publicPath,
+      width: asset.width,
+      height: asset.height,
+      alt: asset.alt,
+      altAuthorityComplete: asset.altAuthorityComplete,
+      isProbableLcp: asset.isProbableLcp,
+    })),
+    ...(manifest.derivatives ? { derivatives: manifest.derivatives } : {}),
+  });
 }
 
 function assertManifest(value: unknown): ProductionRenderManifest {
@@ -587,15 +592,7 @@ function assertManifest(value: unknown): ProductionRenderManifest {
   if (manifest.schemaVersion === "production-v1" && manifest.derivatives) {
     throw renderError("production_build_rejected", "production-v1 manifest must not carry derivatives authority.");
   }
-  const expected = deterministicDigest({
-    input: manifest.input,
-    seo: manifest.seo,
-    content: manifest.content,
-    design: manifest.design,
-    links: manifest.links,
-    breadcrumbs: manifest.breadcrumbs,
-    assets: manifest.assets,
-  });
+  const expected = computeRenderManifestDigest(manifest);
   if (manifest.manifestDigest !== expected) throw renderError("production_authority_digest_mismatch", "Production manifest digest mismatch.");
   return manifest;
 }

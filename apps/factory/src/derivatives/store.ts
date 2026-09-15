@@ -226,7 +226,24 @@ export class DerivativesStore {
       })
       .onConflictDoNothing()
       .returning();
-    return inserted!;
+    if (inserted) return inserted;
+    const [existing] = await this.db
+      .select()
+      .from(pageDerivativeIntentSnapshots)
+      .where(
+        and(
+          eq(pageDerivativeIntentSnapshots.projectId, row.projectId),
+          eq(pageDerivativeIntentSnapshots.pageIdentity, row.pageIdentity),
+          eq(pageDerivativeIntentSnapshots.snapshotDigest, row.snapshotDigest),
+        ),
+      )
+      .limit(1);
+    if (existing) return existing;
+    const current = await this.currentIntentSnapshot(row.projectId, row.pageIdentity);
+    if (!current) {
+      throw new FactoryError("derivative_intent_stale", "Failed to insert or find intent snapshot.");
+    }
+    return current;
   }
 
   // -- Summary prompt snapshots ---------------------------------------------
@@ -368,6 +385,7 @@ export class DerivativesStore {
         proposalId: row.proposalId,
         proposalDigest: row.data.proposalDigest,
         providerMode: row.data.providerMode,
+        isTestDouble: row.data.isTestDouble,
         provider: row.data.provider,
         model: row.data.model,
         language: row.data.language,
@@ -521,6 +539,7 @@ export class DerivativesStore {
         candidateId: row.candidateId,
         candidateDigest: row.data.candidateDigest,
         providerMode: row.data.providerMode,
+        isTestDouble: row.data.isTestDouble,
         provider: row.data.provider,
         engine: row.data.engine,
         voiceId: row.data.voiceId,

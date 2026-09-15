@@ -7,6 +7,8 @@ import { acceptFixturePage } from "../fixtures/accepted-page.js";
 import { WriterBudgetStore } from "../../src/writer/budget.js";
 import { resolveRepositoryRoot } from "../../src/repo-root.js";
 import { createAssetStorage } from "../../src/assets/storage.js";
+import { FactoryError } from "../../src/executor/errors.js";
+import { seedSyntheticProductionDerivativeSet } from "./run10-test-helpers.js";
 import { FixtureAudioNarrationProvider } from "../../src/derivatives/audio-provider.js";
 import type { AudioNarrationProvider, AudioNarrationRequest, AudioNarrationResult } from "../../src/derivatives/audio-provider.js";
 
@@ -25,8 +27,8 @@ import type { AudioNarrationProvider, AudioNarrationRequest, AudioNarrationResul
 
 class CountingAudioProvider implements AudioNarrationProvider {
   readonly providerId = "counting-fixture-tts";
-  readonly providerMode = "live" as const;
-  readonly isTestDouble = false as const;
+  readonly providerMode = "fixture" as const;
+  readonly isTestDouble = true as const;
   calls = 0;
   preflightCalls = 0;
   private readonly inner = new FixtureAudioNarrationProvider();
@@ -81,27 +83,47 @@ test("provider economics: one provider op per generation; zero on re-derivation,
   });
 
   // First generation: exactly one provider operation each.
-  await service.generateSummaryProposal({ projectId: seed.projectId, pageIdentity: page.slug });
+  const { proposal } = await service.generateSummaryProposal({ projectId: seed.projectId, pageIdentity: page.slug });
   assert.equal(summaryCalls, 1, "summary generation must be exactly one provider call");
-  await service.generateAudioCandidate({ projectId: seed.projectId, pageIdentity: page.slug });
+  const { candidate } = await service.generateAudioCandidate({ projectId: seed.projectId, pageIdentity: page.slug });
   assert.equal(audio.calls, 1, "audio generation must be exactly one provider call");
 
-  // Accept both + set: still zero additional provider calls.
-  const store = await import("../../src/derivatives/store.js");
-  const storeInstance = new store.DerivativesStore(dbInst.db);
-  const proposals = await dbInst.db.execute(
-    (await import("drizzle-orm")).sql`select id from summary_proposals where project_id = ${seed.projectId} order by created_at desc limit 1`,
+  // Summary fixture cannot be accepted as production authority:
+  await assert.rejects(
+    () => service.acceptSummary({ projectId: seed.projectId, pageIdentity: page.slug, proposalId: proposal.id }),
+    (err: unknown) =>
+      err instanceof FactoryError && err.code === "derivative_fixture_not_production_authority",
   );
-  const proposalId = (proposals.rows[0] as { id: string }).id;
-  await service.acceptSummary({ projectId: seed.projectId, pageIdentity: page.slug, proposalId });
-  const candidates = await dbInst.db.execute(
-    (await import("drizzle-orm")).sql`select id from audio_candidates where project_id = ${seed.projectId} order by created_at desc limit 1`,
+  assert.equal(summaryCalls, 1, "acceptance rejection must not invoke the provider");
+
+  // Audio fixture cannot be accepted as production authority:
+  await assert.rejects(
+    () => service.acceptAudio({ projectId: seed.projectId, pageIdentity: page.slug, candidateId: candidate.id }),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      (err.code === "derivative_fixture_not_production_authority" ||
+        err.code === "derivative_audio_fixture_not_production_authority"),
   );
-  const candidateId = (candidates.rows[0] as { id: string }).id;
-  await service.acceptAudio({ projectId: seed.projectId, pageIdentity: page.slug, candidateId });
-  await service.acceptDerivativeSet({ projectId: seed.projectId, pageIdentity: page.slug });
-  assert.equal(summaryCalls, 1, "acceptance must not invoke the provider");
-  assert.equal(audio.calls, 1, "acceptance must not invoke the provider");
+  assert.equal(audio.calls, 1, "audio rejection must not invoke the provider");
+
+  // Production derivative set rejects missing accepted audio (since audio fixture was rejected):
+  await assert.rejects(
+    () => service.acceptDerivativeSet({ projectId: seed.projectId, pageIdentity: page.slug }),
+    (err: unknown) =>
+      err instanceof FactoryError &&
+      (err.code === "derivative_required_artifact_missing" ||
+        err.code === "derivative_fixture_not_production_authority" ||
+        err.code === "derivative_audio_fixture_not_production_authority"),
+  );
+  assert.equal(summaryCalls, 1, "acceptance rejection must not invoke the provider");
+  assert.equal(audio.calls, 1, "acceptance rejection must not invoke the provider");
+
+  // Seed synthetic accepted authority for downstream status and visitor read testing:
+  await seedSyntheticProductionDerivativeSet(dbInst.db, repoRoot, {
+    projectId: seed.projectId,
+    pageIdentity: page.slug,
+    sourceContent: { id: page.id, version: page.version, digest: page.contentDigest },
+  });
 
   // Idempotent re-derivation of intent + narration: zero provider calls.
   await service.deriveIntentSnapshot({ projectId: seed.projectId, pageIdentity: page.slug });
@@ -139,11 +161,13 @@ test("zero visitor provider calls: 100 visitor interactions trigger zero provide
     summary: { enabled: true, language: "en", policyVersion: "summary-instructions-v1" },
     audio: { enabled: true, language: "en", voiceId: "fixture-voice-1", policyVersion: "narration-projection-v1" },
   });
-  const { proposal } = await service.generateSummaryProposal({ projectId: seed.projectId, pageIdentity: page.slug });
-  await service.acceptSummary({ projectId: seed.projectId, pageIdentity: page.slug, proposalId: proposal.id });
-  const { candidate } = await service.generateAudioCandidate({ projectId: seed.projectId, pageIdentity: page.slug });
-  await service.acceptAudio({ projectId: seed.projectId, pageIdentity: page.slug, candidateId: candidate.id });
-  await service.acceptDerivativeSet({ projectId: seed.projectId, pageIdentity: page.slug });
+  await service.generateSummaryProposal({ projectId: seed.projectId, pageIdentity: page.slug });
+  await service.generateAudioCandidate({ projectId: seed.projectId, pageIdentity: page.slug });
+  await seedSyntheticProductionDerivativeSet(dbInst.db, repoRoot, {
+    projectId: seed.projectId,
+    pageIdentity: page.slug,
+    sourceContent: { id: page.id, version: page.version, digest: page.contentDigest },
+  });
   const baselineSummary = summaryCalls;
   const baselineAudio = audio.calls;
 

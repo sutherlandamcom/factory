@@ -311,6 +311,7 @@ export const acceptedSummaryArtifactDataSchema = z
       .object({ id: derivativeIdSchema, digest: derivativeDigestSchema })
       .strict(),
     providerMode: derivativeProviderModeSchema,
+    isTestDouble: z.boolean(),
     provider: z.string().trim().min(1).max(100),
     model: z.string().trim().min(1).max(200),
     language: derivativeLanguageSchema,
@@ -389,6 +390,7 @@ export const acceptedAudioArtifactDataSchema = z
       .object({ id: derivativeIdSchema, digest: derivativeDigestSchema })
       .strict(),
     providerMode: derivativeProviderModeSchema,
+    isTestDouble: z.boolean(),
     provider: z.string().trim().min(1).max(100),
     engine: z.string().trim().min(1).max(200),
     voiceId: derivativeVoiceIdSchema,

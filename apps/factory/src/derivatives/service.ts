@@ -33,6 +33,10 @@ import {
   type AudioNarrationProvider,
 } from "./audio-provider.js";
 import {
+  assertSummaryProductionAuthority,
+  deriveCurrentDerivativeIntentAuthority,
+} from "./production-verifier.js";
+import {
   SUMMARY_POLICY_VERSION,
   SUMMARY_MAX_OUTPUT_TOKENS,
   compileSummaryPrompt,
@@ -153,48 +157,28 @@ export class DerivativesService {
    * snapshot row.
    */
   async deriveIntentSnapshot(input: { projectId: string; pageIdentity: string }) {
-    const policyRow = await this.store.currentPolicy(input.projectId);
-    const overrideRow = await this.store.currentOverride(input.projectId, input.pageIdentity);
+    return this.store.withProjectLock(input.projectId, async (tx) => {
+      const txStore = new DerivativesStore(tx);
+      const content = await this.requireCurrentContent(input.projectId, input.pageIdentity);
+      const { data, digest: snapshotDigest } = await deriveCurrentDerivativeIntentAuthority(
+        txStore,
+        input.projectId,
+        input.pageIdentity,
+        { id: content.id, version: content.version, digest: content.contentDigest },
+      );
 
-    const projectPolicy = policyRow ? (policyRow.data as ProjectDerivativePolicyData) : null;
-    const pageOverride = overrideRow ? (overrideRow.data as PageDerivativeOverrideData) : null;
+      const existing = await txStore.findIntentSnapshot(input.projectId, input.pageIdentity, snapshotDigest);
+      if (existing) return { snapshot: existing, reused: true, content };
 
-    // Policy/override resolution first: an override forcing enabled without
-    // any project policy fails closed before any content lookup.
-    const effective = resolveEffectiveDerivativeSettings({ projectPolicy, pageOverride });
-    const content = await this.requireCurrentContent(input.projectId, input.pageIdentity);
-
-    const data: PageDerivativeIntentSnapshotData = {
-      schemaVersion: "derivatives-v1",
-      projectId: input.projectId,
-      pageIdentity: input.pageIdentity,
-      acceptedContent: {
-        id: content.id,
-        version: content.version,
-        digest: content.contentDigest,
-      },
-      projectPolicy: policyRow
-        ? { id: policyRow.id, version: policyRow.version, digest: policyRow.policyDigest }
-        : null,
-      pageOverride: overrideRow
-        ? { id: overrideRow.id, version: overrideRow.version, digest: overrideRow.overrideDigest }
-        : null,
-      effectiveSummary: effective.summary,
-      effectiveAudio: effective.audio,
-    };
-    const snapshotDigest = pageDerivativeIntentSnapshotDigest(data);
-
-    const existing = await this.store.findIntentSnapshot(input.projectId, input.pageIdentity, snapshotDigest);
-    if (existing) return { snapshot: existing, reused: true, content };
-
-    const inserted = await this.store.insertIntentSnapshot({
-      id: `deriv_intent_${randomUUID()}`,
-      projectId: input.projectId,
-      pageIdentity: input.pageIdentity,
-      data,
-      snapshotDigest,
+      const inserted = await txStore.insertIntentSnapshot({
+        id: `deriv_intent_${randomUUID()}`,
+        projectId: input.projectId,
+        pageIdentity: input.pageIdentity,
+        data,
+        snapshotDigest,
+      });
+      return { snapshot: inserted, reused: false, content };
     });
-    return { snapshot: inserted, reused: false, content };
   }
 
   // -- Summary lifecycle ----------------------------------------------------------
@@ -329,6 +313,14 @@ export class DerivativesService {
         throw derivativeError("derivative_qa_failed", "Summary QA has not passed; acceptance is blocked.");
       }
 
+      // Production authority gate (Section 12, 13, 18):
+      // Fixture output can never be accepted as production authority.
+      assertSummaryProductionAuthority({
+        providerMode: proposal.providerMode,
+        isTestDouble: proposal.isTestDouble,
+        provider: proposal.provider,
+      });
+
       // Content must STILL be current inside the acceptance lock.
       const content = await this.requireCurrentContentRefTx(tx, input.projectId, input.pageIdentity, {
         id: proposal.acceptedContentId,
@@ -357,6 +349,7 @@ export class DerivativesService {
         intentSnapshot: { id: snapshot.id, digest: snapshot.snapshotDigest },
         promptSnapshot: { id: proposal.promptSnapshotId, digest: proposal.promptSnapshotDigest },
         providerMode: proposal.providerMode as "live" | "fixture",
+        isTestDouble: proposal.isTestDouble,
         provider: proposal.provider,
         model: proposal.model,
         language: await this.promptLanguage(tx, proposal.promptSnapshotId),
@@ -549,6 +542,7 @@ export class DerivativesService {
         },
         narrationSnapshot: { id: narrationCurrent.id, digest: narrationCurrent.narrationDigest },
         providerMode: candidate.providerMode as "live" | "fixture",
+        isTestDouble: candidate.isTestDouble,
         provider: candidate.provider,
         engine: candidate.engine,
         voiceId: candidate.voiceId,
@@ -614,8 +608,25 @@ export class DerivativesService {
         throw derivativeError("derivative_authority_stale", "Accepted audio is stale versus current accepted content.");
       }
 
-      const data: AcceptedDerivativeSetData = {
-        schemaVersion: "derivatives-v1",
+      // Production authority gate (Section 12, 13, 18):
+      // Fixture/test-double derivative output can never become production authority.
+      if (summaryState === "accepted" && summaryCurrent) {
+        assertSummaryProductionAuthority({
+          providerMode: summaryCurrent.providerMode,
+          isTestDouble: summaryCurrent.isTestDouble,
+          provider: summaryCurrent.provider,
+        });
+      }
+      if (audioState === "accepted" && audioCurrent) {
+        assertAudioProductionAuthority({
+          providerMode: audioCurrent.providerMode,
+          isTestDouble: audioCurrent.isTestDouble,
+          provider: audioCurrent.provider,
+        });
+      }
+
+      const baseData = {
+        schemaVersion: "derivatives-v1" as const,
         projectId: input.projectId,
         pageIdentity: input.pageIdentity,
         sourceContent: { id: content.id, version: content.version, digest: content.contentDigest },
@@ -623,37 +634,50 @@ export class DerivativesService {
         summary:
           summaryState === "accepted" && summaryCurrent
             ? {
-                state: "accepted",
+                state: "accepted" as const,
                 acceptedArtifactId: summaryCurrent.id,
                 version: summaryCurrent.version,
                 digest: summaryCurrent.artifactDigest,
               }
-            : { state: "disabled" },
+            : { state: "disabled" as const },
         audio:
           audioState === "accepted" && audioCurrent
             ? {
-                state: "accepted",
+                state: "accepted" as const,
                 acceptedArtifactId: audioCurrent.id,
                 version: audioCurrent.version,
                 digest: audioCurrent.artifactDigest,
                 binaryDigest: audioCurrent.binaryDigest,
               }
-            : { state: "disabled" },
-        version: 0,
+            : { state: "disabled" as const },
       };
-      const setDigest = acceptedDerivativeSetDigest(data);
+
       const current = await txStore.currentDerivativeSet(input.projectId, input.pageIdentity);
-      if (current && current.setDigest === setDigest) {
-        return { set: current, reused: true };
+      if (current) {
+        const candidateForCurrent: AcceptedDerivativeSetData = {
+          ...baseData,
+          version: current.version,
+        };
+        if (acceptedDerivativeSetDigest(candidateForCurrent) === current.setDigest) {
+          return { set: current, reused: true };
+        }
       }
-      const version = (current?.version ?? 0) + 1;
+
+      // Canonical Option A: calculate final version first, construct final data,
+      // compute setDigest on final data, then insert.
+      const nextVersion = (current?.version ?? 0) + 1;
+      const finalData: AcceptedDerivativeSetData = {
+        ...baseData,
+        version: nextVersion,
+      };
+      const setDigest = acceptedDerivativeSetDigest(finalData);
       const inserted = await txStore.insertDerivativeSet({
         id: `derivative_set_${randomUUID()}`,
         projectId: input.projectId,
         pageIdentity: input.pageIdentity,
-        data: { ...data, version },
+        data: finalData,
         setDigest,
-        version,
+        version: nextVersion,
       });
       if (current) await txStore.markSetSuperseded(input.projectId, current.id);
       return { set: inserted, reused: false };
@@ -772,22 +796,12 @@ export class DerivativesService {
     content: { id: string; version: number; contentDigest: string } | null,
   ) {
     const resolvedContent = content ?? (await this.requireCurrentContent(projectId, pageIdentity));
-    const policyRow = await txStore.currentPolicy(projectId);
-    const overrideRow = await txStore.currentOverride(projectId, pageIdentity);
-    const projectPolicy = policyRow ? (policyRow.data as ProjectDerivativePolicyData) : null;
-    const pageOverride = overrideRow ? (overrideRow.data as PageDerivativeOverrideData) : null;
-    const effective = resolveEffectiveDerivativeSettings({ projectPolicy, pageOverride });
-    const data: PageDerivativeIntentSnapshotData = {
-      schemaVersion: "derivatives-v1",
+    const { data, digest: snapshotDigest } = await deriveCurrentDerivativeIntentAuthority(
+      txStore,
       projectId,
       pageIdentity,
-      acceptedContent: { id: resolvedContent.id, version: resolvedContent.version, digest: resolvedContent.contentDigest },
-      projectPolicy: policyRow ? { id: policyRow.id, version: policyRow.version, digest: policyRow.policyDigest } : null,
-      pageOverride: overrideRow ? { id: overrideRow.id, version: overrideRow.version, digest: overrideRow.overrideDigest } : null,
-      effectiveSummary: effective.summary,
-      effectiveAudio: effective.audio,
-    };
-    const snapshotDigest = pageDerivativeIntentSnapshotDigest(data);
+      { id: resolvedContent.id, version: resolvedContent.version, digest: resolvedContent.contentDigest },
+    );
     const existing = await txStore.findIntentSnapshot(projectId, pageIdentity, snapshotDigest);
     const snapshot = existing ?? (await txStore.insertIntentSnapshot({
       id: `deriv_intent_${randomUUID()}`,

@@ -128,6 +128,9 @@ export function validateContentIntegrity(input: ContentIntegrityInput): ContentI
     ),
     normalizeText(content.conclusion),
     normalizeText(content.cta),
+    ...(input.manifest.derivatives?.summary?.state === "accepted"
+      ? [normalizeText(input.manifest.derivatives.summary.summaryText)]
+      : []),
   ].filter((body) => body !== "");
   const acceptedSet = new Set(acceptedBodies);
   const renderedParagraphs = (main ?? root)

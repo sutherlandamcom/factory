@@ -107,6 +107,15 @@ export async function runSummaryInvocation(
   const resolved = resolveSummaryModel(env);
   const policy = MODEL_ROLE_POLICY[SUMMARY_ROLE_ID as keyof typeof MODEL_ROLE_POLICY];
 
+  // 0. Implementation status runtime guard (Section 36 & 37):
+  // Real non-test invocation cannot bypass implementationStatus = "future".
+  if (!deps.invoke && policy.implementationStatus === "future") {
+    throw new FactoryError(
+      "derivative_generation_blocked",
+      `Role "${SUMMARY_ROLE_ID}" implementationStatus is "future"; live summary provider execution is blocked pending provider-policy confirmation.`,
+    );
+  }
+
   // 1. Credential preflight BEFORE any reservation or provider call.
   assertSummaryCredentialAvailable({ loadApiKey: deps.invoke ? () => "test-key" : undefined });
 

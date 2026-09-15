@@ -73,6 +73,7 @@ export function acceptedSummaryArtifactDigest(data: {
   intentSnapshot: { id: string; digest: string };
   promptSnapshot: { id: string; digest: string };
   providerMode: string;
+  isTestDouble: boolean;
   provider: string;
   model: string;
   language: string;
@@ -105,6 +106,7 @@ export function acceptedAudioArtifactDigest(data: {
   sourceContent: { id: string; version: number; digest: string };
   narrationSnapshot: { id: string; digest: string };
   providerMode: string;
+  isTestDouble: boolean;
   provider: string;
   engine: string;
   voiceId: string;

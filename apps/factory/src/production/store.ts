@@ -39,6 +39,7 @@ import { deterministicDigest } from "../intelligence/digest.js";
 import { acceptedDerivativeSets } from "../persistence/schema.js";
 import { DerivativesStore } from "../derivatives/store.js";
 import { resolveEffectiveDerivativeSettings } from "../derivatives/core.js";
+import { requireProductionDerivativeSet } from "../derivatives/production-verifier.js";
 import type { ProjectDerivativePolicyData, PageDerivativeOverrideData } from "@factory/contracts";
 import { assertCompleteProductionQa, hasValidQaExecutionDigest, TRUSTED_PRODUCTION_QA_GATES } from "./qa/registry.js";
 import { PageAuthorityReader } from "../writer/page-authority.js";
@@ -334,39 +335,23 @@ export class ProductionStore {
       .limit(1);
     let derivativeSetRef: { id: string; version: number; digest: string } | null = null;
     if (derivativeSet) {
-      if (derivativeSet.sourceContentId !== bundle.content.id || derivativeSet.sourceContentVersion !== bundle.content.version || derivativeSet.sourceContentDigest !== bundle.content.digest) {
-        throw productionError(
-          "production_authority_stale",
-          "AcceptedDerivativeSet is stale versus current accepted content; re-accept derivatives.",
-        );
-      }
-      const setData = derivativeSet.data as AcceptedDerivativeSetData;
-      const intentSnapshot = derivativeSet.intentSnapshotDigest;
-      if (setData.intentSnapshot.digest !== intentSnapshot) {
-        throw productionError(
-          "derivative_authority_digest_mismatch",
-          "AcceptedDerivativeSet intent snapshot digest mismatch (forged binding).",
-        );
-      }
-      if (setData.summary.state === "accepted" && setData.summary.digest !== derivativeSet.summaryDigest) {
-        throw productionError("derivative_authority_digest_mismatch", "Derivative set summary digest mismatch.");
-      }
-      if (setData.audio.state === "accepted" && setData.audio.digest !== derivativeSet.audioDigest) {
-        throw productionError("derivative_authority_digest_mismatch", "Derivative set audio digest mismatch.");
-      }
-      // Intent snapshot must still be the current effective policy for this
-      // content (staleness propagation from policy/override mutation).
-      const currentIntent = await new DerivativesStore(this.db).currentIntentSnapshot(input.projectId, input.pageSlug);
-      if (!currentIntent || currentIntent.id !== derivativeSet.intentSnapshotId || currentIntent.snapshotDigest !== derivativeSet.intentSnapshotDigest) {
-        throw productionError(
-          "derivative_authority_stale",
-          "AcceptedDerivativeSet intent snapshot is stale versus current effective derivative policy; re-accept derivatives.",
-        );
-      }
+      const verified = await requireProductionDerivativeSet({
+        db: this.db,
+        projectId: input.projectId,
+        pageIdentity: input.pageSlug,
+        setId: derivativeSet.id,
+        setVersion: derivativeSet.version,
+        setDigest: derivativeSet.setDigest,
+        currentContent: {
+          id: bundle.content.id,
+          version: bundle.content.version,
+          digest: bundle.content.digest,
+        },
+      });
       derivativeSetRef = {
-        id: derivativeSet.id,
-        version: derivativeSet.version,
-        digest: derivativeSet.setDigest,
+        id: verified.set.id,
+        version: verified.set.version,
+        digest: verified.set.setDigest,
       };
     } else if (effectiveDerivatives.summary.state === "enabled" || effectiveDerivatives.audio.state === "enabled") {
       // Readiness rule: enabled policy with NO accepted derivative set at all
@@ -615,59 +600,26 @@ export class ProductionStore {
     // exceptions: staleness propagates through the existing candidate rules.
     const inputData = input.data as { schemaVersion?: string };
     if (inputData.schemaVersion === "production-v2") {
-      const [currentSet] = await this.db
-        .select()
-        .from(acceptedDerivativeSets)
-        .where(
-          and(
-            eq(acceptedDerivativeSets.projectId, input.projectId),
-            eq(acceptedDerivativeSets.pageIdentity, input.pageIdentity),
-          ),
-        )
-        .orderBy(desc(acceptedDerivativeSets.version))
-        .limit(1);
-      if (!currentSet) {
-        return { stale: true, reason: "Bound AcceptedDerivativeSet no longer exists." };
+      const boundSet = (input.data as { acceptedDerivativeSet?: { id: string; version: number; digest: string } }).acceptedDerivativeSet;
+      if (!boundSet) {
+        return { stale: true, reason: "production-v2 input missing acceptedDerivativeSet binding." };
       }
-      if (currentSet.id !== (input.data as { acceptedDerivativeSet?: { id?: string } }).acceptedDerivativeSet?.id || currentSet.setDigest !== (input.data as { acceptedDerivativeSet?: { digest?: string } }).acceptedDerivativeSet?.digest) {
-        return { stale: true, reason: "AcceptedDerivativeSet changed or was superseded." };
-      }
-      if (currentSet.sourceContentId !== input.acceptedContentId || currentSet.sourceContentVersion !== input.acceptedContentVersion || currentSet.sourceContentDigest !== input.acceptedContentDigest) {
-        return { stale: true, reason: "AcceptedDerivativeSet is stale versus current accepted content." };
-      }
-      // Policy/override mutation staleness: re-resolve the EFFECTIVE policy
-      // from the current policy + override and compare with the intent the
-      // set was accepted against. A policy/voice/override change makes the
-      // set stale even though no new intent snapshot has been derived yet.
-      const setData = currentSet.data as AcceptedDerivativeSetData;
-      const freshPolicyRow = await new DerivativesStore(this.db).currentPolicy(input.projectId);
-      const freshOverrideRow = await new DerivativesStore(this.db).currentOverride(input.projectId, input.pageIdentity);
-      const freshEffective = resolveEffectiveDerivativeSettings({
-        projectPolicy: freshPolicyRow ? (freshPolicyRow.data as ProjectDerivativePolicyData) : null,
-        pageOverride: freshOverrideRow ? (freshOverrideRow.data as PageDerivativeOverrideData) : null,
-      });
-      const boundIntent = setData.intentSnapshot;
-      const freshIntentData = {
-        schemaVersion: "derivatives-v1",
-        projectId: input.projectId,
-        pageIdentity: input.pageIdentity,
-        acceptedContent: {
-          id: input.acceptedContentId,
-          version: input.acceptedContentVersion,
-          digest: input.acceptedContentDigest,
-        },
-        projectPolicy: freshPolicyRow
-          ? { id: freshPolicyRow.id, version: freshPolicyRow.version, digest: freshPolicyRow.policyDigest }
-          : null,
-        pageOverride: freshOverrideRow
-          ? { id: freshOverrideRow.id, version: freshOverrideRow.version, digest: freshOverrideRow.overrideDigest }
-          : null,
-        effectiveSummary: freshEffective.summary,
-        effectiveAudio: freshEffective.audio,
-      };
-      const freshIntentDigest = deterministicDigest(freshIntentData);
-      if (freshIntentDigest !== boundIntent.digest) {
-        return { stale: true, reason: "AcceptedDerivativeSet intent snapshot is stale versus current effective derivative policy." };
+      try {
+        await requireProductionDerivativeSet({
+          db: this.db,
+          projectId: input.projectId,
+          pageIdentity: input.pageIdentity,
+          setId: boundSet.id,
+          setVersion: boundSet.version,
+          setDigest: boundSet.digest,
+          currentContent: {
+            id: input.acceptedContentId,
+            version: input.acceptedContentVersion,
+            digest: input.acceptedContentDigest,
+          },
+        });
+      } catch (err) {
+        return { stale: true, reason: err instanceof Error ? err.message : String(err) };
       }
     }
 

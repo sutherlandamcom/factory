@@ -866,3 +866,51 @@ test("Theorem D / Section 18-21: page_summarizer implementationStatus=future blo
     await dbInst.close();
   }
 });
+
+test("multi-page project: multiple pages in the same project can each accept derivatives independently with page-scoped versioning", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const repoRoot = await resolveRepositoryRoot();
+  const seed = await seedProjectWithAcceptedInputs(dbInst, "multi-page-deriv-1");
+  const projectId = seed.projectId;
+  const homePage = await acceptFixturePage(dbInst, projectId, "home");
+  const aboutPage = await acceptFixturePage(dbInst, projectId, "about");
+
+  try {
+    const homeSet = await seedSyntheticProductionDerivativeSet(dbInst.db, repoRoot, {
+      projectId,
+      pageIdentity: "home",
+      sourceContent: { id: homePage.id, version: homePage.version, digest: homePage.contentDigest },
+      summaryText: "Summary for home page.",
+    });
+    assert.equal(homeSet.set.version, 1);
+    assert.equal(homeSet.set.pageIdentity, "home");
+
+    // A second page in the same project must succeed with its own independent version 1
+    const aboutSet = await seedSyntheticProductionDerivativeSet(dbInst.db, repoRoot, {
+      projectId,
+      pageIdentity: "about",
+      sourceContent: { id: aboutPage.id, version: aboutPage.version, digest: aboutPage.contentDigest },
+      summaryText: "Summary for about page.",
+    });
+    assert.equal(aboutSet.set.version, 1);
+    assert.equal(aboutSet.set.pageIdentity, "about");
+
+    // Superseding the home page derivative set increments home to version 2 without affecting about
+    const homeSetV2 = await seedSyntheticProductionDerivativeSet(dbInst.db, repoRoot, {
+      projectId,
+      pageIdentity: "home",
+      sourceContent: { id: homePage.id, version: homePage.version, digest: homePage.contentDigest },
+      summaryText: "Updated summary for home page.",
+    });
+    assert.equal(homeSetV2.set.version, 2);
+    assert.equal(homeSetV2.set.pageIdentity, "home");
+
+    const store = new DerivativesStore(dbInst.db);
+    const reloadedAbout = await store.currentDerivativeSet(projectId, "about");
+    assert.equal(reloadedAbout?.version, 1);
+    const reloadedHome = await store.currentDerivativeSet(projectId, "home");
+    assert.equal(reloadedHome?.version, 2);
+  } finally {
+    await dbInst.close();
+  }
+});

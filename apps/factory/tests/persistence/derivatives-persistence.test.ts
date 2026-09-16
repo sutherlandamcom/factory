@@ -24,6 +24,7 @@ import {
   assertSummaryProductionAuthority,
   assertAudioProductionAuthority,
 } from "../../src/derivatives/production-verifier.js";
+import { runSummaryInvocation } from "../../src/derivatives/summary-provider.js";
 
 /**
  * Run 10 persistence suite — real PostgreSQL (dedicated factory_test DB).
@@ -776,4 +777,92 @@ test("AcceptedDerivativeSet digest/version canonicality roundtrip", async () => 
   const readData = parseAcceptedDerivativeSetData(read.data);
   assert.equal(readData.version, 2);
   assert.equal(acceptedDerivativeSetDigest(readData), read.setDigest);
+
+  // Theorem A / Historical Immutability:
+  // Historical set1 remains strictly unchanged, unmutated, and parseable after set2 exists
+  const reloadedSet1 = await freshStore.getDerivativeSetById(page.projectId, set1.set.id);
+  assert.ok(reloadedSet1);
+  assert.deepEqual(reloadedSet1.data, set1.set.data);
+  const reloadedData1 = parseAcceptedDerivativeSetData(reloadedSet1.data);
+  assert.equal(reloadedData1.version, 1);
+  assert.equal(acceptedDerivativeSetDigest(reloadedData1), reloadedSet1.setDigest);
+});
+
+test("Theorem D / Section 18-21: page_summarizer implementationStatus=future blocks live summary generation with zero network calls", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const repoRoot = await resolveRepositoryRoot();
+  let networkCalls = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    networkCalls += 1;
+    throw new Error("HARD NETWORK TRAP: external network was reached!");
+  }) as typeof globalThis.fetch;
+
+  const originalApiKey = process.env["OPENROUTER_API_KEY"];
+  process.env["OPENROUTER_API_KEY"] = "sk-or-v1-fake-test-key-12345678";
+
+  try {
+    // 1. Direct invocation test on runSummaryInvocation without fixture override:
+    await assert.rejects(
+      () =>
+        runSummaryInvocation(
+          {
+            promptSnapshotDigest: "d".repeat(64),
+            projectId: "proj-fake",
+            pageIdentity: "home",
+            systemPrompt: "System prompt instructions",
+            userPrompt: "User prompt content",
+          },
+          {
+            budget: new WriterBudgetStore(dbInst.db),
+            // Explicitly NO deps.invoke — exercises the real live policy guard!
+          },
+        ),
+      (err: unknown) => {
+        assert.ok(err instanceof FactoryError);
+        assert.equal(err.code, "derivative_generation_blocked");
+        assert.match(err.message, /implementationStatus is "future"/);
+        return true;
+      },
+    );
+    assert.equal(networkCalls, 0, "Network calls must be strictly 0");
+
+    // 2. Full service-level test on DerivativesService.generateSummaryProposal:
+    // Construct service WITHOUT deps.summary.invoke (non-fixture path):
+    const liveService = new DerivativesService(dbInst.db, repoRoot, {
+      budget: new WriterBudgetStore(dbInst.db),
+      summary: undefined, // NO fixture invoke
+      storage: createAssetStorage(repoRoot),
+    });
+
+    const page = await seedProjectWithPage(dbInst, "future-guard", "home");
+    await liveService.updateProjectPolicy({
+      projectId: page.projectId,
+      summary: { enabled: true, language: "en", policyVersion: "summary-instructions-v1" },
+      audio: { enabled: false, language: "en", policyVersion: "narration-projection-v1" },
+    });
+
+    await assert.rejects(
+      () =>
+        liveService.generateSummaryProposal({
+          projectId: page.projectId,
+          pageIdentity: "home",
+        }),
+      (err: unknown) => {
+        assert.ok(err instanceof FactoryError);
+        assert.equal(err.code, "derivative_generation_blocked");
+        assert.match(err.message, /implementationStatus is "future"/);
+        return true;
+      },
+    );
+    assert.equal(networkCalls, 0, "Network calls must be strictly 0 after service call");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalApiKey !== undefined) {
+      process.env["OPENROUTER_API_KEY"] = originalApiKey;
+    } else {
+      delete process.env["OPENROUTER_API_KEY"];
+    }
+    await dbInst.close();
+  }
 });

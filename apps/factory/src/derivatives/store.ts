@@ -639,12 +639,4 @@ export class DerivativesStore {
       .returning();
     return inserted!;
   }
-
-  /** Mark an accepted set superseded when a newer version replaces it. */
-  async markSetSuperseded(projectId: string, setId: string): Promise<void> {
-    await this.db
-      .update(acceptedDerivativeSets)
-      .set({ data: sql`${acceptedDerivativeSets.data} || '{"superseded":true}'::jsonb` })
-      .where(and(eq(acceptedDerivativeSets.projectId, projectId), eq(acceptedDerivativeSets.id, setId)));
-  }
 }

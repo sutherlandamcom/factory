@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -15,10 +15,18 @@ import { DerivativesService } from "../../src/derivatives/service.js";
 import { WriterBudgetStore } from "../../src/writer/budget.js";
 import { createAssetStorage } from "../../src/assets/storage.js";
 import { resolveRepositoryRoot } from "../../src/repo-root.js";
-import { parseDesignCandidateData, type DesignCandidateData } from "@factory/contracts";
+import {
+  parseAcceptedDerivativeSetData,
+  parseDesignCandidateData,
+  type DesignCandidateData,
+} from "@factory/contracts";
 import type { FactoryDatabaseInstance } from "../../src/persistence/db.js";
 import { PageAuthorityReader } from "../../src/writer/page-authority.js";
 import { seedSyntheticProductionDerivativeSet } from "./run10-test-helpers.js";
+import { requireProductionDerivativeSet } from "../../src/derivatives/production-verifier.js";
+import { DerivativesStore } from "../../src/derivatives/store.js";
+import { acceptedDerivativeSetDigest } from "../../src/derivatives/core.js";
+import { productionCandidates } from "../../src/persistence/schema.js";
 
 /**
  * RUN 10 PRODUCTION INTEGRATION — real PostgreSQL.
@@ -362,5 +370,225 @@ test("PG run10: policy drift makes deriveProductionInput fail immediately with p
     );
   } finally {
     await dbInst.close();
+  }
+});
+
+test("PG run10: mandatory supersession regression (D1 historical immutable, D2 current, PI1 stale, candidate blocked)", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const root = await mkdtemp(path.join(tmpdir(), "run10-supersession-"));
+  const env = await setupLiveAuthority(dbInst, "run10-super", "home");
+  try {
+    const repoRoot = await resolveRepositoryRoot();
+    const service = await makeDerivativesService(dbInst, repoRoot);
+
+    // Current policy P1
+    await service.updateProjectPolicy({
+      projectId: env.projectId,
+      summary: { enabled: true, language: "en", policyVersion: "summary-instructions-v1" },
+      audio: { enabled: false, language: "en", policyVersion: "narration-projection-v1" },
+    });
+
+    // Current content C1
+    const [page] = (await new PageAuthorityReader(dbInst.db).currentPages(env.projectId)).filter(p => p.slug === "home");
+    assert.ok(page);
+    const content = { id: page.id, version: page.version, digest: page.contentDigest };
+
+    // 1. Accept Summary S1 and DerivativeSet D1
+    const seededD1 = await seedSyntheticProductionDerivativeSet(dbInst.db, repoRoot, {
+      projectId: env.projectId,
+      pageIdentity: "home",
+      sourceContent: content,
+      summaryText: "Initial Summary S1 text for page home.",
+    });
+
+    // Record D1 id, version, data, digest
+    const d1Id = seededD1.set.id;
+    const d1Version = seededD1.set.version;
+    const d1DataBefore = JSON.parse(JSON.stringify(seededD1.set.data));
+    const d1Digest = seededD1.set.setDigest;
+    assert.equal(d1Version, 1);
+
+    // D1 is current before D2 exists: requireProductionDerivativeSet(D1) PASSES
+    const verifiedD1Before = await requireProductionDerivativeSet({
+      db: dbInst.db,
+      projectId: env.projectId,
+      pageIdentity: "home",
+      setId: d1Id,
+      setVersion: d1Version,
+      setDigest: d1Digest,
+      currentContent: content,
+    });
+    assert.equal(verifiedD1Before.set.id, d1Id);
+
+    // Derive ProductionPageInput PI1 binding D1
+    const input1 = await env.production.deriveProductionInput({
+      projectId: env.projectId,
+      pageSlug: "home",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "astro-7.2.9",
+      rendererPolicyVersion: "production-policy-v1",
+    });
+    const input1Data = input1.data as { acceptedDerivativeSet?: { id: string; version: number; digest: string } };
+    assert.equal(input1Data.acceptedDerivativeSet?.id, d1Id);
+    assert.equal(input1Data.acceptedDerivativeSet?.version, d1Version);
+    assert.equal(input1Data.acceptedDerivativeSet?.digest, d1Digest);
+
+    const input1StalenessBefore = await env.production.inputStaleness(input1, {
+      siteProfileDigest: siteIdentity().profileDigest,
+      rendererVersion: "astro-7.2.9",
+      rendererPolicyVersion: "production-policy-v1",
+    });
+    assert.equal(input1StalenessBefore.stale, false);
+
+    // Bind a ProductionCandidate to PI1
+    const candidate1 = await env.production.createCandidate({
+      projectId: env.projectId,
+      productionInputId: input1.id,
+      repositorySha: "a".repeat(40),
+      lockfileDigest: "b".repeat(64),
+      currentEnvironment: {
+        siteProfileDigest: siteIdentity().profileDigest,
+        rendererVersion: "astro-7.2.9",
+        rendererPolicyVersion: "production-policy-v1",
+      },
+    });
+    assert.equal(candidate1.state, "pending");
+
+    // 2. Now create new accepted derivative version under the SAME content, policy, intent:
+    // Summary S1 -> S2, then accept D2
+    const seededD2 = await seedSyntheticProductionDerivativeSet(dbInst.db, repoRoot, {
+      projectId: env.projectId,
+      pageIdentity: "home",
+      sourceContent: content,
+      summaryText: "Updated Summary S2 text for page home.",
+    });
+    const d2Id = seededD2.set.id;
+    const d2Version = seededD2.set.version;
+    const d2Digest = seededD2.set.setDigest;
+    assert.equal(d2Version, 2);
+    assert.notEqual(d2Id, d1Id);
+    assert.notEqual(d2Digest, d1Digest);
+
+    // 3. Historical D1 still valid (Theorem A & Section 13):
+    const derivStore = new DerivativesStore(dbInst.db);
+    const reloadedD1 = await derivStore.getDerivativeSetById(env.projectId, d1Id);
+    assert.ok(reloadedD1);
+    // D1.data exactly unchanged from before D2 (deep equality)
+    assert.deepEqual(reloadedD1.data, d1DataBefore);
+    // parseAcceptedDerivativeSetData(D1.data) -> PASS
+    const parsedD1 = parseAcceptedDerivativeSetData(reloadedD1.data);
+    // acceptedDerivativeSetDigest(D1.data) == D1.setDigest
+    assert.equal(acceptedDerivativeSetDigest(parsedD1), d1Digest);
+    assert.equal(reloadedD1.setDigest, d1Digest);
+    assert.equal(reloadedD1.version, 1);
+
+    // 4. Production currentness (Theorem B & Section 14):
+    // requireProductionDerivativeSet(D1) MUST FAIL with production_authority_stale
+    await assert.rejects(
+      () =>
+        requireProductionDerivativeSet({
+          db: dbInst.db,
+          projectId: env.projectId,
+          pageIdentity: "home",
+          setId: d1Id,
+          setVersion: d1Version,
+          setDigest: d1Digest,
+          currentContent: content,
+        }),
+      (err: unknown) => {
+        assert.ok(err instanceof FactoryError);
+        assert.equal(err.code, "production_authority_stale");
+        assert.match(err.message, /superseded/i);
+        return true;
+      },
+    );
+
+    // requireProductionDerivativeSet(D2) MUST PASS
+    const verifiedD2 = await requireProductionDerivativeSet({
+      db: dbInst.db,
+      projectId: env.projectId,
+      pageIdentity: "home",
+      setId: d2Id,
+      setVersion: d2Version,
+      setDigest: d2Digest,
+      currentContent: content,
+    });
+    assert.equal(verifiedD2.set.id, d2Id);
+    assert.equal(verifiedD2.set.version, 2);
+    assert.equal(verifiedD2.set.setDigest, d2Digest);
+
+    // 5. Production input staleness must follow supersession (Section 15):
+    // Content unchanged, policy unchanged, intent unchanged: staleness reason is supersession.
+    const input1StalenessAfter = await env.production.inputStaleness(input1, {
+      siteProfileDigest: siteIdentity().profileDigest,
+      rendererVersion: "astro-7.2.9",
+      rendererPolicyVersion: "production-policy-v1",
+    });
+    assert.equal(input1StalenessAfter.stale, true);
+    assert.match(input1StalenessAfter.reason!, /superseded/i);
+
+    // 6. Candidate staleness (Section 16):
+    // Attempting to create a new candidate with PI1 now fails closed:
+    await assert.rejects(
+      () =>
+        env.production.createCandidate({
+          projectId: env.projectId,
+          productionInputId: input1.id,
+          repositorySha: "a".repeat(40),
+          lockfileDigest: "b".repeat(64),
+          currentEnvironment: {
+            siteProfileDigest: siteIdentity().profileDigest,
+            rendererVersion: "astro-7.2.9",
+            rendererPolicyVersion: "production-policy-v1",
+          },
+        }),
+      (err: unknown) => {
+        assert.ok(err instanceof FactoryError);
+        assert.equal(err.code, "production_authority_stale");
+        assert.match(err.message, /superseded/i);
+        return true;
+      },
+    );
+
+    // Existing candidate1 bound to PI1 can no longer proceed as current production authority:
+    // recordBuild detects that PI1 became stale, marks candidate1 stale in DB, and throws production_authority_stale.
+    await assert.rejects(
+      () =>
+        env.production.recordBuild({
+          projectId: env.projectId,
+          candidateId: candidate1.id,
+          artifactDigest: "c".repeat(64),
+          artifactRef: "artifacts/build-test",
+          assetReferences: [],
+          manifestSetDigest: "d".repeat(64),
+          redirectSnapshotDigest: "e".repeat(64),
+          candidateInputs: [
+            {
+              productionInputId: input1.id,
+              productionInputVersion: input1.version,
+              productionInputDigest: input1.inputDigest,
+              pageIdentity: input1.pageIdentity,
+              route: input1.route,
+              manifestDigest: "f".repeat(64),
+            },
+          ],
+          redirectRules: [],
+        }),
+      (err: unknown) => {
+        assert.ok(err instanceof FactoryError);
+        assert.equal(err.code, "production_authority_stale");
+        assert.match(err.message, /superseded/i);
+        return true;
+      },
+    );
+
+    const [reloadedCand] = await dbInst.db
+      .select()
+      .from(productionCandidates)
+      .where(eq(productionCandidates.id, candidate1.id));
+    assert.equal(reloadedCand?.state, "stale");
+  } finally {
+    await dbInst.close();
+    await rm(root, { recursive: true, force: true });
   }
 });

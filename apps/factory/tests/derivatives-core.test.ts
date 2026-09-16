@@ -20,6 +20,9 @@ import {
   NARRATION_POLICY_VERSION,
 } from "../src/derivatives/core.js";
 import { runSummaryQa } from "../src/derivatives/summary-qa.js";
+import { runSummaryInvocation, SUMMARY_ROLE_ID } from "../src/derivatives/summary-provider.js";
+import { MODEL_ROLE_POLICY } from "../src/models/policy.js";
+import { FactoryError } from "../src/executor/errors.js";
 import type { AcceptedPageContentData } from "@factory/contracts";
 
 const hex = (c: string) => c.repeat(64);
@@ -502,4 +505,47 @@ test("summary QA: YMYL content hardening rejects absolutized claims", () => {
     expectedLanguage: "en",
   });
   assert.equal(report.overall, "FAIL");
+});
+
+test("Theorem D / Section 18-21: page_summarizer future role blocks live summary execution before network with zero calls", async () => {
+  const policy = MODEL_ROLE_POLICY[SUMMARY_ROLE_ID as keyof typeof MODEL_ROLE_POLICY];
+  assert.equal(policy.implementationStatus, "future");
+
+  let networkCalls = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    networkCalls += 1;
+    throw new Error("HARD NETWORK TRAP: network must never be reached!");
+  }) as typeof globalThis.fetch;
+
+  try {
+    // Attempt live summary invocation without fixture override (deps.invoke undefined).
+    // Provide a valid-looking OPENROUTER_API_KEY in env so missing credentials is NOT the reason for failure.
+    await assert.rejects(
+      () =>
+        runSummaryInvocation(
+          {
+            promptSnapshotDigest: hex("1"),
+            projectId: "proj-1",
+            pageIdentity: "home",
+            systemPrompt: "System prompt",
+            userPrompt: "User prompt",
+          },
+          {
+            budget: {} as any, // Fail closed before budget or network
+            env: { OPENROUTER_API_KEY: "sk-or-v1-fake-test-key-12345678" },
+          },
+        ),
+      (err: unknown) => {
+        assert.ok(err instanceof FactoryError);
+        assert.equal(err.code, "derivative_generation_blocked");
+        assert.match(err.message, /implementationStatus is "future"/);
+        return true;
+      },
+    );
+
+    assert.equal(networkCalls, 0, "Network call count must be strictly 0");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

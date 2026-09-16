@@ -679,7 +679,6 @@ export class DerivativesService {
         setDigest,
         version: nextVersion,
       });
-      if (current) await txStore.markSetSuperseded(input.projectId, current.id);
       return { set: inserted, reused: false };
     });
   }

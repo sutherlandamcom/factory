@@ -209,6 +209,24 @@ export async function requireProductionDerivativeSet(
     );
   }
 
+  // 6b. Explicit current-set verification (Sections 8, 9, 10):
+  // The requested set must be the current accepted derivative set for this project/page.
+  const current = await derivStore.currentDerivativeSet(
+    input.projectId,
+    input.pageIdentity,
+  );
+  if (
+    !current ||
+    current.id !== setRow.id ||
+    current.version !== setRow.version ||
+    current.setDigest !== setRow.setDigest
+  ) {
+    throw new FactoryError(
+      "production_authority_stale",
+      "AcceptedDerivativeSet has been superseded by a newer accepted derivative set.",
+    );
+  }
+
   // 7. Source content exact id/version/digest
   if (
     setRow.sourceContentId !== input.currentContent.id ||

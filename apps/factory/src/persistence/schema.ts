@@ -2472,7 +2472,11 @@ export const acceptedSummaryArtifacts = pgTable(
       sql`${table.artifactDigest} ~ '^[0-9a-f]{64}$' AND ${table.sourceContentDigest} ~ '^[0-9a-f]{64}$' AND ${table.intentSnapshotDigest} ~ '^[0-9a-f]{64}$' AND ${table.promptSnapshotDigest} ~ '^[0-9a-f]{64}$' AND ${table.proposalDigest} ~ '^[0-9a-f]{64}$' AND ${table.qaReportDigest} ~ '^[0-9a-f]{64}$`,
     ),
     check("accepted_summary_artifacts_qa_overall_valid", sql`${table.qaOverall} IN ('PASS', 'REVIEW')`),
-    unique("accepted_summary_artifacts_project_version_unique").on(table.projectId, table.version),
+    unique("accepted_summary_artifacts_project_page_version_unique").on(
+      table.projectId,
+      table.pageIdentity,
+      table.version,
+    ),
     index("accepted_summary_artifacts_project_page_idx").on(table.projectId, table.pageIdentity, table.version),
   ],
 );
@@ -2595,7 +2599,11 @@ export const acceptedAudioArtifacts = pgTable(
       sql`${table.artifactDigest} ~ '^[0-9a-f]{64}$' AND ${table.sourceContentDigest} ~ '^[0-9a-f]{64}$' AND ${table.narrationSnapshotDigest} ~ '^[0-9a-f]{64}$' AND ${table.candidateDigest} ~ '^[0-9a-f]{64}$' AND ${table.binaryDigest} ~ '^[0-9a-f]{64}$`,
     ),
     check("accepted_audio_artifacts_mime_type_valid", sql`${table.mimeType} IN ('audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4')`),
-    unique("accepted_audio_artifacts_project_version_unique").on(table.projectId, table.version),
+    unique("accepted_audio_artifacts_project_page_version_unique").on(
+      table.projectId,
+      table.pageIdentity,
+      table.version,
+    ),
     index("accepted_audio_artifacts_project_page_idx").on(table.projectId, table.pageIdentity, table.version),
   ],
 );
@@ -2650,7 +2658,6 @@ export const acceptedDerivativeSets = pgTable(
       "accepted_derivative_sets_audio_identity",
       sql`(${table.audioState} = 'disabled' AND ${table.audioArtifactId} IS NULL AND ${table.audioDigest} IS NULL AND ${table.audioBinaryDigest} IS NULL) OR (${table.audioState} = 'accepted' AND ${table.audioArtifactId} IS NOT NULL AND ${table.audioDigest} IS NOT NULL AND ${table.audioVersion} IS NOT NULL AND ${table.audioBinaryDigest} IS NOT NULL)`,
     ),
-    unique("accepted_derivative_sets_project_version_unique").on(table.projectId, table.version),
     unique("accepted_derivative_sets_project_page_version_unique").on(
       table.projectId,
       table.pageIdentity,

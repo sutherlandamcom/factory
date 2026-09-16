@@ -191,6 +191,18 @@ export const OPERATOR_ERROR_CODES = [
   "visual_set_immutable",
   /** Slot has no accepted resolution yet (set acceptance fail-closed). */
   "visual_slot_unresolved",
+  // Run 10 — page derivatives (summary + narration/audio)
+  "derivative_policy_not_found",
+  "derivative_authority_stale",
+  "derivative_authority_digest_mismatch",
+  "derivative_authority_wrong_project",
+  "derivative_required_artifact_missing",
+  "derivative_fixture_not_production_authority",
+  "derivative_binary_digest_mismatch",
+  "derivative_artifact_immutable",
+  "derivative_generation_blocked",
+  "derivative_qa_failed",
+  "summary_provider_not_configured",
   /** Unexpected server fault (message is always the sanitized fixed string). */
   "internal_error",
 ] as const;
@@ -288,6 +300,17 @@ export const OPERATOR_ERROR_STATUS: Readonly<Record<OperatorErrorCode, number>> 
   visual_acceptance_failed: 409,
   visual_set_immutable: 409,
   visual_slot_unresolved: 409,
+  derivative_policy_not_found: 404,
+  derivative_authority_stale: 409,
+  derivative_authority_digest_mismatch: 409,
+  derivative_authority_wrong_project: 403,
+  derivative_required_artifact_missing: 404,
+  derivative_fixture_not_production_authority: 409,
+  derivative_binary_digest_mismatch: 409,
+  derivative_artifact_immutable: 409,
+  derivative_generation_blocked: 409,
+  derivative_qa_failed: 409,
+  summary_provider_not_configured: 503,
   internal_error: 500,
 };
 

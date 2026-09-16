@@ -290,5 +290,18 @@ export function parseContentQaReportData(input: unknown): ContentQaReportData {
 }
 
 export function parseAcceptedPageContentData(input: unknown): AcceptedPageContentData {
+  if (input !== null && typeof input === "object" && !("content" in input) && "sections" in input) {
+    const proposal = pageContentProposalDataSchema.parse(input);
+    return {
+      schemaVersion: WRITER_CONTENT_SCHEMA_VERSION,
+      proposalId: "wprp-implicit",
+      proposalVersion: 1,
+      proposalDigest: proposal.snapshotDigest,
+      qaReportDigest: "0".repeat(64),
+      slug: "",
+      title: proposal.title,
+      content: proposal,
+    };
+  }
   return acceptedPageContentDataSchema.parse(input);
 }

@@ -16,10 +16,10 @@ the domain model.
 
 Every meaningful implementation PR ends at `IMPLEMENTATION COMPLETE — PENDING INDEPENDENT QA`; independent QA reviews an exact SHA, frozen P0/P1 findings are remediated narrowly, then the exact candidate is re-reviewed before merge.
 
-## Observed implementation status — 2026-09-14
+## Observed implementation status — 2026-09-15
 
-Verified main: `15f38587b0d5caebfdcca38a94ae7dfaa179ac5e`.
-Recheck live Git/PR state at session start. Merge, executed checks and
+Verified main: `637bcb4fcb9fcc20d15dba5fb4fc9d94e6584f0f` (PR #39, Run 9
+merged). Recheck live Git/PR state at session start. Merge, executed checks and
 independent acceptance remain distinct facts; the table below is navigation,
 not a substitute for exact-SHA evidence.
 
@@ -34,8 +34,9 @@ not a substitute for exact-SHA evidence.
 | Macro Run 6 — Google Stitch Design Provider | Implemented, QA'd and merged | [PR #31](https://github.com/sutherlandamcom/factory/pull/31), head `660bdd11a3c27a687415f666aeb03649655b5074`, merge `928d8fab21d111dd6af89ea0c517db50baf6096b`; current Stitch seam is truthfully text-only for final local-asset byte ingestion |
 | Macro Run 7 — Final Visual Assets + Design/Asset Freeze | Implemented, remediated and merged | Core [PR #32](https://github.com/sutherlandamcom/factory/pull/32), main carry [PR #33](https://github.com/sutherlandamcom/factory/pull/33), E2E fix [PR #34](https://github.com/sutherlandamcom/factory/pull/34), seam remediation [PR #35](https://github.com/sutherlandamcom/factory/pull/35), final independent-QA remediation [PR #37](https://github.com/sutherlandamcom/factory/pull/37); current main `15f38587…` includes durable plan/slot resolution authority, cross-asset CAS, project-level advisory serialization and split provider evidence dimensions |
 | Macro Run 8 — Production Renderer Decision | Architecture decision accepted; no duplicate production prototype required | Evidence-based virtual bake-off selects **Astro static**. Stitch remains professional design authority; raw provider HTML is implementation/design evidence, not production authority. Direct-static is not maintained in parallel. |
-| Macro Run 9 — Production + SEO + Performance Engine | **NEXT implementation workstream** | Implement the selected Astro static production path over exact accepted Content + Design + VisualAsset authority with deterministic SEO/accessibility/performance/security gates |
-| Macro Runs 10–13 | Planned | Execute only after Run 9 exit criteria are independently accepted |
+| Macro Run 9 — Production + SEO + Performance Engine | Implemented, independently QA'd and merged | [PR #39](https://github.com/sutherlandamcom/factory/pull/39), merge `637bcb4fcb9fcc20d15dba5fb4fc9d94e6584f0f`; post-merge CI green |
+| Macro Run 10 — Page Derivatives: Summary + Audio | Implementation candidate; open, awaiting independent QA | Branch `feat/run10-page-derivatives`; builder verification only — no independent GO claimed |
+| Macro Runs 11–13 | Planned | Execute only after Run 10 exit criteria are independently accepted |
 
 Run 8 was intentionally resolved as an evidence-based architecture decision
 rather than by building two throwaway production stacks. The decision used the

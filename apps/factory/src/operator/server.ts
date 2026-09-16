@@ -382,12 +382,35 @@ export async function startOperatorServer(): Promise<http.Server> {
     provider: visualProvider,
     designService: design,
   });
+  // Deterministic offline summary fixture for E2E/test mode. Truthfully
+  // marked as a test double; never production authority.
+  const fixtureSummaryInvoke = async (request: { prompt: string }) => {
+    // Extract only the ACCEPTED PAGE CONTENT section of the compiled prompt.
+    const marker = "ACCEPTED PAGE CONTENT FOLLOWS:";
+    const source = String(request.prompt);
+    const accepted = source.includes(marker) ? source.split(marker)[1]! : source;
+    const sentences = accepted.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => s.length > 40);
+    return {
+      content: sentences.slice(0, 4).join(" "),
+      model: "fixture/page_summarizer",
+      promptTokens: null,
+      completionTokens: null,
+      totalTokens: null,
+      durationMs: 0,
+    };
+  };
   const { resolveRepositoryRoot } = await import("../repo-root.js");
   const { ProductionApiFacade } = await import("../production/api-facade.js");
   const repoRoot = await resolveRepositoryRoot();
+  // Derivative provider mode is trusted backend config only (never browser
+  // input): FACTORY_SUMMARY_MODE=fixture wires the offline fixture summary
+  // invocation so E2E journeys never touch a paid provider.
+  const summaryMode = process.env.FACTORY_SUMMARY_MODE === "fixture" ? "fixture" : "production";
+  const { DerivativesApiFacade } = await import("../derivatives/api-facade.js");
   const deps: OperatorApiDeps = {
     store, intake, search, competitors, writer, assets, design, visual,
     production: new ProductionApiFacade(dbInstance.db, repoRoot),
+    derivatives: new DerivativesApiFacade(dbInstance.db, repoRoot, summaryMode === "fixture" ? { summaryInvoke: fixtureSummaryInvoke } : {}),
   };
   const server = createOperatorServer(deps);
   const host = process.env.FACTORY_OPERATOR_HOST ?? "127.0.0.1";

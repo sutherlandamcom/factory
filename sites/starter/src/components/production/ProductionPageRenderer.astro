@@ -4,6 +4,7 @@ import type { ProductionRenderManifest } from "../../lib/production-manifest";
 interface Props { manifest: ProductionRenderManifest }
 const { manifest } = Astro.props;
 const { content, design, assets, links, breadcrumbs } = manifest;
+const derivatives = manifest.derivatives;
 function archetypeClasses(kind: typeof design.archetype.kind): { shell: string; hero: string; content: string } {
   switch (kind) {
     case "homepage": return { shell: "max-w-7xl", hero: "md:grid md:grid-cols-2 md:gap-16", content: "max-w-6xl" };
@@ -46,6 +47,19 @@ const jsonLd = breadcrumbJsonLd ? [pageJsonLd, breadcrumbJsonLd] : [pageJsonLd];
     <section class={`px-6 py-16 md:py-24 ${classes.hero}`} data-pattern={design.archetype.sectionPatterns[0]}>
       <div><h1 class="font-[var(--design-heading-font)] text-4xl font-semibold text-[var(--design-primary)] md:text-6xl">{content.title}</h1><p class="mt-8 text-lg leading-relaxed">{content.introduction}</p></div>
       {probableLcp && <img src={probableLcp.publicPath} alt={probableLcp.alt} width={probableLcp.width} height={probableLcp.height} loading="eager" decoding="async" data-version-id={probableLcp.versionId} data-binary-digest={probableLcp.binaryDigest} data-governance-digest={probableLcp.governanceDigest} data-truth-class={probableLcp.truthClass} class="mt-10 h-auto w-full rounded-[var(--radius-md)] object-cover" />}
+      {derivatives?.summary.state === "accepted" && (
+        <details class="mt-10 rounded-[var(--radius-md)] border border-[var(--design-secondary)] bg-[var(--design-surface)] p-4" data-derivative="summary" data-summary-digest={derivatives.summary.acceptedDigest}>
+          <summary class="cursor-pointer font-medium text-[var(--design-primary)]">AI-generated summary</summary>
+          <p class="mt-4 leading-relaxed">{derivatives.summary.summaryText}</p>
+        </details>
+      )}
+      {derivatives?.audio.state === "accepted" && (
+        <div class="mt-6 flex flex-col gap-2" data-derivative="audio" data-audio-digest={derivatives.audio.binaryDigest}>
+          <span class="font-medium text-[var(--design-primary)]">Listen to article</span>
+          <span class="text-sm opacity-75">Generated narration of this article.</span>
+          <audio controls preload="none" src={derivatives.audio.publicPath} class="w-full max-w-md"></audio>
+        </div>
+      )}
     </section>
     {renderedSections.map((section) => (
       <section class={`mx-auto px-6 py-[var(--space-lg)] ${classes.content} ${primitiveClass(section.primitive)}`} data-pattern={section.pattern}>

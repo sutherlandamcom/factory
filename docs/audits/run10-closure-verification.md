@@ -55,7 +55,7 @@ The following identities are distinct and must not be conflated:
 
 The QA remediation candidate `372fadaa…` and the final merged main `f11fd0f6…` are different objects: the former is the PR #41 branch head that was reviewed and tested as a candidate; the latter is the merge commit GitHub produced in `main`. Post-merge CI run `35080141954` ran against `f11fd0f6…` (head SHA verified via `gh run view`).
 
-Correction note: an earlier draft of this report used the SHA `f11fd0f8cb8b598b9e6ffecb30cfcf04d0932230` as the final main. That string does not correspond to any object in this repository's history. The correct final merged main is `f11fd0f6b1b60e2f56b9aba98cc219ca092056b8`. This report supersedes that draft.
+Correction note: an earlier draft of this report used an incorrect SHA (one character different from the correct final main) as the final main. That string does not correspond to any object in this repository's history. The correct final merged main is `f11fd0f6b1b60e2f56b9aba98cc219ca092056b8`. This report supersedes that draft.
 
 ---
 
@@ -304,6 +304,8 @@ Run 10 proves:
 - zero visitor-time generation.
 
 Accepted summary and audio derivatives are materialized into static Astro production output and can be consumed without visitor-time model or TTS execution.
+
+Derivative generation is operator-triggered and versioned. Accepted derivative artifacts are reused statically. Visitor interactions never trigger regeneration.
 
 Governed production delivery (deployment, preview, publish, rollback) belongs to a later run and is not claimed here. No Cloudflare delivery claim is made or implied by Run 10 evidence.
 

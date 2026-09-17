@@ -9,6 +9,7 @@ import { FactoryError } from "../executor/errors.js";
 import { ProjectIntakeStore } from "./intake-store.js";
 import { FactoryStore } from "../persistence/store.js";
 import { getProjectOperatorWorkspace } from "./workspace.js";
+import { deriveProjectWorkflow, deriveProjectVersions, deriveProjectCosts } from "./workflow.js";
 import type { SearchIntelligenceService } from "../search/service.js";
 import type { CompetitorContentGapService } from "../competitors/service.js";
 import type { WriterService } from "../writer/service.js";
@@ -370,6 +371,35 @@ export function createOperatorApi(deps: OperatorApiDeps) {
       if (req.method === "GET" && pathname === "/api/projects") {
         const projects = await deps.store.listProjects();
         return sendJson(res, 200, { projects });
+      }
+
+      // ------------------------------------------------------------------
+      // Macro Run 11 — derived operator workflow read model (read-only).
+      // No workflow state is persisted anywhere; every value is derived
+      // from the existing subsystem authorities on each read.
+      // ------------------------------------------------------------------
+      if (
+        req.method === "GET" &&
+        segments.length >= 3 &&
+        segments[0] === "projects" &&
+        (segments[2] === "workflow" || segments[2] === "workflow-versions" || segments[2] === "workflow-costs")
+      ) {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        const workflowDeps = { db: deps.store.db, intake: deps.intake };
+        if (segments[2] === "workflow-versions") {
+          const versions = await deriveProjectVersions(workflowDeps, project.id);
+          if (!versions) return sendError(res, "not_found", "Project not found.");
+          return sendJson(res, 200, versions);
+        }
+        if (segments[2] === "workflow-costs") {
+          const costs = await deriveProjectCosts(workflowDeps, project.id);
+          if (!costs) return sendError(res, "not_found", "Project not found.");
+          return sendJson(res, 200, costs);
+        }
+        const workflow = await deriveProjectWorkflow(workflowDeps, project.id);
+        if (!workflow) return sendError(res, "not_found", "Project not found.");
+        return sendJson(res, 200, workflow);
       }
 
       if (req.method === "GET" && segments.length === 3 && segments[0] === "projects" && segments[2] === "workspace") {

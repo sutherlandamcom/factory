@@ -65,13 +65,13 @@ Conversely, agents MUST NOT treat transitional behavior as permission to extend 
 - Factory orchestrates and governs; specialized providers create bounded outputs.
 - Real acquired search evidence underpins Search Intelligence; an LLM does not invent a current SERP.
 - Anthropic Opus is the intended marketing/editorial writer behind a human-approved exact writer prompt.
-- Professional design comes from an external `DesignProvider`; Google Stitch is the preferred first provider for v0 evaluation.
+- Professional design candidates come from an external `DesignProvider`; Google Stitch is the preferred first provider for v0 evaluation. The provider owns generation only. Human acceptance creates the immutable/version-bound `AcceptedDesignArtifact`, which is the durable Factory design authority.
 - Synthetic/generated imagery belongs behind `VisualAssetProvider`; the preferred v0 production direction is Google Vertex/Gemini Nano Banana Pro, while authentic operator-owned photography has priority when it is documentary evidence.
 - Code workers are implementation workers, not production marketing writers or design authorities. The current pre-vNext `create_page` compatibility path may still materialize minimal neutral connective prose from bounded `contentBrief` key points because it predates `AcceptedPageContent`; do not broaden that compatibility behavior, and do not use it as the design for new content workflows.
 - Typical mass-page production should become deterministic/cached rather than repeatedly invoking coding or vision models.
 - Per-page multimodal screenshot comparison is not a default QA strategy.
-- Run 8 selected **Astro 7 + Tailwind CSS 4 static rendering as the single ordinary production renderer**. Google Stitch remains professional design authority/input, not production runtime authority. Raw provider HTML may be retained as implementation/design evidence but is not a second production renderer. A parallel Stitch-native/direct-static ordinary production path may be introduced only by a later reviewed ADR satisfying the documented reversal conditions.
-- Governed production design implementation follows `docs/design-system-implementation-policy.md`: accepted design remains authority; implementation is deterministic/bounded; coding agents reuse registered capabilities and semantic tokens rather than silently redesigning pages.
+- Run 8 selected **Astro 7 + Tailwind CSS 4 static rendering as the single ordinary production renderer**. Google Stitch / `DesignProvider` remains professional design generation/evidence only, not Factory design authority and not production runtime authority. Raw provider HTML may be retained as implementation/design evidence but is not a second production renderer. A parallel Stitch-native/direct-static ordinary production path may be introduced only by a later reviewed ADR satisfying the documented reversal conditions.
+- Governed production design implementation follows `docs/design-system-implementation-policy.md`: `AcceptedDesignArtifact` remains authority; implementation is deterministic/bounded; coding agents reuse registered capabilities and semantic tokens rather than silently redesigning pages.
 
 ## Known transitional names that are not future authority
 

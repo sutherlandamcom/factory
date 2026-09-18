@@ -257,11 +257,41 @@ Connect existing vertical Dashboard slices into one coherent operator lifecycle 
 
 Do not build a generic CMS or visual page builder. Dashboard remains a semantic operator console.
 
+### Pre-Run-12 — Design System Implementation Hardening
+
+After Run 11 is independently accepted, merged and post-merge verified, harden
+the implementation layer between accepted design authority and Astro before the
+multi-page proof. Re-baseline against the exact post-Run-11 `main` SHA first.
+
+The governing policy is `docs/design-system-implementation-policy.md`.
+
+The hardening must preserve the existing architecture:
+
+`AcceptedDesignArtifact -> deterministic implementation contract/policy -> governed semantic tokens -> registered reusable Astro components -> bounded archetype composition -> Astro static output`.
+
+This workstream must not create a second accepted design authority, a parallel
+Stitch-native renderer, a generic visual page builder or a new mutable workflow
+state. The default expectation is zero database migrations, zero new runtime
+dependencies and zero paid provider calls for the hardening itself.
+
+Exit: accepted design deterministically controls reusable implementation;
+ordinary pages use registered bounded components/variants and governed semantic
+tokens; design-drift, component accessibility and visual-regression gates are
+automated; fixture routes cannot leak into production; lineage/staleness remains
+correct; and reuse can be measured for Run 12. Builder completion still requires
+independent exact-SHA QA before merge.
+
 ### Macro Run 12 — High-quality Multi-page Proof
 
 Produce a small coherent Sutherland set such as homepage + service + location + editorial/research page using one accepted design system and multiple archetypes.
 
 Prove search/content strategy, internal links, no cannibalization, accepted content quality, authentic/generated asset discipline, SEO/performance and cheap template/archetype reuse.
+
+In addition to the representative archetypes, use an additional ordinary-page
+scalability proof where practical: the expected steady state is no new design
+authority, no new renderer, no new DesignProvider call and approximately zero
+new component families for a normal page that fits the accepted design system.
+Report factual reuse evidence rather than a subjective design score.
 
 Measure per-page/provider cost. The desired steady state is that a typical page using an accepted archetype does not require a new design or coding-model call.
 

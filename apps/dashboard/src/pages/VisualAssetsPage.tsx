@@ -475,7 +475,12 @@ function VisualSlotCard({
       )}
 
       {/* Resolution actions */}
-      {!slot.resolved && slot.truthClass && (
+      {/* A pre-bound design slot shows resolved=true (Run 5 assignment
+          exists) but still needs the operator's explicit durable reuse
+          resolution before set acceptance, so the reuse action renders for
+          any slot with a bindable approved version that has no durable
+          resolution record yet. */}
+      {slot.truthClass && !slot.acceptedResolution && (
         <div className="mt-3 space-y-2">
           {slot.existingVersionId && (
             <button

@@ -5,7 +5,6 @@ import {
   parseSiteBlueprint,
   parseSiteProfile,
   parseSiteProductionSpec,
-  productionQaCheckResultSchema,
 } from "@factory/contracts";
 import { runPersistedSiteTask } from "./persistence/driver.js";
 import { resolveDatabaseConfig, sanitizeDatabaseUrl } from "./persistence/config.js";
@@ -30,7 +29,7 @@ import {
 } from "./site-production/index.js";
 import type { DeploymentResult } from "@factory/contracts";
 import pkg from "../package.json" with { type: "json" };
-import { ProductionStore } from "./production/store.js";
+import { importTrustedQaEvidenceFromFile } from "./production/qa/evidence-import.js";
 
 const USAGE = `Factory persistent control plane v${pkg.version}
 
@@ -142,25 +141,15 @@ async function main(argv: string[]): Promise<number> {
 
     if (command === "production" && rest[0] === "qa-import" && rest.length === 4) {
       const [projectId, candidateId, evidencePath] = rest.slice(1);
-      const raw = JSON.parse(await readFile(path.resolve(evidencePath!), "utf8")) as {
-        artifactDigest?: string; repositorySha?: string; lockfileDigest?: string; checks?: unknown[];
-      };
-      if (!Array.isArray(raw.checks) || raw.checks.length === 0) throw new FactoryError("production_qa_failed", "Trusted evidence report contains no checks.");
-      const allowed = new Set(["accessibility.axe", "accessibility.keyboard", "performance.lighthouse", "security.gitleaks", "security.osv"]);
-      const checks = raw.checks.map((entry) => productionQaCheckResultSchema.parse(entry));
-      if (checks.some((check) => !allowed.has(check.checkId))) throw new FactoryError("production_qa_failed", "Trusted importer accepts only browser, Lighthouse, Gitleaks, and OSV evidence.");
-      const config = resolveDatabaseConfig({ requireConfigured: true });
-      const dbInst = createDatabaseInstance(config);
-      try {
-        const store = new ProductionStore(dbInst.db);
-        for (const check of checks) {
-          await store.recordTrustedQaEvidence({ projectId: projectId!, candidateId: candidateId!, check, artifactDigest: raw.artifactDigest, repositorySha: raw.repositorySha, lockfileDigest: raw.lockfileDigest });
-        }
-        console.log(`TRUSTED PRODUCTION QA EVIDENCE IMPORTED: candidate=${candidateId} checks=${checks.length}`);
-        return 0;
-      } finally {
-        await dbInst.close();
-      }
+      // Shared application seam (production/qa/evidence-import.ts) — the CLI
+      // and the Operator API QA collector share one evidence-semantics path.
+      const result = await importTrustedQaEvidenceFromFile({
+        projectId: projectId!,
+        candidateId: candidateId!,
+        evidencePath: path.resolve(evidencePath!),
+      });
+      console.log(`TRUSTED PRODUCTION QA EVIDENCE IMPORTED: candidate=${candidateId} checks=${result.imported}`);
+      return 0;
     }
 
     if (command === "project") {

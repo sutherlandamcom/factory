@@ -114,6 +114,133 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return parsed as T;
 }
 
+export type WorkflowAreaId =
+  | "intake"
+  | "research"
+  | "content"
+  | "assets"
+  | "design"
+  | "production"
+  | "qa"
+  | "versions"
+  | "costs"
+  | "deployment";
+
+export type WorkflowState =
+  | "NOT_STARTED"
+  | "READY"
+  | "IN_PROGRESS"
+  | "REVIEW_REQUIRED"
+  | "ACCEPTED"
+  | "STALE"
+  | "BLOCKED"
+  | "NOT_APPLICABLE";
+
+export interface WorkflowAuthorityRef {
+  kind: string;
+  id: string;
+  version?: number;
+  digest?: string;
+  acceptedAt?: string;
+  pageIdentity?: string;
+}
+
+export interface WorkflowBlocker {
+  code: string;
+  area: WorkflowAreaId;
+  message: string;
+  pageIdentity?: string;
+  authorityRef?: WorkflowAuthorityRef;
+  resolutionRoute?: string;
+}
+
+export interface WorkflowNextAction {
+  actionId: string;
+  area: WorkflowAreaId;
+  label: string;
+  route: string;
+  reasonCode: string;
+  reasonMessage: string;
+  pageIdentity?: string;
+}
+
+export interface PageWorkflowCell {
+  state: WorkflowState;
+  relation?: "CURRENT" | "HISTORICAL";
+  freshness?: "CURRENT" | "STALE";
+  version?: number;
+  digest?: string;
+}
+
+export interface PageWorkflowRow {
+  pageIdentity: string;
+  content: PageWorkflowCell;
+  assets: PageWorkflowCell;
+  design: PageWorkflowCell;
+  derivatives: PageWorkflowCell;
+  production: PageWorkflowCell;
+  qa: PageWorkflowCell;
+}
+
+export interface DeploymentReadiness {
+  state: "BLOCKED" | "READY_FOR_DEPLOYMENT";
+  candidate?: WorkflowAuthorityRef;
+  blockers: WorkflowBlocker[];
+  qaCurrent: boolean;
+}
+
+export interface ProjectWorkflowReadModel {
+  projectId: string;
+  overall: "IN_PROGRESS" | "BLOCKED" | "READY_FOR_DEPLOYMENT";
+  areas: Array<{
+    area: WorkflowAreaId;
+    state: WorkflowState;
+    blockers: WorkflowBlocker[];
+    staleReasons: Array<{ code: string; message: string; authorityRef?: WorkflowAuthorityRef }>;
+    currentAuthorities: WorkflowAuthorityRef[];
+    historicalCount?: number;
+    pageCounts?: { total: number; current: number; stale: number; blocked: number };
+  }>;
+  nextAction: WorkflowNextAction | null;
+  secondaryActionCount: number;
+  pages: PageWorkflowRow[];
+  deployment: DeploymentReadiness;
+}
+
+export interface ArtifactVersionSummary {
+  artifactKind: string;
+  pageIdentity?: string;
+  id: string;
+  version: number;
+  digest: string;
+  acceptedAt?: string;
+  relation: "CURRENT" | "HISTORICAL";
+  freshness?: "CURRENT" | "STALE";
+  sourceAuthorities?: WorkflowAuthorityRef[];
+}
+
+export interface ProjectVersionsReadModel {
+  projectId: string;
+  artifacts: ArtifactVersionSummary[];
+}
+
+export type CostValue = { kind: "KNOWN"; amountUsd: number } | { kind: "UNKNOWN" };
+
+export interface ProjectCostsReadModel {
+  projectId: string;
+  rows: Array<{
+    provider: string;
+    model: string | null;
+    operation: string;
+    pageIdentity: string | null;
+    calls: number;
+    knownCost: CostValue;
+    unknownCostCalls: number;
+  }>;
+  unattributedCalls: number;
+  unavailableSources: Array<{ source: string; reason: string }>;
+}
+
 export const api = {
   listProjects: () => request<{ projects: ProjectSummary[] }>("/api/projects"),
 
@@ -266,6 +393,23 @@ export const api = {
   getAcceptedGapDetail: (projectId: string, version: number) =>
     request<AcceptedGapDetail>(
       `/api/projects/${encodeURIComponent(projectId)}/content-gaps/accepted/${version}/detail`,
+    ),
+
+  // ---- Run 11 — derived operator workflow read model (read-only) ----------
+
+  getWorkflow: (projectId: string) =>
+    request<ProjectWorkflowReadModel>(
+      `/api/projects/${encodeURIComponent(projectId)}/workflow`,
+    ),
+
+  getWorkflowVersions: (projectId: string) =>
+    request<ProjectVersionsReadModel>(
+      `/api/projects/${encodeURIComponent(projectId)}/workflow-versions`,
+    ),
+
+  getWorkflowCosts: (projectId: string) =>
+    request<ProjectCostsReadModel>(
+      `/api/projects/${encodeURIComponent(projectId)}/workflow-costs`,
     ),
 };
 
@@ -1374,6 +1518,17 @@ export const productionApi = {
       { method: "POST", body: JSON.stringify({}) },
     ),
 
+  /**
+   * Run 11: collect current mandatory trusted QA evidence (axe, keyboard,
+   * Lighthouse, gitleaks, OSV) for this exact candidate through the real
+   * Operator API. Does NOT set candidate state — Run QA decides.
+   */
+  collectQaEvidence: (projectId: string, candidateId: string) =>
+    request<{ collected: number; verdicts: Record<string, string> }>(
+      `/api/projects/${encodeURIComponent(projectId)}/production/candidates/${encodeURIComponent(candidateId)}/qa-evidence`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+
   candidateDetail: (projectId: string, candidateId: string) =>
     request<ProductionCandidateDetail>(
       `/api/projects/${encodeURIComponent(projectId)}/production/candidates/${encodeURIComponent(candidateId)}`,
@@ -1516,5 +1671,26 @@ export const derivativesApi = {
     request<{ id: string; version: number; digest: string; reused: boolean }>(
       `/api/projects/${encodeURIComponent(projectId)}/derivatives/pages/${encodeURIComponent(pageIdentity)}/set/accept`,
       { method: "POST", body: JSON.stringify({}) },
+    ),
+};
+
+// ---------------------------------------------------------------------------
+// Run 11 — derived operator workflow read model (read-only)
+// ---------------------------------------------------------------------------
+
+export const workflowApi = {
+  getWorkflow: (projectId: string) =>
+    request<ProjectWorkflowReadModel>(
+      `/api/projects/${encodeURIComponent(projectId)}/workflow`,
+    ),
+
+  getVersions: (projectId: string) =>
+    request<ProjectVersionsReadModel>(
+      `/api/projects/${encodeURIComponent(projectId)}/workflow-versions`,
+    ),
+
+  getCosts: (projectId: string) =>
+    request<ProjectCostsReadModel>(
+      `/api/projects/${encodeURIComponent(projectId)}/workflow-costs`,
     ),
 };

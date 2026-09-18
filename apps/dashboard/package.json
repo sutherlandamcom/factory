@@ -11,8 +11,11 @@
     "test:e2e": "node scripts/operator-e2e-setup.mjs && node scripts/operator-e2e-run.mjs"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.103.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-hook-form": "^7.88.0",
+    "react-router-dom": "^7.18.4"
   },
   "devDependencies": {
     "@playwright/test": "~1.61.1",

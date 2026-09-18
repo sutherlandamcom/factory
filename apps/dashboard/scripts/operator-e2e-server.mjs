@@ -17,7 +17,8 @@
  * supervisor adds no behavior of its own.
  */
 import http from "node:http";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { writeFileSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import net from "node:net";
@@ -33,6 +34,10 @@ const FACTORY_ROOT = path.resolve(__dirname, "../../factory");
 // supervisor and Playwright wait on.
 const CHILD_ENV = {
   ...process.env,
+  // Trusted QA scanners may be installed in the user bin dir (osv-scanner is
+  // environment tooling, not a repo dependency); extend PATH so the operator
+  // child's executor can resolve them.
+  PATH: `${process.env.HOME}/bin:${process.env.PATH ?? ""}`,
   FACTORY_OPERATOR_PORT: String(OPERATOR_PORT),
   FACTORY_DATABASE_URL: process.env.FACTORY_TEST_DATABASE_URL || process.env.FACTORY_DATABASE_URL,
   // E2E runs Search with the deterministic fixture provider/analyst so the
@@ -43,12 +48,19 @@ const CHILD_ENV = {
   // Writer pipeline (Macro Run 4): fixture writer provider so the full
   // journey never touches a paid provider. Trusted backend config only.
   FACTORY_WRITER_MODE: process.env.FACTORY_WRITER_MODE || "fixture",
-  // Design pipeline (Macro Run 6): fixture design provider so the full
-  // journey never touches a paid provider. Trusted backend config only.
+  // Design/visual pipelines (Macro Runs 6–7): deterministic fixture
+  // providers so the journey never touches a paid provider. Fixture
+  // authority is never production authority; the E2E journey seeds
+  // test-only synthetic production authority through the guarded test
+  // harness (see run11-synthetic-authority.ts), never via provider modes.
   FACTORY_DESIGN_MODE: process.env.FACTORY_DESIGN_MODE || "fixture",
-  // Visual pipeline (Macro Run 7): fixture visual provider so the full
-  // journey never touches a paid provider. Trusted backend config only.
   FACTORY_VISUAL_MODE: process.env.FACTORY_VISUAL_MODE || "fixture",
+  // Run 11: configure the trusted local QA evidence executor (fixed local
+  // OSS tools; the browser journey calls the REAL Operator API action).
+  FACTORY_QA_EXECUTOR: process.env.FACTORY_QA_EXECUTOR || "local",
+  // Derivatives (Macro Run 10): fixture summary provider so the full
+  // journey never touches a paid provider. Trusted backend config only.
+  FACTORY_SUMMARY_MODE: process.env.FACTORY_SUMMARY_MODE || "fixture",
 };
 
 /** @type {import('node:child_process').ChildProcess | null} */
@@ -137,6 +149,46 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && req.url === "/stop") {
       await stopOperator();
       return send(200, { ok: true });
+    }
+    if (req.method === "POST" && req.url?.startsWith("/seed-synthetic-authority")) {
+      // Run 11 test bootstrap ONLY (§53): seeds test-only synthetic
+      // production authority into the DEDICATED test database so the
+      // browser journey can exercise downstream workflow mechanics. The
+      // seed helper fails closed on any non-test database and is never
+      // reachable through the production Operator API. The browser journey
+      // does not call this endpoint for any workflow action.
+      let raw = "";
+      req.on("data", (chunk) => (raw += chunk));
+      await new Promise((resolve) => req.on("end", resolve));
+      const { projectId, pageSlug } = JSON.parse(raw || "{}");
+      if (!projectId || !pageSlug) return send(400, { error: { code: "validation_error", message: "projectId and pageSlug are required." } });
+      // The supervisor is a plain Node process; TypeScript sources are
+      // executed through the repository's tsx runtime (same as the operator
+      // child itself).
+      const seedScript = [
+        'import { createDatabaseInstance } from "./src/persistence/db.js";',
+        'import { seedRun11SyntheticDesignAuthorityForTest } from "./src/production/qa/run11-synthetic-authority.js";',
+        "const db = createDatabaseInstance({ connectionString: process.env.FACTORY_TEST_DATABASE_URL, isTest: true }).db;",
+        "const result = await seedRun11SyntheticDesignAuthorityForTest(db, { projectId: process.argv[2], pageSlug: process.argv[3] });",
+        "process.stdout.write(JSON.stringify(result));",
+        "process.exit(0);",
+      ].join("\n");
+      const seedFile = path.join(FACTORY_ROOT, ".factory-seed-run11.mts");
+      writeFileSync(seedFile, seedScript);
+      try {
+        const seedRes = spawnSync(
+          process.execPath,
+          [path.join(FACTORY_ROOT, "node_modules", "tsx", "dist", "cli.mjs"), seedFile, projectId, pageSlug],
+          { cwd: FACTORY_ROOT, env: { ...process.env }, encoding: "utf8", timeout: 180_000 },
+        );
+        if (seedRes.status !== 0) {
+          throw new Error(`synthetic seed failed: ${(seedRes.stderr || seedRes.stdout).slice(-300)}`);
+        }
+        const result = JSON.parse(seedRes.stdout.trim().split("\n").filter(Boolean).pop());
+        return send(200, { ok: true, ...result });
+      } finally {
+        rmSync(seedFile, { force: true });
+      }
     }
     if (req.method === "GET" && req.url === "/health") {
       return send(200, { ok: true, running: Boolean(child) });

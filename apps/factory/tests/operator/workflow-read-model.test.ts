@@ -24,6 +24,7 @@ import {
   summaryProposals,
   summaryPromptSnapshots,
   pageDerivativeIntentSnapshots,
+  projectDerivativePolicies,
   visualGenerationRequests,
   visualPromptSnapshots,
   visualAssetPlans,
@@ -86,6 +87,39 @@ async function insertAcceptedContent(
   return row!;
 }
 
+async function insertDerivativePolicy(db: FactoryDatabaseInstance["db"], projectId: string) {
+  const existing = await db
+    .select({ id: projectDerivativePolicies.id })
+    .from(projectDerivativePolicies)
+    .where(eq(projectDerivativePolicies.projectId, projectId))
+    .limit(1);
+  if (existing.length > 0) return existing[0]!;
+  const [row] = await db
+    .insert(projectDerivativePolicies)
+    .values({
+      id: `dpol-${randomUUID()}`,
+      projectId,
+      version: 1,
+      summaryEnabled: true,
+      summaryLanguage: "en",
+      summaryPolicyVersion: "summary-instructions-v1",
+      audioEnabled: false,
+      audioLanguage: "en",
+      audioVoiceId: "fixture-voice-1",
+      audioPolicyVersion: "narration-projection-v1",
+      data: {
+        schemaVersion: "derivatives-v1",
+        projectId,
+        version: 1,
+        summary: { enabled: true, language: "en", policyVersion: "summary-instructions-v1" },
+        audio: { enabled: false, language: "en", voiceId: null, policyVersion: "narration-projection-v1" },
+      },
+      policyDigest: deterministicDigest({ dpol: projectId }),
+    })
+    .returning();
+  return row!;
+}
+
 async function insertDerivativeSet(
   db: FactoryDatabaseInstance["db"],
   projectId: string,
@@ -93,6 +127,8 @@ async function insertDerivativeSet(
   version: number,
   source: { id: string; version: number; digest: string },
 ) {
+  // A derivative set can only exist when project defaults enable derivatives.
+  await insertDerivativePolicy(db, projectId);
   // Real FK chain: page_derivative_intent_snapshots -> accepted_derivative_sets.
   const [intent] = await db
     .insert(pageDerivativeIntentSnapshots)

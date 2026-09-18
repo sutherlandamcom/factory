@@ -48,6 +48,12 @@ export interface OperatorApiDeps {
   readonly production?: ProductionApiFacade;
   /** Page derivatives v0 (Macro Run 10); optional for backward compatibility. */
   readonly derivatives?: import("../derivatives/api-facade.js").DerivativesApiFacade;
+  /**
+   * Run 11 trusted-QA evidence collector; optional. Absent = this
+   * environment has no trusted QA executor configured (typed
+   * qa_tool_unavailable; fail closed — never treated as PASS).
+   */
+  readonly qaCollector?: import("../production/qa/collector.js").ProductionQaEvidenceCollector;
 }
 
 const projectKeySchema = z
@@ -640,7 +646,7 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         }
 
         // GET /api/projects/:id/derivatives/summary/:proposalId/review
-        if (req.method === "GET" && segments.length === 7 && segments[3] === "summary" && segments[5] === "review") {
+        if (req.method === "GET" && segments.length === 6 && segments[3] === "summary" && segments[5] === "review") {
           return sendJson(res, 200, await derivatives.summaryReview(projectId, segments[4]!));
         }
 
@@ -656,7 +662,7 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         }
 
         // GET /api/projects/:id/derivatives/audio/:candidateId/review
-        if (req.method === "GET" && segments.length === 7 && segments[3] === "audio" && segments[5] === "review") {
+        if (req.method === "GET" && segments.length === 6 && segments[3] === "audio" && segments[5] === "review") {
           return sendJson(res, 200, await derivatives.audioReview(projectId, segments[4]!));
         }
 
@@ -1325,6 +1331,22 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         if (req.method === "POST" && segments.length === 6 && segments[3] === "candidates" && segments[5] === "qa") {
           if (body.trim()) parseJsonBody(body);
           const result = await production.runCandidateQa({ projectId: project.id, candidateId: segments[4]! });
+          return sendJson(res, 200, result);
+        }
+
+        // POST collect trusted QA evidence:
+        // /projects/:id/production/candidates/:candidateId/qa-evidence
+        // Run 11: collects current mandatory trusted evidence (axe, keyboard,
+        // Lighthouse, gitleaks, OSV) for this EXACT candidate through the
+        // configured trusted executor and persists it via the shared Run 9
+        // import authority. It does NOT set candidate state — runCandidateQa
+        // remains the sole QA decision authority.
+        if (req.method === "POST" && segments.length === 6 && segments[3] === "candidates" && segments[5] === "qa-evidence") {
+          if (!deps.qaCollector) {
+            return sendError(res, "qa_tool_unavailable", "No trusted QA evidence executor is configured in this environment.");
+          }
+          if (body.trim()) parseJsonBody(body);
+          const result = await deps.qaCollector.collect({ projectId: project.id, candidateId: segments[4]! });
           return sendJson(res, 200, result);
         }
 

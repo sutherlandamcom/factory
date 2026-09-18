@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import http from "node:http";
+import { gotoArea, gotoIntakeSection, gotoSubsection } from "./run11-navigation";
 
 /**
  * REAL BROWSER Search Intelligence journey (Macro Run 2 acceptance):
@@ -58,7 +59,7 @@ async function createAndAcceptProject(page: Page) {
   await expect(page.locator("h1", { hasText: PROJECT.name })).toBeVisible({ timeout: 10_000 });
 
   const set = async (tab: string, label: string, value: string) => {
-    await page.getByRole("button", { name: tab, exact: true }).click();
+    await gotoIntakeSection(page, tab);
     await page.getByLabel(label, { exact: false }).first().fill(value);
   };
   await set("Business", "Business Name", "E2E Search Roofing Co");
@@ -68,7 +69,7 @@ async function createAndAcceptProject(page: Page) {
   await set("Conversion", "CTA Destination", "tel:+15550100100");
   await set("Search Seeds", "Seed Queries", "roof repair austin");
   await page.getByRole("button", { name: "Save Draft" }).click();
-  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await gotoIntakeSection(page, "Review");
   await page.getByRole("button", { name: "ACCEPT INPUTS" }).click();
   await expect(
     page.locator("span", { hasText: /^APPROVED$/i }).first(),
@@ -83,7 +84,7 @@ test.describe("Search Intelligence journey", () => {
     await createAndAcceptProject(page);
 
     // 2. Open the Search workspace; accepted-input lineage + seeds visible.
-    await page.getByRole("button", { name: "Search", exact: true }).click();
+    await gotoSubsection(page, "Research", "Search");
     await expect(page.getByTestId("search-workspace")).toBeVisible({ timeout: 10_000 });
     await expect(page.getByTestId("search-accepted-version")).toHaveText(/v1/);
     await expect(page.getByRole("button", { name: "roof repair austin" })).toBeVisible();
@@ -94,7 +95,7 @@ test.describe("Search Intelligence journey", () => {
     // 3. Pick the seed query and run the search.
     await page.getByRole("button", { name: "roof repair austin" }).click();
     await page.getByLabel("Location", { exact: false }).fill("Austin, TX");
-    await page.getByRole("button", { name: "Run Search" }).click();
+    await page.getByTestId("search-workspace").getByRole("button", { name: "Run Search" }).click();
 
     // 4. Run detail renders: SERP organic results (human-readable list).
     await expect(page.getByTestId("search-run-detail")).toBeVisible({ timeout: 30_000 });
@@ -127,7 +128,7 @@ test.describe("Search Intelligence journey", () => {
     // 7. Reload the browser — run persists and is re-openable from history.
     await page.reload();
     await openProject(page);
-    await page.getByRole("button", { name: "Search", exact: true }).click();
+    await gotoSubsection(page, "Research", "Search");
     await expect(page.getByTestId("search-history").locator("tbody tr").first()).toBeVisible({ timeout: 10_000 });
     await expect(page.getByTestId("search-history")).toContainText("roof repair austin");
     await page.getByRole("button", { name: "Inspect" }).first().click();
@@ -136,7 +137,7 @@ test.describe("Search Intelligence journey", () => {
     // 8. Restart the Operator service WITHOUT resetting the DB.
     await supervisorCall("/restart");
     await openProject(page);
-    await page.getByRole("button", { name: "Search", exact: true }).click();
+    await gotoSubsection(page, "Research", "Search");
     await expect(page.getByTestId("search-accepted-version")).toHaveText(/v1/, { timeout: 15_000 });
     await expect(page.getByTestId("search-history").locator("tbody tr").first()).toBeVisible({ timeout: 15_000 });
 

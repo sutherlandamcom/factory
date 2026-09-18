@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import http from "node:http";
+import { gotoArea, gotoIntakeSection, gotoSubsection } from "./run11-navigation";
 
 /**
  * REAL BROWSER Operator journey (Macro Run 1 acceptance):
@@ -44,7 +45,7 @@ const PROJECT = {
 /** Fill intake fields needed to reach READY (including Audience segments and Conversion CTA destination). */
 async function fillIntake(page: Page) {
   const set = async (tab: string, label: string, value: string) => {
-    await page.getByRole("button", { name: tab, exact: true }).click();
+    await gotoIntakeSection(page, tab);
     await page.getByLabel(label, { exact: false }).first().fill(value);
   };
 
@@ -96,7 +97,7 @@ test.describe("Operator journey", () => {
     await expectStatus(page, "READY");
 
     // 5. Review tab -> visibly contains actual audience segments and CTA destination.
-    await page.getByRole("button", { name: "Review", exact: true }).click();
+    await gotoIntakeSection(page, "Review");
     await expect(page.getByText("Residential Homeowners, Commercial Property Managers")).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("tel:+15550100100")).toBeVisible({ timeout: 10_000 });
 
@@ -105,12 +106,12 @@ test.describe("Operator journey", () => {
     await page.getByRole("button", { name: "ACCEPT INPUTS" }).click();
     await expectStatus(page, "APPROVED");
 
-    // Versions tab shows exactly v1 as CURRENT ACCEPTED.
-    await page.getByRole("button", { name: "Versions", exact: true }).click();
-    const v1Card = page.locator("div.rounded-lg.border.p-4", { hasText: /^v1/ }).first();
-    await expect(v1Card.locator("span", { hasText: "CURRENT ACCEPTED" })).toBeVisible();
-    const v1DigestValue = (await v1Card.locator("div.font-mono").innerText()).replace("digest:", "").trim();
-    expect(v1DigestValue).toMatch(/^[0-9a-f]{64}$/);
+    // Versions area shows exactly v1 as CURRENT for ProjectInputSnapshot.
+    await gotoArea(page, "Versions");
+    const v1Row = page.locator("div:has(> h3:text('ProjectInputSnapshot')) tr", { hasText: "v1" }).first();
+    await expect(v1Row.locator("span", { hasText: /^CURRENT$/i })).toBeVisible();
+    const v1DigestValue = (await v1Row.locator("td.font-mono").first().innerText()).trim();
+    expect(v1DigestValue).toMatch(/^[0-9a-f]{16}/);
 
     // 6. Reload the browser — accepted v1 persists.
     await page.reload();
@@ -123,13 +124,13 @@ test.describe("Operator journey", () => {
     await expectStatus(page, "APPROVED");
 
     // v1 still current after restart.
-    await page.getByRole("button", { name: "Versions", exact: true }).click();
-    const v1After = page.locator("div.rounded-lg.border.p-4", { hasText: /^v1/ }).first();
-    await expect(v1After.locator("span", { hasText: "CURRENT ACCEPTED" })).toBeVisible();
-    await expect(v1After.locator("div.font-mono")).toContainText(v1DigestValue);
+    await gotoArea(page, "Versions");
+    const v1After = page.locator("div:has(> h3:text('ProjectInputSnapshot')) tr", { hasText: "v1" }).first();
+    await expect(v1After.locator("span", { hasText: /^CURRENT$/i })).toBeVisible();
+    await expect(v1After.locator("td.font-mono").first()).toContainText(v1DigestValue.slice(0, 16));
 
     // 8. Edit the draft -> Save -> CHANGED (v1 must remain unchanged).
-    await page.getByRole("button", { name: "Business", exact: true }).click();
+    await gotoIntakeSection(page, "Business");
     await page.getByLabel("Description").first().fill(
       "UPDATED after acceptance by the operator journey (v2 candidate).",
     );
@@ -138,26 +139,27 @@ test.describe("Operator journey", () => {
     await expectStatus(page, "CHANGED");
 
     // v1 digest must be unchanged.
-    await page.getByRole("button", { name: "Versions", exact: true }).click();
-    const v1BeforeV2 = page.locator("div.rounded-lg.border.p-4", { hasText: /^v1/ }).first();
-    await expect(v1BeforeV2.locator("span", { hasText: "CURRENT ACCEPTED" })).toBeVisible();
-    await expect(v1BeforeV2.locator("div.font-mono")).toContainText(v1DigestValue);
+    await gotoArea(page, "Versions");
+    const v1BeforeV2 = page.locator("div:has(> h3:text('ProjectInputSnapshot')) tr", { hasText: "v1" }).first();
+    await expect(v1BeforeV2.locator("span", { hasText: /^CURRENT$/i })).toBeVisible();
+    await expect(v1BeforeV2.locator("td.font-mono").first()).toContainText(v1DigestValue.slice(0, 16));
 
     // 9. ACCEPT v2 -> v2 CURRENT ACCEPTED, v1 remains inspectable without badge.
-    await page.getByRole("button", { name: "Review", exact: true }).click();
+    await gotoIntakeSection(page, "Review");
     await expect(page.getByRole("button", { name: "ACCEPT INPUTS" })).toBeEnabled();
     await page.getByRole("button", { name: "ACCEPT INPUTS" }).click();
     await expectStatus(page, "APPROVED");
 
-    await page.getByRole("button", { name: "Versions", exact: true }).click();
-    const v2Card = page.locator("div.rounded-lg.border.p-4", { hasText: /^v2/ }).first();
-    await expect(v2Card.locator("span", { hasText: "CURRENT ACCEPTED" })).toBeVisible();
-    const v2Digest = (await v2Card.locator("div.font-mono").innerText()).replace("digest:", "").trim();
-    expect(v2Digest).not.toEqual(v1DigestValue);
+    await gotoArea(page, "Versions");
+    const v2Row = page.locator("div:has(> h3:text('ProjectInputSnapshot')) tr", { hasText: "v2" }).first();
+    await expect(v2Row.locator("span", { hasText: /^CURRENT$/i })).toBeVisible();
+    const v2Digest = (await v2Row.locator("td.font-mono").first().innerText()).trim();
+    expect(v2Digest).not.toEqual(v1DigestValue.slice(0, 16));
 
-    const v1Final = page.locator("div.rounded-lg.border.p-4", { hasText: /^v1/ }).first();
-    await expect(v1Final.locator("div.font-mono")).toContainText(v1DigestValue);
-    await expect(v1Final.locator("span", { hasText: "CURRENT ACCEPTED" })).toHaveCount(0);
+    const v1Final = page.locator("div:has(> h3:text('ProjectInputSnapshot')) tr", { hasText: "v1" }).first();
+    await expect(v1Final.locator("td.font-mono").first()).toContainText(v1DigestValue.slice(0, 16));
+    // v1 is HISTORICAL now (superseded, never rewritten as failed).
+    await expect(v1Final.locator("span", { hasText: /^HISTORICAL$/i })).toBeVisible();
   });
 
   test("regression: conversion CTA destination string round-trips through Dashboard UI without intake_schema_invalid", async ({ page }) => {
@@ -175,7 +177,7 @@ test.describe("Operator journey", () => {
     await expectStatus(page, "DRAFT");
 
     // Navigate to Conversion tab and enter CTA Destination
-    await page.getByRole("button", { name: "Conversion", exact: true }).click();
+    await gotoIntakeSection(page, "Conversion");
     await page.getByLabel("CTA Destination", { exact: false }).first().fill("https://example.com/contact-us");
 
     // Save Draft
@@ -189,12 +191,12 @@ test.describe("Operator journey", () => {
     await openProject(page, regName);
 
     // Inspect Conversion tab again: CTA destination input must contain the exact string
-    await page.getByRole("button", { name: "Conversion", exact: true }).click();
+    await gotoIntakeSection(page, "Conversion");
     const ctaInput = page.getByLabel("CTA Destination", { exact: false }).first();
     await expect(ctaInput).toHaveValue("https://example.com/contact-us");
 
     // Inspect Review tab: CTA field must visibly render the string
-    await page.getByRole("button", { name: "Review", exact: true }).click();
+    await gotoIntakeSection(page, "Review");
     await expect(page.getByText("https://example.com/contact-us")).toBeVisible();
   });
 });

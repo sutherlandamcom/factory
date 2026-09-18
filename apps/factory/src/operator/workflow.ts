@@ -694,7 +694,9 @@ async function derivePages(
     const set = latestSetByPage.get(pageIdentity) ?? null;
     const summary = summaryByPage.get(pageIdentity) ?? null;
     const audio = audioByPage.get(pageIdentity) ?? null;
-    const anyEnabled = !derivativePolicy || derivativePolicy.summaryEnabled || derivativePolicy.audioEnabled;
+    // Run 10 effective settings: absent project policy means derivatives are
+    // explicitly DISABLED until the operator creates defaults (not enabled).
+    const anyEnabled = Boolean(derivativePolicy) && (derivativePolicy!.summaryEnabled || derivativePolicy!.audioEnabled);
     const sourceStale = (source: { sourceContentId: string; sourceContentVersion: number; sourceContentDigest: string } | null) =>
       !source ||
       source.sourceContentId !== page.id ||

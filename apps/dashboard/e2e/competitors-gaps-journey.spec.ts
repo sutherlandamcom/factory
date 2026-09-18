@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import http from "node:http";
+import { gotoArea, gotoIntakeSection, gotoSubsection } from "./run11-navigation";
 
 /**
  * REAL BROWSER Competitors + Content Gap journey (Macro Run 3 acceptance):
@@ -52,7 +53,7 @@ async function createAndAcceptProject(page: Page) {
   await expect(page.locator("h1", { hasText: PROJECT.name })).toBeVisible({ timeout: 10_000 });
 
   const set = async (tab: string, label: string, value: string) => {
-    await page.getByRole("button", { name: tab, exact: true }).click();
+    await gotoIntakeSection(page, tab);
     await page.getByLabel(label, { exact: false }).first().fill(value);
   };
   await set("Business", "Business Name", "E2E Gaps Roofing Co");
@@ -63,7 +64,7 @@ async function createAndAcceptProject(page: Page) {
   await set("Search Seeds", "Seed Queries", "roof repair austin");
   await set("Evidence & Claims", "Operator Facts", "Serving Austin roofs since 2009 with 12-person crew");
   await page.getByRole("button", { name: "Save Draft" }).click();
-  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await gotoIntakeSection(page, "Review");
   await page.getByRole("button", { name: "ACCEPT INPUTS" }).click();
   await expect(
     page.locator("span", { hasText: /^APPROVED$/i }).first(),
@@ -71,9 +72,9 @@ async function createAndAcceptProject(page: Page) {
 }
 
 async function runSearch(page: Page) {
-  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await gotoSubsection(page, "Research", "Search");
   await page.getByLabel("Query", { exact: false }).first().fill("roof repair austin");
-  await page.getByRole("button", { name: "Run Search", exact: false }).click();
+  await page.getByTestId("search-workspace").getByRole("button", { name: "Run Search" }).click();
   await expect(page.locator("text=SERP", { hasText: "SERP" }).first()).toBeVisible({ timeout: 30_000 });
 }
 
@@ -84,7 +85,7 @@ test.describe("Competitors + Content Gap journey", () => {
     await runSearch(page);
 
     // ---- Competitors Research ----
-    await page.getByRole("button", { name: "Competitors Research", exact: true }).click();
+    await gotoSubsection(page, "Research", "Competitors");
     await expect(page.locator("text=Competitor evidence run")).toBeVisible({ timeout: 10_000 });
     await page
       .locator("select")
@@ -97,7 +98,7 @@ test.describe("Competitors + Content Gap journey", () => {
     await expect(page.locator("text=Analyzed:").first()).toBeVisible();
 
     // ---- Content Gaps ----
-    await page.getByRole("button", { name: "Content Gaps", exact: true }).click();
+    await gotoSubsection(page, "Research", "Content Gaps");
     await page.getByRole("button", { name: "Propose gap report", exact: true }).click();
     await expect(page.locator("text=Review gaps (")).toBeVisible({ timeout: 60_000 });
 
@@ -137,10 +138,9 @@ test.describe("Competitors + Content Gap journey", () => {
 
     // ---- Reload persistence ----
     await page.reload();
-    // Reload lands on the projects list (view state is not persisted); reopen.
-    await page.getByRole("button", { name: new RegExp(PROJECT.name) }).first().click();
+    // Router deep link: reload re-lands on the same project workspace.
     await expect(page.locator("h1", { hasText: PROJECT.name })).toBeVisible({ timeout: 15_000 });
-    await page.getByRole("button", { name: "Content Gaps", exact: true }).click();
+    await gotoSubsection(page, "Research", "Content Gaps");
     await expect(page.locator("text=Accepted versions")).toBeVisible({ timeout: 15_000 });
     await page.locator("button", { hasText: "v1" }).first().click();
     await expect(page.locator("text=Accepted snapshot v1 (immutable)")).toBeVisible({ timeout: 15_000 });
@@ -152,10 +152,10 @@ test.describe("Competitors + Content Gap journey", () => {
     // ---- Real operator restart WITHOUT database reset ----
     await supervisorCall("/restart");
     await page.waitForTimeout(1_000);
-    await page.goto("/");
-    await page.getByRole("button", { name: new RegExp(PROJECT.name) }).first().click();
+    await page.reload();
+    // Router deep link: reload re-lands on the same project workspace.
     await expect(page.locator("h1", { hasText: PROJECT.name })).toBeVisible({ timeout: 15_000 });
-    await page.getByRole("button", { name: "Content Gaps", exact: true }).click();
+    await gotoSubsection(page, "Research", "Content Gaps");
     await expect(page.locator("text=Accepted versions")).toBeVisible({ timeout: 15_000 });
     await page.locator("button", { hasText: "v1" }).first().click();
     await expect(page.locator("text=Accepted snapshot v1 (immutable)")).toBeVisible({ timeout: 15_000 });
@@ -186,7 +186,7 @@ test.describe("Competitors + Content Gap journey", () => {
     await expect(pageA.locator("h1", { hasText: project.name })).toBeVisible({ timeout: 10_000 });
 
     const set = async (tab: string, label: string, value: string) => {
-      await pageA.getByRole("button", { name: tab, exact: true }).click();
+      await gotoIntakeSection(pageA, tab);
       await pageA.getByLabel(label, { exact: false }).first().fill(value);
     };
     await set("Business", "Business Name", "Stale Roofing Co");
@@ -197,25 +197,25 @@ test.describe("Competitors + Content Gap journey", () => {
     await set("Search Seeds", "Seed Queries", "roof repair austin");
     await set("Evidence & Claims", "Operator Facts", "Serving Austin roofs since 2009 with 12-person crew");
     await pageA.getByRole("button", { name: "Save Draft" }).click();
-    await pageA.getByRole("button", { name: "Review", exact: true }).click();
+    await gotoIntakeSection(pageA, "Review");
     await pageA.getByRole("button", { name: "ACCEPT INPUTS" }).click();
     await expect(pageA.locator("span", { hasText: /^APPROVED$/i }).first()).toBeVisible({ timeout: 10_000 });
 
     // Search
-    await pageA.getByRole("button", { name: "Search", exact: true }).click();
+    await gotoSubsection(pageA, "Research", "Search");
     await pageA.getByLabel("Query", { exact: false }).first().fill("roof repair austin");
-    await pageA.getByRole("button", { name: "Run Search", exact: false }).click();
+    await pageA.getByTestId("search-workspace").getByRole("button", { name: "Run Search" }).click();
     await expect(pageA.locator("text=SERP", { hasText: "SERP" }).first()).toBeVisible({ timeout: 30_000 });
 
     // Competitors
-    await pageA.getByRole("button", { name: "Competitors Research", exact: true }).click();
+    await gotoSubsection(pageA, "Research", "Competitors");
     await expect(pageA.locator("text=Competitor evidence run")).toBeVisible({ timeout: 10_000 });
     await pageA.locator("select").first().selectOption({ index: 0 });
     await pageA.getByRole("button", { name: "Acquire competitors" }).click();
     await expect(pageA.locator("text=Candidates (")).toBeVisible({ timeout: 60_000 });
 
     // Content Gaps proposal on pageA
-    await pageA.getByRole("button", { name: "Content Gaps", exact: true }).click();
+    await gotoSubsection(pageA, "Research", "Content Gaps");
     await pageA.getByRole("button", { name: "Propose gap report", exact: true }).click();
     await expect(pageA.locator("text=Review gaps (")).toBeVisible({ timeout: 60_000 });
 
@@ -223,7 +223,7 @@ test.describe("Competitors + Content Gap journey", () => {
     await pageB.goto("/");
     await pageB.getByRole("button", { name: new RegExp(project.name) }).first().click();
     await expect(pageB.locator("h1", { hasText: project.name })).toBeVisible({ timeout: 15_000 });
-    await pageB.getByRole("button", { name: "Content Gaps", exact: true }).click();
+    await gotoSubsection(pageB, "Research", "Content Gaps");
     await pageB.locator("div.space-y-2 button").first().click();
     await expect(pageB.locator("text=Review gaps (")).toBeVisible({ timeout: 15_000 });
 

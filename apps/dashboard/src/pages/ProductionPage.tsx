@@ -28,6 +28,8 @@ const PRODUCTION_ERROR_COPY: Record<string, string> = {
   production_build_rejected: "Build rejected: readiness, staleness or renderer failure.",
   production_qa_failed: "A required QA gate verdict is FAIL; candidate acceptance blocked.",
   production_qa_not_found: "QA run not found or candidate has no completed build.",
+  qa_tool_unavailable: "A mandatory trusted QA tool is unavailable in this environment; QA cannot pass until it is installed.",
+  qa_tool_timeout: "A trusted QA tool exceeded its execution time budget; QA cannot pass on a timeout.",
   validation_error: "Invalid input; check the form fields.",
 };
 
@@ -138,10 +140,15 @@ export function ProductionPage({ projectId }: { projectId: string }) {
     }
   }, [projectId, load, openDetail]);
 
+  // Run 11: "Run QA" collects current mandatory trusted evidence for this
+  // exact candidate through the real Operator API, then runs the governed
+  // QA decision. Backend layers stay separate (collector ≠ approval); the
+  // combined button is the narrow operator flow (§27).
   const runQa = useCallback(async (candidateId: string) => {
     setBusy(true);
     setError(null);
     try {
+      await productionApi.collectQaEvidence(projectId, candidateId);
       await productionApi.runQa(projectId, candidateId);
       await load();
       await openDetail(candidateId);

@@ -23,7 +23,7 @@ DesignProvider / Google Stitch
 human review and acceptance
         ↓
 AcceptedDesignArtifact
-        │  sole accepted design authority
+        │  sole accepted Factory design authority
         ↓
 DesignImplementationContract
         │  deterministic derived implementation projection
@@ -44,17 +44,36 @@ deterministic design QA + accessibility + visual regression
 The implementation layer controls how accepted design is realized. It is not a
 new designer.
 
+## Transition status and scope
+
+This policy defines the target constraints for the explicit Pre-Run-12 Design
+System Implementation Hardening workstream. Until that hardening implementation
+is independently accepted and merged, references here to a
+`DesignImplementationContract`, production component registry, governed token
+projection or fixture surface describe required target capabilities; they do not
+assert that those capabilities already exist on `main`.
+
+Agents working on Run 11 or unrelated work MUST NOT opportunistically implement
+this policy ahead of the roadmap gate. They preserve the accepted current
+implementation until the explicit hardening slice begins.
+
+This policy also does not expand the write authority of runtime `SiteTask`
+workers. `TaskWritePolicy` and the repository-wide `AGENTS.md` runtime write
+scope remain authoritative. Registry, token, component or renderer-policy
+evolution requires an explicitly authorized repository-engineering task.
+
 ## Non-negotiable authority boundaries
 
 - `AcceptedDesignArtifact` remains the accepted Factory design authority after
   human approval.
+- Google Stitch / `DesignProvider` owns professional design **generation only**;
+  provider output, IDs, HTML, screenshots and `DESIGN.md` are never Factory
+  design authority before or after acceptance.
 - `AcceptedPageContent` remains content authority. Implementation workers must
   reproduce accepted copy faithfully and do not gain editorial authorship.
 - `AcceptedVisualAssetSet` remains visual-asset authority. Production
   components consume accepted asset roles/slots; they do not hardcode arbitrary
   image paths or invoke an image provider themselves.
-- Google Stitch / `DesignProvider` supplies professional design input and
-  evidence. It is not the ordinary production renderer.
 - Raw Stitch/provider HTML, screenshots and provider `DESIGN.md` output may be
   retained as design/implementation evidence, but are not production authority
   and must not be published directly as a parallel renderer.
@@ -64,6 +83,36 @@ new designer.
   conditions.
 - Historical accepted artifacts remain immutable. A later authority version may
   make a downstream artifact stale/non-current without rewriting history.
+
+## Required Phase 0 — repository design audit
+
+Before implementing the hardening, re-baseline the exact post-Run-11 `main` SHA
+and inspect the repository as it actually exists. Do not choose new schemas,
+files or component architecture from this policy alone.
+
+At minimum inventory:
+
+- current `packages/contracts` design contracts and `AcceptedDesignArtifact`;
+- design-provider/Stitch normalization and acceptance path;
+- accepted visual-set authority and slot semantics;
+- production contracts, including `ProductionPageInput` and renderer identity;
+- production render manifest/compiler and candidate lineage;
+- current archetype/pattern vocabulary;
+- existing production Astro components and layout/compositor seams;
+- global/site styling and token surfaces;
+- historical/planner component registries that must not become accidental
+  production authority;
+- Playwright, Axe, keyboard, Lighthouse and production QA surfaces;
+- current CI and agent/documentation surfaces.
+
+Phase 0 must produce a concise gap matrix before implementation begins:
+
+```text
+Capability | Exists | Partial | Missing | Action
+```
+
+Each planned change must map to a concrete observed gap. Existing canonical
+mechanisms should be reused instead of duplicated.
 
 ## No hidden design model between authority and implementation
 
@@ -94,8 +143,8 @@ inside free-form model reasoning or page-local CSS.
 ## DesignImplementationContract
 
 The hardening work should introduce a typed, deterministic implementation
-contract only after inspecting the current design/production contracts and
-reusing existing semantics wherever possible.
+contract only after the Phase 0 audit has inspected the current design/production
+contracts and reused existing semantics wherever possible.
 
 The contract is:
 
@@ -161,6 +210,27 @@ Production global CSS must not become an independent brand/design authority.
 Generic reset, browser mechanics and accessibility rules are allowed; governed
 site styling must derive from accepted design semantics.
 
+## Component API review gate — API first, implementation second
+
+Before adding or materially changing a governed production component, define
+and review its semantic API before writing the Astro implementation.
+
+The review must establish:
+
+1. semantic component ID and purpose;
+2. minimal approved variants;
+3. required and optional semantic props;
+4. allowed archetypes/patterns;
+5. responsive profile;
+6. accessibility contract;
+7. accepted visual-asset roles/slots;
+8. token dependencies;
+9. whether any proposed prop creates unnecessary visual freedom.
+
+Only after this API review may the Astro component, fixture, accessibility test
+and visual baseline be implemented. Avoid designing an API retrospectively from
+a page-specific Tailwind implementation.
+
 ## Production component registry
 
 Ordinary production pages must be assembled from a machine-readable registry of
@@ -177,8 +247,16 @@ The registry should expose semantic information such as:
 - asset-role requirements.
 
 The registry is not merely documentation. Production implementation and QA must
-be able to prove that registered component IDs/variants have implementations and
-that ordinary production did not bypass the registry with arbitrary local
+prove both directions of integrity:
+
+```text
+registered production component IDs == implemented production component IDs
+registered variants              == implemented approved variants
+```
+
+A registered component/variant without an implementation is invalid. A governed
+production implementation that is absent from the registry is also invalid.
+Ordinary production must not bypass the registry with arbitrary local
 alternatives.
 
 Do not repurpose historical conceptual/planner registries as production
@@ -351,7 +429,11 @@ Baseline updates require intentional review of the visual change.
 ## Deterministic design-drift QA
 
 Before considering an AI visual critic, use deterministic checks to detect
-implementation drift. Blocking checks should cover, where applicable:
+implementation drift. Classify findings explicitly.
+
+### BLOCKING
+
+Examples include:
 
 - unknown component IDs;
 - unknown variants;
@@ -359,19 +441,43 @@ implementation drift. Blocking checks should cover, where applicable:
 - missing required semantic token roles;
 - ambiguous component bindings;
 - unauthorized design colors/fonts;
-- unapproved arbitrary Tailwind design values;
+- unapproved arbitrary Tailwind design values outside the explicit allowlist;
 - page-local design-token invention;
 - unregistered visual variants;
 - forbidden arbitrary style/class escape hatches;
-- fixture routes in production output.
+- registry/implementation mismatch;
+- fixture routes in production output;
+- accepted-design or implementation-contract identity/digest mismatch.
+
+Blocking findings fail the governed build/QA path.
+
+### REVIEW / WARNING
+
+Examples include:
+
+- a documented one-off component exception;
+- a new variant requiring explicit reuse rationale;
+- an unusual but allowlisted renderer-internal arbitrary value;
+- a deliberate visual baseline change awaiting review.
+
+These require visible rationale/review and must not be silently normalized away.
+
+### INFO
+
+Examples include deterministic evidence such as:
+
+- components and variants used;
+- reuse counts;
+- new component-family count;
+- one-off count;
+- unknown-token/component/variant count when zero.
 
 Arbitrary Tailwind values are not universally forbidden, but governed
 production code must use a small explicit allowlist for legitimate renderer
 internals rather than permitting arbitrary design invention.
 
-Report factual evidence such as unknown-component count, unknown-token count and
-one-off count. Do not invent subjective Design Quality scores without an
-objective calibrated metric.
+Report factual evidence. Do not invent subjective Design Quality scores without
+an objective calibrated metric.
 
 ## Accessibility
 
@@ -405,7 +511,8 @@ Useful evidence includes:
 - new variants introduced;
 - one-off exceptions;
 - unknown tokens/components/variants;
-- new DesignProvider calls.
+- new DesignProvider calls;
+- coding-model design-invention calls/steps.
 
 The representative multi-page proof should demonstrate one accepted design
 system/authority serving multiple archetypes through shared implementation
@@ -418,34 +525,59 @@ new DesignProvider call = 0
 new design authority = 0
 new renderer = 0
 new component family ≈ 0
+coding-model design invention = 0
 unknown tokens = 0
 blocking design drift = 0
 ```
 
 If a normal additional page repeatedly requires a new provider screen, token
-system or component library, the design implementation has not achieved the
-required reuse model.
+system, component library or free-form coding-model design decision, the design
+implementation has not achieved the required reuse model.
 
 ## Lineage and staleness
 
 Implementation hardening must reuse the existing immutable production lineage
 rather than introduce a competing authority chain.
 
+The current production contract already binds renderer identity as:
+
+```text
+renderer.id
+renderer.version
+renderer.policyVersion
+```
+
+Therefore an implementation-policy change should first be represented through
+the existing `renderer.policyVersion` staleness mechanism. Do not introduce
+`ProductionPageInput v3` merely to version the
+`DesignImplementationContract`.
+
+The exact `DesignImplementationContract` digest must also be carried in durable
+production build/render evidence (for example the trusted render manifest and
+its digest lineage) so an auditor can prove which exact contract materialized a
+candidate. This digest is evidence/binding, not a second accepted authority or
+new mutable DB state. Add a ProductionPageInput schema version only if Phase 0
+proves the existing immutable bindings cannot represent the required lineage.
+
 Changes to accepted design, accepted visual assets, accepted content, renderer
 policy or build/source identity must invalidate the correct downstream
 production/QA readiness through canonical staleness semantics.
 
-Prefer existing renderer-policy/source/build identity mechanisms before adding a
-new ProductionPageInput schema version or database persistence. A new schema,
-table or authority requires concrete proof that the existing immutable binding
-cannot represent the required change.
-
 Historical candidates/evidence remain immutable; newer authority makes old
 artifacts historical/non-current rather than rewriting them.
 
+Required mutation coverage includes at least:
+
+- accepted design changes;
+- accepted visual set changes;
+- accepted content changes;
+- renderer policy version changes;
+- source/repository build identity changes.
+
 ## Agent algorithm for ordinary page implementation
 
-A coding agent implementing a normal page should follow this sequence:
+A coding agent implementing a normal page should follow this sequence after the
+hardening capability exists on accepted `main`:
 
 ```text
 read current accepted design authority
@@ -492,31 +624,37 @@ This policy does not authorize:
 - a new design database;
 - subjective AI design scoring;
 - broad analytics infrastructure;
-- page-local redesign by coding agents.
+- page-local redesign by coding agents;
+- broader runtime `SiteTask` write permissions.
 
 ## Pre-Run-12 hardening gate
 
 Design System Implementation Hardening is a distinct pre-Run-12 workstream.
 Implementation must not start while Run 11 remains an unaccepted candidate.
 After Run 11 is independently accepted, merged and post-merge verified, the
-hardening work should re-baseline the exact main SHA before modifying contracts,
-renderer implementation or QA.
+hardening work must re-baseline the exact main SHA and complete the Phase 0 gap
+matrix before modifying contracts, renderer implementation or QA.
 
 The hardening exit requires evidence that:
 
-1. accepted design remains the sole design authority;
-2. Astro remains the sole ordinary renderer;
-3. accepted design maps deterministically into governed implementation policy;
-4. ordinary pages use registered reusable components/variants;
-5. approved semantic tokens govern production styling;
-6. coding agents cannot silently invent new design primitives;
-7. component APIs are bounded and documented;
-8. fixture/showcase coverage uses real production implementation;
-9. component accessibility is automatically checked;
-10. visual regression detects accidental implementation drift;
-11. unknown tokens/components/variants fail deterministic QA;
-12. no parallel Stitch renderer or unnecessary provider call was introduced;
-13. component reuse can be measured for the Run 12 multi-page proof.
+1. `AcceptedDesignArtifact` remains the sole Factory design authority;
+2. DesignProvider/Stitch remains generation/evidence only;
+3. Astro remains the sole ordinary renderer;
+4. accepted design maps deterministically into governed implementation policy;
+5. ordinary pages use registered reusable components/variants;
+6. registered IDs/variants exactly match governed implementations;
+7. approved semantic tokens govern production styling;
+8. coding agents cannot silently invent new design primitives;
+9. component APIs are reviewed before implementation and are bounded/documented;
+10. fixture/showcase coverage uses real production implementation;
+11. component accessibility is automatically checked;
+12. visual regression detects accidental implementation drift;
+13. blocking unknown tokens/components/variants fail deterministic QA;
+14. implementation-policy changes invalidate old production through existing
+    renderer-policy lineage;
+15. exact implementation-contract digest is provable in production evidence;
+16. no parallel Stitch renderer or unnecessary provider call was introduced;
+17. component reuse can be measured for the Run 12 multi-page proof.
 
 Builder verification remains separate from independent QA. The hardening PR may
 merge only after independent exact-SHA GO under repository merge governance.

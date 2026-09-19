@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import http from "node:http";
+import { gotoArea, gotoIntakeSection, gotoSubsection } from "./run11-navigation";
 
 /**
  * REAL BROWSER Content Writer journey (Macro Run 4 acceptance):
@@ -57,7 +58,7 @@ async function createAndAcceptProject(page: Page, project: { key: string; name: 
   await expect(page.locator("h1", { hasText: project.name })).toBeVisible({ timeout: 10_000 });
 
   const set = async (tab: string, label: string, value: string) => {
-    await page.getByRole("button", { name: tab, exact: true }).click();
+    await gotoIntakeSection(page, tab);
     await page.getByLabel(label, { exact: false }).first().fill(value);
   };
   await set("Business", "Business Name", "E2E Writer Roofing Co");
@@ -75,23 +76,23 @@ async function createAndAcceptProject(page: Page, project: { key: string; name: 
   await set("Content Constitution", "Locale / Language Preferences", "US English");
   await set("Content Constitution", "Custom Project Writer Instructions", "Keep sentences under 20 words.");
   await page.getByRole("button", { name: "Save Draft" }).click();
-  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await gotoIntakeSection(page, "Review");
   await page.getByRole("button", { name: "ACCEPT INPUTS" }).click();
   await expect(page.locator("span", { hasText: /^APPROVED$/i }).first()).toBeVisible({ timeout: 10_000 });
 }
 
 async function acceptGapSnapshot(page: Page) {
-  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await gotoSubsection(page, "Research", "Search");
   await page.getByLabel("Query", { exact: false }).first().fill("roof repair austin");
-  await page.getByRole("button", { name: "Run Search", exact: false }).click();
+  await page.getByTestId("search-workspace").getByRole("button", { name: "Run Search" }).click();
   await expect(page.locator("text=SERP").first()).toBeVisible({ timeout: 30_000 });
 
-  await page.getByRole("button", { name: "Competitors Research", exact: true }).click();
+  await gotoSubsection(page, "Research", "Competitors");
   await page.locator("select").first().selectOption({ index: 0 });
   await page.getByRole("button", { name: "Acquire competitors" }).click();
   await expect(page.locator("text=Candidates (")).toBeVisible({ timeout: 60_000 });
 
-  await page.getByRole("button", { name: "Content Gaps", exact: true }).click();
+  await gotoSubsection(page, "Research", "Content Gaps");
   await page.getByRole("button", { name: "Propose gap report", exact: true }).click();
   await expect(page.locator("text=Review gaps (")).toBeVisible({ timeout: 60_000 });
   await page.getByRole("button", { name: "Save review" }).click();
@@ -107,7 +108,7 @@ test.describe("Content Writer journey", () => {
     await acceptGapSnapshot(page);
 
     // ---- Content workspace ----
-    await page.getByRole("button", { name: "Content", exact: true }).click();
+    await gotoSubsection(page, "Content", "Pipeline");
     await expect(page.getByText("Factory Writer Policy")).toBeVisible({ timeout: 10_000 });
 
     // ---- Writer Policy: derive + approve ----
@@ -144,7 +145,7 @@ test.describe("Content Writer journey", () => {
     await page.getByRole("button", { name: "Run QA" }).click();
     await expect(page.getByText(/QA verdict: /)).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText("Factual", { exact: true })).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText("Search", { exact: true }).nth(1)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Search", { exact: true })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("Editorial", { exact: true })).toBeVisible({ timeout: 10_000 });
 
     // ---- ACCEPT CONTENT ----
@@ -154,29 +155,27 @@ test.describe("Content Writer journey", () => {
 
     // ---- Reload persistence ----
     await page.reload();
-    // Reload lands on the projects list (view state is not persisted); reopen.
-    await page.getByRole("button", { name: new RegExp(PROJECT.key) }).click();
+    // Router deep link: reload re-lands on the same project workspace.
     await expect(page.locator("h1", { hasText: PROJECT.name })).toBeVisible({ timeout: 15_000 });
-    await page.getByRole("button", { name: "Content", exact: true }).click();
+    await gotoSubsection(page, "Content", "Pipeline");
     await expect(page.getByText("Accepted Page Content")).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText("v1").first()).toBeVisible();
 
     // ---- Service restart WITHOUT DB reset ----
     await supervisorCall("/restart");
-    await page.goto("/");
-    await page.getByRole("button", { name: new RegExp(PROJECT.key) }).click();
-    await page.getByRole("button", { name: "Content", exact: true }).click();
+    // Router deep link: the workspace URL still points at this project.
+    await gotoSubsection(page, "Content", "Pipeline");
     await expect(page.getByText("Accepted Page Content")).toBeVisible({ timeout: 30_000 });
 
     // ---- Upstream edit -> new accepted inputs -> snapshot STALE, v1 unchanged ----
-    await page.getByRole("button", { name: "Business", exact: true }).click();
+    await gotoIntakeSection(page, "Business");
     await page.getByLabel("Description", { exact: false }).first().fill("Updated description after acceptance.");
     await page.getByRole("button", { name: "Save Draft" }).click();
-    await page.getByRole("button", { name: "Review", exact: true }).click();
+    await gotoIntakeSection(page, "Review");
     await page.getByRole("button", { name: "ACCEPT INPUTS" }).click();
     await expect(page.locator("span", { hasText: /^APPROVED$/i }).first()).toBeVisible({ timeout: 10_000 });
 
-    await page.getByRole("button", { name: "Content", exact: true }).click();
+    await gotoSubsection(page, "Content", "Pipeline");
     await expect(page.getByText("STALE").first()).toBeVisible({ timeout: 15_000 });
     // Accepted v1 remains unchanged and inspectable.
     await expect(page.getByText("Accepted Page Content")).toBeVisible({ timeout: 10_000 });
@@ -189,7 +188,7 @@ test.describe("Content Writer journey", () => {
     await createAndAcceptProject(page, PROJECT_NOGAP);
 
     // ---- Content workspace ----
-    await page.getByRole("button", { name: "Content", exact: true }).click();
+    await gotoSubsection(page, "Content", "Pipeline");
     await expect(page.getByText("Factory Writer Policy")).toBeVisible({ timeout: 10_000 });
 
     // ---- Writer Policy: derive + approve ----
@@ -240,9 +239,9 @@ test.describe("Content Writer journey", () => {
 
     // ---- Reload persistence: accepted v1 with proposal + QA digests survives ----
     await page.reload();
-    await page.getByRole("button", { name: new RegExp(PROJECT_NOGAP.key) }).click();
+    // Router deep link: reload re-lands on the same project workspace.
     await expect(page.locator("h1", { hasText: PROJECT_NOGAP.name })).toBeVisible({ timeout: 15_000 });
-    await page.getByRole("button", { name: "Content", exact: true }).click();
+    await gotoSubsection(page, "Content", "Pipeline");
     await expect(page.getByText("Accepted Page Content")).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText(/QA report: [0-9a-f]{64}/)).toBeVisible({ timeout: 10_000 });
   });

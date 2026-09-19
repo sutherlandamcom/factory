@@ -5,6 +5,7 @@ import sharp from "sharp";
 import path from "node:path";
 import os from "node:os";
 import { mkdtemp, writeFile } from "node:fs/promises";
+import { gotoArea, gotoIntakeSection, gotoSubsection } from "./run11-navigation";
 
 /**
  * REAL BROWSER Asset journey (Macro Run 5 acceptance):
@@ -85,7 +86,7 @@ test.describe("Asset journey", () => {
     await acceptPageContent(page);
 
     // ---- Asset Library ----
-    await page.getByRole("button", { name: "Asset Library", exact: true }).click();
+    await gotoSubsection(page, "Assets", "Asset Library");
     await expect(page.getByRole("heading", { name: "Asset Library" })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("No assets uploaded yet.")).toBeVisible({ timeout: 10_000 });
 
@@ -123,15 +124,15 @@ test.describe("Asset journey", () => {
 
     // ---- Reload persistence ----
     await page.reload();
-    await page.getByRole("button", { name: new RegExp(key) }).click();
-    await page.getByRole("button", { name: "Asset Library", exact: true }).click();
+    // Router deep link: reload re-lands on the same project workspace.
+    await gotoSubsection(page, "Assets", "Asset Library");
     await expect(page.getByText(/← Chamonix homepage hero photograph v1/)).toBeVisible({ timeout: 15_000 });
 
     // ---- Service restart WITHOUT DB reset ----
     await supervisorCall("/restart");
-    await page.goto("/");
-    await page.getByRole("button", { name: new RegExp(key) }).click();
-    await page.getByRole("button", { name: "Asset Library", exact: true }).click();
+    await page.reload();
+    // Router deep link: reload re-lands on the same project workspace.
+    await gotoSubsection(page, "Assets", "Asset Library");
     await expect(page.getByText(/← Chamonix homepage hero photograph v1/)).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText("replacement available", { exact: false })).toHaveCount(0);
 
@@ -161,7 +162,7 @@ test.describe("Asset journey", () => {
     const key = `e2e-assets-bad-${UNIQUE}`;
     await createProject(page, key, "E2E Assets Negative");
 
-    await page.getByRole("button", { name: "Asset Library", exact: true }).click();
+    await gotoSubsection(page, "Assets", "Asset Library");
     await expect(page.getByText("No assets uploaded yet.")).toBeVisible({ timeout: 10_000 });
 
     // A text file with an image-ish name: the server must reject the actual bytes.

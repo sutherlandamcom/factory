@@ -1,10 +1,11 @@
+import { gotoSubsection } from "./run11-navigation.js";
 import { expect, type Page } from "@playwright/test";
 export async function acceptSearchGap(page: Page) {
-  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await gotoSubsection(page, "Research", "Search");
   await page.getByLabel("Query", { exact: false }).first().fill("roof repair austin");
-  await page.getByRole("button", { name: "Run Search", exact: false }).click();
+  await page.getByTestId("search-workspace").getByRole("button", { name: "Run Search" }).click();
   await expect(page.locator("text=SERP", { hasText: "SERP" }).first()).toBeVisible({ timeout: 30_000 });
-    await page.getByRole("button", { name: "Competitors Research", exact: true }).click();
+    await gotoSubsection(page, "Research", "Competitors");
     await expect(page.locator("text=Competitor evidence run")).toBeVisible({ timeout: 10_000 });
     await page
       .locator("select")
@@ -17,7 +18,7 @@ export async function acceptSearchGap(page: Page) {
     await expect(page.locator("text=Analyzed:").first()).toBeVisible();
 
     // ---- Content Gaps ----
-    await page.getByRole("button", { name: "Content Gaps", exact: true }).click();
+    await gotoSubsection(page, "Research", "Content Gaps");
     await page.getByRole("button", { name: "Propose gap report", exact: true }).click();
     await expect(page.locator("text=Review gaps (")).toBeVisible({ timeout: 60_000 });
 

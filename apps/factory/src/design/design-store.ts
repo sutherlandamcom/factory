@@ -711,10 +711,7 @@ export class DesignStore {
       };
     }
 
-    const contentRows = await tx
-      .select()
-      .from(acceptedPageContent)
-      .where(eq(acceptedPageContent.projectId, projectId));
+    const contentRows = await new PageAuthorityReader(tx).currentPages(projectId);
     const currentContent = new Map(contentRows.map((row) => [row.id, row]));
     for (const ref of data.contentRefs) {
       try { await new PageAuthorityReader(tx).requireCurrent(projectId, ref); }

@@ -13,6 +13,7 @@ allowBuilds:
 minimumReleaseAgeExclude:
   - astro@7.2.9
 overrides:
+  devalue: "5.9.2"
   tslib@>=1 <2: "2.8.1"
   sharp: "0.35.4"
   js-yaml: "^4.3.2"

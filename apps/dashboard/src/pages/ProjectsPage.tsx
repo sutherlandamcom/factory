@@ -1,18 +1,36 @@
 import { useState } from "react";
-import { api } from "../api/client";
+import { api, OperatorApiError } from "../api/client";
 import type { ProjectSummary } from "../api/types";
+import { useQuery } from "@tanstack/react-query";
+import { queryKeys } from "../query/keys";
+import { useNavigate } from "react-router-dom";
 
-interface ProjectsPageProps {
-  projects: ProjectSummary[];
-  onOpenProject: (project: ProjectSummary) => void;
-}
-
-export function ProjectsPage({ projects, onOpenProject }: ProjectsPageProps) {
+/**
+ * Projects list (Run 11 root route). TanStack Query owns the server state;
+ * the 5-second manual polling loop is gone.
+ */
+export function ProjectsPage() {
+  const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
+
+  const projectsQuery = useQuery({
+    queryKey: queryKeys.projects,
+    queryFn: () => api.listProjects(),
+    // The list may briefly fail while the operator server starts; keep the
+    // previous data instead of blanking the page.
+    retry: 2,
+  });
+
+  const projects = projectsQuery.data?.projects ?? [];
+
+  const openProject = (project: ProjectSummary) => {
+    localStorage.setItem("factory:lastProjectId", project.id);
+    navigate(`/projects/${encodeURIComponent(project.id)}/overview`);
+  };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -23,9 +41,9 @@ export function ProjectsPage({ projects, onOpenProject }: ProjectsPageProps) {
       setShowNew(false);
       setNewKey("");
       setNewName("");
-      onOpenProject(created);
+      openProject(created);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create project");
+      setError(err instanceof OperatorApiError ? err.message : "Failed to create project");
     } finally {
       setCreating(false);
     }
@@ -59,7 +77,7 @@ export function ProjectsPage({ projects, onOpenProject }: ProjectsPageProps) {
               />
             </div>
             <div>
-              <label htmlFor="project-name" className="mb-1 block text-sm font-medium text-gray-700">Display Name</label>
+              <label htmlFor="project-name" className="mb-1 block text-sm font-medium text-gray-700">Name</label>
               <input
                 id="project-name"
                 value={newName}
@@ -80,7 +98,7 @@ export function ProjectsPage({ projects, onOpenProject }: ProjectsPageProps) {
             <button
               type="button"
               onClick={() => setShowNew(false)}
-              className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              className="rounded-md border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
             >
               Cancel
             </button>
@@ -88,24 +106,33 @@ export function ProjectsPage({ projects, onOpenProject }: ProjectsPageProps) {
         </form>
       )}
 
-      {projects.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-gray-300 bg-white p-12 text-center text-gray-500">
-          No projects yet. Create your first project to get started.
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {projects.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => onOpenProject(p)}
-              className="w-full rounded-lg border border-gray-200 bg-white p-4 text-left shadow-sm transition hover:border-indigo-300 hover:shadow"
-            >
-              <div className="font-medium text-gray-900">{p.name}</div>
-              <div className="text-sm text-gray-500">{p.key}</div>
-            </button>
-          ))}
+      {projectsQuery.isLoading && <p className="text-gray-500">Loading…</p>}
+      {projectsQuery.isError && (
+        <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">
+          Could not load projects. The operator service may be starting — retrying automatically.
         </div>
       )}
+
+      <div className="space-y-3">
+        {projects.map((p) => (
+          <button
+            key={p.id}
+            onClick={() => openProject(p)}
+            className="block w-full rounded-lg border border-gray-200 bg-white p-4 text-left shadow-sm hover:border-indigo-300 hover:bg-indigo-50"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-semibold text-gray-900">{p.name}</div>
+                <div className="text-sm text-gray-500">{p.key}</div>
+              </div>
+              <div className="text-xs text-gray-400">{new Date(p.createdAt).toLocaleString()}</div>
+            </div>
+          </button>
+        ))}
+        {!projectsQuery.isLoading && projects.length === 0 && !projectsQuery.isError && (
+          <p className="text-gray-500">No projects yet. Create one to start the operator workflow.</p>
+        )}
+      </div>
     </div>
   );
 }

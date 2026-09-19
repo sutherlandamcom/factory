@@ -37,6 +37,7 @@ import { VisualService } from "../visual/service.js";
 import { VisualBudgetStore } from "../visual/budget.js";
 import { GoogleGenAiVisualAssetAdapter } from "../visual/google-genai-adapter.js";
 import { FixtureVisualAssetProvider } from "../visual/fixture-adapter.js";
+
 import { FactoryError } from "../executor/errors.js";
 
 /**
@@ -360,7 +361,8 @@ export async function startOperatorServer(): Promise<http.Server> {
   const designStore = new DesignStore(dbInstance.db);
   // Design provider selection is trusted backend config only (never browser
   // input): FACTORY_DESIGN_MODE=fixture wires the deterministic fixture
-  // provider so E2E journeys never touch a paid provider.
+  // provider so E2E journeys never touch a paid provider. Fixture authority
+  // is never production authority (requireProductionDesign fails closed).
   const designMode = process.env.FACTORY_DESIGN_MODE === "fixture" ? "fixture" : "production";
   const design = await DesignService.create({
     store: designStore,
@@ -407,10 +409,27 @@ export async function startOperatorServer(): Promise<http.Server> {
   // invocation so E2E journeys never touch a paid provider.
   const summaryMode = process.env.FACTORY_SUMMARY_MODE === "fixture" ? "fixture" : "production";
   const { DerivativesApiFacade } = await import("../derivatives/api-facade.js");
+  // Trusted QA evidence executor (Run 11): tool-execution capability, NOT a
+  // provider mode. FACTORY_QA_EXECUTOR=local wires the fixed local-tool
+  // executor (axe/keyboard/LHCI/gitleaks/OSV with fixed argument arrays and
+  // bounded timeouts). Absent/unset = no executor configured; the
+  // qa-evidence endpoint responds typed qa_tool_unavailable (fail closed).
+  let qaCollector: import("../production/qa/collector.js").ProductionQaEvidenceCollector | undefined;
+  if (process.env.FACTORY_QA_EXECUTOR === "local") {
+    const { ProductionQaEvidenceCollector, LocalTrustedQaEvidenceExecutor } = await import("../production/qa/collector.js");
+    const { ProductionStore } = await import("../production/store.js");
+    qaCollector = new ProductionQaEvidenceCollector(
+      new ProductionStore(dbInstance.db),
+      dbInstance.db,
+      repoRoot,
+      new LocalTrustedQaEvidenceExecutor(),
+    );
+  }
   const deps: OperatorApiDeps = {
     store, intake, search, competitors, writer, assets, design, visual,
     production: new ProductionApiFacade(dbInstance.db, repoRoot),
     derivatives: new DerivativesApiFacade(dbInstance.db, repoRoot, summaryMode === "fixture" ? { summaryInvoke: fixtureSummaryInvoke } : {}),
+    qaCollector,
   };
   const server = createOperatorServer(deps);
   const host = process.env.FACTORY_OPERATOR_HOST ?? "127.0.0.1";

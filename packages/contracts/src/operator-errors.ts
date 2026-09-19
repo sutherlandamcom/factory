@@ -203,6 +203,10 @@ export const OPERATOR_ERROR_CODES = [
   "derivative_generation_blocked",
   "derivative_qa_failed",
   "summary_provider_not_configured",
+  /** A mandatory trusted QA tool is unavailable in this environment (fail closed; never treated as PASS). */
+  "qa_tool_unavailable",
+  /** A trusted QA tool exceeded its bounded execution time budget (fail closed). */
+  "qa_tool_timeout",
   /** Unexpected server fault (message is always the sanitized fixed string). */
   "internal_error",
 ] as const;
@@ -310,6 +314,8 @@ export const OPERATOR_ERROR_STATUS: Readonly<Record<OperatorErrorCode, number>> 
   derivative_artifact_immutable: 409,
   derivative_generation_blocked: 409,
   derivative_qa_failed: 409,
+  qa_tool_unavailable: 503,
+  qa_tool_timeout: 504,
   summary_provider_not_configured: 503,
   internal_error: 500,
 };

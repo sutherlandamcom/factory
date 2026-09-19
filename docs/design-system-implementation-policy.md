@@ -86,7 +86,7 @@ evolution requires an explicitly authorized repository-engineering task.
 
 ## Required Phase 0 — repository design audit
 
-Before implementing the hardening, re-baseline the exact post-Run-11 `main` SHA
+Before implementing the hardening, re-baseline the exact post-PR44 verified `main` SHA
 and inspect the repository as it actually exists. Do not choose new schemas,
 files or component architecture from this policy alone.
 
@@ -633,9 +633,13 @@ Design System Implementation Hardening is a distinct pre-Run-12 workstream.
 Run 11 is closed (implemented, independently QA'd, merged and post-merge verified).
 Implementation of hardening must not start until this governance policy (PR #44)
 passes independent exact-SHA QA, merges and passes post-merge verification on main.
-Once unblocked, the hardening work must re-baseline the exact post-Run-11 `main`
-SHA (`5eeffadbbd928f4a03644d6e8ff267a6d5795316`) and complete the Phase 0 gap
-matrix before modifying contracts, renderer implementation or QA.
+After PR #44 has passed independent exact-SHA QA, merged, and passed post-merge
+verification, the implementation agent MUST fetch the live repository state,
+record the then-current verified `main` SHA (the post-PR44 `main` SHA), and perform
+the mandatory Phase 0 gap matrix against that exact SHA before modifying
+contracts, renderer implementation or QA. The Run 11 merge SHA
+(`5eeffadbbd928f4a03644d6e8ff267a6d5795316`) is historical Run 11 closure
+evidence, not the future Pre-Run-12 implementation base.
 
 The hardening exit requires evidence that:
 

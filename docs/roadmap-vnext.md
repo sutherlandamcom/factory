@@ -261,7 +261,7 @@ Implemented, independently QA'd, merged and post-merge verified via [PR #43](htt
 
 Status: Planned; Run 11 prerequisite satisfied. Blocked on independent exact-SHA QA, merge and post-merge verification of this governance policy ([PR #44](https://github.com/sutherlandamcom/factory/pull/44)).
 
-Once PR #44 governance is accepted, merged and verified on main, harden the implementation layer between accepted design authority and Astro before the multi-page proof. Re-baseline against the exact post-Run-11 `main` SHA (`5eeffadbbd928f4a03644d6e8ff267a6d5795316`) first and complete the mandatory Phase 0 repository inventory/gap matrix defined in `docs/design-system-implementation-policy.md` before choosing implementation changes.
+After PR #44 has passed independent exact-SHA QA, merged, and passed post-merge verification, the Pre-Run-12 hardening work MUST fetch the live repository state, record the then-current verified `main` SHA (the post-PR44 `main` SHA), and perform the mandatory Phase 0 repository inventory/gap matrix defined in `docs/design-system-implementation-policy.md` against that exact SHA before choosing implementation changes. The Run 11 merge SHA (`5eeffadbbd928f4a03644d6e8ff267a6d5795316`) is historical Run 11 closure evidence, not the future hardening implementation base.
 
 The governing policy is `docs/design-system-implementation-policy.md`.
 

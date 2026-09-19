@@ -115,7 +115,7 @@ test.describe("Run 11 staleness cascade", () => {
     // 3. Deterministic next action targets recovery.
     await gotoArea(page, "Overview");
     await expect(page.getByText(/Primary next action/i)).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText(/Regenerate derivatives|Re-derive production input|Re-run QA/i).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/Refresh design authority|Regenerate derivatives|Re-derive production input|Re-run QA/i).first()).toBeVisible({ timeout: 15_000 });
 
     // 4. Versions: v2 CURRENT, v1 HISTORICAL (never rewritten as failed).
     await gotoArea(page, "Versions");

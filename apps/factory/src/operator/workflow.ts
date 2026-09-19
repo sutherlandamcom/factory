@@ -83,8 +83,8 @@ const AREA_ORDER: readonly WorkflowAreaId[] = [
   "intake",
   "research",
   "content",
-  "assets",
   "design",
+  "assets",
   "production",
   "qa",
   "deployment",
@@ -1471,7 +1471,7 @@ function deriveNextActions(
     });
   }
   const visualSet = authorities.visual.acceptedSet;
-  if (design && !visualSet) {
+  if (design && !design.stale && !visualSet) {
     push({
       actionId: "VISUAL_SET_MISSING",
       area: "assets",
@@ -1480,7 +1480,7 @@ function deriveNextActions(
       reasonCode: "VISUAL_SET_MISSING",
       reasonMessage: "The accepted design has no accepted visual asset set binding.",
     });
-  } else if (visualSet?.stale) {
+  } else if (visualSet?.stale && !design?.stale) {
     push({
       actionId: "VISUAL_SET_STALE",
       area: "assets",

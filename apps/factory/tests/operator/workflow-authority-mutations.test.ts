@@ -696,6 +696,9 @@ test("Mutation E2: Mutate upstream AcceptedPageContent -> design becomes STALE, 
     assert.equal(wf.deployment.state, "BLOCKED");
     assert.ok(wf.deployment.blockers.some((b) => b.code === "DESIGN_STALE"));
     assert.ok(wf.deployment.blockers.some((b) => b.code === "VISUAL_STALE"));
+
+    assert.equal(wf.nextAction?.actionId, "DESIGN_STALE");
+    assert.equal(wf.nextAction?.label, "Refresh design authority");
   } finally {
     await env.dbInst.close();
   }

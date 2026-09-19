@@ -40,7 +40,11 @@ function Digest({ digest }: { digest: string }) {
 
 export function ContentPage({ projectId }: { projectId: string }) {
   const [inspectedContent, setInspectedContent] = useState<AcceptedContentView | null>(null);
-  useEffect(() => setInspectedContent(null), [projectId]);
+  const [initialWorkspaceLoaded, setInitialWorkspaceLoaded] = useState(false);
+  useEffect(() => {
+    setInspectedContent(null);
+    setInitialWorkspaceLoaded(false);
+  }, [projectId]);
   const [ws, setWs] = useState<WriterWorkspace | null>(null);
   const [qa, setQa] = useState<WriterQaView | null>(null);
   const [busy, setBusy] = useState(false);
@@ -73,7 +77,9 @@ export function ContentPage({ projectId }: { projectId: string }) {
           internalLinkIntent: pt.internalLinkIntent.join("\n"),
           ctaIntent: pt.ctaIntent,
         });
+        setNoGapAck(Boolean(data.brief.latest.noGapLineageAcknowledged));
       }
+      setInitialWorkspaceLoaded(true);
     } catch (e) {
       setError(errorMessage(e, "Content workspace failed to load."));
     }
@@ -188,7 +194,7 @@ export function ContentPage({ projectId }: { projectId: string }) {
 
       {/* 2. Content Production Brief */}
       <Section title="Content Production Brief">
-        <div className="space-y-3 text-sm">
+        <fieldset disabled={busy || !initialWorkspaceLoaded} className="space-y-3 text-sm border-0 p-0 m-0">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <label className="block">
               <span className="text-gray-700">Slug</span>
@@ -285,7 +291,7 @@ export function ContentPage({ projectId }: { projectId: string }) {
                 return `Brief draft v${result.version} saved (digest ${result.digest.slice(0, 12)}…).`;
               }, "Brief draft rejected.")
             }
-            disabled={busy}
+            disabled={busy || !initialWorkspaceLoaded}
             className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
           >
             {brief && brief.state === "draft" ? "Update draft" : "Create draft"}
@@ -328,7 +334,7 @@ export function ContentPage({ projectId }: { projectId: string }) {
                         return `Brief v${brief.version} approved.`;
                       }, "Brief approval rejected.")
                     }
-                    disabled={busy}
+                    disabled={busy || !initialWorkspaceLoaded}
                     className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
                   >
                     Approve exact digest
@@ -337,7 +343,7 @@ export function ContentPage({ projectId }: { projectId: string }) {
               )}
             </div>
           )}
-        </div>
+        </fieldset>
       </Section>
 
       {/* 3. WriterPromptSnapshot */}

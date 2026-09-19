@@ -29,9 +29,11 @@ import {
   audioCandidates,
   contentBriefs,
   contentQaReports,
+  designInputSnapshots,
   modelInvocations,
   pageContentProposals,
   productionCandidates,
+  productionPageInputs,
   projects,
   productionQaRuns,
   projectInputSnapshots,
@@ -45,6 +47,7 @@ import {
 } from "../persistence/schema.js";
 import type { FactoryDb } from "../persistence/db.js";
 import { PageAuthorityReader } from "../writer/page-authority.js";
+import { DesignStore } from "../design/design-store.js";
 import type { ProjectIntakeStore } from "./intake-store.js";
 import { getProjectOperatorWorkspace } from "./workspace.js";
 
@@ -241,11 +244,11 @@ export async function deriveProjectWorkflow(
   if (!project) return null;
 
   const authorities = await deriveAuthorities(deps, projectId);
-  const pages = await derivePages(deps, projectId, authorities);
+  const { pages, currentCandidate } = await derivePages(deps, projectId, authorities);
 
   const areas = deriveAreaSummaries(authorities, pages);
   const nextActions = deriveNextActions(authorities, pages);
-  const deployment = deriveDeployment(authorities, pages);
+  const deployment = deriveDeployment(authorities, pages, currentCandidate);
   const overall = deriveOverallState(authorities, pages, deployment);
 
   return {
@@ -486,25 +489,45 @@ async function deriveAuthorities(
   const assignmentsStale = assignmentRowList.filter((r) => r.replacementAvailable === true).length;
   const assignmentPageSlugs = [...new Set(assignmentRowList.map((r) => String(r.pageSlug)))];
 
-  // Design staleness: accepted design binds an input snapshot; stale when
-  // that snapshot no longer matches current upstream authority. The design
-  // store's own staleness is authoritative; here we use the digest-binding
-  // shortcut (input snapshot identity) plus content supersession, which is
-  // exactly what the store re-checks. We reuse the store's own semantics by
-  // binding on the accepted artifact's stored input digest identity.
+  // Design staleness: upstream authority of design is ProjectInputSnapshot.
+  // Stale when accepted project inputs changed after design acceptance.
   const latestDesign = designAcceptedRows[0] ?? null;
+  let designStale = false;
+  let designStaleReason: string | null = null;
+  if (latestDesign) {
+    const [boundSnap] = await deps.db
+      .select({ data: designInputSnapshots.data })
+      .from(designInputSnapshots)
+      .where(eq(designInputSnapshots.id, latestDesign.inputSnapshotId))
+      .limit(1);
+    const boundData = boundSnap?.data as Record<string, unknown> | undefined;
+    if (boundData?.acceptedInputSnapshotId && latestSnapshot) {
+      if (
+        boundData.acceptedInputSnapshotId !== latestSnapshot.id ||
+        boundData.acceptedInputDigest !== latestSnapshot.digest
+      ) {
+        designStale = true;
+        designStaleReason = `Accepted project inputs changed after design acceptance (snapshot ${latestDesign.inputSnapshotVersion} -> ${latestSnapshot.version}).`;
+      }
+    } else if (latestSnapshot && latestSnapshot.version > latestDesign.inputSnapshotVersion) {
+      designStale = true;
+      designStaleReason = `Accepted project inputs changed (snapshot ${latestDesign.inputSnapshotVersion} -> ${latestSnapshot.version}).`;
+    }
+  }
+
   const designAccepted = latestDesign
     ? {
         id: latestDesign.id,
         version: latestDesign.version,
         digest: latestDesign.candidateDigest,
         acceptedAt: latestDesign.acceptedAt,
-        stale: false,
-        staleReason: null as string | null,
+        stale: designStale,
+        staleReason: designStaleReason,
       }
     : null;
 
   // Visual set staleness: binds exact design artifact id/version.
+  // Downstream cannot be fresh if upstream is stale!
   const latestSet = visualSetRows[0] ?? null;
   const visualAcceptedSet = latestSet
     ? {
@@ -512,20 +535,22 @@ async function deriveAuthorities(
         version: latestSet.version,
         digest: latestSet.setDigest,
         acceptedAt: latestSet.acceptedAt,
-        stale: Boolean(designAccepted) &&
-          (latestSet.designArtifactId !== designAccepted!.id ||
-            latestSet.designArtifactVersion !== designAccepted!.version),
+        stale:
+          !designAccepted ||
+          Boolean(designAccepted.stale) ||
+          latestSet.designArtifactId !== designAccepted.id ||
+          latestSet.designArtifactVersion !== designAccepted.version,
         staleReason:
-          designAccepted &&
-          (latestSet.designArtifactId !== designAccepted.id ||
-            latestSet.designArtifactVersion !== designAccepted.version)
+          !designAccepted
+            ? "No accepted design exists for this visual asset set."
+            : designAccepted.stale
+            ? "The bound accepted design is stale."
+            : latestSet.designArtifactId !== designAccepted.id ||
+              latestSet.designArtifactVersion !== designAccepted.version
             ? "The accepted design changed since this visual asset set was accepted."
             : null,
       }
     : null;
-  if (visualAcceptedSet?.stale) {
-    designAccepted!.stale = false; // design itself is fresh; the set is behind
-  }
 
   // Per-page production/candidate/QA state is derived in derivePages() from
   // the same tables; deriveAuthorities only needs project-level aggregates.
@@ -578,10 +603,13 @@ async function derivePages(
   deps: WorkflowReadModelDeps,
   projectId: string,
   authorities: AuthorityProjection,
-): Promise<PageWorkflowRow[]> {
+): Promise<{
+  pages: PageWorkflowRow[];
+  currentCandidate: { id: string; version?: number; digest?: string; pageIdentity: string } | null;
+}> {
   const pageReader = new PageAuthorityReader(deps.db);
   const currentPages = await pageReader.currentPages(projectId);
-  if (currentPages.length === 0) return [];
+  if (currentPages.length === 0) return { pages: [], currentCandidate: null };
 
   const [derivativeSets, summaryAccepted, audioAccepted, intents, policyResult, productionInputs, candidates, qaRuns] =
     await Promise.all([
@@ -617,7 +645,13 @@ async function derivePages(
         select id, version, page_identity as "pageIdentity", input_digest as "digest",
                accepted_content_id as "contentId",
                accepted_content_version as "contentVersion",
-               accepted_content_digest as "contentDigest"
+               accepted_content_digest as "contentDigest",
+               accepted_design_id as "designId",
+               accepted_design_version as "designVersion",
+               accepted_design_digest as "designDigest",
+               accepted_visual_set_id as "visualSetId",
+               accepted_visual_set_version as "visualSetVersion",
+               accepted_visual_set_digest as "visualSetDigest"
         from production_page_inputs
         where project_id = ${projectId}
         order by version desc
@@ -678,6 +712,13 @@ async function derivePages(
   for (const run of qaRuns) {
     if (!qaByCandidate.has(run.candidateId)) qaByCandidate.set(run.candidateId, run);
   }
+
+  let currentCandidateRecord: {
+    id: string;
+    version?: number;
+    digest?: string;
+    pageIdentity: string;
+  } | null = null;
 
   const rows: PageWorkflowRow[] = currentPages.map((page) => {
     const pageIdentity = page.slug;
@@ -744,14 +785,37 @@ async function derivePages(
     // ---- Production cell.
     const input = inputByPage.get(pageIdentity);
     const candidate = candidateByPage.get(pageIdentity);
+    const visual = authorities.visual.acceptedSet;
+
     let productionCell: PageWorkflowCell;
+    let candidateMatchesInput = false;
+    let inputSuperseded = false;
+
     if (!input) {
       productionCell = cell("NOT_STARTED");
     } else {
-      const inputSuperseded =
+      const contentSuperseded =
         input.contentId !== page.id ||
         Number(input.contentVersion) !== page.version ||
         input.contentDigest !== page.contentDigest;
+
+      const designSuperseded =
+        !design ||
+        Boolean(design.stale) ||
+        input.designId !== design.id ||
+        Number(input.designVersion) !== design.version ||
+        input.designDigest !== design.digest;
+
+      const visualSuperseded =
+        !visual ||
+        Boolean(visual.stale) ||
+        input.visualSetId !== visual.id ||
+        Number(input.visualSetVersion) !== visual.version ||
+        input.visualSetDigest !== visual.digest;
+
+      inputSuperseded = contentSuperseded || designSuperseded || visualSuperseded;
+      candidateMatchesInput = Boolean(candidate && candidate.productionInputId === input.id);
+
       if (inputSuperseded) {
         productionCell = cell("STALE", {
           relation: "HISTORICAL",
@@ -759,7 +823,7 @@ async function derivePages(
           version: Number(input.version),
           digest: String(input.digest),
         });
-      } else if (!candidate) {
+      } else if (!candidate || !candidateMatchesInput) {
         productionCell = cell("READY", {
           relation: "CURRENT",
           freshness: "CURRENT",
@@ -768,22 +832,14 @@ async function derivePages(
         });
       } else {
         const qaRun = qaByCandidate.get(candidate.id) ?? null;
-        const candidateCurrent = candidate.productionInputId === input.id;
-        if (!candidateCurrent || inputSuperseded) {
-          productionCell = cell("STALE", {
-            relation: "HISTORICAL",
-            freshness: "STALE",
-            version: Number(input.version),
-            digest: String(input.digest),
-          });
-        } else if (candidate.state === "qa_passed" && qaRun?.overall === "PASS") {
+        if (candidate.state === "qa_passed" && qaRun?.overall === "PASS") {
           productionCell = cell("ACCEPTED", {
             relation: "CURRENT",
             freshness: "CURRENT",
             version: Number(input.version),
             digest: candidate.artifactDigest ?? String(input.digest),
           });
-        } else if (candidate.state === "qa_failed") {
+        } else if (candidate.state === "qa_failed" || qaRun?.overall === "FAIL") {
           productionCell = cell("BLOCKED", {
             relation: "CURRENT",
             version: Number(input.version),
@@ -803,12 +859,7 @@ async function derivePages(
     let qaCell: PageWorkflowCell;
     if (candidate) {
       const qaRun = qaByCandidate.get(candidate.id) ?? null;
-      const inputSuperseded =
-        input &&
-        (input.contentId !== page.id ||
-          Number(input.contentVersion) !== page.version ||
-          input.contentDigest !== page.contentDigest);
-      const candidateCurrent = !inputSuperseded && input ? candidate.productionInputId === input.id : false;
+      const candidateCurrent = !inputSuperseded && candidateMatchesInput;
       if (!qaRun) {
         qaCell = cell("NOT_STARTED");
       } else if (qaRun.overall === "PASS" && candidateCurrent) {
@@ -816,12 +867,21 @@ async function derivePages(
       } else if (qaRun.overall === "PASS") {
         qaCell = cell("ACCEPTED", { relation: "HISTORICAL", freshness: "STALE" });
       } else if (qaRun.overall === "FAIL") {
-        qaCell = cell("BLOCKED", { relation: "CURRENT" });
+        qaCell = cell("BLOCKED", { relation: candidateCurrent ? "CURRENT" : "HISTORICAL" });
       } else {
-        qaCell = cell("REVIEW_REQUIRED", { relation: "CURRENT" });
+        qaCell = cell("REVIEW_REQUIRED", { relation: candidateCurrent ? "CURRENT" : "HISTORICAL" });
       }
     } else {
       qaCell = cell("NOT_STARTED");
+    }
+
+    if (productionCell.state === "ACCEPTED" && candidate && candidateMatchesInput && !inputSuperseded && !currentCandidateRecord) {
+      currentCandidateRecord = {
+        id: candidate.id,
+        version: candidate.productionInputVersion ?? (input ? Number(input.version) : undefined),
+        digest: candidate.artifactDigest ?? candidate.productionInputDigest ?? (input ? String(input.digest) : undefined),
+        pageIdentity,
+      };
     }
 
     return {
@@ -837,7 +897,7 @@ async function derivePages(
 
   // Deterministic page ordering.
   rows.sort((a, b) => a.pageIdentity.localeCompare(b.pageIdentity));
-  return rows;
+  return { pages: rows, currentCandidate: currentCandidateRecord };
 }
 
 // ---------------------------------------------------------------------------
@@ -985,21 +1045,24 @@ function deriveAreaSummaries(
 
   // Assets.
   const assets = authorities.assets;
+  const visualSet = authorities.visual.acceptedSet;
   const assetsState: WorkflowState =
-    assets.unapprovedVersions > 0
-      ? "IN_PROGRESS"
-      : assets.assignmentsStale > 0
-        ? "STALE"
-        : assets.assignmentsTotal > 0
-          ? "ACCEPTED"
-          : pages.length > 0
-            ? "READY"
-            : "NOT_STARTED";
+    visualSet?.stale
+      ? "STALE"
+      : assets.unapprovedVersions > 0
+        ? "IN_PROGRESS"
+        : assets.assignmentsStale > 0
+          ? "STALE"
+          : assets.assignmentsTotal > 0
+            ? "ACCEPTED"
+            : pages.length > 0
+              ? "READY"
+              : "NOT_STARTED";
   summaries.push({
     area: "assets",
     state: assetsState,
-    blockers:
-      assets.assignmentsStale > 0
+    blockers: [
+      ...(assets.assignmentsStale > 0
         ? [
             {
               code: "ASSET_ASSIGNMENT_REPLACEMENT_AVAILABLE",
@@ -1008,16 +1071,36 @@ function deriveAreaSummaries(
               resolutionRoute: WORKFLOW_ROUTES.assets,
             },
           ]
-        : [],
-    staleReasons:
-      assets.assignmentsStale > 0
+        : []),
+      ...(visualSet?.stale
+        ? [
+            {
+              code: "VISUAL_STALE",
+              area: "assets" as const,
+              message: visualSet.staleReason ?? "The accepted visual asset set is stale.",
+              resolutionRoute: WORKFLOW_ROUTES.assets,
+            },
+          ]
+        : []),
+    ],
+    staleReasons: [
+      ...(assets.assignmentsStale > 0
         ? [
             {
               code: "ASSET_ASSIGNMENT_REPLACEMENT_AVAILABLE",
               message: "Newer approved asset versions exist for assigned assets.",
             },
           ]
-        : [],
+        : []),
+      ...(visualSet?.stale
+        ? [
+            {
+              code: "VISUAL_STALE",
+              message: visualSet.staleReason ?? "The accepted visual asset set is stale.",
+            },
+          ]
+        : []),
+    ],
     currentAuthorities: [],
   });
 
@@ -1105,7 +1188,14 @@ function deriveAreaSummaries(
   });
 
   // Deployment.
-  const deploymentBlocked = pages.length === 0 || prodState !== "ACCEPTED" || qaState !== "ACCEPTED";
+  const deploymentBlocked =
+    pages.length === 0 ||
+    prodState !== "ACCEPTED" ||
+    qaState !== "ACCEPTED" ||
+    !authorities.design.accepted ||
+    authorities.design.accepted.stale ||
+    !authorities.visual.acceptedSet ||
+    authorities.visual.acceptedSet.stale;
   summaries.push({
     area: "deployment",
     state: deploymentBlocked ? "BLOCKED" : "READY",
@@ -1383,6 +1473,15 @@ function deriveNextActions(
       reasonCode: "DESIGN_MISSING",
       reasonMessage: "No accepted design exists for the accepted content.",
     });
+  } else if (design?.stale) {
+    push({
+      actionId: "DESIGN_STALE",
+      area: "design",
+      label: "Refresh design authority",
+      route: WORKFLOW_ROUTES.design,
+      reasonCode: "DESIGN_STALE",
+      reasonMessage: design.staleReason ?? "The accepted design is stale against upstream authority.",
+    });
   }
   const visualSet = authorities.visual.acceptedSet;
   if (design && !visualSet) {
@@ -1526,6 +1625,7 @@ function deriveNextActions(
 function deriveDeployment(
   authorities: AuthorityProjection,
   pages: PageWorkflowRow[],
+  currentCandidate: { id: string; version?: number; digest?: string; pageIdentity: string } | null,
 ): DeploymentReadiness {
   const blockers: WorkflowBlocker[] = [];
   if (pages.length === 0) {
@@ -1536,6 +1636,43 @@ function deriveDeployment(
       resolutionRoute: WORKFLOW_ROUTES.content,
     });
   }
+
+  // Design authority check
+  const design = authorities.design.accepted;
+  if (!design) {
+    blockers.push({
+      code: "DESIGN_MISSING",
+      area: "design",
+      message: "No accepted design exists for this project.",
+      resolutionRoute: WORKFLOW_ROUTES.design,
+    });
+  } else if (design.stale) {
+    blockers.push({
+      code: "DESIGN_STALE",
+      area: "design",
+      message: design.staleReason ?? "The accepted design is stale against upstream authority.",
+      resolutionRoute: WORKFLOW_ROUTES.design,
+    });
+  }
+
+  // Visual asset set authority check
+  const visualSet = authorities.visual.acceptedSet;
+  if (!visualSet) {
+    blockers.push({
+      code: "VISUAL_SET_MISSING",
+      area: "assets",
+      message: "No accepted visual asset set exists for this project.",
+      resolutionRoute: WORKFLOW_ROUTES.assets,
+    });
+  } else if (visualSet.stale) {
+    blockers.push({
+      code: "VISUAL_STALE",
+      area: "assets",
+      message: visualSet.staleReason ?? "The accepted visual asset set is stale.",
+      resolutionRoute: WORKFLOW_ROUTES.assets,
+    });
+  }
+
   for (const page of pages) {
     if (page.production.state !== "ACCEPTED") {
       blockers.push({
@@ -1546,7 +1683,7 @@ function deriveDeployment(
         resolutionRoute: WORKFLOW_ROUTES.production,
       });
     }
-    if (!(page.qa.state === "ACCEPTED" && page.qa.relation === "CURRENT")) {
+    if (!(page.qa.state === "ACCEPTED" && page.qa.relation === "CURRENT" && page.qa.freshness === "CURRENT")) {
       blockers.push({
         code: page.qa.relation === "HISTORICAL" ? "QA_HISTORICAL_NOT_CURRENT" : "QA_NOT_CURRENT",
         area: "qa",
@@ -1570,20 +1707,19 @@ function deriveDeployment(
   }
 
   const ready = blockers.length === 0 && pages.length > 0;
-  const currentCandidate = pages.find((p) => p.production.state === "ACCEPTED");
   return {
     state: ready ? "READY_FOR_DEPLOYMENT" : "BLOCKED",
     candidate: currentCandidate
       ? {
           kind: "ProductionCandidate",
-          id: currentCandidate.production.digest ?? "",
-          version: currentCandidate.production.version,
-          digest: currentCandidate.production.digest ?? undefined,
+          id: currentCandidate.id,
+          version: currentCandidate.version,
+          digest: currentCandidate.digest,
           pageIdentity: currentCandidate.pageIdentity,
         }
       : undefined,
     blockers,
-    qaCurrent: pages.length > 0 && pages.every((p) => p.qa.state === "ACCEPTED" && p.qa.relation === "CURRENT"),
+    qaCurrent: pages.length > 0 && pages.every((p) => p.qa.state === "ACCEPTED" && p.qa.relation === "CURRENT" && p.qa.freshness === "CURRENT"),
   };
 }
 
@@ -1617,7 +1753,7 @@ export async function deriveProjectVersions(
     .limit(1);
   if (!project) return null;
 
-  const [snapshots, acceptedContent, derivativeSets, designs, visualSets, candidates] = await Promise.all([
+  const [snapshots, acceptedContent, derivativeSets, designs, visualSets, candidates, prodInputs] = await Promise.all([
     deps.db
       .select()
       .from(projectInputSnapshots)
@@ -1648,6 +1784,15 @@ export async function deriveProjectVersions(
       .from(productionCandidates)
       .where(eq(productionCandidates.projectId, projectId))
       .orderBy(desc(productionCandidates.createdAt)),
+    deps.db
+      .select({
+        id: productionPageInputs.id,
+        version: productionPageInputs.version,
+        pageIdentity: productionPageInputs.pageIdentity,
+      })
+      .from(productionPageInputs)
+      .where(eq(productionPageInputs.projectId, projectId))
+      .orderBy(desc(productionPageInputs.version)),
   ]);
 
   const artifacts: ArtifactVersionSummary[] = [];
@@ -1763,14 +1908,17 @@ export async function deriveProjectVersions(
     });
   });
 
-  // ProductionCandidates: current per page = the newest candidate bound to
-  // the newest input; others are HISTORICAL.
-  const currentInputByPage = new Map<string, string>();
-  for (const c of candidates) {
-    if (!currentInputByPage.has(c.pageIdentity)) currentInputByPage.set(c.pageIdentity, c.productionInputId);
+  // ProductionCandidates: current per page = candidate whose productionInputId
+  // matches the authoritative latest ProductionPageInput for that page.
+  const latestInputByPage = new Map<string, { id: string; version: number }>();
+  for (const input of prodInputs) {
+    if (!latestInputByPage.has(input.pageIdentity)) {
+      latestInputByPage.set(input.pageIdentity, { id: input.id, version: input.version });
+    }
   }
   for (const c of candidates) {
-    const isCurrent = currentInputByPage.get(c.pageIdentity) === c.productionInputId;
+    const latestInput = latestInputByPage.get(c.pageIdentity);
+    const isCurrent = latestInput != null && c.productionInputId === latestInput.id;
     artifacts.push({
       artifactKind: "ProductionCandidate",
       pageIdentity: c.pageIdentity,

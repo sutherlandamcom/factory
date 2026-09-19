@@ -606,6 +606,8 @@ export function createOperatorApi(deps: OperatorApiDeps) {
 
       // ---- Run 10: Page derivatives --------------------------------------
       if (segments.length >= 4 && segments[0] === "projects" && segments[2] === "derivatives") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
         if (!deps.derivatives) return sendError(res, "not_found", "Derivatives are not available.");
         const derivatives = deps.derivatives;
         const projectId = segments[1]!;

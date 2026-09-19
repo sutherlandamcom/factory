@@ -247,11 +247,11 @@ export class LocalTrustedQaEvidenceExecutor implements TrustedQaEvidenceExecutor
     const result = await runProcess("node", ["--input-type=commonjs", "-e", script], {
       cwd: input.repoRoot,
       env: {
+        ...process.env,
         QA_DIST_DIR: input.distDir,
         QA_ROUTES: JSON.stringify(input.routes),
         QA_PLAYWRIGHT_PKG: input.browserPkgs.playwright,
         QA_AXE_PLAYWRIGHT_PKG: input.browserPkgs.axe,
-        ...process.env,
       },
       timeoutMs: TOOL_TIMEOUT_MS,
     });
@@ -319,7 +319,7 @@ export class LocalTrustedQaEvidenceExecutor implements TrustedQaEvidenceExecutor
     ], { cwd: path.join(input.repoRoot, "sites", "starter"), env: { ...process.env }, timeoutMs: TOOL_TIMEOUT_MS });
     const manifestPath = path.join(outDir, "manifest.json");
     if (result.timedOut) throw new FactoryError("qa_tool_timeout", "Lighthouse CI exceeded its time budget.");
-    if (result.exitCode !== 0 && !exists(manifestPath)) {
+    if (result.exitCode !== 0 && !(await exists(manifestPath))) {
       throw new FactoryError("qa_tool_unavailable", `Lighthouse CI failed: ${(result.stderr || result.stdout).slice(-300)}`);
     }
     const out: ProductionQaCheckResult[] = [];
@@ -444,12 +444,15 @@ export class LocalTrustedQaEvidenceExecutor implements TrustedQaEvidenceExecutor
   }
 }
 
-function exists(p: string): boolean {
+export async function exists(p: string): Promise<boolean> {
   try {
-    void stat(p);
+    await stat(p);
     return true;
-  } catch {
-    return false;
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return false;
+    }
+    throw error;
   }
 }
 

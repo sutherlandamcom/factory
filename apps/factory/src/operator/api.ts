@@ -9,6 +9,7 @@ import { FactoryError } from "../executor/errors.js";
 import { ProjectIntakeStore } from "./intake-store.js";
 import { FactoryStore } from "../persistence/store.js";
 import { getProjectOperatorWorkspace } from "./workspace.js";
+import { deriveProjectWorkflow, deriveProjectVersions, deriveProjectCosts } from "./workflow.js";
 import type { SearchIntelligenceService } from "../search/service.js";
 import type { CompetitorContentGapService } from "../competitors/service.js";
 import type { WriterService } from "../writer/service.js";
@@ -47,6 +48,12 @@ export interface OperatorApiDeps {
   readonly production?: ProductionApiFacade;
   /** Page derivatives v0 (Macro Run 10); optional for backward compatibility. */
   readonly derivatives?: import("../derivatives/api-facade.js").DerivativesApiFacade;
+  /**
+   * Run 11 trusted-QA evidence collector; optional. Absent = this
+   * environment has no trusted QA executor configured (typed
+   * qa_tool_unavailable; fail closed — never treated as PASS).
+   */
+  readonly qaCollector?: import("../production/qa/collector.js").ProductionQaEvidenceCollector;
 }
 
 const projectKeySchema = z
@@ -372,6 +379,35 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         return sendJson(res, 200, { projects });
       }
 
+      // ------------------------------------------------------------------
+      // Macro Run 11 — derived operator workflow read model (read-only).
+      // No workflow state is persisted anywhere; every value is derived
+      // from the existing subsystem authorities on each read.
+      // ------------------------------------------------------------------
+      if (
+        req.method === "GET" &&
+        segments.length >= 3 &&
+        segments[0] === "projects" &&
+        (segments[2] === "workflow" || segments[2] === "workflow-versions" || segments[2] === "workflow-costs")
+      ) {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        const workflowDeps = { db: deps.store.db, intake: deps.intake };
+        if (segments[2] === "workflow-versions") {
+          const versions = await deriveProjectVersions(workflowDeps, project.id);
+          if (!versions) return sendError(res, "not_found", "Project not found.");
+          return sendJson(res, 200, versions);
+        }
+        if (segments[2] === "workflow-costs") {
+          const costs = await deriveProjectCosts(workflowDeps, project.id);
+          if (!costs) return sendError(res, "not_found", "Project not found.");
+          return sendJson(res, 200, costs);
+        }
+        const workflow = await deriveProjectWorkflow(workflowDeps, project.id);
+        if (!workflow) return sendError(res, "not_found", "Project not found.");
+        return sendJson(res, 200, workflow);
+      }
+
       if (req.method === "GET" && segments.length === 3 && segments[0] === "projects" && segments[2] === "workspace") {
         const project = await deps.store.getProjectById(segments[1]!);
         if (!project) return sendError(res, "not_found", "Project not found.");
@@ -570,6 +606,8 @@ export function createOperatorApi(deps: OperatorApiDeps) {
 
       // ---- Run 10: Page derivatives --------------------------------------
       if (segments.length >= 4 && segments[0] === "projects" && segments[2] === "derivatives") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
         if (!deps.derivatives) return sendError(res, "not_found", "Derivatives are not available.");
         const derivatives = deps.derivatives;
         const projectId = segments[1]!;
@@ -610,7 +648,7 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         }
 
         // GET /api/projects/:id/derivatives/summary/:proposalId/review
-        if (req.method === "GET" && segments.length === 7 && segments[3] === "summary" && segments[5] === "review") {
+        if (req.method === "GET" && segments.length === 6 && segments[3] === "summary" && segments[5] === "review") {
           return sendJson(res, 200, await derivatives.summaryReview(projectId, segments[4]!));
         }
 
@@ -626,7 +664,7 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         }
 
         // GET /api/projects/:id/derivatives/audio/:candidateId/review
-        if (req.method === "GET" && segments.length === 7 && segments[3] === "audio" && segments[5] === "review") {
+        if (req.method === "GET" && segments.length === 6 && segments[3] === "audio" && segments[5] === "review") {
           return sendJson(res, 200, await derivatives.audioReview(projectId, segments[4]!));
         }
 
@@ -1295,6 +1333,22 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         if (req.method === "POST" && segments.length === 6 && segments[3] === "candidates" && segments[5] === "qa") {
           if (body.trim()) parseJsonBody(body);
           const result = await production.runCandidateQa({ projectId: project.id, candidateId: segments[4]! });
+          return sendJson(res, 200, result);
+        }
+
+        // POST collect trusted QA evidence:
+        // /projects/:id/production/candidates/:candidateId/qa-evidence
+        // Run 11: collects current mandatory trusted evidence (axe, keyboard,
+        // Lighthouse, gitleaks, OSV) for this EXACT candidate through the
+        // configured trusted executor and persists it via the shared Run 9
+        // import authority. It does NOT set candidate state — runCandidateQa
+        // remains the sole QA decision authority.
+        if (req.method === "POST" && segments.length === 6 && segments[3] === "candidates" && segments[5] === "qa-evidence") {
+          if (!deps.qaCollector) {
+            return sendError(res, "qa_tool_unavailable", "No trusted QA evidence executor is configured in this environment.");
+          }
+          if (body.trim()) parseJsonBody(body);
+          const result = await deps.qaCollector.collect({ projectId: project.id, candidateId: segments[4]! });
           return sendJson(res, 200, result);
         }
 

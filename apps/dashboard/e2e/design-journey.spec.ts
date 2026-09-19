@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import http from "node:http";
+import { gotoArea, gotoIntakeSection, gotoSubsection } from "./run11-navigation";
 
 /**
  * REAL BROWSER Design journey (Macro Run 6 acceptance):
@@ -52,7 +53,7 @@ async function createProject(page: Page, key: string, name: string): Promise<voi
 /** Minimal intake fill so the project becomes READY/acceptable. */
 async function fillIntake(page: Page): Promise<void> {
   const set = async (tab: string, label: string, value: string) => {
-    await page.getByRole("button", { name: tab, exact: true }).click();
+    await gotoIntakeSection(page, tab);
     await page.getByLabel(label, { exact: false }).first().fill(value);
   };
   await set("Business", "Business Name", "Design Journey Roofing Co");
@@ -66,7 +67,7 @@ async function fillIntake(page: Page): Promise<void> {
   await set("Conversion", "Primary Objective", "Generate assessment requests");
   await set("Conversion", "CTA Type", "Call the office");
   // Destination Type is a <select>: use selectOption, not fill.
-  await page.getByRole("button", { name: "Conversion", exact: true }).click();
+  await gotoIntakeSection(page, "Conversion");
   await page.getByLabel("Destination Type").selectOption("phone");
   await set("Conversion", "CTA Destination", "+15550100100");
   await set("Evidence & Claims", "Operator Facts", "Family-owned roofing firm operating since 1998");
@@ -87,12 +88,12 @@ test.describe("Design journey", () => {
     // Accept project inputs first (required upstream authority).
     await fillIntake(page);
     await page.getByRole("button", { name: "Save Draft" }).click();
-    await page.getByRole("button", { name: "Review", exact: true }).click();
+    await gotoIntakeSection(page, "Review");
     await page.getByRole("button", { name: "ACCEPT INPUTS" }).click();
     await expect(page.locator("span", { hasText: /^APPROVED$/i }).first()).toBeVisible({ timeout: 15_000 });
 
     // Open the Design tab.
-    await page.getByRole("button", { name: "Design" }).click();
+    await gotoArea(page, "Design");
     await expect(page.locator("h3", { hasText: "Design Provider" })).toBeVisible();
     // Fixture provider is configured and reachable.
     await expect(page.locator("text=configured & reachable")).toBeVisible();
@@ -137,10 +138,9 @@ test.describe("Design journey", () => {
     // The dashboard SPA resets to the projects list after a reload; re-open
     // the project like a real operator would.
     await page.reload();
-    await expect(page.locator("h1", { hasText: "Projects" })).toBeVisible({ timeout: 30_000 });
-    await page.getByRole("button", { name: new RegExp(name) }).first().click();
+    // Router deep link: reload re-lands on the same project workspace.
     await expect(page.locator("h1", { hasText: name })).toBeVisible({ timeout: 30_000 });
-    await page.getByRole("button", { name: "Design" }).click();
+    await gotoArea(page, "Design");
     await expect(page.locator("h3", { hasText: "Accepted Design" })).toBeVisible({ timeout: 30_000 });
     await expect(page.locator("text=accepted version(s); accepted designs are immutable").first()).toBeVisible();
   });

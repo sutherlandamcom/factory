@@ -6,6 +6,7 @@ import sharp from "sharp";
 import path from "node:path";
 import os from "node:os";
 import { mkdtemp, writeFile } from "node:fs/promises";
+import { gotoArea, gotoIntakeSection, gotoSubsection } from "./run11-navigation";
 
 /**
  * REAL BROWSER Design AUTHORITY journey (Macro Run 6 acceptance, §24):
@@ -85,7 +86,7 @@ async function createHeroFixture(seed: number): Promise<string> {
 
 /** Real Run 5 asset authority: upload -> approve exact digest -> assign homepage/hero. */
 async function approveAndAssignHeroAsset(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Asset Library", exact: true }).click();
+  await gotoSubsection(page, "Assets", "Asset Library");
   await expect(page.getByRole("heading", { name: "Asset Library" })).toBeVisible({ timeout: 10_000 });
   const fixture = await createHeroFixture(7);
   await page.locator("#asset-file").setInputFiles(fixture);
@@ -137,7 +138,7 @@ test.describe("Design authority journey", () => {
     expect(assignment).toMatchObject({ acceptedPageContentId: content.id, acceptedPageContentVersion: content.version, acceptedPageContentDigest: content.digest, pageSlug: PAGE_SLUG, role: "hero" });
 
     // ---- Design: derive the authority-bound input snapshot ----
-    await page.getByRole("button", { name: "Design" }).click();
+    await gotoArea(page, "Design");
     await expect(page.locator("h3", { hasText: "Design Provider" })).toBeVisible();
     await page.getByRole("button", { name: "Derive input snapshot" }).click();
     await expect(page.locator("text=Re-derive input snapshot")).toBeVisible({ timeout: 15_000 });
@@ -193,12 +194,10 @@ test.describe("Design authority journey", () => {
     await supervisorCall("/restart");
     await page.waitForTimeout(2_000);
     await page.reload();
-    await expect(page.locator("h1", { hasText: "Projects" })).toBeVisible({ timeout: 30_000 });
-    // Reopen by the UNIQUE key (project names repeat across runs; the key
-    // is unique per run).
-    await page.getByRole("button", { name: new RegExp(KEY) }).first().click();
+    // Router deep link: reload re-lands on the same project workspace
+    // (the URL carries the exact project id).
     await expect(page.locator("h1", { hasText: NAME })).toBeVisible({ timeout: 30_000 });
-    await page.getByRole("button", { name: "Design" }).click();
+    await gotoArea(page, "Design");
     await expect(page.locator("h3", { hasText: "Accepted Design" })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTitle("Accepted from a deterministic fixture candidate — NOT live Google Stitch evidence")).toBeVisible({ timeout: 15_000 });
     expect((await read<WriterWorkspace>("writer/workspace")).accepted.latest).toEqual(content);

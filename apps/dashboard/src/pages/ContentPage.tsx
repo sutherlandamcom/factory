@@ -2,7 +2,9 @@ import { useState, useEffect, useCallback } from "react";
 import { writerApi, OperatorApiError, type WriterWorkspace, type WriterQaView, type AcceptedContentView } from "../api/client";
 import { Section } from "../components/Section";
 import { StatusBadge } from "../components/StatusBadge";
+import { useQueryClient } from "@tanstack/react-query";
 import { usePolling } from "../hooks/usePolling";
+import { queryKeys } from "../query/keys";
 
 /**
  * Content workspace (Macro Run 4): operator surface over the writer pipeline.
@@ -38,7 +40,11 @@ function Digest({ digest }: { digest: string }) {
 
 export function ContentPage({ projectId }: { projectId: string }) {
   const [inspectedContent, setInspectedContent] = useState<AcceptedContentView | null>(null);
-  useEffect(() => setInspectedContent(null), [projectId]);
+  const [initialWorkspaceLoaded, setInitialWorkspaceLoaded] = useState(false);
+  useEffect(() => {
+    setInspectedContent(null);
+    setInitialWorkspaceLoaded(false);
+  }, [projectId]);
   const [ws, setWs] = useState<WriterWorkspace | null>(null);
   const [qa, setQa] = useState<WriterQaView | null>(null);
   const [busy, setBusy] = useState(false);
@@ -71,7 +77,9 @@ export function ContentPage({ projectId }: { projectId: string }) {
           internalLinkIntent: pt.internalLinkIntent.join("\n"),
           ctaIntent: pt.ctaIntent,
         });
+        setNoGapAck(Boolean(data.brief.latest.noGapLineageAcknowledged));
       }
+      setInitialWorkspaceLoaded(true);
     } catch (e) {
       setError(errorMessage(e, "Content workspace failed to load."));
     }
@@ -106,6 +114,7 @@ export function ContentPage({ projectId }: { projectId: string }) {
   const brief = ws?.brief.latest ?? null;
   const policy = ws?.policy.latest ?? null;
   const snapshot = ws?.snapshot.latest ?? null;
+  const queryClient = useQueryClient();
   const proposal = ws?.proposal.latest ?? null;
   const accepted = inspectedContent ?? ws?.accepted.latest ?? null;
   const acceptedCopy = accepted?.data as { title?: string; introduction?: string; sections?: Array<{ heading: string; body: string }>; conclusion?: string; cta?: string } | undefined;
@@ -185,7 +194,7 @@ export function ContentPage({ projectId }: { projectId: string }) {
 
       {/* 2. Content Production Brief */}
       <Section title="Content Production Brief">
-        <div className="space-y-3 text-sm">
+        <fieldset disabled={busy || !initialWorkspaceLoaded} className="space-y-3 text-sm border-0 p-0 m-0">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <label className="block">
               <span className="text-gray-700">Slug</span>
@@ -282,7 +291,7 @@ export function ContentPage({ projectId }: { projectId: string }) {
                 return `Brief draft v${result.version} saved (digest ${result.digest.slice(0, 12)}…).`;
               }, "Brief draft rejected.")
             }
-            disabled={busy}
+            disabled={busy || !initialWorkspaceLoaded}
             className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
           >
             {brief && brief.state === "draft" ? "Update draft" : "Create draft"}
@@ -325,7 +334,7 @@ export function ContentPage({ projectId }: { projectId: string }) {
                         return `Brief v${brief.version} approved.`;
                       }, "Brief approval rejected.")
                     }
-                    disabled={busy}
+                    disabled={busy || !initialWorkspaceLoaded}
                     className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
                   >
                     Approve exact digest
@@ -334,7 +343,7 @@ export function ContentPage({ projectId }: { projectId: string }) {
               )}
             </div>
           )}
-        </div>
+        </fieldset>
       </Section>
 
       {/* 3. WriterPromptSnapshot */}
@@ -459,18 +468,36 @@ export function ContentPage({ projectId }: { projectId: string }) {
               <div className="mt-2 font-medium text-indigo-700">{proposal.data.cta}</div>
             </div>
             <div className="flex gap-2">
-              <button
-                onClick={() =>
-                  run(async () => {
-                    await writerApi.generate(projectId, proposal.snapshotId);
-                    return "New proposal generated from the approved snapshot.";
-                  }, "Generation failed.")
-                }
-                disabled={busy || proposal.stale}
-                className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-900 disabled:opacity-50"
-              >
-                Regenerate
-              </button>
+              {proposal.stale && snapshot?.state === "approved" && !snapshot.stale ? (
+                /* Stale proposal: the recovery action generates a fresh
+                   proposal from the CURRENT approved snapshot (the old one
+                   stays visible as history). */
+                <button
+                  onClick={() =>
+                    run(async () => {
+                      await writerApi.generate(projectId, snapshot.id);
+                      return "New proposal generated from the current approved snapshot.";
+                    }, "Generation failed.")
+                  }
+                  disabled={busy}
+                  className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-900 disabled:opacity-50"
+                >
+                  Generate proposal
+                </button>
+              ) : (
+                <button
+                  onClick={() =>
+                    run(async () => {
+                      await writerApi.generate(projectId, proposal.snapshotId);
+                      return "New proposal generated from the approved snapshot.";
+                    }, "Generation failed.")
+                  }
+                  disabled={busy}
+                  className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-900 disabled:opacity-50"
+                >
+                  Regenerate
+                </button>
+              )}
               <button
                 onClick={() =>
                   run(async () => {
@@ -521,6 +548,12 @@ export function ContentPage({ projectId }: { projectId: string }) {
                     proposalId: proposal.id,
                     expectedProposalDigest: proposal.digest,
                   });
+                  // Content acceptance mutates downstream authority: the
+                  // derived workflow read model must refetch everywhere
+                  // (the layout header keeps the query observer active, so
+                  // navigation alone would never trigger a refetch).
+                  await queryClient.invalidateQueries({ queryKey: queryKeys.workflow(projectId) });
+                  await queryClient.invalidateQueries({ queryKey: queryKeys.versions(projectId) });
                   return `AcceptedPageContent v${result.version} created for ${result.slug}.`;
                 }, "Acceptance rejected.")
               }

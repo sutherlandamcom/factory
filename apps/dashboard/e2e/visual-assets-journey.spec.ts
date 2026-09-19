@@ -6,6 +6,7 @@ import sharp from "sharp";
 import path from "node:path";
 import os from "node:os";
 import { mkdtemp, writeFile } from "node:fs/promises";
+import { gotoArea, gotoIntakeSection, gotoSubsection } from "./run11-navigation";
 
 /**
  * REAL BROWSER Visual Assets journey (Macro Run 7 acceptance, §24):
@@ -65,7 +66,7 @@ async function createProject(page: Page, key: string, name: string): Promise<voi
 
 async function fillAndAcceptIntake(page: Page): Promise<void> {
   const set = async (tab: string, label: string, value: string) => {
-    await page.getByRole("button", { name: tab, exact: true }).click();
+    await gotoIntakeSection(page, tab);
     await page.getByLabel(label, { exact: false }).first().fill(value);
   };
   await set("Business", "Business Name", "Visual Journey Roofing Co");
@@ -77,7 +78,7 @@ async function fillAndAcceptIntake(page: Page): Promise<void> {
   await set("Site Identity", "Locale", "en-US");
   await set("Conversion", "Primary Objective", "Generate assessment requests");
   await set("Conversion", "CTA Type", "Call the office");
-  await page.getByRole("button", { name: "Conversion", exact: true }).click();
+  await gotoIntakeSection(page, "Conversion");
   await page.getByLabel("Destination Type").selectOption("phone");
   await set("Conversion", "CTA Destination", "+15550100200");
   await set("Search Seeds", "Seed Queries", "roof repair austin");
@@ -91,7 +92,7 @@ async function fillAndAcceptIntake(page: Page): Promise<void> {
   await set("Content Constitution", "Locale / Language Preferences", "US English");
   await set("Content Constitution", "Custom Project Writer Instructions", "Keep sentences short.");
   await page.getByRole("button", { name: "Save Draft" }).click();
-  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await gotoIntakeSection(page, "Review");
   await page.getByRole("button", { name: "ACCEPT INPUTS" }).click();
   await expect(page.locator("span", { hasText: /^APPROVED$/i }).first()).toBeVisible({ timeout: 15_000 });
 }
@@ -99,7 +100,7 @@ async function fillAndAcceptIntake(page: Page): Promise<void> {
 /** Accepted page content via the fixture writer (no-gap path: no SERP spend). */
 async function acceptPageContent(page: Page): Promise<void> {
   await acceptSearchGap(page);
-  await page.getByRole("button", { name: "Content", exact: true }).click();
+  await gotoSubsection(page, "Content", "Pipeline");
   await expect(page.getByText("Factory Writer Policy")).toBeVisible({ timeout: 10_000 });
   await page.getByRole("button", { name: "Derive draft" }).click();
   await expect(page.getByText("Writer policy draft created")).toBeVisible({ timeout: 15_000 });
@@ -154,7 +155,7 @@ async function createHeroFixture(seed: number): Promise<string> {
 
 /** Real Run 5 asset authority: upload -> approve exact digest -> assign homepage/hero. */
 async function approveAndAssignHeroAsset(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Asset Library", exact: true }).click();
+  await gotoSubsection(page, "Assets", "Asset Library");
   await expect(page.getByRole("heading", { name: "Asset Library" })).toBeVisible({ timeout: 10_000 });
   const fixture = await createHeroFixture(9);
   await page.locator("#asset-file").setInputFiles(fixture);
@@ -174,7 +175,7 @@ async function approveAndAssignHeroAsset(page: Page): Promise<void> {
 
 /** Accepted fixture design (the visual plan's upstream authority). */
 async function acceptFixtureDesign(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Design" }).click();
+  await gotoArea(page, "Design");
   await expect(page.locator("h3", { hasText: "Design Provider" })).toBeVisible();
   await page.getByRole("button", { name: "Derive input snapshot" }).click();
   await expect(page.locator("text=Re-derive input snapshot")).toBeVisible({ timeout: 15_000 });
@@ -196,7 +197,7 @@ test.describe("Visual assets journey", () => {
     await acceptFixtureDesign(page);
 
     // ---- Visual Assets: derive the plan from the accepted design ----
-    await page.getByRole("button", { name: "Visual Assets" }).click();
+    await gotoSubsection(page, "Assets", "Visual Slots");
     await expect(page.locator("h2", { hasText: "Visual Assets" })).toBeVisible();
     await page.getByRole("button", { name: "Derive visual plan" }).click();
     await expect(page.getByText(/Plan v1/)).toBeVisible({ timeout: 15_000 });
@@ -238,7 +239,7 @@ test.describe("Visual assets journey", () => {
     await expect(page.getByText(/Slot hero\.primary accepted: version/)).toBeVisible({ timeout: 30_000 });
 
     // ---- The Run 5 Asset Library shows the new assignment ----
-    await page.getByRole("button", { name: "Asset Library", exact: true }).click();
+    await gotoSubsection(page, "Assets", "Asset Library");
     await expect(page.getByRole("heading", { name: "Asset Library" })).toBeVisible({ timeout: 10_000 });
     // The AI-derived version is durably assigned to the exact page/role slot
     // (visible provenance: generated + exact derivation lineage).
@@ -246,7 +247,7 @@ test.describe("Visual assets journey", () => {
     await expect(page.getByText(/roof-repair-austin \/ hero/).last()).toBeVisible({ timeout: 15_000 });
 
     // ---- Accept the visual asset set ----
-    await page.getByRole("button", { name: "Visual Assets" }).click();
+    await gotoSubsection(page, "Assets", "Visual Slots");
     await page.getByRole("button", { name: "Accept visual asset set" }).click();
     await expect(page.getByRole("heading", { name: /Accepted Visual Asset Set v1/ })).toBeVisible({ timeout: 30_000 });
 
@@ -260,15 +261,14 @@ test.describe("Visual assets journey", () => {
     await supervisorCall("/restart");
     await page.waitForTimeout(2_000);
     await page.reload();
-    await expect(page.locator("h1", { hasText: "Projects" })).toBeVisible({ timeout: 30_000 });
-    await page.getByRole("button", { name: new RegExp(KEY) }).first().click();
+    // Router deep link: reload re-lands on the same project workspace.
     await expect(page.locator("h1", { hasText: NAME })).toBeVisible({ timeout: 30_000 });
-    await page.getByRole("button", { name: "Visual Assets" }).click();
+    await gotoSubsection(page, "Assets", "Visual Slots");
     await expect(page.getByRole("heading", { name: /Accepted Visual Asset Set v1/ })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText(/Design frozen \(Accepted design v2 is reconciled/)).toBeVisible({ timeout: 30_000 });
 
     // Verify Design tab reflects Accepted Design v2 (not stale)
-    await page.getByRole("button", { name: "Design" }).click();
+    await gotoArea(page, "Design");
     await expect(page.getByRole("heading", { name: "Accepted Design" })).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText("v2").first()).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText("current").first()).toBeVisible({ timeout: 15_000 });

@@ -125,6 +125,8 @@ async function probeVersion(spec: TrustedToolSpec, repoRoot: string, extraEnv: R
  * arrays, explicit timeouts, backend-resolved paths, no shell.
  */
 export class LocalTrustedQaEvidenceExecutor implements TrustedQaEvidenceExecutor {
+  constructor(private readonly runner: typeof runProcess = runProcess) {}
+
   async availability(repoRoot: string): Promise<TrustedToolAvailability[]> {
     const axePkg = await resolveAxeCorePackage(repoRoot);
     return Promise.all(
@@ -244,7 +246,7 @@ export class LocalTrustedQaEvidenceExecutor implements TrustedQaEvidenceExecutor
         process.stdout.write(JSON.stringify(results));
       });
     `;
-    const result = await runProcess("node", ["--input-type=commonjs", "-e", script], {
+    const result = await this.runner("node", ["--input-type=commonjs", "-e", script], {
       cwd: input.repoRoot,
       env: {
         ...process.env,
@@ -310,7 +312,7 @@ export class LocalTrustedQaEvidenceExecutor implements TrustedQaEvidenceExecutor
     versions: Map<string, string>,
   ): Promise<ProductionQaCheckResult[]> {
     const outDir = path.join(input.repoRoot, "qa-artifacts", "lhci-e2e");
-    const result = await runProcess("pnpm", [
+    const result = await this.runner("pnpm", [
       "exec", "lhci", "autorun",
       `--collect.staticDistDir=${input.distDir}`,
       "--collect.numberOfRuns=1",
@@ -381,7 +383,7 @@ export class LocalTrustedQaEvidenceExecutor implements TrustedQaEvidenceExecutor
     input: { repoRoot: string; repositorySha: string },
     versions: Map<string, string>,
   ): Promise<ProductionQaCheckResult> {
-    const result = await runProcess("gitleaks", ["detect", "--redact", "--config", path.join(input.repoRoot, ".gitleaks.toml")], {
+    const result = await this.runner("gitleaks", ["detect", "--redact", "--config", path.join(input.repoRoot, ".gitleaks.toml")], {
       cwd: input.repoRoot,
       env: { ...process.env },
       timeoutMs: TOOL_TIMEOUT_MS,
@@ -414,7 +416,7 @@ export class LocalTrustedQaEvidenceExecutor implements TrustedQaEvidenceExecutor
     input: { repoRoot: string; repositorySha: string },
     versions: Map<string, string>,
   ): Promise<ProductionQaCheckResult> {
-    const result = await runProcess(process.env.OSV_SCANNER_BIN || "osv-scanner", ["scan", "--lockfile=pnpm-lock.yaml"], {
+    const result = await this.runner(process.env.OSV_SCANNER_BIN || "osv-scanner", ["scan", "--lockfile=pnpm-lock.yaml"], {
       cwd: input.repoRoot,
       env: { ...process.env },
       timeoutMs: TOOL_TIMEOUT_MS,

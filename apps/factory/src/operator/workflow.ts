@@ -5,6 +5,7 @@ import {
   type CostAggregateRow,
   type CostValue,
   type DeploymentReadiness,
+  type DesignStalenessCode,
   type PageWorkflowCell,
   type PageWorkflowRow,
   type ProjectCostsReadModel,
@@ -213,7 +214,15 @@ interface AuthorityProjection {
     unapprovedVersions: number;
   };
   design: {
-    accepted: { id: string; version: number; digest: string; acceptedAt: Date; stale: boolean; staleReason: string | null } | null;
+    accepted: {
+      id: string;
+      version: number;
+      digest: string;
+      acceptedAt: Date;
+      stale: boolean;
+      staleReason: string | null;
+      staleCode?: DesignStalenessCode | null;
+    } | null;
     acceptedCount: number;
     historicalCount: number;
   };
@@ -489,40 +498,18 @@ async function deriveAuthorities(
   const assignmentsStale = assignmentRowList.filter((r) => r.replacementAvailable === true).length;
   const assignmentPageSlugs = [...new Set(assignmentRowList.map((r) => String(r.pageSlug)))];
 
-  // Design staleness: upstream authority of design is ProjectInputSnapshot.
-  // Stale when accepted project inputs changed after design acceptance.
-  const latestDesign = designAcceptedRows[0] ?? null;
-  let designStale = false;
-  let designStaleReason: string | null = null;
-  if (latestDesign) {
-    const [boundSnap] = await deps.db
-      .select({ data: designInputSnapshots.data })
-      .from(designInputSnapshots)
-      .where(eq(designInputSnapshots.id, latestDesign.inputSnapshotId))
-      .limit(1);
-    const boundData = boundSnap?.data as Record<string, unknown> | undefined;
-    if (boundData?.acceptedInputSnapshotId && latestSnapshot) {
-      if (
-        boundData.acceptedInputSnapshotId !== latestSnapshot.id ||
-        boundData.acceptedInputDigest !== latestSnapshot.digest
-      ) {
-        designStale = true;
-        designStaleReason = `Accepted project inputs changed after design acceptance (snapshot ${latestDesign.inputSnapshotVersion} -> ${latestSnapshot.version}).`;
-      }
-    } else if (latestSnapshot && latestSnapshot.version > latestDesign.inputSnapshotVersion) {
-      designStale = true;
-      designStaleReason = `Accepted project inputs changed (snapshot ${latestDesign.inputSnapshotVersion} -> ${latestSnapshot.version}).`;
-    }
-  }
-
-  const designAccepted = latestDesign
+  // Design staleness: derived from canonical DesignStore authority lineage.
+  const designStore = new DesignStore(deps.db);
+  const acceptedDesignResult = await designStore.latestAcceptedDesign(projectId);
+  const designAccepted = acceptedDesignResult
     ? {
-        id: latestDesign.id,
-        version: latestDesign.version,
-        digest: latestDesign.candidateDigest,
-        acceptedAt: latestDesign.acceptedAt,
-        stale: designStale,
-        staleReason: designStaleReason,
+        id: acceptedDesignResult.artifact.id,
+        version: acceptedDesignResult.artifact.version,
+        digest: acceptedDesignResult.artifact.candidateDigest,
+        acceptedAt: acceptedDesignResult.artifact.acceptedAt,
+        stale: acceptedDesignResult.staleness.stale,
+        staleReason: acceptedDesignResult.staleness.reason,
+        staleCode: acceptedDesignResult.staleness.code ?? null,
       }
     : null;
 
@@ -1118,7 +1105,7 @@ function deriveAreaSummaries(
     state: designState,
     blockers: [],
     staleReasons: design.accepted?.stale
-      ? [{ code: "DESIGN_INPUT_STALE", message: design.accepted.staleReason ?? "Design authority is stale." }]
+      ? [{ code: design.accepted.staleCode ?? "DESIGN_INPUT_STALE", message: design.accepted.staleReason ?? "Design authority is stale." }]
       : [],
     currentAuthorities: design.accepted
       ? [authorityRef({ kind: "AcceptedDesignArtifact", ...design.accepted })]
@@ -1867,6 +1854,12 @@ export async function deriveProjectVersions(
     });
   }
 
+  let latestDesignStale = false;
+  if (designs.length > 0) {
+    const latestAcceptedDesign = await new DesignStore(deps.db).latestAcceptedDesign(projectId);
+    latestDesignStale = Boolean(latestAcceptedDesign?.staleness.stale);
+  }
+
   // AcceptedDesignArtifacts: highest version is CURRENT.
   designs.forEach((d, i) => {
     artifacts.push({
@@ -1876,16 +1869,19 @@ export async function deriveProjectVersions(
       digest: d.candidateDigest,
       acceptedAt: d.acceptedAt.toISOString(),
       relation: i === 0 ? "CURRENT" : "HISTORICAL",
+      freshness: i === 0 ? (latestDesignStale ? "STALE" : "CURRENT") : undefined,
     });
   });
 
   // AcceptedVisualAssetSets: highest version is CURRENT; freshness against
-  // the current design binding.
+  // the current design binding. Downstream cannot be fresh if upstream is stale!
   visualSets.forEach((s, i) => {
     const currentDesign = designs[0];
     const freshness: AuthorityFreshness | undefined =
       i === 0 && currentDesign
-        ? s.designArtifactId === currentDesign.id && s.designArtifactVersion === currentDesign.version
+        ? s.designArtifactId === currentDesign.id &&
+          s.designArtifactVersion === currentDesign.version &&
+          !latestDesignStale
           ? "CURRENT"
           : "STALE"
         : undefined;

@@ -46,58 +46,143 @@ test("QA env precedence contract: collector spreads ...process.env BEFORE truste
   assert.ok(spreadIdx < axeIdx, "...process.env must precede QA_AXE_PLAYWRIGHT_PKG");
 });
 
-test("QA env precedence runtime: poisoned process.env cannot override candidate-derived QA variables", async () => {
+import { LocalTrustedQaEvidenceExecutor } from "../../src/production/qa/collector.js";
+import type { RunProcessOptions } from "../../src/executor/process.js";
+import { mkdir, writeFile } from "node:fs/promises";
+
+test("QA env precedence runtime: real LocalTrustedQaEvidenceExecutor overrides poisoned ambient QA_* variables", async () => {
   const origDist = process.env.QA_DIST_DIR;
   const origRoutes = process.env.QA_ROUTES;
   const origPw = process.env.QA_PLAYWRIGHT_PKG;
   const origAxe = process.env.QA_AXE_PLAYWRIGHT_PKG;
 
-  // Poison inherited environment with corrupted values
+  // Poison ambient inherited environment with attacker-controlled values
   process.env.QA_DIST_DIR = "/poisoned/qa/dist/dir";
   process.env.QA_ROUTES = JSON.stringify(["/poisoned-route-attacker"]);
   process.env.QA_PLAYWRIGHT_PKG = "/poisoned/playwright/attacker.js";
   process.env.QA_AXE_PLAYWRIGHT_PKG = "/poisoned/axe/attacker.js";
 
-  const trustedDistDir = "/trusted/candidate/dist";
+  const repoRoot = path.resolve(here, "../../../../");
+  const trustedDistDir = "/trusted/candidate-a/dist";
   const trustedRoutes = ["/homepage", "/about"];
-  const trustedPlaywrightPkg = "@playwright/test";
-  const trustedAxePkg = "@axe-core/playwright";
+
+  // Capture real executor process invocations and probe child process runtime environment
+  const captured: Array<{
+    command: string;
+    args: string[];
+    env: NodeJS.ProcessEnv;
+    childObserved?: { dist?: string; routes?: string[]; pw?: string; axe?: string };
+  }> = [];
+
+  const capturingRunner = async (
+    command: string,
+    args: string[],
+    opts: RunProcessOptions,
+  ) => {
+    if (command === "node") {
+      // Execute a real child process with opts.env (constructed by LocalTrustedQaEvidenceExecutor)
+      // to prove the child process actually receives the trusted values, overriding poisoned ambient env.
+      const probe = await runProcess("node", ["-e", `
+        process.stdout.write(JSON.stringify({
+          dist: process.env.QA_DIST_DIR,
+          routes: JSON.parse(process.env.QA_ROUTES),
+          pw: process.env.QA_PLAYWRIGHT_PKG,
+          axe: process.env.QA_AXE_PLAYWRIGHT_PKG,
+        }));
+      `], opts);
+      const childObserved = JSON.parse(probe.stdout);
+      captured.push({ command, args, env: opts.env, childObserved });
+
+      // Return valid browser check results so collect() continues through its real flow
+      return {
+        exitCode: 0,
+        signal: null,
+        stdout: JSON.stringify([
+          { kind: "axe", route: "/homepage", count: 0, blocking: [] },
+          { kind: "keyboard", route: "/homepage", expected: 1, visited: 1, ok: true },
+        ]),
+        stderr: "",
+        timedOut: false,
+      };
+    }
+
+    if (command === "pnpm") {
+      // Lighthouse: provide minimal manifest so collectLighthouse parses safely without expensive full run
+      const outDir = path.join(repoRoot, "qa-artifacts", "lhci-e2e");
+      await mkdir(outDir, { recursive: true });
+      const reportPath = path.join(outDir, "report.json");
+      await writeFile(reportPath, JSON.stringify({
+        categories: { performance: { score: 1 }, seo: { score: 1 }, "best-practices": { score: 1 } },
+        audits: {},
+      }));
+      await writeFile(path.join(outDir, "manifest.json"), JSON.stringify([
+        { url: "http://localhost/homepage", jsonPath: reportPath },
+      ]));
+      captured.push({ command, args, env: opts.env });
+      return { exitCode: 0, signal: null, stdout: "", stderr: "", timedOut: false };
+    }
+
+    // gitleaks and osv scanner: return pass without running expensive full scans
+    captured.push({ command, args, env: opts.env });
+    return { exitCode: 0, signal: null, stdout: "no leaks found", stderr: "", timedOut: false };
+  };
 
   try {
-    // Invoke child process with the exact environment construction pattern used in collector.ts
-    const childEnv = {
-      ...process.env,
-      QA_DIST_DIR: trustedDistDir,
-      QA_ROUTES: JSON.stringify(trustedRoutes),
-      QA_PLAYWRIGHT_PKG: trustedPlaywrightPkg,
-      QA_AXE_PLAYWRIGHT_PKG: trustedAxePkg,
-    };
-
-    const probeScript = `
-      process.stdout.write(JSON.stringify({
-        dist: process.env.QA_DIST_DIR,
-        routes: JSON.parse(process.env.QA_ROUTES),
-        pw: process.env.QA_PLAYWRIGHT_PKG,
-        axe: process.env.QA_AXE_PLAYWRIGHT_PKG
-      }));
-    `;
-
-    const result = await runProcess("node", ["-e", probeScript], {
-      cwd: process.cwd(),
-      env: childEnv,
-      timeoutMs: 10_000,
+    // Invoke the REAL LocalTrustedQaEvidenceExecutor
+    const executor = new LocalTrustedQaEvidenceExecutor(capturingRunner);
+    const checks = await executor.collect({
+      distDir: trustedDistDir,
+      routes: trustedRoutes,
+      manifestSetDigest: "m".repeat(64),
+      repositorySha: "s".repeat(40),
+      repoRoot,
     });
 
-    assert.equal(result.exitCode, 0, `probe script failed: ${result.stderr}`);
-    const observed = JSON.parse(result.stdout);
+    assert.ok(checks.length > 0, "executor.collect must produce check results");
 
-    // Assert that the trusted candidate-derived values won and poisoned process.env was defeated
-    assert.equal(observed.dist, trustedDistDir, "QA_DIST_DIR must use candidate-derived value");
-    assert.deepEqual(observed.routes, trustedRoutes, "QA_ROUTES must use candidate-derived value");
-    assert.equal(observed.pw, trustedPlaywrightPkg, "QA_PLAYWRIGHT_PKG must use candidate-derived value");
-    assert.equal(observed.axe, trustedAxePkg, "QA_AXE_PLAYWRIGHT_PKG must use candidate-derived value");
+    // Verify node browser-harness invocation through the real production executor path
+    const nodeInvocation = captured.find((c) => c.command === "node");
+    assert.ok(nodeInvocation, "LocalTrustedQaEvidenceExecutor must execute the browser harness");
+
+    // 1. The env passed by LocalTrustedQaEvidenceExecutor MUST contain candidate-derived trusted values
+    assert.equal(
+      nodeInvocation.env.QA_DIST_DIR,
+      trustedDistDir,
+      "QA_DIST_DIR in executor child env must be the candidate-derived trustedDistDir",
+    );
+    assert.equal(
+      nodeInvocation.env.QA_ROUTES,
+      JSON.stringify(trustedRoutes),
+      "QA_ROUTES in executor child env must be the candidate-derived trustedRoutes",
+    );
+    assert.notEqual(
+      nodeInvocation.env.QA_DIST_DIR,
+      "/poisoned/qa/dist/dir",
+      "Poisoned ambient QA_DIST_DIR must not leak into child process",
+    );
+    assert.notEqual(
+      nodeInvocation.env.QA_ROUTES,
+      JSON.stringify(["/poisoned-route-attacker"]),
+      "Poisoned ambient QA_ROUTES must not leak into child process",
+    );
+    assert.notEqual(
+      nodeInvocation.env.QA_PLAYWRIGHT_PKG,
+      "/poisoned/playwright/attacker.js",
+      "Poisoned ambient QA_PLAYWRIGHT_PKG must not leak into child process",
+    );
+    assert.notEqual(
+      nodeInvocation.env.QA_AXE_PLAYWRIGHT_PKG,
+      "/poisoned/axe/attacker.js",
+      "Poisoned ambient QA_AXE_PLAYWRIGHT_PKG must not leak into child process",
+    );
+
+    // 2. Child process runtime check: the spawned process actually observed trusted candidate values
+    assert.equal(nodeInvocation.childObserved?.dist, trustedDistDir);
+    assert.deepEqual(nodeInvocation.childObserved?.routes, trustedRoutes);
+    assert.ok(nodeInvocation.childObserved?.pw?.endsWith(path.join("@playwright", "test")));
+    assert.ok(nodeInvocation.childObserved?.axe?.endsWith(path.join("@axe-core", "playwright")));
   } finally {
-    // Clean up process.env
+    // Restore process.env
     if (origDist === undefined) delete process.env.QA_DIST_DIR;
     else process.env.QA_DIST_DIR = origDist;
 

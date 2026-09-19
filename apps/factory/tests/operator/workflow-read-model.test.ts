@@ -38,6 +38,9 @@ import {
 import { randomUUID } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
 import type { FactoryDatabaseInstance } from "../../src/persistence/db.js";
+import { DesignStore } from "../../src/design/design-store.js";
+import { parseDesignCandidateData, parseDesignInputSnapshotData } from "@factory/contracts";
+import { acceptFixturePage } from "../fixtures/accepted-page.js";
 
 /**
  * Macro Run 11 — derived workflow read model tests.
@@ -61,7 +64,7 @@ async function setup() {
   return { dbInst, store, intake, deps };
 }
 
-/** Insert an accepted page content row directly (authority-level test seam). */
+/** Insert an accepted page content row (preferring real writer acceptance when lineage exists). */
 async function insertAcceptedContent(
   db: FactoryDatabaseInstance["db"],
   projectId: string,
@@ -69,22 +72,26 @@ async function insertAcceptedContent(
   version: number,
   contentDigest = deterministicDigest({ slug, version }),
 ) {
-  const [row] = await db
-    .insert(acceptedPageContent)
-    .values({
-      id: `wac-${randomUUID()}`,
-      projectId,
-      version,
-      slug,
-      proposalId: `wprp-${randomUUID()}`,
-      proposalVersion: version,
-      proposalDigest: deterministicDigest({ proposal: slug, version }),
-      qaReportDigest: deterministicDigest({ qa: slug, version }),
-      data: { title: `Page ${slug} v${version}` },
-      contentDigest,
-    })
-    .returning();
-  return row!;
+  try {
+    return await acceptFixturePage({ db } as FactoryDatabaseInstance, projectId, slug);
+  } catch {
+    const [row] = await db
+      .insert(acceptedPageContent)
+      .values({
+        id: `wac-${randomUUID()}`,
+        projectId,
+        version,
+        slug,
+        proposalId: `wprp-${randomUUID()}`,
+        proposalVersion: version,
+        proposalDigest: deterministicDigest({ proposal: slug, version }),
+        qaReportDigest: deterministicDigest({ qa: slug, version }),
+        data: { title: `Page ${slug} v${version}` },
+        contentDigest,
+      })
+      .returning();
+    return row!;
+  }
 }
 
 async function insertDerivativePolicy(db: FactoryDatabaseInstance["db"], projectId: string) {
@@ -174,54 +181,72 @@ async function insertDerivativeSet(
   return row!;
 }
 
-async function insertDesign(db: FactoryDatabaseInstance["db"], projectId: string, version: number) {
-  // Real FK chain: design_input_snapshot -> design_candidate -> accepted artifact.
+async function insertDesign(db: FactoryDatabaseInstance["db"], projectId: string, _version = 1) {
+  const designStore = new DesignStore(db);
+  const designSnapshot = await designStore.deriveInputSnapshotDraft({ projectId });
   const [snapshot] = await db
-    .insert(designInputSnapshots)
-    .values({
-      id: `dsnp-${randomUUID()}`,
-      projectId,
-      version,
-      data: {},
-      inputDigest: deterministicDigest({ dsnap: projectId, version }),
-    })
-    .returning();
-  const [candidate] = await db
-    .insert(designCandidates)
-    .values({
-      id: `dcan-${randomUUID()}`,
-      projectId,
-      inputSnapshotId: snapshot!.id,
-      inputSnapshotVersion: version,
-      inputDigest: snapshot!.inputDigest,
-      provider: "google-stitch",
-      providerMode: "fixture",
-      providerProjectName: "fixture",
-      data: {},
-      candidateDigest: deterministicDigest({ design: projectId, version }),
-      approvalState: "accepted",
-      acceptedAt: new Date(),
-    })
-    .returning();
-  const [row] = await db
-    .insert(acceptedDesignArtifacts)
-    .values({
-      id: `ades-${randomUUID()}`,
-      projectId,
-      version,
-      candidateId: candidate!.id,
-      candidateDigest: candidate!.candidateDigest,
-      inputSnapshotId: snapshot!.id,
-      inputSnapshotVersion: version,
-      inputDigest: snapshot!.inputDigest,
-      provider: "google-stitch",
-      providerMode: "fixture",
-      providerProjectName: "fixture",
-      designMdDigest: deterministicDigest({ md: projectId, version }),
-      data: {},
-    })
-    .returning();
-  return row!;
+    .select()
+    .from(designInputSnapshots)
+    .where(eq(designInputSnapshots.id, designSnapshot.id));
+
+  const snapshotData = parseDesignInputSnapshotData(snapshot!.data);
+  const archetypes = snapshotData.archetypes.map((arch) => ({
+    kind: arch,
+    purpose: `${arch} purpose`,
+    providerScreenNames: [`projects/fixture/screens/${arch}`],
+    sectionPatterns: ["hero", "evidence", "cta"],
+    contentRequirements: ["Primary CTA visible"],
+    assetSlots: [],
+    primaryCta: "Request assessment",
+    secondaryCta: "",
+    responsiveBehavior: "Mobile-first stack",
+    trustPresentation: "Author/date areas visible",
+  }));
+  const screens = archetypes.map((arch, idx) => ({
+    id: `screen-${idx + 1}`,
+    providerScreenName: arch.providerScreenNames[0]!,
+    title: `${arch.kind} Screen`,
+    deviceType: "DESKTOP" as const,
+    archetype: arch.kind,
+  }));
+
+  const cData = parseDesignCandidateData({
+    schemaVersion: "design-v1",
+    provider: "google-stitch",
+    providerMode: "fixture",
+    providerProjectName: "projects/fixture",
+    designMdDigest: "d".repeat(64),
+    designMdToolVersion: "factory-design-md-lint-v1",
+    designMdLint: { errors: 0, warnings: 0, infos: 0 },
+    designSeed: {
+      colors: { primary: "#1A2E35" },
+      typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans" },
+      rationale: "Seed rationale",
+    },
+    providerEvidence: {},
+    tokens: {
+      colors: { primary: "#1A2E35" },
+      typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans" },
+      spacing: { md: "16px" },
+      rounded: { md: "8px" },
+    },
+    screens,
+    archetypes,
+    rationale: "Fixture rationale",
+  });
+
+  const designCandidate = await designStore.createCandidate({
+    projectId,
+    inputSnapshot: designSnapshot,
+    data: cData,
+  });
+  const design = await designStore.acceptCandidate({
+    projectId,
+    candidateId: designCandidate.id,
+    expectedCandidateDigest: designCandidate.candidateDigest,
+    reviewNotes: "fixture acceptance for operator testing",
+  });
+  return design;
 }
 
 async function insertVisualSet(
@@ -393,11 +418,27 @@ async function insertResearch(
     provider: "fixture",
     observedAt: new Date(),
     requestDigest: digest("req2"),
-    snapshotDigest: digest("serp"),
-    rawDigest: digest("raw"),
+    snapshotDigest: "a".repeat(64),
+    rawDigest: "b".repeat(64),
     organic: [],
   });
   const intelligenceId = `sis-${randomUUID()}`;
+  const intelData = {
+    evidenceRefs: [{ kind: "serp_snapshot", id: serpId, digest: "a".repeat(64) }],
+    primaryIntent: "commercial",
+    intentRationale: "fixture",
+    secondaryIntents: [],
+    queryClusters: [],
+    longTailOpportunities: [],
+    entities: [],
+    topics: [],
+    questions: [],
+    modifiers: [],
+    searchVocabulary: [],
+    relatedConcepts: [],
+    semanticCoverageRequirements: [],
+    userNeeds: [],
+  };
   await db.insert(searchIntelligenceSnapshots).values({
     id: intelligenceId,
     runId,
@@ -406,14 +447,14 @@ async function insertResearch(
     acceptedInputVersion: inputSnapshot.version,
     acceptedInputDigest: inputSnapshot.digest,
     query: "roof repair denver",
-    model: "fixture",
+    model: "fixture-analyst",
     provider: "fixture",
-    promptVersion: "v1",
-    promptDigest: digest("iprompt"),
+    promptVersion: "search-analyst-v1",
+    promptDigest: "c".repeat(64),
     serpSnapshotId: serpId,
-    evidenceDigests: [],
-    data: {},
-    snapshotDigest: digest("intel"),
+    evidenceDigests: { serp: "a".repeat(64) },
+    data: intelData,
+    snapshotDigest: "d".repeat(64),
   });
   const competitorRunId = `cr-${randomUUID()}`;
   await db.insert(competitorRuns).values({
@@ -423,53 +464,103 @@ async function insertResearch(
     acceptedInputVersion: inputSnapshot.version,
     acceptedInputDigest: inputSnapshot.digest,
     serpSnapshotId: serpId,
-    serpSnapshotDigest: digest("serp"),
+    serpSnapshotDigest: "a".repeat(64),
     intelligenceSnapshotId: intelligenceId,
-    intelligenceSnapshotDigest: digest("intel"),
-    pipelineVersion: "v1",
+    intelligenceSnapshotDigest: "d".repeat(64),
+    pipelineVersion: "fixture-v1",
     status: "succeeded",
     startedAt: new Date(),
     finishedAt: new Date(),
   });
+  const reportId = `cgr-${randomUUID()}`;
+  const reportData = {
+    serpSnapshotId: serpId,
+    serpSnapshotDigest: "a".repeat(64),
+    intelligenceSnapshotId: intelligenceId,
+    intelligenceSnapshotDigest: "d".repeat(64),
+    searchSemantics: {
+      intelligenceSnapshotId: intelligenceId,
+      intelligenceSnapshotDigest: "d".repeat(64),
+      primaryIntent: "commercial",
+      semanticCoverageRequirements: [
+        "What a full roof replacement includes",
+        "Typical timeline and process steps",
+        "Warranty and workmanship guarantees",
+      ],
+      userNeeds: [
+        "Understand cost drivers before requesting a quote",
+        "Trust signals: licensing, insurance, reviews",
+      ],
+    },
+    pageSnapshotRefs: [],
+    analysisRefs: [],
+    acceptedInputSnapshotId: inputSnapshot.id,
+    acceptedInputSnapshotVersion: inputSnapshot.version,
+    acceptedInputDigest: inputSnapshot.digest,
+    coverageMatrix: { policyVersion: "fixture-v1", rows: [] },
+    gaps: [],
+    differentiationRequirements: { items: [] },
+    model: "fixture",
+    provider: "fixture",
+    promptVersion: "fixture-v1",
+    reviewState: "operator_reviewed" as const,
+  };
+  const reportDigest = deterministicDigest(reportData);
   const [report] = await db
     .insert(contentGapReports)
     .values({
-      id: `cgr-${randomUUID()}`,
+      id: reportId,
       runId: competitorRunId,
       projectId,
       acceptedInputSnapshotId: inputSnapshot.id,
       acceptedInputVersion: inputSnapshot.version,
       acceptedInputDigest: inputSnapshot.digest,
       serpSnapshotId: serpId,
-      serpSnapshotDigest: digest("serp"),
+      serpSnapshotDigest: "a".repeat(64),
       intelligenceSnapshotId: intelligenceId,
-      intelligenceSnapshotDigest: digest("intel"),
+      intelligenceSnapshotDigest: "d".repeat(64),
       model: "fixture",
       provider: "fixture",
-      promptVersion: "v1",
-      data: {},
-      snapshotDigest: digest("report"),
-      reviewState: "accepted",
+      promptVersion: "fixture-v1",
+      data: reportData,
+      snapshotDigest: reportDigest,
+      reviewState: "operator_reviewed",
+      reviewRevision: 1,
+      decisionsDigest: "e".repeat(64),
     })
     .returning();
+
+  const gapData = {
+    ...reportData,
+    reviewState: "accepted" as const,
+    decisions: [],
+  };
+  const gapSnapshotDigest = deterministicDigest({
+    projectId,
+    version: 1,
+    reportId,
+    reportDigest,
+    decisionsDigest: "e".repeat(64),
+    data: gapData,
+  });
   await db.insert(acceptedContentGapSnapshots).values({
     id: `acgs-${randomUUID()}`,
     projectId,
     version: 1,
     reportId: report!.id,
     reportDigest: report!.snapshotDigest,
-    decisionsDigest: digest("decisions"),
+    decisionsDigest: "e".repeat(64),
     acceptedInputSnapshotId: inputSnapshot.id,
     acceptedInputVersion: inputSnapshot.version,
     acceptedInputDigest: inputSnapshot.digest,
-    serpSnapshotId: "serp-x",
-    serpSnapshotDigest: digest("serp"),
-    intelligenceSnapshotId: "sis-x",
-    intelligenceSnapshotDigest: digest("intel"),
+    serpSnapshotId: serpId,
+    serpSnapshotDigest: "a".repeat(64),
+    intelligenceSnapshotId: intelligenceId,
+    intelligenceSnapshotDigest: "d".repeat(64),
     pageSnapshotRefs: [],
     analysisRefs: [],
-    data: {},
-    snapshotDigest: digest("accepted"),
+    data: gapData,
+    snapshotDigest: gapSnapshotDigest,
   });
 }
 
@@ -694,6 +785,15 @@ test("workflow: multi-page mixed state — home current, service derivatives sta
     const snapshot = (await intake.listSnapshots(p.id))[0]!;
     await insertResearch(dbInst.db, p.id, { id: snapshot.id, version: snapshot.version, digest: snapshot.digest });
 
+    // home: fully current. NOTE: accepted content versions are project-global
+    // unique, so multi-page fixtures allocate increasing versions.
+    const homeC1 = await insertAcceptedContent(dbInst.db, p.id, "home", 1);
+
+    // service: content accepted at a later global version, derivative set
+    // still bound to the superseded v1 content.
+    const serviceC1 = await insertAcceptedContent(dbInst.db, p.id, "service", 2);
+    const serviceC2 = await insertAcceptedContent(dbInst.db, p.id, "service", 3);
+
     const design = await insertDesign(dbInst.db, p.id, 1);
     const vset = await insertVisualSet(dbInst.db, p.id, 1, {
       id: design.id,
@@ -701,9 +801,6 @@ test("workflow: multi-page mixed state — home current, service derivatives sta
       digest: design.candidateDigest,
     });
 
-    // home: fully current. NOTE: accepted content versions are project-global
-    // unique, so multi-page fixtures allocate increasing versions.
-    const homeC1 = await insertAcceptedContent(dbInst.db, p.id, "home", 1);
     await insertDerivativeSet(dbInst.db, p.id, "home", 1, {
       id: homeC1.id,
       version: homeC1.version,
@@ -717,10 +814,6 @@ test("workflow: multi-page mixed state — home current, service derivatives sta
     const homeCand = await insertCandidate(dbInst.db, p.id, "home", homeInput, "qa_passed", deterministicDigest({ artifact: "home" }));
     await insertQaRun(dbInst.db, p.id, homeCand.id, "PASS", homeCand.artifactDigest);
 
-    // service: content accepted at a later global version, derivative set
-    // still bound to the superseded v1 content.
-    const serviceC1 = await insertAcceptedContent(dbInst.db, p.id, "service", 2);
-    const serviceC2 = await insertAcceptedContent(dbInst.db, p.id, "service", 3);
     await insertDerivativeSet(dbInst.db, p.id, "service", 1, {
       id: serviceC1.id,
       version: serviceC1.version,

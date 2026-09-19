@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { setupMigratedTestDatabase } from "../persistence/helpers.js";
+import { acceptFixturePage } from "../fixtures/accepted-page.js";
+import { seedProjectWithAcceptedInputs } from "../fixtures/writer-seeds.js";
 import { FactoryStore } from "../../src/persistence/store.js";
 import { ProjectIntakeStore } from "../../src/operator/intake-store.js";
+import { DesignStore } from "../../src/design/design-store.js";
 import {
   deriveProjectWorkflow,
   deriveProjectVersions,
@@ -10,30 +13,20 @@ import {
 import { deterministicDigest } from "../../src/intelligence/digest.js";
 import { buildIntakePayload } from "../fixtures/intake-payloads.js";
 import {
-  acceptedPageContent,
-  acceptedDerivativeSets,
   acceptedDesignArtifacts,
   acceptedVisualAssetSets,
-  designCandidates,
-  designInputSnapshots,
+  assets,
+  assetVersions,
+  assetPageAssignments,
   productionPageInputs,
   productionCandidates,
   productionQaRuns,
-  pageDerivativeIntentSnapshots,
-  projectDerivativePolicies,
   visualAssetPlans,
-  serpSnapshots,
-  searchRuns,
-  searchIntelligenceSnapshots,
-  competitorRuns,
-  contentGapReports,
-  acceptedContentGapSnapshots,
-  projectInputSnapshots,
 } from "../../src/persistence/schema.js";
 import { randomUUID } from "node:crypto";
 import { eq, desc } from "drizzle-orm";
 import type { FactoryDatabaseInstance } from "../../src/persistence/db.js";
-import type { DesignInputSnapshotData } from "@factory/contracts";
+import { parseDesignCandidateData, type DesignCandidateData } from "@factory/contracts";
 
 /**
  * Macro Run 11 — authority mutation and staleness cascade verification.
@@ -52,249 +45,82 @@ async function setup() {
   return { dbInst, store, intake, deps };
 }
 
-async function insertResearch(
-  db: FactoryDatabaseInstance["db"],
-  projectId: string,
-  snapshot: { id: string; version: number; digest: string },
-) {
-  const digest = (n: string) => deterministicDigest({ r: n, projectId, version: snapshot.version });
-  const runId = `sr-${randomUUID()}`;
-  await db.insert(searchRuns).values({
-    id: runId,
-    projectId,
-    acceptedInputSnapshotId: snapshot.id,
-    acceptedInputVersion: snapshot.version,
-    acceptedInputDigest: snapshot.digest,
-    query: "factory test",
-    device: "desktop",
-    provider: "fixture",
-    requestDigest: digest("req"),
-    status: "succeeded",
-    startedAt: new Date(),
-    finishedAt: new Date(),
-  });
-  const serpId = `serp-${randomUUID()}`;
-  await db.insert(serpSnapshots).values({
-    id: serpId,
-    runId,
-    projectId,
-    acceptedInputSnapshotId: snapshot.id,
-    acceptedInputVersion: snapshot.version,
-    acceptedInputDigest: snapshot.digest,
-    query: "factory test",
-    device: "desktop",
-    provider: "fixture",
-    observedAt: new Date(),
-    requestDigest: digest("req2"),
-    snapshotDigest: digest("serp"),
-    rawDigest: digest("raw"),
-    organic: [],
-  });
-  const intelligenceId = `sis-${randomUUID()}`;
-  await db.insert(searchIntelligenceSnapshots).values({
-    id: intelligenceId,
-    runId,
-    projectId,
-    acceptedInputSnapshotId: snapshot.id,
-    acceptedInputVersion: snapshot.version,
-    acceptedInputDigest: snapshot.digest,
-    query: "factory test",
-    model: "fixture",
-    provider: "fixture",
-    promptVersion: "v1",
-    promptDigest: digest("iprompt"),
-    serpSnapshotId: serpId,
-    evidenceDigests: [],
-    data: {},
-    snapshotDigest: digest("intel"),
-  });
-  const competitorRunId = `cr-${randomUUID()}`;
-  await db.insert(competitorRuns).values({
-    id: competitorRunId,
-    projectId,
-    acceptedInputSnapshotId: snapshot.id,
-    acceptedInputVersion: snapshot.version,
-    acceptedInputDigest: snapshot.digest,
-    serpSnapshotId: serpId,
-    serpSnapshotDigest: digest("serp"),
-    intelligenceSnapshotId: intelligenceId,
-    intelligenceSnapshotDigest: digest("intel"),
-    pipelineVersion: "v1",
-    status: "succeeded",
-    startedAt: new Date(),
-    finishedAt: new Date(),
-  });
-  const [report] = await db
-    .insert(contentGapReports)
-    .values({
-      id: `cgr-${randomUUID()}`,
-      runId: competitorRunId,
-      projectId,
-      acceptedInputSnapshotId: snapshot.id,
-      acceptedInputVersion: snapshot.version,
-      acceptedInputDigest: snapshot.digest,
-      serpSnapshotId: serpId,
-      serpSnapshotDigest: digest("serp"),
-      intelligenceSnapshotId: intelligenceId,
-      intelligenceSnapshotDigest: digest("intel"),
-      model: "fixture",
-      provider: "fixture",
-      promptVersion: "v1",
-      data: {},
-      snapshotDigest: digest("report"),
-      reviewState: "accepted",
-    })
-    .returning();
-  await db.insert(acceptedContentGapSnapshots).values({
-    id: `acgs-${randomUUID()}`,
-    projectId,
-    version: snapshot.version,
-    reportId: report!.id,
-    reportDigest: report!.snapshotDigest,
-    decisionsDigest: digest("decisions"),
-    acceptedInputSnapshotId: snapshot.id,
-    acceptedInputVersion: snapshot.version,
-    acceptedInputDigest: snapshot.digest,
-    serpSnapshotId: "serp-x",
-    serpSnapshotDigest: digest("serp"),
-    intelligenceSnapshotId: "sis-x",
-    intelligenceSnapshotDigest: digest("intel"),
-    pageSnapshotRefs: [],
-    analysisRefs: [],
-    data: {},
-    snapshotDigest: digest("accepted"),
-  });
-}
-
-async function insertAcceptedContent(
-  db: FactoryDatabaseInstance["db"],
-  projectId: string,
-  slug: string,
-  version: number,
-  contentDigest = deterministicDigest({ slug, version }),
-) {
-  const [row] = await db
-    .insert(acceptedPageContent)
-    .values({
-      id: `wac-${randomUUID()}`,
-      projectId,
-      version,
-      slug,
-      proposalId: `wprp-${randomUUID()}`,
-      proposalVersion: version,
-      proposalDigest: deterministicDigest({ proposal: slug, version }),
-      qaReportDigest: deterministicDigest({ qa: slug, version }),
-      data: { title: `Page ${slug} v${version}` },
-      contentDigest,
-    })
-    .returning();
-  return row!;
-}
-
-async function insertDesignWithCanonicalLineage(
-  db: FactoryDatabaseInstance["db"],
-  projectId: string,
-  version: number,
-) {
-  const [inputSnapshot] = await db
-    .select()
-    .from(projectInputSnapshots)
-    .where(eq(projectInputSnapshots.projectId, projectId))
-    .orderBy(desc(projectInputSnapshots.version))
-    .limit(1);
-
-  const contentRows = await db
-    .select()
-    .from(acceptedPageContent)
-    .where(eq(acceptedPageContent.projectId, projectId))
-    .orderBy(desc(acceptedPageContent.version));
-
-  const data: DesignInputSnapshotData = {
+function candidateData(boundSlot?: {
+  boundAssetVersionId: string;
+  boundBinaryDigest: string;
+  boundGovernanceDigest: string;
+}): DesignCandidateData {
+  return parseDesignCandidateData({
     schemaVersion: "design-v1",
-    acceptedInputSnapshotId: inputSnapshot?.id ?? `psnp-${projectId}`,
-    acceptedInputSnapshotVersion: inputSnapshot?.version ?? 1,
-    acceptedInputDigest: inputSnapshot?.digest ?? deterministicDigest({ project: projectId }),
-    brand: {
-      facts: ["Fact 1"],
-      positioning: "Positioning",
-      tone: "Professional",
-      visualIdentityNotes: "",
+    provider: "google-stitch",
+    providerMode: "fixture",
+    providerProjectName: "projects/fixture",
+    designMdDigest: "d".repeat(64),
+    designMdToolVersion: "factory-design-md-lint-v1",
+    designMdLint: { errors: 0, warnings: 0, infos: 0 },
+    designSeed: {
+      colors: { primary: "#1A2E35" },
+      typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans" },
+      rationale: "Seed rationale",
     },
-    audience: {
-      segments: ["Audience 1"],
-      needs: ["Need 1"],
-      decisionContext: "",
+    providerEvidence: {},
+    tokens: {
+      colors: { primary: "#1A2E35" },
+      typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans" },
+      spacing: { md: "16px" },
+      rounded: { md: "8px" },
     },
-    references: {
-      referenceUrls: [],
-      antiReferenceUrls: [],
-      learn: [],
-      avoid: [],
-      preferredPerception: "",
-    },
-    uxRequirements: [],
-    representativePages: [],
-    archetypes: ["homepage"],
-    contentRefs: contentRows.map((c) => ({
-      id: c.id,
-      slug: c.slug,
-      version: c.version,
-      contentDigest: c.contentDigest,
-    })),
-    assetRefs: [],
-  };
-
-  const inputDigest = deterministicDigest(data);
-
-  const [snapshot] = await db
-    .insert(designInputSnapshots)
-    .values({
-      id: `dsnp-${randomUUID()}`,
-      projectId,
-      version,
-      data,
-      inputDigest,
-    })
-    .returning();
-
-  const [candidate] = await db
-    .insert(designCandidates)
-    .values({
-      id: `dcan-${randomUUID()}`,
-      projectId,
-      inputSnapshotId: snapshot!.id,
-      inputSnapshotVersion: version,
-      inputDigest: snapshot!.inputDigest,
-      provider: "google-stitch",
-      providerMode: "fixture",
-      providerProjectName: "fixture",
-      data: {},
-      candidateDigest: deterministicDigest({ design: projectId, version }),
-      approvalState: "accepted",
-      acceptedAt: new Date(),
-    })
-    .returning();
-
-  const [row] = await db
-    .insert(acceptedDesignArtifacts)
-    .values({
-      id: `ades-${randomUUID()}`,
-      projectId,
-      version,
-      candidateId: candidate!.id,
-      candidateDigest: candidate!.candidateDigest,
-      inputSnapshotId: snapshot!.id,
-      inputSnapshotVersion: version,
-      inputDigest: snapshot!.inputDigest,
-      provider: "google-stitch",
-      providerMode: "fixture",
-      providerProjectName: "fixture",
-      designMdDigest: deterministicDigest({ md: projectId, version }),
-      data: {},
-    })
-    .returning();
-
-  return row!;
+    screens: [
+      {
+        id: "screen-1",
+        providerScreenName: "projects/fixture/screens/abc",
+        title: "Homepage",
+        deviceType: "DESKTOP",
+        archetype: "homepage",
+      },
+    ],
+    archetypes: [
+      {
+        kind: "homepage",
+        purpose: "Trust-first entry",
+        providerScreenNames: ["projects/fixture/screens/abc"],
+        sectionPatterns: ["hero", "evidence", "cta"],
+        contentRequirements: ["Primary CTA visible"],
+        assetSlots: [
+          boundSlot
+            ? {
+                slot: "hero.primary",
+                requirement: "Hero photography",
+                pageSlug: "home",
+                role: "hero",
+                requiredRole: "hero",
+                boundAssetVersionId: boundSlot.boundAssetVersionId,
+                boundBinaryDigest: boundSlot.boundBinaryDigest,
+                boundGovernanceDigest: boundSlot.boundGovernanceDigest,
+                providerConsumed: false,
+                placeholder: false,
+                designProviderReferencedFinalAsset: true,
+                designProviderConsumedFinalAsset: false,
+              }
+            : {
+                slot: "hero.primary",
+                requirement: "Hero placeholder",
+                pageSlug: "home",
+                role: "hero",
+                requiredRole: "hero",
+                providerConsumed: false,
+                placeholder: true,
+                unresolvedReason: "No approved asset assignment for home/hero.",
+              },
+        ],
+        primaryCta: "Request assessment",
+        secondaryCta: "",
+        responsiveBehavior: "Mobile-first stack",
+        trustPresentation: "Author/date areas visible",
+      },
+    ],
+    rationale: "Fixture rationale",
+  });
 }
 
 async function insertVisualSet(
@@ -432,26 +258,96 @@ async function insertQaRun(
 
 /**
  * Creates a fully valid READY_FOR_DEPLOYMENT state and verifies the base invariants.
+ * Lineage is strictly rooted in real accepted ProjectInputSnapshot and ContentGap reports.
  */
-async function setupValidReadyChain(key: string) {
+async function setupValidReadyChain(key: string, opts?: { withAsset?: boolean }) {
   const { dbInst, store, intake, deps } = await setup();
-  const project = await store.createProject({ key, name: `Project ${key}` });
-  const payload = buildIntakePayload();
-  await intake.saveDraft({ projectId: project.id, baseRevision: 0, payload });
-  await intake.accept({
-    projectId: project.id,
-    expectedRevision: 1,
-    expectedDigest: deterministicDigest(payload),
-  });
+  const seeded = await seedProjectWithAcceptedInputs(dbInst, key);
+  const project = (await store.getProjectById(seeded.projectId))!;
   const snapshot = (await intake.listSnapshots(project.id))[0]!;
-  await insertResearch(dbInst.db, project.id, {
-    id: snapshot.id,
-    version: snapshot.version,
-    digest: snapshot.digest,
+
+  const content = await acceptFixturePage(dbInst, project.id, "home");
+
+  let assetInfo: {
+    assetId: string;
+    versionId: string;
+    assignmentId: string;
+    binDigest: string;
+    govDigest: string;
+  } | undefined;
+
+  if (opts?.withAsset) {
+    const assetId = `ast-${randomUUID()}`;
+    const versionId = `asv-${randomUUID()}`;
+    const assignmentId = `apa-${randomUUID()}`;
+    const binDigest = "1".repeat(64);
+    const govDigest = "2".repeat(64);
+
+    await dbInst.db.insert(assets).values({
+      id: assetId,
+      projectId: project.id,
+      kind: "photo",
+      title: "Hero Photo",
+    });
+
+    await dbInst.db.insert(assetVersions).values({
+      id: versionId,
+      assetId,
+      projectId: project.id,
+      version: 1,
+      mediaType: "image/jpeg",
+      byteSize: 1024,
+      binaryDigest: binDigest,
+      storageKey: `fixtures/${assetId}`,
+      originalFilename: "hero.jpg",
+      provenance: { source: "operator" },
+      rightsStatus: "operator_owned",
+      approvalState: "approved",
+      approvedAt: new Date(),
+      governanceDigest: govDigest,
+    });
+
+    await dbInst.db.insert(assetPageAssignments).values({
+      id: assignmentId,
+      projectId: project.id,
+      assetId,
+      versionId,
+      versionDigest: govDigest,
+      binaryDigest: binDigest,
+      acceptedPageContentId: content.id,
+      acceptedPageContentVersion: content.version,
+      acceptedPageContentDigest: content.contentDigest,
+      pageSlug: "home",
+      role: "hero",
+      assignedAt: new Date(),
+    });
+
+    assetInfo = { assetId, versionId, assignmentId, binDigest, govDigest };
+  }
+
+  const designStore = new DesignStore(dbInst.db);
+  const designSnapshot = await designStore.deriveInputSnapshotDraft({ projectId: project.id });
+  const cData = candidateData(
+    assetInfo
+      ? {
+          boundAssetVersionId: assetInfo.versionId,
+          boundBinaryDigest: assetInfo.binDigest,
+          boundGovernanceDigest: assetInfo.govDigest,
+        }
+      : undefined,
+  );
+  const designCandidate = await designStore.createCandidate({
+    projectId: project.id,
+    inputSnapshot: designSnapshot,
+    data: cData,
+  });
+  const design = await designStore.acceptCandidate({
+    projectId: project.id,
+    candidateId: designCandidate.id,
+    expectedCandidateDigest: designCandidate.candidateDigest,
+    reviewNotes: "fixture acceptance for operator testing",
   });
 
-  const content = await insertAcceptedContent(dbInst.db, project.id, "home", 1);
-  const design = await insertDesignWithCanonicalLineage(dbInst.db, project.id, 1);
   const visualSet = await insertVisualSet(dbInst.db, project.id, 1, {
     id: design.id,
     version: design.version,
@@ -495,7 +391,22 @@ async function setupValidReadyChain(key: string) {
   );
   assert.equal(initialWf.deployment.qaCurrent, true);
 
-  return { dbInst, store, intake, deps, project, snapshot, content, design, visualSet, input, candidate };
+  return {
+    dbInst,
+    store,
+    intake,
+    deps,
+    project,
+    snapshot,
+    content,
+    design,
+    visualSet,
+    input,
+    candidate,
+    assetInfo,
+    designStore,
+    designSnapshot,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -505,7 +416,7 @@ async function setupValidReadyChain(key: string) {
 test("Mutation A: New AcceptedPageContent (v2) makes production STALE, QA HISTORICAL, deployment BLOCKED", async () => {
   const env = await setupValidReadyChain("mut-a");
   try {
-    const contentV2 = await insertAcceptedContent(env.dbInst.db, env.project.id, "home", 2);
+    const contentV2 = await acceptFixturePage(env.dbInst, env.project.id, "home");
 
     const wf = (await deriveProjectWorkflow(env.deps, env.project.id))!;
     const versions = (await deriveProjectVersions(env.deps, env.project.id))!;
@@ -545,7 +456,20 @@ test("Mutation A: New AcceptedPageContent (v2) makes production STALE, QA HISTOR
 test("Mutation B: New AcceptedDesignArtifact (v2) makes visual set STALE, production STALE, QA HISTORICAL, deployment BLOCKED", async () => {
   const env = await setupValidReadyChain("mut-b");
   try {
-    const designV2 = await insertDesignWithCanonicalLineage(env.dbInst.db, env.project.id, 2);
+    const cData2 = candidateData();
+    cData2.rationale = "Candidate v2 rationale";
+    const candV2 = await env.designStore.createCandidate({
+      projectId: env.project.id,
+      inputSnapshot: env.designSnapshot,
+      data: cData2,
+    });
+    const designV2 = await env.designStore.acceptCandidate({
+      projectId: env.project.id,
+      candidateId: candV2.id,
+      expectedCandidateDigest: candV2.candidateDigest,
+      reviewNotes: "fixture acceptance for v2",
+    });
+    assert.equal(designV2.version, 2);
 
     const wf = (await deriveProjectWorkflow(env.deps, env.project.id))!;
     const versions = (await deriveProjectVersions(env.deps, env.project.id))!;
@@ -681,11 +605,11 @@ test("Mutation D: New ProductionPageInput (v2) without candidate makes Candidate
 });
 
 // ---------------------------------------------------------------------------
-// Mutation E: Upstream ProjectInputSnapshot changes -> design becomes STALE
+// Mutation E1: Upstream ProjectInputSnapshot changes -> design becomes STALE
 // ---------------------------------------------------------------------------
 
-test("Mutation E: Mutate upstream ProjectInputSnapshot -> design becomes STALE, downstream production STALE, deployment BLOCKED", async () => {
-  const env = await setupValidReadyChain("mut-e");
+test("Mutation E1: Mutate upstream ProjectInputSnapshot -> design becomes STALE, downstream production STALE, deployment BLOCKED", async () => {
+  const env = await setupValidReadyChain("mut-e1");
   try {
     const base = buildIntakePayload();
     const updatedPayload = {
@@ -706,17 +630,134 @@ test("Mutation E: Mutate upstream ProjectInputSnapshot -> design becomes STALE, 
       expectedDigest: deterministicDigest(updatedPayload),
     });
 
+    // 1. Direct canonical DesignStore assertion: reports stale with INPUT_CHANGED
+    const canonicalDesign = await env.designStore.latestAcceptedDesign(env.project.id);
+    assert.ok(canonicalDesign);
+    assert.equal(canonicalDesign.staleness.stale, true);
+    assert.equal(canonicalDesign.staleness.code, "INPUT_CHANGED");
+    assert.match(canonicalDesign.staleness.reason ?? "", /accepted project inputs changed/i);
+
+    // 2. Full workflow projection assertion: cascades downstream
     const wf = (await deriveProjectWorkflow(env.deps, env.project.id))!;
 
     const designArea = wf.areas.find((a) => a.area === "design");
     assert.equal(designArea?.state, "STALE");
+    assert.equal(designArea?.staleReasons[0]?.code, "INPUT_CHANGED");
+
+    const assetsArea = wf.areas.find((a) => a.area === "assets");
+    assert.equal(assetsArea?.state, "STALE");
 
     const homePage = wf.pages.find((p) => p.pageIdentity === "home")!;
     assert.equal(homePage.design.freshness, "STALE");
     assert.equal(homePage.production.state, "STALE");
+    assert.equal(homePage.qa.relation, "HISTORICAL");
 
     assert.equal(wf.deployment.state, "BLOCKED");
     assert.ok(wf.deployment.blockers.some((b) => b.code === "DESIGN_STALE"));
+    assert.ok(wf.deployment.blockers.some((b) => b.code === "VISUAL_STALE"));
+    assert.ok(wf.deployment.blockers.some((b) => b.code === "PRODUCTION_NOT_CURRENT"));
+  } finally {
+    await env.dbInst.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Mutation E2: Upstream AcceptedPageContent changes -> design becomes STALE
+// ---------------------------------------------------------------------------
+
+test("Mutation E2: Mutate upstream AcceptedPageContent -> design becomes STALE, downstream production STALE, deployment BLOCKED", async () => {
+  const env = await setupValidReadyChain("mut-e2");
+  try {
+    // Add a new accepted page without updating design input snapshot
+    await acceptFixturePage(env.dbInst, env.project.id, "services/test");
+
+    // 1. Direct canonical DesignStore assertion: reports stale with CONTENT_ADDED
+    const canonicalDesign = await env.designStore.latestAcceptedDesign(env.project.id);
+    assert.ok(canonicalDesign);
+    assert.equal(canonicalDesign.staleness.stale, true);
+    assert.equal(canonicalDesign.staleness.code, "CONTENT_ADDED");
+    assert.match(canonicalDesign.staleness.reason ?? "", /new accepted content exists/i);
+
+    // 2. Full workflow projection assertion: cascades downstream
+    const wf = (await deriveProjectWorkflow(env.deps, env.project.id))!;
+
+    const designArea = wf.areas.find((a) => a.area === "design");
+    assert.equal(designArea?.state, "STALE");
+    assert.equal(designArea?.staleReasons[0]?.code, "CONTENT_ADDED");
+
+    const assetsArea = wf.areas.find((a) => a.area === "assets");
+    assert.equal(assetsArea?.state, "STALE");
+
+    const homePage = wf.pages.find((p) => p.pageIdentity === "home")!;
+    assert.equal(homePage.design.freshness, "STALE");
+    assert.equal(homePage.production.state, "STALE");
+    assert.equal(homePage.qa.relation, "HISTORICAL");
+
+    assert.equal(wf.deployment.state, "BLOCKED");
+    assert.ok(wf.deployment.blockers.some((b) => b.code === "DESIGN_STALE"));
+    assert.ok(wf.deployment.blockers.some((b) => b.code === "VISUAL_STALE"));
+  } finally {
+    await env.dbInst.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Mutation E3: Upstream asset assignment changes -> design becomes STALE
+// ---------------------------------------------------------------------------
+
+test("Mutation E3: Mutate asset assignment -> design becomes STALE, downstream production STALE, deployment BLOCKED", async () => {
+  const env = await setupValidReadyChain("mut-e3", { withAsset: true });
+  try {
+    assert.ok(env.assetInfo);
+
+    // Initial check: canonical design is fresh with the bound asset
+    const initialCanonical = await env.designStore.latestAcceptedDesign(env.project.id);
+    assert.ok(initialCanonical);
+    assert.equal(initialCanonical.staleness.stale, false);
+
+    // Mutate the assignment's governance digest without updating design input snapshot
+    await env.dbInst.db
+      .update(assetPageAssignments)
+      .set({ versionDigest: "f".repeat(64) })
+      .where(eq(assetPageAssignments.id, env.assetInfo.assignmentId));
+
+    // 1. Direct canonical DesignStore assertion: reports stale with ASSET_ASSIGNMENT_CHANGED
+    const canonicalDesign = await env.designStore.latestAcceptedDesign(env.project.id);
+    assert.ok(canonicalDesign);
+    assert.equal(canonicalDesign.staleness.stale, true);
+    assert.equal(canonicalDesign.staleness.code, "ASSET_ASSIGNMENT_CHANGED");
+    assert.match(canonicalDesign.staleness.reason ?? "", /asset assignment.*changed/i);
+
+    // 2. Full workflow projection assertion: cascades downstream
+    const wf = (await deriveProjectWorkflow(env.deps, env.project.id))!;
+
+    const designArea = wf.areas.find((a) => a.area === "design");
+    assert.equal(designArea?.state, "STALE");
+    assert.equal(designArea?.staleReasons[0]?.code, "ASSET_ASSIGNMENT_CHANGED");
+
+    const assetsArea = wf.areas.find((a) => a.area === "assets");
+    assert.equal(assetsArea?.state, "STALE");
+
+    const homePage = wf.pages.find((p) => p.pageIdentity === "home")!;
+    assert.equal(homePage.design.freshness, "STALE");
+    assert.equal(homePage.production.state, "STALE");
+    assert.equal(homePage.qa.relation, "HISTORICAL");
+
+    assert.equal(wf.deployment.state, "BLOCKED");
+    assert.ok(wf.deployment.blockers.some((b) => b.code === "DESIGN_STALE"));
+    assert.ok(wf.deployment.blockers.some((b) => b.code === "VISUAL_STALE"));
+    assert.ok(wf.deployment.blockers.some((b) => b.code === "PRODUCTION_NOT_CURRENT"));
+
+    // Also test asset assignment removal:
+    await env.dbInst.db
+      .delete(assetPageAssignments)
+      .where(eq(assetPageAssignments.id, env.assetInfo.assignmentId));
+
+    const removedCanonical = await env.designStore.latestAcceptedDesign(env.project.id);
+    assert.ok(removedCanonical);
+    assert.equal(removedCanonical.staleness.stale, true);
+    assert.equal(removedCanonical.staleness.code, "ASSET_ASSIGNMENT_REMOVED");
+    assert.match(removedCanonical.staleness.reason ?? "", /asset assignment.*removed/i);
   } finally {
     await env.dbInst.close();
   }

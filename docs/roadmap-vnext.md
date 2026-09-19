@@ -16,12 +16,9 @@ the domain model.
 
 Every meaningful implementation PR ends at `IMPLEMENTATION COMPLETE — PENDING INDEPENDENT QA`; independent QA reviews an exact SHA, frozen P0/P1 findings are remediated narrowly, then the exact candidate is re-reviewed before merge.
 
-## Observed implementation status — 2026-09-15
+## Observed implementation status — 2026-09-19
 
-Verified main: `637bcb4fcb9fcc20d15dba5fb4fc9d94e6584f0f` (PR #39, Run 9
-merged). Recheck live Git/PR state at session start. Merge, executed checks and
-independent acceptance remain distinct facts; the table below is navigation,
-not a substitute for exact-SHA evidence.
+Verified main: `5eeffadbbd928f4a03644d6e8ff267a6d5795316` (PR #43 merged; Run 11 closed and post-merge verified). Recheck live Git/PR state at session start. Merge, executed checks and independent acceptance remain distinct facts; the table below is navigation, not a substitute for exact-SHA evidence.
 
 | Workstream | Observed state | Evidence / next gate |
 | --- | --- | --- |
@@ -31,12 +28,15 @@ not a substitute for exact-SHA evidence.
 | Macro Run 4 — Content Constitution + Opus Writer | Implemented, independently QA'd and merged | [PR #25](https://github.com/sutherlandamcom/factory/pull/25), head `76d528c1a66ec3a4dbcaea87fa9787d246a6cdf2`, merge `590ed435c7d72a6e4f1e9289db337e837cdf534c` |
 | Macro Run 4.1 — QA Hardening | Implemented and merged | [PR #27](https://github.com/sutherlandamcom/factory/pull/27), merge `cd28a6af8ca4e82ecd140006d3f169d317271a74`; [PR #28](https://github.com/sutherlandamcom/factory/pull/28), merge `318661e590377c9deec44b98d933a641d7cc1d19` |
 | Macro Run 5 — Asset Foundation | Implemented, QA'd and merged | [PR #30](https://github.com/sutherlandamcom/factory/pull/30), head `062e9346bb6f26b2129a9c4b1037e985634f79c7`, merge `0d5e65f0db09fffa061f127674dc4014e6e0d692`; subsequent CAS/authority hardening is present on current main |
-| Macro Run 6 — Google Stitch Design Provider | Implemented, QA'd and merged | [PR #31](https://github.com/sutherlandamcom/factory/pull/31), head `660bdd11a3c27a687415f666aeb03649655b5074`, merge `928d8fab21d111dd6af89ea0c517db50baf6096b`; current Stitch seam is truthfully text-only for final local-asset byte ingestion |
-| Macro Run 7 — Final Visual Assets + Design/Asset Freeze | Implemented, remediated and merged | Core [PR #32](https://github.com/sutherlandamcom/factory/pull/32), main carry [PR #33](https://github.com/sutherlandamcom/factory/pull/33), E2E fix [PR #34](https://github.com/sutherlandamcom/factory/pull/34), seam remediation [PR #35](https://github.com/sutherlandamcom/factory/pull/35), final independent-QA remediation [PR #37](https://github.com/sutherlandamcom/factory/pull/37); current main `15f38587…` includes durable plan/slot resolution authority, cross-asset CAS, project-level advisory serialization and split provider evidence dimensions |
-| Macro Run 8 — Production Renderer Decision | Architecture decision accepted; no duplicate production prototype required | Evidence-based virtual bake-off selects **Astro static**. Stitch remains professional design authority; raw provider HTML is implementation/design evidence, not production authority. Direct-static is not maintained in parallel. |
+| Macro Run 6 — Google Stitch Design Provider | Implemented, QA'd and merged | [PR #31](https://github.com/sutherlandamcom/factory/pull/31), head `660bdd11a3c27a687415f666aeb03649655b5074`, merge `928d8fab21d111dd6af89ea0c517db50baf6096b`; Stitch is the design generation provider, while human acceptance produces `AcceptedDesignArtifact`, the Factory design authority |
+| Macro Run 7 — Final Visual Assets + Design/Asset Freeze | Implemented, remediated and merged | Core [PR #32](https://github.com/sutherlandamcom/factory/pull/32), main carry [PR #33](https://github.com/sutherlandamcom/factory/pull/33), E2E fix [PR #34](https://github.com/sutherlandamcom/factory/pull/34), seam remediation [PR #35](https://github.com/sutherlandamcom/factory/pull/35), final independent-QA remediation [PR #37](https://github.com/sutherlandamcom/factory/pull/37); current lineage includes durable plan/slot resolution authority, exact replacement CAS, advisory-lock serialization and split provider evidence dimensions |
+| Macro Run 8 — Production Renderer Decision | Architecture decision accepted | Evidence-based review selects **Astro static** as the single ordinary renderer. Stitch remains generation/evidence only; `AcceptedDesignArtifact` is Factory design authority; raw provider HTML is not production authority. Direct-static is not maintained in parallel. |
 | Macro Run 9 — Production + SEO + Performance Engine | Implemented, independently QA'd and merged | [PR #39](https://github.com/sutherlandamcom/factory/pull/39), merge `637bcb4fcb9fcc20d15dba5fb4fc9d94e6584f0f`; post-merge CI green |
-| Macro Run 10 — Page Derivatives: Summary + Audio | Implementation candidate; open, awaiting independent QA | Branch `feat/run10-page-derivatives`; builder verification only — no independent GO claimed |
-| Macro Runs 11–13 | Planned | Execute only after Run 10 exit criteria are independently accepted |
+| Macro Run 10 — Page Derivatives: Summary + Audio | Implemented, remediated and merged | [PR #40](https://github.com/sutherlandamcom/factory/pull/40), merge `93d8d33cb26476b6d9b245ed2b312d83ca5e872e`; multi-page uniqueness remediation [PR #41](https://github.com/sutherlandamcom/factory/pull/41), merge `f11fd0f6b1b60e2f56b9aba98cc219ca092056b8`; closure-evidence correction [PR #42](https://github.com/sutherlandamcom/factory/pull/42), merge `c4ef30eda6eff25251ec4cb65ddc0f5243433586` |
+| Macro Run 11 — Full Operator Workflow | Implemented, independently QA'd, merged and post-merge verified | [PR #43](https://github.com/sutherlandamcom/factory/pull/43), approved candidate `0c77e5dfba5c51fc99e47a762729ba01a3726e96`, merge `5eeffadbbd928f4a03644d6e8ff267a6d5795316`, post-merge [CI run 35448825801](https://github.com/sutherlandamcom/factory/actions/runs/35448825801) SUCCESS |
+| Pre-Run-12 — Design System Implementation Hardening | Planned; Run 11 prerequisite satisfied. Blocked on PR #44 governance acceptance/merge/post-merge verification | Governed by `docs/design-system-implementation-policy.md`; [PR #44](https://github.com/sutherlandamcom/factory/pull/44) must pass independent exact-SHA QA, merge and pass post-merge verification on main before hardening implementation begins |
+| Macro Run 12 — High-quality Multi-page Proof | Planned | Requires accepted Design System Implementation Hardening first |
+| Macro Run 13 — Production Delivery vNext | Planned | Follows Run 12 proof |
 
 Run 8 was intentionally resolved as an evidence-based architecture decision
 rather than by building two throwaway production stacks. The decision used the
@@ -153,11 +153,11 @@ Exit: an operator can upload and approve real Chamonix imagery for a specific pa
 
 Implement a narrow `DesignProvider` adapter with Google Stitch as preferred v0 provider. Feed real accepted content, brand facts, references/anti-references and available assets. Generate a site design system plus representative archetypes rather than independently designing every page.
 
-This workstream supersedes legacy `design_director` model-eval roles as professional visual authority; do not extend those eval roles into a proprietary Factory design engine.
+This workstream supersedes legacy `design_director` model-eval roles as professional visual-generation mechanisms; do not extend those eval roles into a proprietary Factory design engine. Stitch/provider output is a candidate/evidence surface only. Human acceptance produces the immutable/version-bound `AcceptedDesignArtifact`, which is Factory design authority.
 
-Human review/approval is the visual authority. If Stitch clears the institutional-quality floor, stop provider search. Only if it fails should the next cheapest viable provider (Framer, then Figma, then others) be tested.
+If Stitch clears the institutional-quality floor, stop provider search. Only if it fails should the next cheapest viable provider (Framer, then Figma, then others) be tested.
 
-Exit: accepted Sutherland design artifacts and implementation references exist for homepage plus representative page archetypes.
+Exit: accepted Sutherland `AcceptedDesignArtifact` and implementation references exist for homepage plus representative page archetypes.
 
 ### Macro Run 7 — Nano Banana Pro + Final Asset Resolution
 
@@ -193,11 +193,9 @@ branch.
 
 Decision:
 
-`Stitch / AcceptedDesignArtifact -> Astro archetypes/components -> static HTML`
+`DesignProvider generation -> human acceptance -> AcceptedDesignArtifact -> Astro archetypes/components -> static HTML`
 
-Google Stitch remains professional design authority. `DESIGN.md`, screenshots
-and provider HTML are retained as design/implementation evidence; raw provider
-HTML is not ordinary production authority.
+Google Stitch / `DesignProvider` remains professional design generation/evidence only. Human acceptance creates `AcceptedDesignArtifact`, the Factory design authority. Provider `DESIGN.md`, screenshots and HTML are retained as design/implementation evidence; raw provider HTML is not ordinary production authority.
 
 Astro 7 + Tailwind CSS 4 is the single ordinary production renderer because it
 preserves near-zero-JS static output while providing materially stronger
@@ -257,11 +255,56 @@ Connect existing vertical Dashboard slices into one coherent operator lifecycle 
 
 Do not build a generic CMS or visual page builder. Dashboard remains a semantic operator console.
 
+Implemented, independently QA'd, merged and post-merge verified via [PR #43](https://github.com/sutherlandamcom/factory/pull/43) (approved candidate `0c77e5dfba5c51fc99e47a762729ba01a3726e96`, merge `5eeffadbbd928f4a03644d6e8ff267a6d5795316`, post-merge [CI run 35448825801](https://github.com/sutherlandamcom/factory/actions/runs/35448825801) SUCCESS).
+
+### Pre-Run-12 — Design System Implementation Hardening
+
+Status: Planned; Run 11 prerequisite satisfied. Blocked on independent exact-SHA QA, merge and post-merge verification of this governance policy ([PR #44](https://github.com/sutherlandamcom/factory/pull/44)).
+
+After PR #44 has passed independent exact-SHA QA, merged, and passed post-merge verification, the Pre-Run-12 hardening work MUST fetch the live repository state, record the then-current verified `main` SHA (the post-PR44 `main` SHA), and perform the mandatory Phase 0 repository inventory/gap matrix defined in `docs/design-system-implementation-policy.md` against that exact SHA before choosing implementation changes. The Run 11 merge SHA (`5eeffadbbd928f4a03644d6e8ff267a6d5795316`) is historical Run 11 closure evidence, not the future hardening implementation base.
+
+The governing policy is `docs/design-system-implementation-policy.md`.
+
+The hardening must preserve the existing architecture:
+
+`AcceptedDesignArtifact -> deterministic implementation contract/policy -> governed semantic tokens -> registered reusable Astro components -> bounded archetype composition -> Astro static output`.
+
+This workstream must not create a second accepted design authority, a parallel
+Stitch-native renderer, a generic visual page builder or a new mutable workflow
+state. The default expectation is zero database migrations, zero new runtime
+dependencies and zero paid provider calls for the hardening itself.
+
+Exit: accepted design deterministically controls reusable implementation;
+component APIs are reviewed before implementation; registered IDs/variants match
+actual governed implementations; ordinary pages use bounded components/variants
+and governed semantic tokens; implementation-policy changes use the existing
+`renderer.policyVersion` lineage; the exact implementation-contract digest is
+provable in production evidence; design-drift, component accessibility and
+visual-regression gates are automated; fixture routes cannot leak into
+production; lineage/staleness remains correct; and reuse can be measured for
+Run 12. Builder completion still requires independent exact-SHA QA before merge.
+
 ### Macro Run 12 — High-quality Multi-page Proof
 
 Produce a small coherent Sutherland set such as homepage + service + location + editorial/research page using one accepted design system and multiple archetypes.
 
 Prove search/content strategy, internal links, no cannibalization, accepted content quality, authentic/generated asset discipline, SEO/performance and cheap template/archetype reuse.
+
+In addition to the representative archetypes, use an additional ordinary-page
+scalability proof where practical. For a normal page that fits the accepted
+design system, the expected steady state is:
+
+```text
+new DesignProvider call = 0
+new design authority = 0
+new renderer = 0
+new component family ≈ 0
+coding-model design invention = 0
+unknown tokens/components/variants = 0
+blocking design drift = 0
+```
+
+Report factual reuse evidence rather than a subjective design score.
 
 Measure per-page/provider cost. The desired steady state is that a typical page using an accepted archetype does not require a new design or coding-model call.
 

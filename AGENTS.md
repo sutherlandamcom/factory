@@ -7,6 +7,9 @@ Normative vNext product/architecture policy:
 - `docs/architecture/factory-constitution-vnext.md`
 - `docs/roadmap-vnext.md`
 
+Specialized normative design-implementation policy:
+- `docs/design-system-implementation-policy.md`
+
 Instruction precedence and historical-document handling:
 - `docs/instruction-authority.md`
 
@@ -21,17 +24,20 @@ extend a transitional v0 behavior merely because it still exists in code.
   services and operator UI unless a concrete reviewed task requires otherwise.
 - **Ordinary production renderer: Astro 7 + Tailwind CSS 4.** Run 8's reviewed
   architecture decision selects Astro static as the single ordinary production
-  renderer. Google Stitch remains design authority, not production runtime
-  authority. Raw Stitch/provider HTML may be retained as implementation/design
-  evidence, but it is not a second production renderer or source of truth.
-  Do not maintain a parallel Stitch-native/direct-static path unless a later
-  reviewed ADR meets the documented reversal conditions.
+  renderer. Google Stitch / `DesignProvider` generates professional design
+  candidates and evidence; it is never Factory design authority. Human
+  acceptance creates the immutable/version-bound `AcceptedDesignArtifact`,
+  which is the durable Factory design authority. Raw Stitch/provider HTML may
+  be retained as implementation/design evidence, but it is not a second
+  production renderer or source of truth. Do not maintain a parallel
+  Stitch-native/direct-static path unless a later reviewed ADR meets the
+  documented reversal conditions.
 - **Dashboard/operator UI is explicitly in vNext scope.** It must be a thin
   operator surface over shared application services, not a second source of
   business truth or a separate business-logic implementation.
-- **No proprietary AI design engine.** Professional design is supplied through
-  a bounded external `DesignProvider`; Google Stitch is the preferred v0
-  provider until it fails an agreed quality/cost gate.
+- **No proprietary AI design engine.** Professional design generation is
+  supplied through a bounded external `DesignProvider`; Google Stitch is the
+  preferred v0 provider until it fails an agreed quality/cost gate.
 - **No packages without a concrete reason.** Every new dependency must solve a
   requirement of the task at hand. Plain TS types beat runtime schema
   libraries unless runtime validation is genuinely needed.
@@ -48,6 +54,19 @@ extend a transitional v0 behavior merely because it still exists in code.
   (`sites/starter/src/components/`) before creating new ones. New reusable
   primitives must be justified by repeated accepted archetype needs rather than
   speculative page-builder generality.
+- For governed design implementation, follow
+  `docs/design-system-implementation-policy.md`. Ordinary page implementation
+  must prefer `existing component + existing variant` -> `justified variant` ->
+  `new reusable component`; a page-local one-off is an exception requiring an
+  explicit rationale. Coding agents must use governed semantic tokens and must
+  not silently invent new colors, spacing, radii, typography, shadows, CTA
+  treatments or cloned design components.
+- **No hidden design model between accepted design and production.** Once an
+  `AcceptedDesignArtifact` is accepted, do not insert an LLM/coding-model step
+  that freely interprets how the design should work. Implementation policy must
+  be deterministic/versioned/validated; if the governed contract cannot express
+  the accepted design, extend the contract deliberately rather than hiding a
+  page-local CSS/model exception.
 - Every public page requires:
   - a unique `title` and meta `description`,
   - a canonical URL,
@@ -59,6 +78,8 @@ extend a transitional v0 behavior merely because it still exists in code.
   `AcceptedPageContent` + `AcceptedDesignArtifact` +
   `AcceptedVisualAssetSet` + route/site identity. The renderer may materialize
   these authorities but may not silently rewrite, substitute or redesign them.
+- Production components consume accepted visual roles/slots; they must not
+  hardcode arbitrary project asset paths or call an image provider themselves.
 - Current Astro-site images are local assets processed through the accepted
   asset path; no external hotlinks. vNext asset work must preserve local/durable
   provenance, rights, optimization and deterministic production semantics.
@@ -76,8 +97,11 @@ extend a transitional v0 behavior merely because it still exists in code.
   `AcceptedDesignArtifact` or approved archetype exists, implementation workers
   must implement it rather than redesign it. Legacy `ProductionSpec`
   layout/editorial guidance remains a compatibility input only; it must not
-  supersede the accepted external DesignProvider authority or expand into a
+  supersede the accepted `AcceptedDesignArtifact` authority or expand into a
   proprietary Factory design engine.
+- Committed visual-regression baselines are implementation regression oracles,
+  not design authority. Do not update snapshots merely to make CI green; a
+  baseline change requires intentional review of the visual change.
 
 ## Search, writer and provider governance
 
@@ -94,12 +118,13 @@ extend a transitional v0 behavior merely because it still exists in code.
   `WriterProvider`, `DesignProvider`, `VisualAssetProvider`, and later
   `SummaryProvider` / `SpeechProvider`). Provider secrets never enter browser
   state, public artifacts or model prompts that do not need them.
-- Professional visual design is owned by `DesignProvider`, not by legacy
-  `design_director` model-eval tasks. Google Stitch is the preferred first v0
-  candidate; alternatives are tested only if it fails the quality/cost floor.
-  Provider HTML/screenshots/DESIGN.md are evidence and implementation
-  references; accepted design authority is the version/digest-bound Factory
-  artifact.
+- Professional visual design generation is supplied by `DesignProvider`, not by
+  legacy `design_director` model-eval tasks. Google Stitch is the preferred
+  first v0 provider; alternatives are tested only if it fails the quality/cost
+  floor. Provider HTML/screenshots/DESIGN.md are evidence and implementation
+  references; they are never Factory design authority. Human acceptance binds
+  the exact immutable/version-bound `AcceptedDesignArtifact`, which is the
+  accepted design authority.
 - Synthetic/generated imagery belongs behind `VisualAssetProvider`; the
   preferred v0 production direction is Google Vertex/Gemini Nano Banana Pro.
   Any older `image_generator` model-policy entry is a pre-vNext placeholder and
@@ -195,6 +220,12 @@ The narrower runtime boundary below applies to workers executing a `SiteTask`;
 it is not a general ban on authorized Factory maintenance. Neither role may
 broaden its own assignment by inference.
 
+The design-system implementation policy does **not** expand a runtime `SiteTask`
+worker's write authority. Registry/token/component evolution belongs only to an
+explicitly authorized repository-engineering task. A `SiteTask` worker remains
+bound by `TaskWritePolicy` and the exact write scope below even if a design
+capability would otherwise need extension.
+
 When implementing a current `SiteTask`:
 - **Authorized write scope**: current `create_page` permits only the exact page
   path derived from its validated slug by the trusted `TaskWritePolicy`.
@@ -210,7 +241,9 @@ When implementing a current `SiteTask`:
 Current Astro Playwright QA runs against the **built** site (`astro preview`),
 never the dev server. Screenshot artifacts are local/gitignored QA evidence and
 must not be treated as durable approval data unless a later artifact policy
-explicitly persists them.
+explicitly persists them. When committed visual-regression baselines are added
+by the design-system hardening policy, they remain reviewed test oracles rather
+than accepted design authority.
 
 ## Human approval and durable state
 
@@ -263,4 +296,5 @@ explicitly persists them.
 - `docs/architecture.md` — detailed record of implemented architecture; historical "future/deferred" statements inside older sections do not override vNext sequencing.
 - `docs/architecture/factory-constitution-vnext.md` — governing vNext product/engineering constitution.
 - `docs/roadmap-vnext.md` — macro-run implementation sequence.
+- `docs/design-system-implementation-policy.md` — normative rules for translating accepted design authority into governed reusable production implementation.
 - `docs/instruction-authority.md` — precedence rules for repository instructions and historical artifacts.

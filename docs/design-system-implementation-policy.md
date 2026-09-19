@@ -53,7 +53,7 @@ is independently accepted and merged, references here to a
 projection or fixture surface describe required target capabilities; they do not
 assert that those capabilities already exist on `main`.
 
-Agents working on Run 11 or unrelated work MUST NOT opportunistically implement
+Agents working on other workstreams MUST NOT opportunistically implement
 this policy ahead of the roadmap gate. They preserve the accepted current
 implementation until the explicit hardening slice begins.
 
@@ -630,9 +630,11 @@ This policy does not authorize:
 ## Pre-Run-12 hardening gate
 
 Design System Implementation Hardening is a distinct pre-Run-12 workstream.
-Implementation must not start while Run 11 remains an unaccepted candidate.
-After Run 11 is independently accepted, merged and post-merge verified, the
-hardening work must re-baseline the exact main SHA and complete the Phase 0 gap
+Run 11 is closed (implemented, independently QA'd, merged and post-merge verified).
+Implementation of hardening must not start until this governance policy (PR #44)
+passes independent exact-SHA QA, merges and passes post-merge verification on main.
+Once unblocked, the hardening work must re-baseline the exact post-Run-11 `main`
+SHA (`5eeffadbbd928f4a03644d6e8ff267a6d5795316`) and complete the Phase 0 gap
 matrix before modifying contracts, renderer implementation or QA.
 
 The hardening exit requires evidence that:

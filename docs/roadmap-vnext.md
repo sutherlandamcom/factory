@@ -18,7 +18,7 @@ Every meaningful implementation PR ends at `IMPLEMENTATION COMPLETE — PENDING 
 
 ## Observed implementation status — 2026-09-19
 
-Verified main: `c4ef30eda6eff25251ec4cb65ddc0f5243433586` (PR #42 merged; Run 10 closure evidence corrected). Recheck live Git/PR state at session start. Merge, executed checks and independent acceptance remain distinct facts; the table below is navigation, not a substitute for exact-SHA evidence.
+Verified main: `5eeffadbbd928f4a03644d6e8ff267a6d5795316` (PR #43 merged; Run 11 closed and post-merge verified). Recheck live Git/PR state at session start. Merge, executed checks and independent acceptance remain distinct facts; the table below is navigation, not a substitute for exact-SHA evidence.
 
 | Workstream | Observed state | Evidence / next gate |
 | --- | --- | --- |
@@ -33,8 +33,8 @@ Verified main: `c4ef30eda6eff25251ec4cb65ddc0f5243433586` (PR #42 merged; Run 10
 | Macro Run 8 — Production Renderer Decision | Architecture decision accepted | Evidence-based review selects **Astro static** as the single ordinary renderer. Stitch remains generation/evidence only; `AcceptedDesignArtifact` is Factory design authority; raw provider HTML is not production authority. Direct-static is not maintained in parallel. |
 | Macro Run 9 — Production + SEO + Performance Engine | Implemented, independently QA'd and merged | [PR #39](https://github.com/sutherlandamcom/factory/pull/39), merge `637bcb4fcb9fcc20d15dba5fb4fc9d94e6584f0f`; post-merge CI green |
 | Macro Run 10 — Page Derivatives: Summary + Audio | Implemented, remediated and merged | [PR #40](https://github.com/sutherlandamcom/factory/pull/40), merge `93d8d33cb26476b6d9b245ed2b312d83ca5e872e`; multi-page uniqueness remediation [PR #41](https://github.com/sutherlandamcom/factory/pull/41), merge `f11fd0f6b1b60e2f56b9aba98cc219ca092056b8`; closure-evidence correction [PR #42](https://github.com/sutherlandamcom/factory/pull/42), merge `c4ef30eda6eff25251ec4cb65ddc0f5243433586` |
-| Macro Run 11 — Full Operator Workflow | Implementation candidate; open, awaiting remediation/re-QA | [PR #43](https://github.com/sutherlandamcom/factory/pull/43), head `6206630706a008c2d984abff4521d85558851898`; open/unmerged at this snapshot; independent QA findings must be remediated on a new exact SHA before merge |
-| Pre-Run-12 — Design System Implementation Hardening | Planned; blocked on Run 11 closure | Start only after Run 11 independent GO, merge and post-merge exact-main verification; governed by `docs/design-system-implementation-policy.md` |
+| Macro Run 11 — Full Operator Workflow | Implemented, independently QA'd, merged and post-merge verified | [PR #43](https://github.com/sutherlandamcom/factory/pull/43), approved candidate `0c77e5dfba5c51fc99e47a762729ba01a3726e96`, merge `5eeffadbbd928f4a03644d6e8ff267a6d5795316`, post-merge [CI run 35448825801](https://github.com/sutherlandamcom/factory/actions/runs/35448825801) SUCCESS |
+| Pre-Run-12 — Design System Implementation Hardening | Planned; Run 11 prerequisite satisfied. Blocked on PR #44 governance acceptance/merge/post-merge verification | Governed by `docs/design-system-implementation-policy.md`; [PR #44](https://github.com/sutherlandamcom/factory/pull/44) must pass independent exact-SHA QA, merge and pass post-merge verification on main before hardening implementation begins |
 | Macro Run 12 — High-quality Multi-page Proof | Planned | Requires accepted Design System Implementation Hardening first |
 | Macro Run 13 — Production Delivery vNext | Planned | Follows Run 12 proof |
 
@@ -255,14 +255,13 @@ Connect existing vertical Dashboard slices into one coherent operator lifecycle 
 
 Do not build a generic CMS or visual page builder. Dashboard remains a semantic operator console.
 
+Implemented, independently QA'd, merged and post-merge verified via [PR #43](https://github.com/sutherlandamcom/factory/pull/43) (approved candidate `0c77e5dfba5c51fc99e47a762729ba01a3726e96`, merge `5eeffadbbd928f4a03644d6e8ff267a6d5795316`, post-merge [CI run 35448825801](https://github.com/sutherlandamcom/factory/actions/runs/35448825801) SUCCESS).
+
 ### Pre-Run-12 — Design System Implementation Hardening
 
-After Run 11 is independently accepted, merged and post-merge verified, harden
-the implementation layer between accepted design authority and Astro before the
-multi-page proof. Re-baseline against the exact post-Run-11 `main` SHA first and
-complete the mandatory Phase 0 repository inventory/gap matrix defined in
-`docs/design-system-implementation-policy.md` before choosing implementation
-changes.
+Status: Planned; Run 11 prerequisite satisfied. Blocked on independent exact-SHA QA, merge and post-merge verification of this governance policy ([PR #44](https://github.com/sutherlandamcom/factory/pull/44)).
+
+Once PR #44 governance is accepted, merged and verified on main, harden the implementation layer between accepted design authority and Astro before the multi-page proof. Re-baseline against the exact post-Run-11 `main` SHA (`5eeffadbbd928f4a03644d6e8ff267a6d5795316`) first and complete the mandatory Phase 0 repository inventory/gap matrix defined in `docs/design-system-implementation-policy.md` before choosing implementation changes.
 
 The governing policy is `docs/design-system-implementation-policy.md`.
 

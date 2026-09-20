@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  canonicalProductionJson,
   parseRenderManifestAnyVersion,
   type DesignArchetypeKind,
   type ManifestCompositionEntry,
@@ -65,7 +67,9 @@ export async function loadProductionManifests(): Promise<ProductionRenderManifes
   const manifests: ProductionRenderManifest[] = [];
   for (const file of files.filter((name) => name.endsWith(".json")).sort()) {
     const raw = await readFile(path.join(manifestDir, file), "utf8");
-    manifests.push(parseRenderManifestAnyVersion(JSON.parse(raw)) as ProductionRenderManifest);
+    const parsed = parseRenderManifestAnyVersion(JSON.parse(raw)) as ProductionRenderManifest;
+    verifyManifestDigest(parsed);
+    manifests.push(parsed);
   }
   for (const key of ["id", "pageIdentity", "route"] as const) {
     const values = manifests.map((manifest) => manifest.input[key]);
@@ -74,6 +78,22 @@ export async function loadProductionManifests(): Promise<ProductionRenderManifes
   const canonicals = manifests.map((manifest) => manifest.seo.canonicalUrl);
   if (new Set(canonicals).size !== canonicals.length) throw new Error("Duplicate production canonical URL.");
   return manifests.sort((a, b) => (a.input.route < b.input.route ? -1 : a.input.route > b.input.route ? 1 : 0));
+}
+
+/**
+ * Digest verification (consumer-side, Node crypto): the consumer never
+ * trusts a manifest whose recorded digest does not bind its exact body.
+ * Formula (shared with the Factory compiler): sha256 over
+ * canonicalProductionJson of the manifest body EXCLUDING manifestDigest and
+ * schemaVersion (historical compatibility; v3 design authority fields live
+ * inside `design` and ARE digest-bound).
+ */
+function verifyManifestDigest(manifest: ProductionRenderManifest): void {
+  const { manifestDigest, schemaVersion: _schemaVersion, ...body } = manifest;
+  const expected = createHash("sha256").update(canonicalProductionJson(body)).digest("hex");
+  if (manifest.manifestDigest !== expected) {
+    throw new Error("Production manifest digest mismatch.");
+  }
 }
 
 /** Load one manifest by route; missing manifests fail the page build. */

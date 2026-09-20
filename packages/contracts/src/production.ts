@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { createHash } from "node:crypto";
 import { canonicalOriginSchema } from "./site-profile.js";
 import { siteProfileLanguageSchema, siteNameSchema } from "./site-profile.js";
 import { designArchetypeKindSchema } from "./design.js";
@@ -615,16 +614,14 @@ export const renderManifestBodySchema = z
 /** Version-aware manifest validation with version-specific invariants. */
 export function parseRenderManifestAnyVersion(input: unknown): z.infer<typeof renderManifestBodySchema> {
   const parsed = renderManifestBodySchema.parse(input);
-  // Digest verification is part of the shared contract: the consumer never
-  // trusts a manifest whose recorded digest does not bind its exact body.
+  // NOTE: digest VERIFICATION lives with the consumers that have Node crypto
+  // (Factory compiler `assertManifest`, starter manifest loader) — this
+  // module stays Node/browser-neutral (no node:crypto import; the Dashboard
+  // bundles it for the browser). The canonical digest formula is:
+  //   sha256(canonicalProductionJson(bodyWithoutManifestDigestAndSchemaVersion))
   // schemaVersion is structurally validated and NOT part of the digest body
   // (historical manifest compatibility); the v3 design authority fields are
   // inside `design` and ARE digest-bound.
-  const { manifestDigest, schemaVersion: _schemaVersion, ...body } = parsed;
-  const expectedDigest = createHash("sha256").update(canonicalProductionJson(body)).digest("hex");
-  if (manifestDigest !== expectedDigest) {
-    throw new TypeError("Production manifest digest mismatch.");
-  }
   if (parsed.schemaVersion === PRODUCTION_SCHEMA_VERSION_V2 && parsed.derivatives === undefined) {
     throw new TypeError("production-v2 manifest is missing its derivatives authority.");
   }

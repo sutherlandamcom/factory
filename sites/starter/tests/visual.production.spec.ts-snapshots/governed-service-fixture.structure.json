@@ -1,0 +1,158 @@
+{
+  "viewport": {
+    "width": 1280,
+    "height": 800
+  },
+  "components": [
+    {
+      "component": "page-hero",
+      "variant": "split",
+      "pattern": null,
+      "box": {
+        "x": 0,
+        "y": 81,
+        "width": 1280,
+        "height": 229.5
+      }
+    },
+    {
+      "component": "content-section",
+      "variant": "plain",
+      "pattern": "service-overview",
+      "box": {
+        "x": 0,
+        "y": 310.5,
+        "width": 1280,
+        "height": 168
+      }
+    },
+    {
+      "component": "content-section",
+      "variant": "plain",
+      "pattern": "service-overview",
+      "box": {
+        "x": 0,
+        "y": 478.5,
+        "width": 1280,
+        "height": 134
+      }
+    },
+    {
+      "component": "content-section",
+      "variant": "structured",
+      "pattern": "process",
+      "box": {
+        "x": 0,
+        "y": 612.5,
+        "width": 1280,
+        "height": 174
+      }
+    },
+    {
+      "component": "content-section",
+      "variant": "structured",
+      "pattern": "process",
+      "box": {
+        "x": 0,
+        "y": 786.5,
+        "width": 1280,
+        "height": 100
+      }
+    },
+    {
+      "component": "content-section",
+      "variant": "evidence",
+      "pattern": "evidence",
+      "box": {
+        "x": 0,
+        "y": 886.5,
+        "width": 1280,
+        "height": 170
+      }
+    },
+    {
+      "component": "content-section",
+      "variant": "evidence",
+      "pattern": "evidence",
+      "box": {
+        "x": 0,
+        "y": 1056.5,
+        "width": 1280,
+        "height": 136
+      }
+    },
+    {
+      "component": "content-section",
+      "variant": "structured",
+      "pattern": "faq",
+      "box": {
+        "x": 0,
+        "y": 1192.5,
+        "width": 1280,
+        "height": 174
+      }
+    },
+    {
+      "component": "content-section",
+      "variant": "structured",
+      "pattern": "faq",
+      "box": {
+        "x": 0,
+        "y": 1366.5,
+        "width": 1280,
+        "height": 100
+      }
+    },
+    {
+      "component": "page-conclusion",
+      "variant": "surface",
+      "pattern": null,
+      "box": {
+        "x": 256,
+        "y": 1466.5,
+        "width": 768,
+        "height": 104.5
+      }
+    },
+    {
+      "component": "page-cta",
+      "variant": "text",
+      "pattern": "cta",
+      "box": {
+        "x": 0,
+        "y": 1571,
+        "width": 1280,
+        "height": 93.5
+      }
+    }
+  ],
+  "tokenProjection": {
+    "bg": [
+      "#FFFFFF",
+      "#FFFFFF",
+      "#FFFFFF",
+      "#FFFFFF",
+      "#FFFFFF"
+    ],
+    "text": [
+      "#1A2E35",
+      "#1A2E35",
+      "#1A2E35",
+      "#1A2E35",
+      "#1A2E35"
+    ],
+    "sectionY": [
+      "32px",
+      "32px",
+      "32px",
+      "32px",
+      "32px"
+    ]
+  },
+  "fontFamilies": {
+    "display": "ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", Helvetica, Arial, sans-serif",
+    "heading": "ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", Helvetica, Arial, sans-serif",
+    "body": "ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", Helvetica, Arial, sans-serif"
+  },
+  "documentHeight": 1753
+}

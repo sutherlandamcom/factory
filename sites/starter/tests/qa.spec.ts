@@ -171,12 +171,14 @@ test.describe("sitemap and robots crawler baseline", () => {
     expect(new Set(locMatches).size, "sitemap must contain no duplicate URLs").toBe(locMatches.length);
 
     // Governed fixture scope: the sitemap contains exactly the governed
-    // fixture routes (Run 9 launch page + Run 10 derivative fixture pages).
+    // fixture routes (Run 9 launch page + Run 10 derivative fixture pages +
+    // the Pre-Run-12 governed production-v3 fixture page).
     expect(locMatches.slice().sort(), "sitemap must contain exactly the governed fixture scope").toEqual(
       [
         `${expectedOrigin}/`,
         `${expectedOrigin}/run10-derivatives/`,
         `${expectedOrigin}/run10-disabled/`,
+        `${expectedOrigin}/services/advisory/`,
       ].sort(),
     );
 

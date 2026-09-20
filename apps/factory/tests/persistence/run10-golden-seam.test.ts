@@ -401,7 +401,7 @@ test("GOLDEN SEAM: real DB → AcceptedDerivativeSet → production-v2 → manif
 test("DETERMINISM: Re-compiling manifest without authority changes yields identical digests", async () => {
   const repoRoot = await resolveRepositoryRoot();
   const dbInst = await setupMigratedTestDatabase();
-  const pageSlug = "roof-repair";
+  const pageSlug = "services/roof-repair";
   const env = await setupGoldenEnvironment(dbInst, repoRoot, "gold-det-1", pageSlug);
 
   const derivService = new DerivativesService(dbInst.db, repoRoot, {
@@ -467,7 +467,7 @@ test("DETERMINISM: Re-compiling manifest without authority changes yields identi
 test("NEGATIVE SEAM: requireProductionDerivativeSet rejects fixture summary", async () => {
   const repoRoot = await resolveRepositoryRoot();
   const dbInst = await setupMigratedTestDatabase();
-  const pageSlug = "roof-repair";
+  const pageSlug = "services/roof-repair";
   const env = await setupGoldenEnvironment(dbInst, repoRoot, "gold-neg-1", pageSlug);
 
   const derivService = new DerivativesService(dbInst.db, repoRoot, {
@@ -518,7 +518,7 @@ test("NEGATIVE SEAM: requireProductionDerivativeSet rejects fixture summary", as
 test("NEGATIVE SEAM: requireProductionDerivativeSet rejects fixture audio", async () => {
   const repoRoot = await resolveRepositoryRoot();
   const dbInst = await setupMigratedTestDatabase();
-  const pageSlug = "roof-repair";
+  const pageSlug = "services/roof-repair";
   const env = await setupGoldenEnvironment(dbInst, repoRoot, "gold-neg-2", pageSlug);
 
   const derivService = new DerivativesService(dbInst.db, repoRoot, {
@@ -568,7 +568,7 @@ test("NEGATIVE SEAM: requireProductionDerivativeSet rejects fixture audio", asyn
 test("NEGATIVE SEAM: forged set digest is rejected", async () => {
   const repoRoot = await resolveRepositoryRoot();
   const dbInst = await setupMigratedTestDatabase();
-  const pageSlug = "roof-repair";
+  const pageSlug = "services/roof-repair";
   const env = await setupGoldenEnvironment(dbInst, repoRoot, "gold-neg-3", pageSlug);
 
   const derivService = new DerivativesService(dbInst.db, repoRoot, {
@@ -632,7 +632,7 @@ test("NEGATIVE SEAM: forged set digest is rejected", async () => {
 test("NEGATIVE SEAM: stale policy makes deriveProductionInput fail immediately with production_authority_stale", async () => {
   const repoRoot = await resolveRepositoryRoot();
   const dbInst = await setupMigratedTestDatabase();
-  const pageSlug = "roof-repair";
+  const pageSlug = "services/roof-repair";
   const env = await setupGoldenEnvironment(dbInst, repoRoot, "gold-neg-4", pageSlug);
 
   const derivService = new DerivativesService(dbInst.db, repoRoot, {
@@ -683,7 +683,7 @@ test("NEGATIVE SEAM: stale policy makes deriveProductionInput fail immediately w
 test("NEGATIVE SEAM: stale content makes requireProductionDerivativeSet reject", async () => {
   const repoRoot = await resolveRepositoryRoot();
   const dbInst = await setupMigratedTestDatabase();
-  const pageSlug = "roof-repair";
+  const pageSlug = "services/roof-repair";
   const env = await setupGoldenEnvironment(dbInst, repoRoot, "gold-neg-5", pageSlug);
 
   const derivService = new DerivativesService(dbInst.db, repoRoot, {
@@ -729,7 +729,7 @@ test("NEGATIVE SEAM: stale content makes requireProductionDerivativeSet reject",
 test("NEGATIVE SEAM: audio binary byte mutation in storage fails closed", async () => {
   const repoRoot = await resolveRepositoryRoot();
   const dbInst = await setupMigratedTestDatabase();
-  const pageSlug = "roof-repair";
+  const pageSlug = "services/roof-repair";
   const env = await setupGoldenEnvironment(dbInst, repoRoot, "gold-neg-6", pageSlug);
 
   const derivService = new DerivativesService(dbInst.db, repoRoot, {

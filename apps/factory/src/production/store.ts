@@ -33,6 +33,7 @@ import {
   type ProductionPageInputData,
   type ProductionQaCheckResult,
   type ProductionSiteIdentity,
+  type DesignArchetypeKind,
 } from "@factory/contracts";
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
@@ -46,6 +47,7 @@ import { PageAuthorityReader } from "../writer/page-authority.js";
 import { DesignStore } from "../design/design-store.js";
 import { VisualStore } from "../visual/store.js";
 import { AssetStore } from "../assets/asset-store.js";
+import { derivePageArchetype, PageArchetypeError } from "./page-archetype.js";
 
 /**
  * PRODUCTION STORE — Macro Run 9.
@@ -271,24 +273,26 @@ export class ProductionStore {
       pageSlug: input.pageSlug,
     });
 
-    // Accepted content data carries the page title/meta. The archetype
-    // pageType comes from the accepted design's representative-page routing
-    // (bound in the design input snapshot at design acceptance time).
-    const designData = bundle.design.data as {
-      representativePages?: Array<{ slug?: string; archetype?: string }>;
-    };
-    const designInputData = bundle.designInputData as {
-      representativePages?: Array<{ slug?: string; archetype?: string }>;
-    };
-    const representative = (designData.representativePages ?? designInputData.representativePages ?? []).find(
-      (entry) => entry.slug === input.pageSlug,
-    );
-    const pageType = representative?.archetype;
-    if (!pageType) {
-      throw productionError(
-        "production_route_conflict",
-        `Accepted design does not bind archetype for page ${input.pageSlug}; cannot derive production input.`,
+    // Pre-Run-12 page→archetype authority: every page classifies through the
+    // typed versioned derivation policy against the archetype kinds the
+    // accepted design supports. Representative pages are provider-generation
+    // evidence only and are NEVER consulted for production classification.
+    // Fail-closed: unclassified/ambiguous/unsupported all block derivation.
+    const designData = bundle.design.data as { archetypes?: Array<{ kind?: string }> };
+    const supportedKinds = (designData.archetypes ?? [])
+      .map((entry) => entry.kind)
+      .filter((kind): kind is DesignArchetypeKind =>
+        typeof kind === "string" &&
+        ["homepage", "service", "location", "editorial", "investment_advisory"].includes(kind),
       );
+    let pageType: DesignArchetypeKind;
+    try {
+      pageType = derivePageArchetype(input.pageSlug, supportedKinds).archetype;
+    } catch (error) {
+      if (error instanceof PageArchetypeError) {
+        throw productionError(error.code, error.message);
+      }
+      throw error;
     }
 
     const route = normalizeRoute(input.pageSlug);

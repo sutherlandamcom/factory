@@ -2,13 +2,22 @@ import { PageAuthorityReader } from "../writer/page-authority.js";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, sql } from "drizzle-orm";
 import {
+  DESIGN_SCHEMA_VERSION_V2,
+  PAGE_ARCHETYPE_BINDING_POLICY_V1,
   parseDesignCandidateData,
+  parseDesignCandidateAnyVersion,
   parseDesignInputSnapshotData,
+  parseDesignInputSnapshotAnyVersion,
+  isDesignInputSnapshotV2,
+  isDesignCandidateV2,
   type DesignCandidateData,
+  type DesignCandidateDataV2,
   type DesignInputSnapshotData,
+  type DesignInputSnapshotDataV2,
   type DesignStaleness,
   type DesignStalenessCode,
 } from "@factory/contracts";
+import { derivePageArchetype, PAGE_ARCHETYPE_POLICY_VERSION } from "../production/page-archetype.js";
 import type { FactoryDb } from "../persistence/db.js";
 import {
   acceptedDesignArtifacts,
@@ -124,53 +133,97 @@ export class DesignStore {
     const audience = (intake["audience"] ?? {}) as Record<string, unknown>;
     const designRefs = (intake["designReferences"] ?? {}) as Record<string, unknown>;
 
-    const data = parseDesignInputSnapshotData({
-      schemaVersion: "design-v1",
-      acceptedInputSnapshotId: inputSnapshot.id,
-      acceptedInputSnapshotVersion: inputSnapshot.version,
-      acceptedInputDigest: inputSnapshot.digest,
-      brand: {
-        facts: brand["facts"] ?? [],
-        positioning: brand["positioning"] ?? "",
-        tone: brand["tone"] ?? "",
-        visualIdentityNotes: brand["visualIdentityNotes"] ?? "",
-      },
-      audience: {
-        segments: audience["segments"] ?? [],
-        needs: audience["needs"] ?? [],
-        decisionContext: audience["decisionContext"] ?? "",
-      },
-      references: {
-        referenceUrls: designRefs["referenceUrls"] ?? [],
-        antiReferenceUrls: designRefs["antiReferenceUrls"] ?? [],
-        learn: designRefs["learn"] ?? [],
-        avoid: designRefs["avoid"] ?? [],
-        preferredPerception: designRefs["preferredPerception"] ?? "",
-      },
-      // UX requirements are derived from the accepted evidence/conversion
-      // intent — deterministic projection, not provider-invented content.
-      uxRequirements: designUxRequirements(intake),
-      contentRefs: contentRows.map((row) => ({
-        id: row.id,
-        version: row.version,
-        slug: row.slug,
-        contentDigest: row.contentDigest,
-      })),
-      assetRefs: assignmentRows.map((row) => ({
-        versionId: row.versionId,
-        binaryDigest: row.binaryDigest,
-        governanceDigest: row.governanceDigest,
-        acceptedPageContentId: row.acceptedPageContentId,
-        acceptedPageContentVersion: row.acceptedPageContentVersion,
-        acceptedPageContentDigest: row.acceptedPageContentDigest,
-        pageSlug: row.pageSlug,
-        role: row.role,
-      })),
-      archetypes: deriveArchetypes(contentRows.map((row) => row.slug)),
-      // Page-exact copy routing: each archetype binds exactly one
-      // representative accepted page (deterministic selection below).
-      representativePages: deriveRepresentativePages(contentRows),
-    });
+    const brandBlock = {
+      facts: brand["facts"] ?? [],
+      positioning: brand["positioning"] ?? "",
+      tone: brand["tone"] ?? "",
+      visualIdentityNotes: brand["visualIdentityNotes"] ?? "",
+    };
+    const audienceBlock = {
+      segments: audience["segments"] ?? [],
+      needs: audience["needs"] ?? [],
+      decisionContext: audience["decisionContext"] ?? "",
+    };
+    const referencesBlock = {
+      referenceUrls: designRefs["referenceUrls"] ?? [],
+      antiReferenceUrls: designRefs["antiReferenceUrls"] ?? [],
+      learn: designRefs["learn"] ?? [],
+      avoid: designRefs["avoid"] ?? [],
+      preferredPerception: designRefs["preferredPerception"] ?? "",
+    };
+    // UX requirements are derived from the accepted evidence/conversion
+    // intent — deterministic projection, not provider-invented content.
+    const uxRequirements = designUxRequirements(intake);
+    const assetRefs = assignmentRows.map((row) => ({
+      versionId: row.versionId,
+      binaryDigest: row.binaryDigest,
+      governanceDigest: row.governanceDigest,
+      acceptedPageContentId: row.acceptedPageContentId,
+      acceptedPageContentVersion: row.acceptedPageContentVersion,
+      acceptedPageContentDigest: row.acceptedPageContentDigest,
+      pageSlug: row.pageSlug,
+      role: row.role,
+    }));
+    const representativePages = deriveRepresentativePages(contentRows);
+
+    // Snapshot schema version: design-v2 scopes the snapshot to
+    // DESIGN-DEFINING material (representative pages only) and records the
+    // whole page inventory as typed archetype bindings. design-v1 keeps the
+    // exact historical whole-inventory semantics (never reinterpreted).
+    const designSchemaVersion = designSnapshotSchemaVersion(input.projectId);
+    const data =
+      designSchemaVersion === DESIGN_SCHEMA_VERSION_V2
+        ? parseDesignInputSnapshotAnyVersion({
+            schemaVersion: DESIGN_SCHEMA_VERSION_V2,
+            acceptedInputSnapshotId: inputSnapshot.id,
+            acceptedInputSnapshotVersion: inputSnapshot.version,
+            acceptedInputDigest: inputSnapshot.digest,
+            brand: brandBlock,
+            audience: audienceBlock,
+            references: referencesBlock,
+            uxRequirements,
+            // design-defining content ONLY: the representative pages.
+            contentRefs: representativePages.map((representative) => {
+              const row = contentRows.find((entry) => entry.slug === representative.slug);
+              if (!row) throw staleError(`Representative page ${representative.slug} disappeared while deriving the design input snapshot.`);
+              return { id: row.id, version: row.version, slug: row.slug, contentDigest: row.contentDigest };
+            }),
+            assetRefs,
+            archetypes: deriveArchetypes(contentRows.map((row) => row.slug)),
+            representativePages,
+            // Whole current page inventory -> typed archetype bindings
+            // (fail-closed derivation; provenance record, not runtime truth).
+            pageArchetypeBindings: contentRows.map((row) => ({
+              slug: row.slug,
+              archetype: derivePageArchetype(
+                row.slug,
+                deriveArchetypes(contentRows.map((entry) => entry.slug)),
+              ).archetype,
+              contentDigest: row.contentDigest,
+            })),
+            pageArchetypeBindingPolicy: PAGE_ARCHETYPE_BINDING_POLICY_V1,
+          })
+        : parseDesignInputSnapshotData({
+            schemaVersion: "design-v1",
+            acceptedInputSnapshotId: inputSnapshot.id,
+            acceptedInputSnapshotVersion: inputSnapshot.version,
+            acceptedInputDigest: inputSnapshot.digest,
+            brand: brandBlock,
+            audience: audienceBlock,
+            references: referencesBlock,
+            uxRequirements,
+            contentRefs: contentRows.map((row) => ({
+              id: row.id,
+              version: row.version,
+              slug: row.slug,
+              contentDigest: row.contentDigest,
+            })),
+            assetRefs,
+            archetypes: deriveArchetypes(contentRows.map((row) => row.slug)),
+            // Page-exact copy routing: each archetype binds exactly one
+            // representative accepted page (deterministic selection below).
+            representativePages,
+          });
 
     const inputDigest = deterministicDigest(data);
 
@@ -252,6 +305,16 @@ export class DesignStore {
       .orderBy(desc(designInputSnapshots.version))
       .limit(1);
     return row ?? null;
+  }
+
+  /**
+   * Snapshot schema version for NEW derivations in this project. design-v2
+   * activates when the project opts in via trusted server configuration
+   * (FACTORY_DESIGN_SNAPSHOT_SCHEMA); the default remains design-v1 so
+   * existing behavior and historical semantics never change silently.
+   */
+  designSnapshotSchemaVersion(projectId: string): "design-v1" | "design-v2" {
+    return designSnapshotSchemaVersion(projectId);
   }
 
   async getInputSnapshot(projectId: string, snapshotId: string): Promise<DesignInputSnapshotRecord | null> {
@@ -452,7 +515,7 @@ export class DesignStore {
   async createCandidate(input: {
     projectId: string;
     inputSnapshot: DesignInputSnapshotRecord;
-    data: DesignCandidateData;
+    data: DesignCandidateData | DesignCandidateDataV2;
   }): Promise<DesignCandidateRecord> {
     return this.db.transaction(async tx => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
@@ -463,11 +526,17 @@ export class DesignStore {
     });
   }
 
-  private async createCandidateLocked(input: { projectId: string; inputSnapshot: DesignInputSnapshotRecord; data: DesignCandidateData }): Promise<DesignCandidateRecord> {
-    const data = parseDesignCandidateData(input.data);
-    const snapshotData = parseDesignInputSnapshotData(input.inputSnapshot.data);
+  private async createCandidateLocked(input: { projectId: string; inputSnapshot: DesignInputSnapshotRecord; data: DesignCandidateData | DesignCandidateDataV2 }): Promise<DesignCandidateRecord> {
+    const data = parseDesignCandidateAnyVersion(input.data);
+    const snapshotData = parseDesignInputSnapshotAnyVersion(input.inputSnapshot.data);
     if (input.inputSnapshot.projectId !== input.projectId || deterministicDigest(snapshotData) !== input.inputSnapshot.inputDigest) {
       throw staleError("Design input snapshot identity/digest is invalid.");
+    }
+    // Snapshot/candidate schema versions must agree: a v2 candidate is only
+    // valid against a v2 snapshot (which carries the archetype bindings the
+    // candidate's visual-role requirements derive from).
+    if (isDesignCandidateV2(data) !== isDesignInputSnapshotV2(snapshotData)) {
+      throw staleError("Design candidate schemaVersion does not match its bound input snapshot schemaVersion.");
     }
     validateAssetLineage(data, snapshotData);
     const candidateDigest = deterministicDigest(data);
@@ -541,7 +610,7 @@ export class DesignStore {
       // notes must declare it); it can never silently become live provider
       // authority. The accepted artifact carries the candidate's
       // providerMode so downstream state always distinguishes the two.
-      const candidateData = parseDesignCandidateData(candidate.data);
+      const candidateData = parseDesignCandidateAnyVersion(candidate.data);
       if (deterministicDigest(candidateData) !== candidate.candidateDigest || candidateData.providerMode !== candidate.providerMode) {
         throw approvalError("Stored candidate identity/digest is invalid.");
       }
@@ -586,7 +655,7 @@ export class DesignStore {
         );
       }
 
-      validateAssetLineage(candidateData, parseDesignInputSnapshotData(boundSnapshot.data));
+      validateAssetLineage(candidateData, parseDesignInputSnapshotAnyVersion(boundSnapshot.data));
 
       const [maxVersion] = await tx
         .select({ maxVersion: sql<number>`coalesce(max(${acceptedDesignArtifacts.version}), 0)` })
@@ -687,8 +756,8 @@ export class DesignStore {
     projectId: string,
     snapshot: DesignInputSnapshotRecord,
   ): Promise<DesignStaleness> {
-    let data: DesignInputSnapshotData;
-    try { data = parseDesignInputSnapshotData(snapshot.data); }
+    let data: DesignInputSnapshotData | DesignInputSnapshotDataV2;
+    try { data = parseDesignInputSnapshotAnyVersion(snapshot.data); }
     catch { return { stale: true, reason: "Design input snapshot lacks valid exact upstream lineage; re-derive it.", code: "DESIGN_INPUT_SNAPSHOT_INVALID" }; }
     if (snapshot.projectId !== projectId || deterministicDigest(data) !== snapshot.inputDigest) {
       return { stale: true, reason: "Design input snapshot identity/digest is invalid.", code: "DESIGN_INPUT_SNAPSHOT_INVALID" };
@@ -726,14 +795,21 @@ export class DesignStore {
         return { stale: true, reason: `Accepted content "${ref.slug}" changed.`, code: "CONTENT_CHANGED" };
       }
     }
-    const boundContentIds = new Set(data.contentRefs.map((ref) => ref.id));
-    const addedContent = contentRows.filter((row) => !boundContentIds.has(row.id));
-    if (addedContent.length > 0) {
-      return {
-        stale: true,
-        reason: `New accepted content exists (${addedContent.map((r) => r.slug).join(", ")}).`,
-        code: "CONTENT_ADDED",
-      };
+    // design-v2 scope: the snapshot binds ONLY design-defining content
+    // (representative pages). Adding an ordinary page under a supported
+    // archetype does NOT stale the design — the design's archetype support
+    // is what gates new pages, not the page inventory. design-v1 keeps the
+    // exact historical whole-inventory CONTENT_ADDED semantics.
+    if (!isDesignInputSnapshotV2(data)) {
+      const boundContentIds = new Set(data.contentRefs.map((ref) => ref.id));
+      const addedContent = contentRows.filter((row) => !boundContentIds.has(row.id));
+      if (addedContent.length > 0) {
+        return {
+          stale: true,
+          reason: `New accepted content exists (${addedContent.map((r) => r.slug).join(", ")}).`,
+          code: "CONTENT_ADDED",
+        };
+      }
     }
 
     const assignmentRows = await tx
@@ -780,7 +856,13 @@ export class DesignStore {
     const addedAssignments = assignmentRows.filter(
       (row) => !boundAssignmentKeys.has(`${row.pageSlug}::${row.role}`),
     );
-    if (addedAssignments.length > 0) {
+    // design-v2 scope: the design authority covers archetype DESIGN, not the
+    // per-page asset inventory. A new page-exact asset assignment under an
+    // already-supported archetype is ordinary page visual authority
+    // (VisualAssetPlan/AcceptedVisualAssetSet) and does NOT stale the
+    // design. design-v1 keeps the exact historical whole-inventory
+    // RUN7_ASSET_ASSIGNMENTS_ADDED semantics.
+    if (addedAssignments.length > 0 && !isDesignInputSnapshotV2(data)) {
       return {
         stale: true,
         reason: `New asset assignments exist (${addedAssignments.map((r) => `${r.pageSlug}/${r.role}`).join(", ")}).`,
@@ -829,7 +911,7 @@ export class DesignStore {
       eq(acceptedDesignArtifacts.projectId, projectId), eq(acceptedDesignArtifacts.id, artifactId),
     ));
     if (!artifact) throw designNotFound("Accepted design not found for this project.");
-    const data = parseDesignCandidateData(artifact.data);
+    const data = parseDesignCandidateAnyVersion(artifact.data);
     if (artifact.providerMode !== "live" || data.providerMode !== "live") {
       throw approvalError("Test fixture acceptance is never production design authority.");
     }
@@ -842,7 +924,7 @@ export class DesignStore {
     if (!snapshot || snapshot.inputDigest !== artifact.inputDigest || (await this.inputSnapshotStaleness(projectId, snapshot)).stale) {
       throw staleError("Production design upstream authority is stale.");
     }
-    validateAssetLineage(data, parseDesignInputSnapshotData(snapshot.data));
+    validateAssetLineage(data, parseDesignInputSnapshotAnyVersion(snapshot.data));
     return artifact;
   }
 
@@ -861,6 +943,18 @@ export class DesignStore {
  * support (trust patterns, navigation clarity, responsiveness) — they never
  * invent business claims.
  */
+/**
+ * Snapshot schema version for NEW design input snapshot derivations in a
+ * project. design-v2 activates ONLY through explicit trusted server
+ * configuration (FACTORY_DESIGN_SNAPSHOT_SCHEMA=design-v2); the default
+ * remains design-v1 so existing projects keep their exact historical
+ * semantics and no behavior changes silently.
+ */
+function designSnapshotSchemaVersion(_projectId: string): "design-v1" | "design-v2" {
+  const configured = process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA?.trim();
+  return configured === DESIGN_SCHEMA_VERSION_V2 ? DESIGN_SCHEMA_VERSION_V2 : "design-v1";
+}
+
 function designUxRequirements(intake: Record<string, unknown>): string[] {
   const requirements: string[] = [
     "Mobile-first responsive layout; no horizontal overflow at common phone widths",
@@ -949,7 +1043,10 @@ function validAssignmentAuthority(row: {
 }
 
 /** Provider-returned bindings are claims, checked against Factory authority. */
-function validateAssetLineage(data: DesignCandidateData, input: DesignInputSnapshotData): void {
+function validateAssetLineage(
+  data: DesignCandidateData | DesignCandidateDataV2,
+  input: DesignInputSnapshotData | DesignInputSnapshotDataV2,
+): void {
   for (const archetype of data.archetypes) {
     const representative = input.representativePages.find((page) => page.archetype === archetype.kind);
     for (const slot of archetype.assetSlots) {

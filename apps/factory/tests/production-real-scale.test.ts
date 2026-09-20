@@ -108,7 +108,7 @@ test("REAL ASTRO DESIGN MUTATION: supported accepted design changes manifest and
   second.design.acceptedId = "dacc-design-v2";
   second.design.acceptedVersion = 2;
   second.design.acceptedDigest = deterministicDigest({ design: "v2" });
-  second.design.tokens.colors.primary = "#7a2e1d";
+  second.design.tokens.colors.textPrimary = "#7a2e1d";
   second.design.tokens.spacing.lg = "48px";
   second.design.tokens.rounded.md = "20px";
   second.design.archetype.sectionPatterns = ["page-header", "service-overview", "cta"];
@@ -121,8 +121,12 @@ test("REAL ASTRO DESIGN MUTATION: supported accepted design changes manifest and
     assert.notEqual(a.digest, b.digest);
     assert.match(htmlA, /RUN9_REAL_SCALE_0 accepted introduction\./);
     assert.match(htmlB, /RUN9_REAL_SCALE_0 accepted introduction\./);
-    assert.match(htmlA, /--design-primary:\s*#1a2e35/i);
-    assert.match(htmlB, /--design-primary:\s*#7a2e1d/i);
+    // Root semantic token projection (Pre-Run-12): layout and content consume
+    // the same governed token roles projected at <html>.
+    assert.match(htmlA, /--color-text-primary:#1a2e35/i);
+    assert.match(htmlB, /--color-text-primary:#7a2e1d/i);
+    assert.match(htmlA, /--spacing-section-y:32px/i);
+    assert.match(htmlB, /--spacing-section-y:48px/i);
     assert.notEqual(htmlA, htmlB);
   } finally { await rm(a.root, { recursive: true, force: true }); await rm(b.root, { recursive: true, force: true }); }
 });

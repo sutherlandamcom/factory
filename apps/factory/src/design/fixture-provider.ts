@@ -1,12 +1,15 @@
 import { lintDesignMd } from "./design-md.js";
 import type {
   DesignCandidateData,
+  DesignCandidateDataV2,
   DesignGenerationRequest,
   DesignGenerationResult,
   DesignProvider,
   DesignProviderPreflight,
+  DesignInputSnapshotData,
+  DesignInputSnapshotDataV2,
 } from "@factory/contracts";
-import { parseDesignCandidateData } from "@factory/contracts";
+import { parseDesignCandidateAnyVersion, parseDesignInputSnapshotAnyVersion, isDesignInputSnapshotV2 } from "@factory/contracts";
 import { buildDesignMd, DESIGN_MD_TOOL_VERSION } from "./stitch-provider.js";
 
 /**
@@ -135,48 +138,11 @@ export class FixtureDesignProvider implements DesignProvider {
       index += 1;
     }
 
-    const candidate = parseDesignCandidateData({
-      schemaVersion: "design-v1",
-      provider: "google-stitch",
-      providerMode: FIXTURE_PROVIDER_MODE,
-      providerProjectName: "fixture/projects/e2e",
-      designMdDigest,
-      designMdToolVersion: DESIGN_MD_TOOL_VERSION,
-      designMdLint: { errors: lint.errors, warnings: lint.warnings, infos: lint.infos },
-      designSeed: {
-        colors: seed.colors,
-        typography: seed.typography,
-        rationale: seed.rationale,
-      },
-      providerEvidence: {},
-      tokens: {
-        colors: {
-          primary: seed.colors.primary,
-          secondary: seed.colors.secondary,
-          accent: seed.colors.accent,
-          neutral: seed.colors.neutral,
-          background: "#FFFFFF",
-          surface: seed.colors.neutral,
-          textPrimary: seed.colors.primary,
-          textSecondary: seed.colors.secondary,
-        },
-        typography: {
-          headingFont: seed.typography.headingFont,
-          bodyFont: seed.typography.bodyFont,
-          scaleNotes: "fixture scale",
-        },
-        spacing: { sm: "8px", md: "16px", lg: "32px" },
-        rounded: { sm: "4px", md: "8px" },
-        ctaHierarchy: "Primary solid accent; secondary outlined",
-        navigationLanguage: "Fixture navigation language",
-        imageryTreatment: "Placeholders explicitly labeled",
-        sectionRhythm: "Fixture rhythm",
-      },
-      screens,
-      archetypes: archetypeViews,
-      rationale: "Deterministic fixture candidate (FACTORY_DESIGN_MODE=fixture; providerMode=fixture).",
-      providerSessionId: "fixture-session-1",
-    });
+    const candidate = parseDesignCandidateAnyVersion(
+      isDesignInputSnapshotV2(parseDesignInputSnapshotAnyVersion(request.inputSnapshot))
+        ? this.buildCandidateV2(request, screens, archetypeViews, designMdDigest, lint)
+        : this.buildCandidateV1({ seed, screens, archetypeViews, designMdDigest, lint }),
+    );
 
     return {
       candidate,
@@ -203,6 +169,157 @@ export class FixtureDesignProvider implements DesignProvider {
       providerProjectName: "fixture/projects/e2e",
       providerSessionId: "fixture-session-1",
     };
+  }
+
+  /** design-v1 candidate payload (historical semantics, unchanged). */
+  private buildCandidateV1(input: {
+    seed: DesignGenerationRequest["designSeed"];
+    screens: DesignCandidateData["screens"];
+    archetypeViews: DesignCandidateData["archetypes"];
+    designMdDigest: string;
+    lint: ReturnType<typeof lintDesignMd>;
+  }): DesignCandidateData {
+    const seed = input.seed;
+    return {
+      schemaVersion: "design-v1",
+      provider: "google-stitch",
+      providerMode: FIXTURE_PROVIDER_MODE,
+      providerProjectName: "fixture/projects/e2e",
+      providerDesignSystemAsset: "",
+      designMdDigest: input.designMdDigest,
+      designMdToolVersion: DESIGN_MD_TOOL_VERSION,
+      designMdLint: { errors: input.lint.errors, warnings: input.lint.warnings, infos: input.lint.infos },
+      designSeed: {
+        colors: seed.colors,
+        typography: seed.typography,
+        rationale: seed.rationale,
+      },
+      providerEvidence: { designSystemAsset: "" },
+      tokens: {
+        colors: {
+          primary: seed.colors.primary,
+          secondary: seed.colors.secondary,
+          accent: seed.colors.accent,
+          neutral: seed.colors.neutral,
+          background: "#FFFFFF",
+          surface: seed.colors.neutral,
+          textPrimary: seed.colors.primary,
+          textSecondary: seed.colors.secondary,
+        },
+        typography: {
+          headingFont: seed.typography.headingFont,
+          bodyFont: seed.typography.bodyFont,
+          scaleNotes: "fixture scale",
+        },
+        spacing: { sm: "8px", md: "16px", lg: "32px" },
+        rounded: { sm: "4px", md: "8px" },
+        ctaHierarchy: "Primary solid accent; secondary outlined",
+        navigationLanguage: "Fixture navigation language",
+        imageryTreatment: "Placeholders explicitly labeled",
+        sectionRhythm: "Fixture rhythm",
+      },
+      screens: input.screens,
+      archetypes: input.archetypeViews,
+      rationale: "Deterministic fixture candidate (FACTORY_DESIGN_MODE=fixture; providerMode=fixture).",
+      providerSessionId: "fixture-session-1",
+    };
+  }
+
+  /**
+   * design-v2 candidate payload: adds generic per-archetype visual-role
+   * requirements and explicit normalization provenance. The tokens remain
+   * the Factory seed authority (recorded as such); archetype structure is
+   * the deterministic Factory template; screens remain provider evidence.
+   */
+  private buildCandidateV2(
+    request: DesignGenerationRequest,
+    screens: DesignCandidateData["screens"],
+    archetypeViews: DesignCandidateData["archetypes"],
+    designMdDigest: string,
+    lint: ReturnType<typeof lintDesignMd>,
+  ): DesignCandidateDataV2 {
+    const seed = request.designSeed;
+    const snapshotV2 = request.inputSnapshot as DesignInputSnapshotDataV2;
+    return {
+      schemaVersion: "design-v2",
+      provider: "google-stitch",
+      providerMode: FIXTURE_PROVIDER_MODE,
+      providerProjectName: "fixture/projects/e2e",
+      providerDesignSystemAsset: "",
+      designMdDigest,
+      designMdToolVersion: DESIGN_MD_TOOL_VERSION,
+      designMdLint: { errors: lint.errors, warnings: lint.warnings, infos: lint.infos },
+      designSeed: {
+        colors: seed.colors,
+        typography: seed.typography,
+        rationale: seed.rationale,
+      },
+      providerEvidence: { designSystemAsset: "" },
+      tokens: {
+        colors: {
+          primary: seed.colors.primary,
+          secondary: seed.colors.secondary,
+          accent: seed.colors.accent,
+          neutral: seed.colors.neutral,
+          background: "#FFFFFF",
+          surface: seed.colors.neutral,
+          textPrimary: seed.colors.primary,
+          textSecondary: seed.colors.secondary,
+        },
+        typography: {
+          headingFont: seed.typography.headingFont,
+          bodyFont: seed.typography.bodyFont,
+          scaleNotes: "fixture scale",
+        },
+        spacing: { sm: "8px", md: "16px", lg: "32px" },
+        rounded: { sm: "4px", md: "8px" },
+        ctaHierarchy: "Primary solid accent; secondary outlined",
+        navigationLanguage: "Fixture navigation language",
+        imageryTreatment: "Placeholders explicitly labeled",
+        sectionRhythm: "Fixture rhythm",
+      },
+      screens,
+      archetypes: archetypeViews,
+      visualRoleRequirements: archetypeViews.map((archetype) => ({
+        archetype: archetype.kind,
+        roles: fixtureVisualRoleRequirements(archetype.kind),
+      })),
+      normalization: {
+        factoryAuthorityGroups: ["tokens", "typography", "spacing", "rounded", "ctaHierarchy", "navigationLanguage", "imageryTreatment", "sectionRhythm", "archetypeStructure"],
+        providerDerivedGroups: [],
+        note: "Fixture candidate: all structured values are Factory authority; provider screens are evidence only.",
+      },
+      rationale: `Deterministic fixture candidate (FACTORY_DESIGN_MODE=fixture; providerMode=fixture; snapshot bindings policy ${snapshotV2.pageArchetypeBindingPolicy}).`,
+      providerSessionId: "fixture-session-1",
+    };
+  }
+}
+
+/**
+ * Generic visual-role requirements per archetype for the fixture provider.
+ * These are archetype-level requirements — page-exact resolution happens
+ * downstream per page (VisualAssetPlan -> AcceptedVisualAssetSet).
+ */
+function fixtureVisualRoleRequirements(kind: DesignCandidateData["archetypes"][number]["kind"]): Array<{
+  role: string;
+  requirement: string;
+  requiredRole: "hero" | "background" | "inline" | "chart" | "illustration" | "logo" | "supporting";
+  required: boolean;
+}> {
+  switch (kind) {
+    case "homepage":
+      return [{ role: "hero-primary", requirement: "Homepage hero visual", requiredRole: "hero", required: true }];
+    case "service":
+      return [
+        { role: "hero-primary", requirement: "Service hero visual", requiredRole: "hero", required: true },
+        { role: "supporting", requirement: "Service supporting imagery", requiredRole: "supporting", required: false },
+      ];
+    case "location":
+      return [{ role: "hero-primary", requirement: "Location hero visual", requiredRole: "background", required: true }];
+    case "editorial":
+      return [{ role: "author-portrait", requirement: "Author portrait", requiredRole: "illustration", required: false }];
+    case "investment_advisory":
+      return [{ role: "chart-primary", requirement: "Advisory chart/illustration", requiredRole: "chart", required: false }];
   }
 }
 

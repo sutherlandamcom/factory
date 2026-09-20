@@ -1,0 +1,73 @@
+---
+/**
+ * GOVERNED PRODUCTION COMPONENT — page-hero (variant: split | stacked).
+ *
+ * Registry: production-component-registry-v1 (`page-hero`).
+ * Consumes ONLY projected semantic tokens (root-scoped CSS variables);
+ * never invents colors, fonts, spacing or radii. Renders the accepted page
+ * title as the page's single H1 and binds the page's exact hero asset
+ * authority (versionId/binaryDigest/governanceDigest carried as data
+ * attributes for QA evidence).
+ */
+interface Props {
+  variant: "split" | "stacked";
+  /** Accepted page title (verbatim; the page's single H1). */
+  title: string;
+  /** Accepted introduction (verbatim). */
+  introduction: string;
+  /** Exact page hero asset authority, when the page requires one. */
+  asset?: {
+    publicPath: string;
+    alt: string;
+    width: number;
+    height: number;
+    versionId: string;
+    binaryDigest: string;
+    governanceDigest: string;
+    truthClass: string;
+  } | null;
+  /** Accepted derivative bindings (Run 10), when accepted. */
+  derivatives?: {
+    summary?: { acceptedDigest: string; summaryText: string } | null;
+    audio?: { binaryDigest: string; publicPath: string } | null;
+  } | null;
+}
+const { variant, title, introduction, asset = null, derivatives = null } = Astro.props;
+const shell = variant === "split"
+  ? "md:grid md:grid-cols-2 md:gap-16"
+  : "border-b border-[var(--color-border-subtle)] pb-12";
+---
+<section class:list={["px-[var(--spacing-page-x)] py-[var(--spacing-section-y)]", shell]} data-component="page-hero" data-variant={variant}>
+  <div>
+    <h1 class="font-[var(--typography-display)] text-4xl font-semibold text-[var(--color-text-primary)] md:text-6xl">{title}</h1>
+    <p class="mt-[var(--spacing-stack-lg)] text-lg leading-relaxed text-[var(--color-text-primary)]">{introduction}</p>
+  </div>
+  {asset && (
+    <img
+      src={asset.publicPath}
+      alt={asset.alt}
+      width={asset.width}
+      height={asset.height}
+      loading="eager"
+      decoding="async"
+      data-version-id={asset.versionId}
+      data-binary-digest={asset.binaryDigest}
+      data-governance-digest={asset.governanceDigest}
+      data-truth-class={asset.truthClass}
+      class="mt-[var(--spacing-stack-lg)] h-auto w-full rounded-[var(--radius-surface)] object-cover"
+    />
+  )}
+  {derivatives?.summary && (
+    <details class="mt-[var(--spacing-stack-lg)] rounded-[var(--radius-surface)] border border-[var(--color-border-subtle)] bg-[var(--color-background-surface)] p-4" data-derivative="summary" data-summary-digest={derivatives.summary.acceptedDigest}>
+      <summary class="cursor-pointer font-medium text-[var(--color-text-primary)]">AI-generated summary</summary>
+      <p class="mt-4 leading-relaxed">{derivatives.summary.summaryText}</p>
+    </details>
+  )}
+  {derivatives?.audio && (
+    <div class="mt-[var(--spacing-stack-md)] flex flex-col gap-2" data-derivative="audio" data-audio-digest={derivatives.audio.binaryDigest}>
+      <span class="font-medium text-[var(--color-text-primary)]">Listen to article</span>
+      <span class="text-sm opacity-75">Generated narration of this article.</span>
+      <audio controls preload="none" src={derivatives.audio.publicPath} class="w-full max-w-md"></audio>
+    </div>
+  )}
+</section>

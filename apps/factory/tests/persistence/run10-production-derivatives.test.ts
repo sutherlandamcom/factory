@@ -76,8 +76,27 @@ function candidateData(pageSlug: string): DesignCandidateData {
         deviceType: "DESKTOP",
         archetype: "service",
       },
+      {
+        id: "screen-home",
+        providerScreenName: "projects/fixture/screens/home",
+        title: "Homepage",
+        deviceType: "DESKTOP",
+        archetype: "homepage",
+      },
     ],
     archetypes: [
+      {
+        kind: "homepage",
+        purpose: "Trust-first homepage",
+        providerScreenNames: ["projects/fixture/screens/home"],
+        sectionPatterns: ["hero", "evidence", "cta"],
+        contentRequirements: ["Primary CTA visible"],
+        assetSlots: [],
+        primaryCta: "Request an inspection",
+        secondaryCta: "",
+        responsiveBehavior: "Mobile-first stack",
+        trustPresentation: "Author/date areas visible",
+      },
       {
         kind: "service",
         purpose: "Trust-first service page",

@@ -418,7 +418,7 @@ export class StitchDesignProvider implements DesignProvider {
       );
     }
 
-    const input = request.inputSnapshot;
+    const input = request.inputSnapshot as DesignInputSnapshotData;
     const client = this.createClient();
 
     // Factory design seed: operator-approved generation constraints. The

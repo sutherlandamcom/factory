@@ -11,9 +11,12 @@ import {
 import type { ProductionPageInputRecord } from "../persistence/schema.js";
 import {
   parseAcceptedPageContentData,
-  parseDesignCandidateData,
+  parseDesignCandidateAnyVersion,
+  isDesignCandidateV2,
   type AcceptedPageContentData,
   type DesignArchetypeKind,
+  type DesignCandidateData,
+  type DesignCandidateDataV2,
   type DesignSystemTokens,
 } from "@factory/contracts";
 import { FactoryError } from "../executor/errors.js";
@@ -21,6 +24,8 @@ import { deterministicDigest } from "../intelligence/digest.js";
 import { createAssetStorage, type AssetStorage } from "../assets/storage.js";
 import { requireProductionDerivativeSet } from "../derivatives/production-verifier.js";
 import { ProductionStore } from "./store.js";
+import { deriveDesignImplementationContract } from "./design-implementation.js";
+import type { DesignImplementationContract } from "@factory/contracts";
 
 /**
  * PRODUCTION RENDER MANIFEST — Macro Run 9 (Phase 2).
@@ -43,7 +48,7 @@ import { ProductionStore } from "./store.js";
  */
 
 export interface ProductionRenderManifest {
-  schemaVersion: "production-v1" | "production-v2";
+  schemaVersion: "production-v1" | "production-v2" | "production-v3";
   input: {
     id: string;
     version: number;
@@ -97,6 +102,21 @@ export interface ProductionRenderManifest {
       trustPresentation: string;
       rendererPrimitives: string[];
     };
+    /** production-v3 only: derived DIC evidence (digest + policy). */
+    designImplementation?: { implementationContractDigest: string; policyVersion: string; schemaVersion: string };
+    /** production-v3 only: governed semantic token projection. */
+    semanticTokens?: Array<{ role: string; value: string }>;
+    /** production-v3 only: deterministic font delivery. */
+    fontDelivery?: Array<{ mode: "approved_system_stack" | "bundled_local_asset"; family: string; sourceToken: "typography.display" | "typography.heading" | "typography.body" }>;
+    /** production-v3 only: ordered composition (the renderer's only layout authority). */
+    composition?: Array<{
+      componentId: string;
+      variant: string;
+      pattern: string;
+      repetition: "once" | "per_section";
+      sectionIndex?: number;
+      assetSlot?: string;
+    }>;
   };
   links: Array<{ href: string; title: string }>;
   breadcrumbs: Array<{ name: string; url: string }>;
@@ -242,7 +262,7 @@ export class ProductionRenderCompiler {
       projectId: input.projectId,
       pageSlug: productionInput.pageIdentity,
     });
-    const designData = parseDesignCandidateData(bundle.design.data);
+    const designData = parseDesignCandidateAnyVersion(bundle.design.data);
     const matches = designData.archetypes.filter((entry) => entry.kind === productionInput.pageType);
     if (matches.length !== 1) {
       throw renderError("production_build_rejected", `Accepted design must contain exactly one ${productionInput.pageType} archetype.`);
@@ -254,7 +274,18 @@ export class ProductionRenderCompiler {
       return primitive;
     });
     validateDesignTokens(designData.tokens);
-    const requiredSlots = archetype.assetSlots.filter((slot) => slot.pageSlug === productionInput.pageIdentity);
+    // Required visual slots for THIS page. design-v1 designs bind page-exact
+    // slots directly on the archetype (representative-page era semantics).
+    // design-v2 designs define GENERIC per-archetype visual-role
+    // requirements; the page-exact requirement is derived here as
+    // genericRole x pageIdentity with the deterministic per-page slot
+    // identity "<role-prefix>.<pageSlug>" — representative-page slots never
+    // satisfy another page's requirement.
+    const requiredSlots: Array<{ slot: string; role: string; requiredRole: string }> = isDesignCandidateV2(designData)
+      ? deriveV2RequiredSlots(designData, productionInput.pageType as DesignArchetypeKind, productionInput.pageIdentity)
+      : archetype.assetSlots
+          .filter((slot) => slot.pageSlug === productionInput.pageIdentity)
+          .map((slot) => ({ slot: slot.slot, role: slot.role, requiredRole: slot.requiredRole }));
     const actualSlots = new Set(bundle.visualSlots.map((slot) => slot.slot));
     for (const slot of requiredSlots) {
       if (!actualSlots.has(slot.slot)) throw renderError("production_build_rejected", `Accepted design slot ${slot.slot} has no accepted visual resolution.`);
@@ -309,7 +340,7 @@ export class ProductionRenderCompiler {
     // set and materialize the audio delivery artifact deterministically.
     let derivatives: ProductionRenderManifest["derivatives"];
     const inputData = productionInput.data as { schemaVersion?: string; acceptedDerivativeSet?: { id: string; version: number; digest: string } };
-    if (inputData.schemaVersion === "production-v2") {
+    if (inputData.schemaVersion === "production-v2" || inputData.schemaVersion === "production-v3") {
       const bound = inputData.acceptedDerivativeSet;
       if (!bound) throw renderError("production_build_rejected", "production-v2 input is missing its acceptedDerivativeSet binding.");
       const verified = await requireProductionDerivativeSet({
@@ -379,8 +410,34 @@ export class ProductionRenderCompiler {
     const breadcrumbs = deriveManifestBreadcrumbs(productionInput.route, productionInput.canonicalOrigin, titleByRoute);
     const canonicalUrl = `${productionInput.canonicalOrigin.replace(/\/$/, "")}${productionInput.route === "/" ? "/" : productionInput.route}`;
     const fullTitle = `${content.title} | ${productionInput.siteName}`;
+    // Pre-Run-12: design-v2 designs derive the deterministic DIC and emit a
+    // production-v3 manifest (semantic tokens + composition + DIC evidence).
+    // design-v1 designs keep the historical v1/v2 manifest semantics.
+    const isV2Design = isDesignCandidateV2(designData);
+    let designImplementation: ProductionRenderManifest["design"]["designImplementation"];
+    let semanticTokens: ProductionRenderManifest["design"]["semanticTokens"];
+    let fontDelivery: ProductionRenderManifest["design"]["fontDelivery"];
+    let composition: ProductionRenderManifest["design"]["composition"];
+    let manifestVersion: "production-v1" | "production-v2" | "production-v3" =
+      inputData.schemaVersion === "production-v2" || inputData.schemaVersion === "production-v3" ? "production-v2" : "production-v1";
+    if (isV2Design) {
+      const dic = deriveDesignImplementationContract({
+        design: designData,
+        acceptedDesign: { id: bundle.design.id, version: bundle.design.version, digest: bundle.design.candidateDigest },
+        rendererPolicyVersion: productionInput.rendererPolicyVersion,
+      });
+      designImplementation = {
+        implementationContractDigest: dic.implementationContractDigest,
+        policyVersion: productionInput.rendererPolicyVersion,
+        schemaVersion: dic.schemaVersion,
+      };
+      semanticTokens = Object.entries(dic.semanticTokens).map(([role, value]) => ({ role, value: String(value) }));
+      fontDelivery = dic.fontDelivery.map((entry) => ({ mode: entry.mode, family: entry.family, sourceToken: entry.sourceToken }));
+      composition = deriveManifestComposition(dic, content, requiredSlots);
+      manifestVersion = "production-v3";
+    }
     const manifest: ProductionRenderManifest = {
-      schemaVersion: inputData.schemaVersion === "production-v2" ? "production-v2" : "production-v1",
+      schemaVersion: manifestVersion,
       input: {
         id: productionInput.id,
         version: productionInput.version,
@@ -415,11 +472,17 @@ export class ProductionRenderCompiler {
           trustPresentation: archetype.trustPresentation,
           rendererPrimitives,
         },
+        ...(designImplementation ? { designImplementation } : {}),
+        ...(semanticTokens ? { semanticTokens } : {}),
+        ...(fontDelivery ? { fontDelivery } : {}),
+        ...(composition ? { composition } : {}),
       },
       links,
       breadcrumbs,
       assets,
-      ...(derivatives ? { derivatives } : {}),
+      // production-v3 requires the derivatives block explicitly (disabled
+      // state is a real state, not absence).
+      ...(manifestVersion === "production-v3" ? { derivatives: derivatives ?? { setDigest: "", summary: { state: "disabled" } as const, audio: { state: "disabled" } as const } } : { ...(derivatives ? { derivatives } : {}) }),
       manifestDigest: "",
     };
     manifest.manifestDigest = computeRenderManifestDigest(manifest);
@@ -517,6 +580,79 @@ export class ProductionRenderCompiler {
   }
 }
 
+/**
+ * Derive page-exact required visual slots for a design-v2 archetype from
+ * its GENERIC visual-role requirements. Slot identity is deterministic:
+ * "<role>.<pageSlug>" so two pages of the same archetype get independent
+ * slot identities and never share exact asset authority. Only REQUIRED
+ * roles gate production; optional roles render when resolved.
+ */
+function deriveV2RequiredSlots(
+  design: DesignCandidateDataV2,
+  archetypeKind: DesignArchetypeKind,
+  pageIdentity: string,
+): Array<{ slot: string; role: string; requiredRole: string }> {
+  const requirement = design.visualRoleRequirements.find((entry) => entry.archetype === archetypeKind);
+  if (!requirement) {
+    throw renderError("production_build_rejected", `Accepted design-v2 has no visual-role requirements for archetype ${archetypeKind}.`);
+  }
+  return requirement.roles
+    .filter((role) => role.required)
+    .map((role) => ({
+      slot: `${role.role}.${pageIdentity}`,
+      role: role.requiredRole,
+      requiredRole: role.requiredRole,
+    }));
+}
+
+/**
+ * Derive the page composition: the DIC archetype grammar instantiated with
+ * the exact accepted content and this page's required visual slots. Every
+ * binding comes from the DIC grammar (fail-closed lookup); per_section
+ * bindings expand to one instance per accepted content section IN ORDER.
+ * No positional guessing, no modulo cycling, no fallbacks.
+ */
+function deriveManifestComposition(
+  dic: DesignImplementationContract,
+  content: ProductionRenderManifest["content"],
+  requiredSlots: Array<{ slot: string; role: string; requiredRole: string }>,
+): NonNullable<ProductionRenderManifest["design"]["composition"]> {
+  const grammar = dic.archetypeGrammar;
+  const composition: NonNullable<ProductionRenderManifest["design"]["composition"]> = [];
+  const sectionCount = content.sections.length;
+  for (const entry of grammar) {
+    for (const binding of entry.bindings) {
+      if (binding.repetition === "per_section") {
+        // One instance per accepted section, in accepted order.
+        for (let index = 0; index < sectionCount; index += 1) {
+          composition.push({
+            componentId: binding.componentId,
+            variant: binding.variant,
+            pattern: binding.pattern,
+            repetition: binding.repetition,
+            sectionIndex: index,
+          });
+        }
+        continue;
+      }
+      // "once" bindings: bind the page's matching visual asset slot when the
+      // binding's component carries a visual role this page requires.
+      const boundSlot = requiredSlots.find((slot) => {
+        const family = dic.componentFamilies.find((candidate) => candidate.componentId === binding.componentId);
+        return family ? family.visualRoles.some((role) => slot.slot.startsWith(`${role}.`)) : false;
+      });
+      composition.push({
+        componentId: binding.componentId,
+        variant: binding.variant,
+        pattern: binding.pattern,
+        repetition: binding.repetition,
+        ...(boundSlot ? { assetSlot: boundSlot.slot } : {}),
+      });
+    }
+  }
+  return composition;
+}
+
 function validateDesignTokens(tokens: DesignSystemTokens): void {
   const colorValues = Object.values(tokens.colors).filter((value): value is string => typeof value === "string" && value !== "");
   const safeColor = /^(#[0-9a-f]{3,8}|(?:rgb|hsl)a?\([0-9.% ,/-]+\)|[a-z]+)$/i;
@@ -554,7 +690,12 @@ function deriveManifestBreadcrumbs(route: string, origin: string, titles: Map<st
   return entries;
 }
 
-function computeRenderManifestDigest(manifest: ProductionRenderManifest): string {
+export function computeRenderManifestDigest(manifest: ProductionRenderManifest): string {
+  // Digest formula note: schemaVersion is structurally validated by the
+  // shared contract parser and is NOT part of the digest body (historical
+  // manifest compatibility). The production-v3 design authority fields
+  // (designImplementation/semanticTokens/fontDelivery/composition) live
+  // inside `design` and ARE digest-bound.
   return deterministicDigest({
     input: manifest.input,
     seo: manifest.seo,
@@ -580,9 +721,10 @@ function computeRenderManifestDigest(manifest: ProductionRenderManifest): string
   });
 }
 
-function assertManifest(value: unknown): ProductionRenderManifest {
+export function assertManifest(value: unknown): ProductionRenderManifest {
   const manifest = value as ProductionRenderManifest;
-  const validVersion = manifest?.schemaVersion === "production-v1" || manifest?.schemaVersion === "production-v2";
+  const validVersion =
+    manifest?.schemaVersion === "production-v1" || manifest?.schemaVersion === "production-v2" || manifest?.schemaVersion === "production-v3";
   if (!manifest || !validVersion || !manifest.input || !manifest.content || !manifest.design || !manifest.seo || !Array.isArray(manifest.assets)) {
     throw renderError("production_build_rejected", "Production manifest schema is invalid.");
   }
@@ -591,6 +733,18 @@ function assertManifest(value: unknown): ProductionRenderManifest {
   }
   if (manifest.schemaVersion === "production-v1" && manifest.derivatives) {
     throw renderError("production_build_rejected", "production-v1 manifest must not carry derivatives authority.");
+  }
+  if (manifest.schemaVersion === "production-v3") {
+    if (!manifest.derivatives) {
+      throw renderError("production_build_rejected", "production-v3 manifest is missing its derivatives authority (explicit disabled state is required).");
+    }
+    const design = manifest.design;
+    if (!design.designImplementation || !design.semanticTokens || !design.fontDelivery || !design.composition) {
+      throw renderError("production_build_rejected", "production-v3 manifest is missing its designImplementation/semanticTokens/fontDelivery/composition authority.");
+    }
+  }
+  if (manifest.schemaVersion !== "production-v3" && manifest.design.designImplementation !== undefined) {
+    throw renderError("production_build_rejected", "Only production-v3 manifests may carry designImplementation evidence.");
   }
   const expected = computeRenderManifestDigest(manifest);
   if (manifest.manifestDigest !== expected) throw renderError("production_authority_digest_mismatch", "Production manifest digest mismatch.");

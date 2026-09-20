@@ -8,7 +8,7 @@ const PAGE_GATES: ProductionQaCheckId[] = [
   "seo.title_present", "seo.description_present", "seo.canonical", "seo.breadcrumb", "seo.structured_data", "seo.structured_data_urls", "seo.internal_links", "seo.images",
   "images.accepted_authority", "images.dimensions", "images.alt_authority", "images.lcp_priority", "accessibility.axe", "accessibility.keyboard", "links.internal_resolvable", "links.external", "performance.resource_budget", "performance.js_budget",
 ];
-const SITE_GATES: ProductionQaCheckId[] = ["content.no_duplicate_pages", "seo.title_unique", "seo.description_unique", "seo.robots", "seo.sitemap", "links.canonical_destination", "performance.lighthouse", "security.public_output"];
+const SITE_GATES: ProductionQaCheckId[] = ["content.no_duplicate_pages", "seo.title_unique", "seo.description_unique", "seo.robots", "seo.sitemap", "links.canonical_destination", "performance.lighthouse", "security.public_output", "design.registry_integrity", "design.token_governance", "design.composition_valid", "design.drift_source_scan"];
 const REPOSITORY_GATES: ProductionQaCheckId[] = ["security.gitleaks", "security.osv"];
 
 export const TRUSTED_PRODUCTION_QA_GATES = Object.freeze([

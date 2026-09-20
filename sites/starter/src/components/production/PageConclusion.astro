@@ -1,0 +1,17 @@
+---
+/**
+ * GOVERNED PRODUCTION COMPONENT — page-conclusion (variant: surface).
+ *
+ * Registry: production-component-registry-v1 (`page-conclusion`).
+ * Renders the accepted conclusion VERBATIM in a governed surface band.
+ */
+interface Props {
+  variant: "surface";
+  /** Accepted conclusion paragraphs (verbatim). */
+  paragraphs: string[];
+}
+const { variant, paragraphs } = Astro.props;
+---
+<section class="mx-auto max-w-3xl bg-[var(--color-background-surface)] px-[var(--spacing-page-x)] py-[var(--spacing-section-y)]" data-component="page-conclusion" data-variant={variant}>
+  {paragraphs.map((paragraph) => <p class="mt-[var(--spacing-stack-md)] text-xl leading-relaxed text-[var(--color-text-primary)]">{paragraph}</p>)}
+</section>

@@ -31,9 +31,9 @@ and a separate trusted Production Delivery operation:
 
 Important transitional boundaries:
 
-- the current public-site renderer is Astro 7 + Tailwind CSS 4; it remains
-  accepted until the explicit Stitch-native-static vs Astro bake-off selects
-  the ordinary production path;
+- the ordinary production renderer is Astro 7 + Tailwind CSS 4, selected by
+  the accepted Run 8 architecture decision; Google Stitch remains a bounded
+  `DesignProvider` (candidates/evidence only), never a second renderer;
 - the current pre-vNext `create_page` contract may still materialize minimal
   prose from bounded `contentBrief` key points because `AcceptedPageContent`
   does not exist yet; new content workflows must move to the human-approved

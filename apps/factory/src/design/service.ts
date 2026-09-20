@@ -1,9 +1,11 @@
 import {
-  parseDesignCandidateData,
+  parseDesignCandidateAnyVersion,
   type DesignCandidateData,
+  type DesignCandidateDataV2,
   type DesignGenerationRequest,
   type DesignGenerationResult,
   type DesignInputSnapshotData,
+  type DesignInputSnapshotDataV2,
   type DesignProvider,
   type DesignProviderPreflight,
 } from "@factory/contracts";
@@ -49,7 +51,7 @@ export interface DesignCandidateView {
   candidateDigest: string;
   approvalState: string;
   reviewNotes: string | null;
-  data: DesignCandidateData;
+  data: DesignCandidateData | DesignCandidateDataV2;
   stale: boolean;
   staleReason: string | null;
   createdAt: string;
@@ -67,7 +69,7 @@ export interface AcceptedDesignView {
   providerMode: string;
   providerProjectName: string;
   designMdDigest: string;
-  data: DesignCandidateData;
+  data: DesignCandidateData | DesignCandidateDataV2;
   stale: boolean;
   staleReason: string | null;
   acceptedAt: string;
@@ -263,7 +265,7 @@ export class DesignService {
 
     // Record the REAL lint result on the candidate (never a hard-coded
     // zero) so recorded validation evidence is truthful.
-    const candidateData: DesignCandidateData = {
+    const candidateData: DesignCandidateData | DesignCandidateDataV2 = {
       ...result.candidate,
       designMdToolVersion: DESIGN_MD_TOOL_VERSION,
       designMdLint: { errors: lint.errors, warnings: lint.warnings, infos: lint.infos },
@@ -445,7 +447,7 @@ export class DesignService {
     return {
       id: row.id,
       provider: row.provider,
-      providerMode: parseDesignCandidateData(row.data).providerMode,
+      providerMode: parseDesignCandidateAnyVersion(row.data).providerMode,
       providerProjectName: row.providerProjectName,
       inputSnapshotId: row.inputSnapshotId,
       inputSnapshotVersion: row.inputSnapshotVersion,
@@ -453,7 +455,7 @@ export class DesignService {
       candidateDigest: row.candidateDigest,
       approvalState: row.approvalState,
       reviewNotes: row.reviewNotes,
-      data: parseDesignCandidateData(row.data),
+      data: parseDesignCandidateAnyVersion(row.data),
       stale: staleness?.stale ?? false,
       staleReason: staleness?.reason ?? null,
       createdAt: row.createdAt.toISOString(),
@@ -473,10 +475,10 @@ export class DesignService {
       inputSnapshotVersion: row.inputSnapshotVersion,
       inputDigest: row.inputDigest,
       provider: row.provider,
-      providerMode: parseDesignCandidateData(row.data).providerMode,
+      providerMode: parseDesignCandidateAnyVersion(row.data).providerMode,
       providerProjectName: row.providerProjectName,
       designMdDigest: row.designMdDigest,
-      data: parseDesignCandidateData(row.data),
+      data: parseDesignCandidateAnyVersion(row.data),
       stale: staleness?.stale ?? false,
       staleReason: staleness?.reason ?? null,
       acceptedAt: row.acceptedAt.toISOString(),

@@ -1,0 +1,19 @@
+---
+/**
+ * GOVERNED PRODUCTION COMPONENT — related-links (variant: list).
+ *
+ * Registry: production-component-registry-v1 (`related-links`).
+ * Renders accepted internal links VERBATIM in an accessible nav landmark.
+ */
+interface Props {
+  variant: "list";
+  /** Accepted internal links (verbatim href + title from the manifest). */
+  links: Array<{ href: string; title: string }>;
+}
+const { variant, links } = Astro.props;
+---
+<nav aria-label="Related pages" class="mx-auto max-w-3xl px-[var(--spacing-page-x)] py-[var(--spacing-stack-lg)]" data-component="related-links" data-variant={variant}>
+  <ul>
+    {links.map((link) => <li><a href={link.href} class="text-[var(--color-action-primary)] underline">{link.title}</a></li>)}
+  </ul>
+</nav>

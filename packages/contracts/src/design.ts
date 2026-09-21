@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { archetypeGrammarSchema, type ArchetypeGrammar } from "./design-implementation.js";
 
 /**
  * DESIGN CONTRACTS — Macro Run 6 (Google Stitch Design Provider).
@@ -675,12 +676,17 @@ export const designCandidateDataV2Schema = designCandidateDataSchema.omit({ sche
     )
     .min(1)
     .max(5),
+  /** Bounded per-archetype composition grammar derived from provider evidence. */
+  archetypeGrammar: z.array(archetypeGrammarSchema).min(1).max(5),
   normalization: designNormalizationProvenanceSchema,
 }).strict();
 export type DesignCandidateDataV2 = z.infer<typeof designCandidateDataV2Schema>;
 
+export type DesignInputSnapshotAnyVersion = DesignInputSnapshotData | DesignInputSnapshotDataV2;
+export type DesignCandidateAnyVersion = DesignCandidateData | DesignCandidateDataV2;
+
 /** Parse either schema version of a design input snapshot (fail closed). */
-export function parseDesignInputSnapshotAnyVersion(input: unknown): DesignInputSnapshotData | DesignInputSnapshotDataV2 {
+export function parseDesignInputSnapshotAnyVersion(input: unknown): DesignInputSnapshotAnyVersion {
   const data = input as { schemaVersion?: unknown };
   if (data?.schemaVersion === DESIGN_SCHEMA_VERSION_V2) {
     return designInputSnapshotDataV2Schema.parse(input);

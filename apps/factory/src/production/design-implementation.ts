@@ -34,19 +34,13 @@ export const SEMANTIC_TOKEN_PROJECTION_VERSION = "semantic-token-projection-v1";
  * the browser never silently chooses an unrelated fallback while the
  * accepted design claims that font.
  */
-const APPROVED_FONT_DELIVERY: Readonly<Record<string, { mode: "approved_system_stack"; family: string }>> =
+const APPROVED_FONT_DELIVERY: Readonly<Record<string, { mode: "bundled_local_asset"; family: string }>> =
   Object.freeze({
-    // Institutional serif display: accepted design authority names
-    // "Source Serif 4"; the approved delivery is the governed local serif
-    // stack (Iowan/Palatino/Georgia lineage) already established as the
-    // site's typographic identity in the trusted site profile.
-    "source serif 4": { mode: "approved_system_stack", family: '"Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif' },
-    // Humanist sans body: accepted design authority names "Public Sans";
-    // the approved delivery is the governed system sans stack.
-    "public sans": { mode: "approved_system_stack", family: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif' },
+    "source serif 4": { mode: "bundled_local_asset", family: "'Source Serif 4', serif" },
+    "public sans": { mode: "bundled_local_asset", family: "'Public Sans', sans-serif" },
   });
 
-function resolveFontDelivery(family: string): { mode: "approved_system_stack"; family: string } {
+function resolveFontDelivery(family: string): { mode: "bundled_local_asset"; family: string } {
   const normalized = family.trim().toLowerCase();
   const delivery = APPROVED_FONT_DELIVERY[normalized];
   if (!delivery) {
@@ -131,80 +125,55 @@ const REGISTRY_FAMILIES: ReadonlyArray<ComponentFamily> = Object.freeze([
   },
 ]);
 
-/** Deterministic pattern -> component binding per archetype (grammar). */
-const ARCHETYPE_GRAMMAR_INPUT: Readonly<
-  Record<
-    DesignCandidateDataV2["archetypes"][number]["kind"],
-    Array<{ componentId: string; variant: string; pattern: string; repetition: "once" | "per_section"; required: boolean }>
-  >
-> = Object.freeze({
-  homepage: [
-    { componentId: "page-hero", variant: "split", pattern: "hero", repetition: "once", required: true },
-    { componentId: "content-section", variant: "plain", pattern: "value-statement", repetition: "per_section", required: false },
-    { componentId: "content-section", variant: "evidence", pattern: "evidence", repetition: "per_section", required: false },
-    { componentId: "content-section", variant: "structured", pattern: "services-overview", repetition: "per_section", required: false },
-    { componentId: "content-section", variant: "evidence", pattern: "trust-signals", repetition: "per_section", required: false },
-    { componentId: "page-conclusion", variant: "surface", pattern: "conclusion", repetition: "once", required: true },
-    { componentId: "page-cta", variant: "text", pattern: "cta", repetition: "once", required: false },
-  ],
-  service: [
-    { componentId: "page-hero", variant: "split", pattern: "page-header", repetition: "once", required: true },
-    { componentId: "content-section", variant: "plain", pattern: "service-overview", repetition: "per_section", required: false },
-    { componentId: "content-section", variant: "structured", pattern: "process", repetition: "per_section", required: false },
-    { componentId: "content-section", variant: "evidence", pattern: "evidence", repetition: "per_section", required: false },
-    { componentId: "content-section", variant: "structured", pattern: "faq", repetition: "per_section", required: false },
-    { componentId: "page-conclusion", variant: "surface", pattern: "conclusion", repetition: "once", required: true },
-    { componentId: "page-cta", variant: "text", pattern: "cta", repetition: "once", required: false },
-  ],
-  location: [
-    { componentId: "page-hero", variant: "split", pattern: "page-header", repetition: "once", required: true },
-    { componentId: "content-section", variant: "plain", pattern: "location-intro", repetition: "per_section", required: false },
-    { componentId: "content-section", variant: "structured", pattern: "coverage", repetition: "per_section", required: false },
-    { componentId: "content-section", variant: "evidence", pattern: "local-evidence", repetition: "per_section", required: false },
-    { componentId: "content-section", variant: "structured", pattern: "contact", repetition: "per_section", required: false },
-    { componentId: "page-conclusion", variant: "surface", pattern: "conclusion", repetition: "once", required: true },
-    { componentId: "page-cta", variant: "text", pattern: "cta", repetition: "once", required: false },
-  ],
-  editorial: [
-    { componentId: "page-hero", variant: "stacked", pattern: "article-header", repetition: "once", required: true },
-    { componentId: "content-section", variant: "plain", pattern: "article-body", repetition: "per_section", required: false },
-    { componentId: "content-section", variant: "evidence", pattern: "methodology", repetition: "per_section", required: false },
-    { componentId: "content-section", variant: "evidence", pattern: "sources", repetition: "per_section", required: false },
-    { componentId: "related-links", variant: "list", pattern: "related", repetition: "once", required: false },
-    { componentId: "page-conclusion", variant: "surface", pattern: "conclusion", repetition: "once", required: true },
-    { componentId: "page-cta", variant: "text", pattern: "cta", repetition: "once", required: false },
-  ],
-  investment_advisory: [
-    { componentId: "page-hero", variant: "stacked", pattern: "page-header", repetition: "once", required: true },
-    { componentId: "content-section", variant: "plain", pattern: "approach", repetition: "per_section", required: false },
-    { componentId: "content-section", variant: "evidence", pattern: "assumptions", repetition: "per_section", required: false },
-    { componentId: "content-section", variant: "structured", pattern: "scenarios", repetition: "per_section", required: false },
-    { componentId: "content-section", variant: "evidence", pattern: "disclaimer", repetition: "per_section", required: false },
-    { componentId: "page-conclusion", variant: "surface", pattern: "conclusion", repetition: "once", required: true },
-    { componentId: "page-cta", variant: "text", pattern: "cta", repetition: "once", required: false },
-  ],
-});
+function requireToken(value: string | undefined, name: string): string {
+  if (!value || typeof value !== "string" || value.trim().length === 0) {
+    throw new FactoryError("design_implementation_unsupported", `Accepted design is missing required design token '${name}'.`);
+  }
+  return value.trim();
+}
 
 /** Deterministic semantic token projection from accepted design tokens. */
 function projectSemanticTokens(design: DesignCandidateDataV2) {
   const colors = design.tokens.colors;
+  const spacing = design.tokens.spacing;
+  const rounded = design.tokens.rounded;
+
+  const bgPrimary = requireToken(colors.background, "colors.background");
+  const bgSurface = requireToken(colors.surface, "colors.surface");
+  const textPrimary = requireToken(colors.textPrimary, "colors.textPrimary");
+  const textMuted = requireToken(colors.textSecondary, "colors.textSecondary");
+  const actionPrimary = requireToken(colors.accent, "colors.accent");
+  const borderSubtle = requireToken(colors.secondary, "colors.secondary");
+
+  const spacingPageX = requireToken(spacing.md, "spacing.md");
+  const spacingSectionY = requireToken(spacing.lg, "spacing.lg");
+  const spacingStackSm = requireToken(spacing.sm, "spacing.sm");
+  const spacingStackMd = requireToken(spacing.md, "spacing.md");
+  const spacingStackLg = requireToken(spacing.lg, "spacing.lg");
+
+  const radiusSurface = requireToken(rounded.md, "rounded.md");
+  const radiusControl = requireToken(rounded.sm, "rounded.sm");
+
+  const headingFont = requireToken(design.tokens.typography.headingFont, "typography.headingFont");
+  const bodyFont = requireToken(design.tokens.typography.bodyFont, "typography.bodyFont");
+
   return {
-    "color.background.primary": colors.background || "#ffffff",
-    "color.background.surface": colors.surface || colors.neutral || colors.background || "#ffffff",
-    "color.text.primary": colors.textPrimary || colors.primary,
-    "color.text.muted": colors.textSecondary || colors.secondary || colors.neutral || colors.primary,
-    "color.action.primary": colors.accent || colors.primary,
-    "color.border.subtle": colors.secondary || colors.neutral || colors.primary,
-    "spacing.page-x": design.tokens.spacing.md ?? "1rem",
-    "spacing.section-y": design.tokens.spacing.lg ?? "2rem",
-    "spacing.stack-sm": design.tokens.spacing.xs ?? design.tokens.spacing.sm ?? "0.5rem",
-    "spacing.stack-md": design.tokens.spacing.sm ?? design.tokens.spacing.md ?? "1rem",
-    "spacing.stack-lg": design.tokens.spacing.md ?? design.tokens.spacing.lg ?? "2rem",
-    "radius.surface": design.tokens.rounded.md ?? "0px",
-    "radius.control": design.tokens.rounded.sm ?? "0px",
-    "typography.display": resolveFontDelivery(design.tokens.typography.headingFont).family,
-    "typography.heading": resolveFontDelivery(design.tokens.typography.headingFont).family,
-    "typography.body": resolveFontDelivery(design.tokens.typography.bodyFont).family,
+    "color.background.primary": bgPrimary,
+    "color.background.surface": bgSurface,
+    "color.text.primary": textPrimary,
+    "color.text.muted": textMuted,
+    "color.action.primary": actionPrimary,
+    "color.border.subtle": borderSubtle,
+    "spacing.page-x": spacingPageX,
+    "spacing.section-y": spacingSectionY,
+    "spacing.stack-sm": spacingStackSm,
+    "spacing.stack-md": spacingStackMd,
+    "spacing.stack-lg": spacingStackLg,
+    "radius.surface": radiusSurface,
+    "radius.control": radiusControl,
+    "typography.display": resolveFontDelivery(headingFont).family,
+    "typography.heading": resolveFontDelivery(headingFont).family,
+    "typography.body": resolveFontDelivery(bodyFont).family,
   } as const;
 }
 
@@ -221,27 +190,25 @@ export function deriveDesignImplementationContract(input: {
   const design = input.design;
 
   // Grammar bindings must reference registered families/variants only.
-  const grammar = (Object.keys(ARCHETYPE_GRAMMAR_INPUT) as Array<keyof typeof ARCHETYPE_GRAMMAR_INPUT>)
-    .filter((kind) => design.archetypes.some((entry) => entry.kind === kind))
-    .map((kind) => ({
-      archetype: kind,
-      bindings: ARCHETYPE_GRAMMAR_INPUT[kind].map((binding) => {
-        const family = REGISTRY_FAMILIES.find((entry) => entry.componentId === binding.componentId);
-        if (!family) {
-          throw new FactoryError("design_implementation_policy_invalid", `Grammar binding references unregistered component ${binding.componentId}.`);
-        }
-        if (!family.variants.some((variant) => variant.id === binding.variant)) {
-          throw new FactoryError("design_implementation_policy_invalid", `Grammar binding references unregistered variant ${binding.componentId}/${binding.variant}.`);
-        }
-        if (!family.allowedArchetypes.includes(kind)) {
-          throw new FactoryError("design_implementation_policy_invalid", `Component ${binding.componentId} is not allowed in archetype ${kind}.`);
-        }
-        if (!family.allowedPatterns.includes(binding.pattern)) {
-          throw new FactoryError("design_implementation_policy_invalid", `Component ${binding.componentId} does not realize pattern ${binding.pattern}.`);
-        }
-        return binding;
-      }),
-    }));
+  const grammar = design.archetypeGrammar.map((entry) => ({
+    archetype: entry.archetype,
+    bindings: entry.bindings.map((binding) => {
+      const family = REGISTRY_FAMILIES.find((candidate) => candidate.componentId === binding.componentId);
+      if (!family) {
+        throw new FactoryError("design_implementation_policy_invalid", `Grammar binding references unregistered component ${binding.componentId}.`);
+      }
+      if (!family.variants.some((variant) => variant.id === binding.variant)) {
+        throw new FactoryError("design_implementation_policy_invalid", `Grammar binding references unregistered variant ${binding.componentId}/${binding.variant}.`);
+      }
+      if (!family.allowedArchetypes.includes(entry.archetype)) {
+        throw new FactoryError("design_implementation_policy_invalid", `Component ${binding.componentId} is not allowed in archetype ${entry.archetype}.`);
+      }
+      if (!family.allowedPatterns.includes(binding.pattern)) {
+        throw new FactoryError("design_implementation_policy_invalid", `Component ${binding.componentId} does not realize pattern ${binding.pattern}.`);
+      }
+      return binding;
+    }),
+  }));
 
   const families = REGISTRY_FAMILIES.filter((family) =>
     grammar.some((entry) => entry.bindings.some((binding) => binding.componentId === family.componentId)),

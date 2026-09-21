@@ -11,6 +11,7 @@ import type {
 } from "@factory/contracts";
 import { parseDesignCandidateAnyVersion, parseDesignInputSnapshotAnyVersion, isDesignInputSnapshotV2 } from "@factory/contracts";
 import { buildDesignMd, DESIGN_MD_TOOL_VERSION } from "./stitch-provider.js";
+import { normalizeArchetypeGrammar } from "./archetype-grammar.js";
 
 /**
  * FIXTURE DESIGN PROVIDER — dev/test provider-mode adapter (trusted server
@@ -271,8 +272,8 @@ export class FixtureDesignProvider implements DesignProvider {
           bodyFont: seed.typography.bodyFont,
           scaleNotes: "fixture scale",
         },
-        spacing: { sm: "8px", md: "16px", lg: "32px" },
-        rounded: { sm: "4px", md: "8px" },
+        spacing: { xs: "4px", sm: "8px", md: "16px", lg: "32px", xl: "64px", xxl: "128px" },
+        rounded: { sm: "4px", md: "8px", lg: "16px" },
         ctaHierarchy: "Primary solid accent; secondary outlined",
         navigationLanguage: "Fixture navigation language",
         imageryTreatment: "Placeholders explicitly labeled",
@@ -284,6 +285,7 @@ export class FixtureDesignProvider implements DesignProvider {
         archetype: archetype.kind,
         roles: fixtureVisualRoleRequirements(archetype.kind),
       })),
+      archetypeGrammar: normalizeArchetypeGrammar(archetypeViews),
       normalization: {
         factoryAuthorityGroups: ["tokens", "typography", "spacing", "rounded", "ctaHierarchy", "navigationLanguage", "imageryTreatment", "sectionRhythm", "archetypeStructure"],
         providerDerivedGroups: [],

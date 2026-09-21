@@ -188,7 +188,8 @@ export class DesignStore {
               if (!row) throw staleError(`Representative page ${representative.slug} disappeared while deriving the design input snapshot.`);
               return { id: row.id, version: row.version, slug: row.slug, contentDigest: row.contentDigest };
             }),
-            assetRefs,
+            // design-defining assets ONLY: assets belonging to representative pages.
+            assetRefs: assetRefs.filter((ref) => representativePages.some((r) => r.slug === ref.pageSlug)),
             archetypes: deriveArchetypes(contentRows.map((row) => row.slug)),
             representativePages,
             // Whole current page inventory -> typed archetype bindings

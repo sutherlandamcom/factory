@@ -131,6 +131,12 @@ test.describe("governed production visual regression", () => {
     // token/font difference FAILS).
     expect(structure.components.map((entry) => ({ x: entry.box.x, width: entry.box.width })))
       .toEqual(baseline.components.map((entry) => ({ x: entry.box.x, width: entry.box.width })));
+
+    // Deterministic pixel visual regression oracle with vendored WOFF2 fonts
+    await expect(page).toHaveScreenshot("governed-service-fixture.png", {
+      fullPage: true,
+      animations: "disabled",
+    });
   });
 
   test("hero and section components carry registry data attributes", async ({ page }) => {

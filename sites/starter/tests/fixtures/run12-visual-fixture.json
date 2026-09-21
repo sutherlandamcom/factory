@@ -103,14 +103,14 @@
       "rendererPrimitives": [
         "hero",
         "narrative",
-        "narrative",
+        "structured",
         "evidence",
         "structured",
         "cta"
       ]
     },
     "designImplementation": {
-      "implementationContractDigest": "d3be034d4d775892a49c7b8a9fdf13a2d6077eea7285cc721084d31ffe7bffef",
+      "implementationContractDigest": "ec80d49e5cc99063be9179fb0ba03f6a807a149f565ce15ee853a7e3e4cc062b",
       "policyVersion": "production-policy-v3",
       "schemaVersion": "design-implementation-v1"
     },
@@ -149,15 +149,15 @@
       },
       {
         "role": "spacing.stack-sm",
-        "value": "4px"
-      },
-      {
-        "role": "spacing.stack-md",
         "value": "8px"
       },
       {
-        "role": "spacing.stack-lg",
+        "role": "spacing.stack-md",
         "value": "16px"
+      },
+      {
+        "role": "spacing.stack-lg",
+        "value": "32px"
       },
       {
         "role": "radius.surface",
@@ -169,31 +169,31 @@
       },
       {
         "role": "typography.display",
-        "value": "\"Iowan Old Style\", \"Palatino Linotype\", Palatino, Georgia, \"Times New Roman\", serif"
+        "value": "'Source Serif 4', serif"
       },
       {
         "role": "typography.heading",
-        "value": "\"Iowan Old Style\", \"Palatino Linotype\", Palatino, Georgia, \"Times New Roman\", serif"
+        "value": "'Source Serif 4', serif"
       },
       {
         "role": "typography.body",
-        "value": "ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", Helvetica, Arial, sans-serif"
+        "value": "'Public Sans', sans-serif"
       }
     ],
     "fontDelivery": [
       {
-        "mode": "approved_system_stack",
-        "family": "\"Iowan Old Style\", \"Palatino Linotype\", Palatino, Georgia, \"Times New Roman\", serif",
+        "mode": "bundled_local_asset",
+        "family": "'Source Serif 4', serif",
         "sourceToken": "typography.display"
       },
       {
-        "mode": "approved_system_stack",
-        "family": "\"Iowan Old Style\", \"Palatino Linotype\", Palatino, Georgia, \"Times New Roman\", serif",
+        "mode": "bundled_local_asset",
+        "family": "'Source Serif 4', serif",
         "sourceToken": "typography.heading"
       },
       {
-        "mode": "approved_system_stack",
-        "family": "ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", Helvetica, Arial, sans-serif",
+        "mode": "bundled_local_asset",
+        "family": "'Public Sans', sans-serif",
         "sourceToken": "typography.body"
       }
     ],
@@ -213,50 +213,8 @@
       },
       {
         "componentId": "content-section",
-        "variant": "plain",
-        "pattern": "service-overview",
-        "repetition": "per_section",
-        "sectionIndex": 1
-      },
-      {
-        "componentId": "content-section",
         "variant": "structured",
         "pattern": "process",
-        "repetition": "per_section",
-        "sectionIndex": 0
-      },
-      {
-        "componentId": "content-section",
-        "variant": "structured",
-        "pattern": "process",
-        "repetition": "per_section",
-        "sectionIndex": 1
-      },
-      {
-        "componentId": "content-section",
-        "variant": "evidence",
-        "pattern": "evidence",
-        "repetition": "per_section",
-        "sectionIndex": 0
-      },
-      {
-        "componentId": "content-section",
-        "variant": "evidence",
-        "pattern": "evidence",
-        "repetition": "per_section",
-        "sectionIndex": 1
-      },
-      {
-        "componentId": "content-section",
-        "variant": "structured",
-        "pattern": "faq",
-        "repetition": "per_section",
-        "sectionIndex": 0
-      },
-      {
-        "componentId": "content-section",
-        "variant": "structured",
-        "pattern": "faq",
         "repetition": "per_section",
         "sectionIndex": 1
       },
@@ -292,13 +250,7 @@
   ],
   "assets": [],
   "derivatives": {
-    "setDigest": "67b16da2ea9a7d2c94203bcfd8241044f78e6e68e5ef84f99566913625787b31",
-    "summary": {
-      "state": "disabled"
-    },
-    "audio": {
-      "state": "disabled"
-    }
+    "state": "disabled"
   },
-  "manifestDigest": "1925f8578654f9404216b2ad113e93fb5c662e9a5da552d9504843a2ab415d2e"
+  "manifestDigest": "31033b7fe8052d2585f0428586d9d9d52724ed4222793af07e2d12bbdb138243"
 }

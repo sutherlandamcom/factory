@@ -215,9 +215,15 @@ export const manifestFontDeliverySchema = z
   .strict();
 export type ManifestFontDelivery = z.infer<typeof manifestFontDeliverySchema>;
 
-/** Run 10 derivative authority block (verbatim accepted summary/audio bindings). */
-export const manifestDerivativesSchema = z
+export const manifestDerivativesDisabledSchema = z
   .object({
+    state: z.literal("disabled"),
+  })
+  .strict();
+
+export const manifestDerivativesAcceptedSchema = z
+  .object({
+    state: z.literal("accepted").optional(),
     setDigest: productionDigestSchema,
     summary: z.discriminatedUnion("state", [
       z.object({ state: z.literal("disabled") }).strict(),
@@ -249,6 +255,12 @@ export const manifestDerivativesSchema = z
     ]),
   })
   .strict();
+
+/** Run 10 derivative authority block (verbatim accepted summary/audio bindings). */
+export const manifestDerivativesSchema = z.union([
+  manifestDerivativesDisabledSchema,
+  manifestDerivativesAcceptedSchema,
+]);
 export type ManifestDerivatives = z.infer<typeof manifestDerivativesSchema>;
 
 /**

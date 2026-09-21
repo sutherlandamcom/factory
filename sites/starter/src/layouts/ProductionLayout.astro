@@ -29,7 +29,7 @@ function requireToken(value: string | undefined, provenance: string): string {
 }
 const semanticTokens = design.semanticTokens ?? (() => {
   const colors = design.tokens.colors;
-  const primary = requireToken(colors.primary, "colors.primary");
+  requireToken(colors.primary, "colors.primary");
   // Historical projection precedence is deterministic authority fallback
   // WITHIN the accepted token set (never an invented literal): an absent
   // optional token resolves to another accepted token value or FAILS.
@@ -119,6 +119,22 @@ if (!displayFont || !bodyFont) {
     <meta property="og:title" content={seo.ogTitle} />
     <meta property="og:description" content={seo.ogDescription} />
     <meta property="og:url" content={seo.ogUrl} />
+    <style is:global>
+      @font-face {
+        font-family: "Source Serif 4";
+        font-style: normal;
+        font-weight: 400;
+        font-display: swap;
+        src: url("/fonts/SourceSerif4-Regular.woff2") format("woff2");
+      }
+      @font-face {
+        font-family: "Public Sans";
+        font-style: normal;
+        font-weight: 400;
+        font-display: swap;
+        src: url("/fonts/PublicSans-Regular.woff2") format("woff2");
+      }
+    </style>
     {jsonLd.map((node) => <script type="application/ld+json" is:inline set:html={JSON.stringify(node)} />)}
   </head>
   <body class="min-h-screen bg-[var(--color-background-primary)] text-[var(--color-text-primary)] antialiased" style={`font-family:${bodyFont.family}`}>

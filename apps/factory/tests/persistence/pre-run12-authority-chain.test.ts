@@ -14,6 +14,7 @@ import { buildIntakePayload } from "../fixtures/intake-payloads.js";
 import { deterministicDigest } from "../../src/intelligence/digest.js";
 import { derivePageArchetype, PageArchetypeError } from "../../src/production/page-archetype.js";
 import { deriveDesignImplementationContract } from "../../src/production/design-implementation.js";
+import { normalizeArchetypeGrammar } from "../../src/design/archetype-grammar.js";
 import {
   DESIGN_SCHEMA_VERSION_V2,
   parseDesignCandidateAnyVersion,
@@ -119,6 +120,12 @@ function v2CandidateData(input: { archetypes: Array<{ kind: ArchKind; sectionPat
         { role: "hero-primary", requirement: `${archetype.kind} hero visual`, requiredRole: "hero", required: false },
       ],
     })),
+    archetypeGrammar: normalizeArchetypeGrammar(
+      input.archetypes.map((archetype) => ({
+        kind: archetype.kind as ArchKind,
+        sectionPatterns: archetype.sectionPatterns,
+      })),
+    ),
     normalization: {
       factoryAuthorityGroups: ["tokens", "typography", "spacing", "rounded", "ctaHierarchy", "navigationLanguage", "imageryTreatment", "sectionRhythm", "archetypeStructure"],
       providerDerivedGroups: [],

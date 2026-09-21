@@ -4,13 +4,19 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { createHash } from "node:crypto";
 import {
   parseDesignCandidateData,
+  parseDesignCandidateAnyVersion,
+  parseDesignInputSnapshotAnyVersion,
+  isDesignInputSnapshotV2,
   type DesignCandidateData,
+  type DesignCandidateDataV2,
   type DesignGenerationRequest,
   type DesignGenerationResult,
   type DesignInputSnapshotData,
+  type DesignInputSnapshotAnyVersion,
   type DesignProvider,
   type DesignProviderPreflight,
 } from "@factory/contracts";
+import { normalizeArchetypeGrammar } from "./archetype-grammar.js";
 import { FactoryError } from "../executor/errors.js";
 import { validateUrlResolved } from "../competitors/ssrf-guard.js";
 
@@ -418,7 +424,8 @@ export class StitchDesignProvider implements DesignProvider {
       );
     }
 
-    const input = request.inputSnapshot as DesignInputSnapshotData;
+    const input = parseDesignInputSnapshotAnyVersion(request.inputSnapshot);
+    const isV2 = isDesignInputSnapshotV2(input);
     const client = this.createClient();
 
     // Factory design seed: operator-approved generation constraints. The
@@ -556,54 +563,130 @@ export class StitchDesignProvider implements DesignProvider {
         providerRef: null,
       });
 
-      const candidate: DesignCandidateData = parseDesignCandidateData({
-        schemaVersion: "design-v1",
-        provider: "google-stitch",
-        providerMode: "live",
-        providerProjectName,
-        ...(dsAsset ? { providerDesignSystemAsset: dsAsset } : {}),
-        designMdDigest,
-        designMdToolVersion: DESIGN_MD_TOOL_VERSION,
-        designMdLint: { errors: lint.errors, warnings: lint.warnings, infos: lint.infos },
-        designSeed: {
-          colors: seed.colors,
-          typography: seed.typography,
-          rationale: seed.rationale,
-        },
-        providerEvidence: {
-          ...(dsAsset ? { designSystemAsset: dsAsset } : {}),
-        },
-        tokens: {
-          colors: {
-            primary: seed.colors.primary,
-            secondary: seed.colors.secondary,
-            accent: seed.colors.accent,
-            neutral: seed.colors.neutral,
-            background: "#FFFFFF",
-            surface: seed.colors.neutral,
-            textPrimary: seed.colors.primary,
-            textSecondary: seed.colors.secondary,
-          },
-          typography: {
-            headingFont: seed.typography.headingFont,
-            bodyFont: seed.typography.bodyFont,
-            scaleNotes: "display 3rem/1.2, h2 2rem/1.3, h3 1.5rem/1.4, body 1rem/1.6, label 0.75rem caps",
-          },
-          spacing: { xs: "4px", sm: "8px", md: "16px", lg: "32px", xl: "64px", xxl: "128px" },
-          rounded: { sm: "4px", md: "8px", lg: "16px" },
-          ctaHierarchy: "Primary CTA solid accent; secondary CTA outlined; tertiary links underlined",
-          navigationLanguage: "Persistent top navigation with clear active state; breadcrumbs on interior pages",
-          imageryTreatment: "Documentary-first photography with restrained treatment; placeholders explicitly labeled until Run 7 resolution",
-          sectionRhythm: "Generous vertical whitespace; alternating surface/background bands; evidence blocks visually distinct from marketing copy",
-        },
-        screens,
-        archetypes,
-        rationale:
-          "Site-level design system seeded from accepted brand facts, audience, references/anti-references and UX requirements. Token values are the Factory SEED the provider generation is guided by; provider-returned design evidence is recorded separately (providerEvidence). The DESIGN.md was validated by pinned official @google/design.md tooling plus Factory accepted-artifact requirements. Archetypes: " +
-          archetypes.map((a) => a.kind).join(", ") +
-          ".",
-        providerSessionId: lastSessionId ?? undefined,
-      });
+      const candidate: DesignCandidateData | DesignCandidateDataV2 = isV2
+        ? parseDesignCandidateAnyVersion({
+            schemaVersion: "design-v2",
+            provider: "google-stitch",
+            providerMode: "live",
+            providerProjectName,
+            ...(dsAsset ? { providerDesignSystemAsset: dsAsset } : {}),
+            designMdDigest,
+            designMdToolVersion: DESIGN_MD_TOOL_VERSION,
+            designMdLint: { errors: lint.errors, warnings: lint.warnings, infos: lint.infos },
+            designSeed: {
+              colors: seed.colors,
+              typography: seed.typography,
+              rationale: seed.rationale,
+            },
+            providerEvidence: {
+              ...(dsAsset ? { designSystemAsset: dsAsset } : {}),
+            },
+            tokens: {
+              colors: {
+                primary: seed.colors.primary,
+                secondary: seed.colors.secondary,
+                accent: seed.colors.accent,
+                neutral: seed.colors.neutral,
+                background: "#FFFFFF",
+                surface: seed.colors.neutral,
+                textPrimary: seed.colors.primary,
+                textSecondary: seed.colors.secondary,
+              },
+              typography: {
+                headingFont: seed.typography.headingFont,
+                bodyFont: seed.typography.bodyFont,
+                scaleNotes: "display 3rem/1.2, h2 2rem/1.3, h3 1.5rem/1.4, body 1rem/1.6, label 0.75rem caps",
+              },
+              spacing: { xs: "4px", sm: "8px", md: "16px", lg: "32px", xl: "64px", xxl: "128px" },
+              rounded: { sm: "4px", md: "8px", lg: "16px" },
+              ctaHierarchy: "Primary CTA solid accent; secondary CTA outlined; tertiary links underlined",
+              navigationLanguage: "Persistent top navigation with clear active state; breadcrumbs on interior pages",
+              imageryTreatment: "Documentary-first photography with restrained treatment; placeholders explicitly labeled until Run 7 resolution",
+              sectionRhythm: "Generous vertical whitespace; alternating surface/background bands; evidence blocks visually distinct from marketing copy",
+            },
+            screens,
+            archetypes,
+            visualRoleRequirements: archetypes.map((a) => ({
+              archetype: a.kind,
+              roles: [
+                {
+                  role: "hero-primary",
+                  requirement: `Primary hero visual for ${a.kind}`,
+                  requiredRole: (a.kind === "location" ? "background" : a.kind === "editorial" ? "illustration" : a.kind === "investment_advisory" ? "chart" : "hero") as "hero" | "background" | "inline" | "chart" | "illustration" | "logo" | "supporting",
+                  required: a.kind === "homepage" || a.kind === "service" || a.kind === "location",
+                },
+                ...(a.kind === "service"
+                  ? [
+                      {
+                        role: "supporting",
+                        requirement: "Supporting service visual",
+                        requiredRole: "supporting" as const,
+                        required: false,
+                      },
+                    ]
+                  : []),
+              ],
+            })),
+            archetypeGrammar: normalizeArchetypeGrammar(archetypes),
+            normalization: {
+              factoryAuthorityGroups: ["tokens", "typography", "spacing", "rounded", "ctaHierarchy", "navigationLanguage", "imageryTreatment", "sectionRhythm"],
+              providerDerivedGroups: ["archetypeStructure"],
+              note: "Live Stitch generation: design system tokens seeded from Factory authority; screens and archetype structure normalized from provider evidence into approved component vocabulary.",
+            },
+            rationale:
+              "Site-level design system seeded from accepted brand facts, audience, references/anti-references and UX requirements. Archetypes: " +
+              archetypes.map((a) => a.kind).join(", ") +
+              ".",
+            providerSessionId: lastSessionId ?? undefined,
+          })
+        : parseDesignCandidateData({
+            schemaVersion: "design-v1",
+            provider: "google-stitch",
+            providerMode: "live",
+            providerProjectName,
+            ...(dsAsset ? { providerDesignSystemAsset: dsAsset } : {}),
+            designMdDigest,
+            designMdToolVersion: DESIGN_MD_TOOL_VERSION,
+            designMdLint: { errors: lint.errors, warnings: lint.warnings, infos: lint.infos },
+            designSeed: {
+              colors: seed.colors,
+              typography: seed.typography,
+              rationale: seed.rationale,
+            },
+            providerEvidence: {
+              ...(dsAsset ? { designSystemAsset: dsAsset } : {}),
+            },
+            tokens: {
+              colors: {
+                primary: seed.colors.primary,
+                secondary: seed.colors.secondary,
+                accent: seed.colors.accent,
+                neutral: seed.colors.neutral,
+                background: "#FFFFFF",
+                surface: seed.colors.neutral,
+                textPrimary: seed.colors.primary,
+                textSecondary: seed.colors.secondary,
+              },
+              typography: {
+                headingFont: seed.typography.headingFont,
+                bodyFont: seed.typography.bodyFont,
+                scaleNotes: "display 3rem/1.2, h2 2rem/1.3, h3 1.5rem/1.4, body 1rem/1.6, label 0.75rem caps",
+              },
+              spacing: { xs: "4px", sm: "8px", md: "16px", lg: "32px", xl: "64px", xxl: "128px" },
+              rounded: { sm: "4px", md: "8px", lg: "16px" },
+              ctaHierarchy: "Primary CTA solid accent; secondary CTA outlined; tertiary links underlined",
+              navigationLanguage: "Persistent top navigation with clear active state; breadcrumbs on interior pages",
+              imageryTreatment: "Documentary-first photography with restrained treatment; placeholders explicitly labeled until Run 7 resolution",
+              sectionRhythm: "Generous vertical whitespace; alternating surface/background bands; evidence blocks visually distinct from marketing copy",
+            },
+            screens,
+            archetypes,
+            rationale:
+              "Site-level design system seeded from accepted brand facts, audience, references/anti-references and UX requirements. Token values are the Factory SEED the provider generation is guided by; provider-returned design evidence is recorded separately (providerEvidence). The DESIGN.md was validated by pinned official @google/design.md tooling plus Factory accepted-artifact requirements. Archetypes: " +
+              archetypes.map((a) => a.kind).join(", ") +
+              ".",
+            providerSessionId: lastSessionId ?? undefined,
+          });
 
       rawArtifacts.push({
         kind: "provider_response",
@@ -942,7 +1025,7 @@ interface ArchetypeTemplate {
  * must never satisfy a service supporting slot.
  */
 function resolveSlotAsset(
-  input: DesignInputSnapshotData,
+  input: DesignInputSnapshotAnyVersion,
   pageSlug: string,
   role: string,
 ): { versionId: string; binaryDigest: string; governanceDigest: string } | null {
@@ -952,7 +1035,7 @@ function resolveSlotAsset(
 
 export function archetypeFor(
   kind: DesignCandidateData["archetypes"][number]["kind"],
-  input: DesignInputSnapshotData,
+  input: DesignInputSnapshotAnyVersion,
 ): ArchetypeTemplate {
   // Missing representative identity stays unresolved; never borrow a page.
   const homepageRepresentative = input.representativePages.find((r) => r.archetype === "homepage")?.slug;

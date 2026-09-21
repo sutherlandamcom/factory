@@ -10,9 +10,9 @@
       "pattern": null,
       "box": {
         "x": 0,
-        "y": 81,
+        "y": 113,
         "width": 1280,
-        "height": 229.5
+        "height": 245.5
       }
     },
     {
@@ -21,20 +21,9 @@
       "pattern": "service-overview",
       "box": {
         "x": 0,
-        "y": 310.5,
+        "y": 358.5,
         "width": 1280,
-        "height": 168
-      }
-    },
-    {
-      "component": "content-section",
-      "variant": "plain",
-      "pattern": "service-overview",
-      "box": {
-        "x": 0,
-        "y": 478.5,
-        "width": 1280,
-        "height": 134
+        "height": 184
       }
     },
     {
@@ -43,64 +32,9 @@
       "pattern": "process",
       "box": {
         "x": 0,
-        "y": 612.5,
+        "y": 542.5,
         "width": 1280,
-        "height": 174
-      }
-    },
-    {
-      "component": "content-section",
-      "variant": "structured",
-      "pattern": "process",
-      "box": {
-        "x": 0,
-        "y": 786.5,
-        "width": 1280,
-        "height": 100
-      }
-    },
-    {
-      "component": "content-section",
-      "variant": "evidence",
-      "pattern": "evidence",
-      "box": {
-        "x": 0,
-        "y": 886.5,
-        "width": 1280,
-        "height": 170
-      }
-    },
-    {
-      "component": "content-section",
-      "variant": "evidence",
-      "pattern": "evidence",
-      "box": {
-        "x": 0,
-        "y": 1056.5,
-        "width": 1280,
-        "height": 136
-      }
-    },
-    {
-      "component": "content-section",
-      "variant": "structured",
-      "pattern": "faq",
-      "box": {
-        "x": 0,
-        "y": 1192.5,
-        "width": 1280,
-        "height": 174
-      }
-    },
-    {
-      "component": "content-section",
-      "variant": "structured",
-      "pattern": "faq",
-      "box": {
-        "x": 0,
-        "y": 1366.5,
-        "width": 1280,
-        "height": 100
+        "height": 106
       }
     },
     {
@@ -109,9 +43,9 @@
       "pattern": null,
       "box": {
         "x": 256,
-        "y": 1466.5,
+        "y": 648.5,
         "width": 768,
-        "height": 104.5
+        "height": 112.5
       }
     },
     {
@@ -120,7 +54,7 @@
       "pattern": "cta",
       "box": {
         "x": 0,
-        "y": 1571,
+        "y": 761,
         "width": 1280,
         "height": 93.5
       }
@@ -150,9 +84,9 @@
     ]
   },
   "fontFamilies": {
-    "display": "ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", Helvetica, Arial, sans-serif",
-    "heading": "ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", Helvetica, Arial, sans-serif",
-    "body": "ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", Helvetica, Arial, sans-serif"
+    "display": "\"Public Sans\", sans-serif",
+    "heading": "\"Public Sans\", sans-serif",
+    "body": "\"Public Sans\", sans-serif"
   },
-  "documentHeight": 1753
+  "documentHeight": 943
 }

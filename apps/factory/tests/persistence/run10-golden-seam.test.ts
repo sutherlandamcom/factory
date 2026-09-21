@@ -315,7 +315,7 @@ test("GOLDEN SEAM: real DB → AcceptedDerivativeSet → production-v2 → manif
   const manifests = await buildService.loadManifests({ projectId: env.projectId, candidateId: prep.candidateId });
   assert.equal(manifests.length, 1);
   const manifest = manifests[0]!;
-  assert.ok(manifest.derivatives);
+  assert.ok(manifest.derivatives && "summary" in manifest.derivatives);
   assert.equal(manifest.derivatives.summary.state, "accepted");
   assert.equal(manifest.derivatives.summary.summaryText, syntheticSummaryText);
   assert.equal(manifest.derivatives.audio.state, "accepted");

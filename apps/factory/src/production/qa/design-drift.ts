@@ -1,4 +1,5 @@
 import { readFile, readdir, stat } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 import type { ProductionQaCheckResult } from "./types.js";
 import type { ProductionRenderManifest } from "../render-manifest.js";
@@ -150,13 +151,29 @@ export async function runDesignDriftQa(input: DesignDriftInput): Promise<Product
       tokenFailures.push(`${manifest.input.route}: no semantic tokens projected`);
     }
   }
+
+  // Token projection strictness: verify design-implementation.ts contains no fallback expressions.
+  let hasFallbacks = false;
+  try {
+    const dicPath = fileURLToPath(new URL("../design-implementation.ts", import.meta.url));
+    const dicSource = await readFile(dicPath, "utf8");
+    const projMatch = dicSource.match(/function projectSemanticTokens[\s\S]*?\n\}/);
+    const projFn = projMatch ? projMatch[0] : "";
+    hasFallbacks = /\|\||\?\?/.test(projFn);
+  } catch {
+    hasFallbacks = true;
+  }
+  if (hasFallbacks) {
+    tokenFailures.push("Forbidden fallback expressions (|| or ??) in projectSemanticTokens; token projection must fail closed.");
+  }
+
   checks.push(bindQaCheck(
     {
       checkId: "design.token_governance",
       group: "design",
       verdict: tokenFailures.length === 0 ? "PASS" : "FAIL",
       detail: tokenFailures.length === 0
-        ? "All v3 manifests carry complete governed semantic token projections and resolved font delivery."
+        ? "All v3 manifests carry complete governed semantic token projections, resolved font delivery, and strict token projection without fallbacks."
         : `Token governance failures: ${tokenFailures.join("; ")}.`,
       evidence: tokenFailures.map((finding) => ({ kind: "check" as const, ref: finding })),
     },

@@ -67,10 +67,10 @@ const heroAsset = heroEntry?.assetSlot ? bySlot.get(heroEntry.assetSlot) ?? null
 if (heroEntry?.assetSlot && !heroAsset) {
   throw new Error(`Composition binds hero asset slot "${heroEntry.assetSlot}" which has no accepted asset authority.`);
 }
-const heroDerivatives = derivatives?.summary.state === "accepted" || derivatives?.audio.state === "accepted"
+const heroDerivatives = derivatives && "summary" in derivatives && (derivatives.summary.state === "accepted" || derivatives.audio.state === "accepted")
   ? {
-      summary: derivatives?.summary.state === "accepted" ? { acceptedDigest: derivatives.summary.acceptedDigest, summaryText: derivatives.summary.summaryText } : null,
-      audio: derivatives?.audio.state === "accepted" ? { binaryDigest: derivatives.audio.binaryDigest, publicPath: derivatives.audio.publicPath } : null,
+      summary: derivatives.summary.state === "accepted" ? { acceptedDigest: derivatives.summary.acceptedDigest, summaryText: derivatives.summary.summaryText } : null,
+      audio: derivatives.audio.state === "accepted" ? { binaryDigest: derivatives.audio.binaryDigest, publicPath: derivatives.audio.publicPath } : null,
     }
   : null;
 const conclusionParagraphs = content.conclusion.split(/\n{2,}/);

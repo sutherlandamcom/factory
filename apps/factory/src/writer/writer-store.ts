@@ -1,7 +1,7 @@
 import { GapAuthorityReader } from "../competitors/authority.js";
 import { CompetitorStore } from "../competitors/competitor-store.js";
 import { ProjectIntakeStore } from "../operator/intake-store.js";
-import { PageArchetypeStore } from "../page-authority/store.js";
+import { PageArchetypeStore, normalizePageIdentity } from "../page-authority/store.js";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, sql } from "drizzle-orm";
 import {
@@ -268,6 +268,16 @@ export class WriterStore {
         pageIdentity: pageTarget.slug,
         archetype: pageTarget.designBinding.archetype,
       });
+    } else if (normalizePageIdentity(pageTarget.slug) === "home") {
+      await pageArchetypeStore.setPageArchetype({
+        projectId: input.projectId,
+        pageIdentity: pageTarget.slug,
+        archetype: "homepage",
+      });
+      effectiveTarget = {
+        ...pageTarget,
+        designBinding: { schemaVersion: "page-design-binding-v1" as const, archetype: "homepage" },
+      };
     }
     const snapshot = await this.latestAcceptedInputSnapshot(input.projectId);
     const policy = await this.latestWriterPolicy(input.projectId);

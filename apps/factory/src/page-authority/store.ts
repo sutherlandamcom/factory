@@ -17,7 +17,7 @@ import type { DesignArchetypeKind } from "@factory/contracts";
  */
 export function normalizePageIdentity(slug: string): string {
   const trimmed = slug.trim();
-  if (trimmed === "" || trimmed === "/" || trimmed === "home") return "home";
+  if (trimmed === "" || trimmed === "/" || trimmed === "home" || trimmed === "homepage" || trimmed === "index") return "home";
   return trimmed.replace(/^\/+/, "").replace(/\/+$/, "");
 }
 
@@ -131,6 +131,10 @@ export class PageArchetypeStore {
       if (page) {
         return this.getArchetype(projectId, page.slug);
       }
+    }
+
+    if (norm === "home") {
+      return "homepage";
     }
 
     return null;

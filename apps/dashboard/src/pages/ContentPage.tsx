@@ -220,7 +220,7 @@ export function ContentPage({ projectId }: { projectId: string }) {
             <span className="text-gray-700">Page archetype</span>
             <select aria-label="Page archetype" value={form.archetype} onChange={(e) => setForm({ ...form, archetype: e.target.value })} className="mt-1 w-full rounded border border-gray-300 px-2 py-1.5">
               <option value="">Select before design generation</option>
-              <option value="homepage">Homepage</option><option value="service">Service</option><option value="location">Location</option><option value="editorial">Editorial</option><option value="investment_advisory">Investment advisory</option>
+              <option value="homepage">Archetype: Homepage</option><option value="service">Archetype: Service</option><option value="location">Archetype: Location</option><option value="editorial">Archetype: Editorial</option><option value="investment_advisory">Archetype: Investment advisory</option>
             </select>
           </label>
           <label className="block">
@@ -283,9 +283,10 @@ export function ContentPage({ projectId }: { projectId: string }) {
           <button
             onClick={() =>
               run(async () => {
+                const effectiveArchetype = form.archetype || (form.slug === "homepage" || form.slug === "home" || form.slug === "" ? "homepage" : undefined);
                 const result = await writerApi.saveBriefDraft(projectId, {
                   pageTarget: {
-                    ...(form.archetype ? { designBinding: { schemaVersion: "page-design-binding-v1" as const, archetype: form.archetype as "homepage" | "service" | "location" | "editorial" | "investment_advisory" } } : {}),
+                    ...(effectiveArchetype ? { designBinding: { schemaVersion: "page-design-binding-v1" as const, archetype: effectiveArchetype as "homepage" | "service" | "location" | "editorial" | "investment_advisory" } } : {}),
                     slug: form.slug,
                     title: form.title,
                     objective: form.objective,

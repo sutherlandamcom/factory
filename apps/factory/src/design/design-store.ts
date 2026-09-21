@@ -79,14 +79,14 @@ export class DesignStore {
    * when no accepted project inputs exist. Re-derivation is idempotent on
    * identical digests; changed upstream creates the next version.
    */
-  async deriveInputSnapshotDraft(input: { projectId: string }): Promise<DesignInputSnapshotRecord> {
+  async deriveInputSnapshotDraft(input: { projectId: string; schemaVersion?: "design-v1" | "design-v2" }): Promise<DesignInputSnapshotRecord> {
     return this.db.transaction(async tx => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
       return new DesignStore(tx as unknown as FactoryDb).deriveInputSnapshotDraftLocked(input);
     });
   }
 
-  private async deriveInputSnapshotDraftLocked(input: { projectId: string }): Promise<DesignInputSnapshotRecord> {
+  private async deriveInputSnapshotDraftLocked(input: { projectId: string; schemaVersion?: "design-v1" | "design-v2" }): Promise<DesignInputSnapshotRecord> {
     const [inputSnapshot] = await this.db
       .select()
       .from(projectInputSnapshots)
@@ -170,7 +170,21 @@ export class DesignStore {
     // DESIGN-DEFINING material (representative pages only) and records the
     // whole page inventory as typed archetype bindings. design-v1 keeps the
     // exact historical whole-inventory semantics (never reinterpreted).
-    const designSchemaVersion = designSnapshotSchemaVersion(input.projectId);
+    const [existingSnapshot] = await this.db
+      .select({ data: designInputSnapshots.data })
+      .from(designInputSnapshots)
+      .where(eq(designInputSnapshots.projectId, input.projectId))
+      .orderBy(desc(designInputSnapshots.version))
+      .limit(1);
+
+    const existingVersion = existingSnapshot
+      ? parseDesignInputSnapshotAnyVersion(existingSnapshot.data).schemaVersion
+      : undefined;
+
+    const designSchemaVersion = designSnapshotSchemaVersion(input.projectId, {
+      explicitVersion: input.schemaVersion,
+      existingVersion,
+    });
     const data =
       designSchemaVersion === DESIGN_SCHEMA_VERSION_V2
         ? parseDesignInputSnapshotAnyVersion({
@@ -944,16 +958,32 @@ export class DesignStore {
  * support (trust patterns, navigation clarity, responsiveness) — they never
  * invent business claims.
  */
+export const DESIGN_SNAPSHOT_POLICY_VERSION = "design-policy-v2";
+
 /**
- * Snapshot schema version for NEW design input snapshot derivations in a
- * project. design-v2 activates ONLY through explicit trusted server
- * configuration (FACTORY_DESIGN_SNAPSHOT_SCHEMA=design-v2); the default
- * remains design-v1 so existing projects keep their exact historical
- * semantics and no behavior changes silently.
+ * Snapshot schema version for design input snapshot derivations in a project.
+ *
+ * Durable activation policy (§11):
+ * - If explicitVersion is supplied in options, honor caller intent.
+ * - Else if FACTORY_DESIGN_SNAPSHOT_SCHEMA is explicitly configured, honor it (dev/test override).
+ * - Else if the project already has an established snapshot in DB, preserve that project's established schema version.
+ * - Else for ambient new project derivations, default to design-v1 to preserve historical semantics without silent migration.
  */
-function designSnapshotSchemaVersion(_projectId: string): "design-v1" | "design-v2" {
+export function designSnapshotSchemaVersion(
+  _projectId: string,
+  options?: { explicitVersion?: "design-v1" | "design-v2"; existingVersion?: "design-v1" | "design-v2" },
+): "design-v1" | "design-v2" {
+  if (options?.explicitVersion) {
+    return options.explicitVersion;
+  }
   const configured = process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA?.trim();
-  return configured === DESIGN_SCHEMA_VERSION_V2 ? DESIGN_SCHEMA_VERSION_V2 : "design-v1";
+  if (configured === "design-v1" || configured === DESIGN_SCHEMA_VERSION_V2) {
+    return configured;
+  }
+  if (options?.existingVersion) {
+    return options.existingVersion;
+  }
+  return "design-v1";
 }
 
 function designUxRequirements(intake: Record<string, unknown>): string[] {

@@ -6,31 +6,31 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 /**
  * VISUAL REGRESSION — Pre-Run-12 hardening.
  *
- * Deterministic STRUCTURAL visual oracle over the governed production-v3
- * fixture page. Methodology note (design policy §27): a pixel oracle over
- * full-page text requires byte-identical font rasterization across every
- * environment; the accepted font delivery is an approved SYSTEM stack, so
- * macOS and Linux rasterize differently BY DESIGN and a committed PNG
- * baseline is not a portable oracle. The portable regression oracle here is
- * the page's geometric structure + token projection + component registry
- * markers:
- *   - every governed component's bounding box (tag, component, variant,
- *     pattern, x/y/w/h rounded to whole CSS px);
- *   - root semantic token values as computed on html/body/header/main/
- *     article (identical projection everywhere);
- *   - resolved font-family chains for display/heading/body.
+ * Deterministic visual oracle over the governed production-v3 fixture page.
+ * Model A font delivery (design policy §27 & prompt §13): self-hosted WOFF2
+ * web fonts (Source Serif 4 and Public Sans) are bundled locally in the site
+ * under /fonts/, providing byte-identical font rasterization across both Linux
+ * and macOS environments.
  *
- * The committed JSON baseline is a reviewed implementation-regression
- * ORACLE, never design authority:
- *   - unexpected structural difference -> FAIL;
- *   - automatic baseline regeneration is FORBIDDEN in CI (no script runs
+ * Two complementary oracles are enforced:
+ *   1. STRUCTURAL ORACLE (governed-service-fixture.structure.json):
+ *      - Every governed component's bounding box (tag, component, variant,
+ *        pattern, x/y/w/h rounded to whole CSS px);
+ *      - Root semantic token values as computed on html/body/header/main/
+ *        article (identical projection everywhere);
+ *      - Resolved font-family chains for display/heading/body.
+ *   2. PIXEL VISUAL REGRESSION ORACLE (governed-service-fixture.png):
+ *      - Strict toHaveScreenshot fullPage pixel comparison powered by the
+ *        bundled WOFF2 fonts.
+ *
+ * The committed JSON and PNG baselines are reviewed implementation-regression
+ * ORACLES, never design authority:
+ *   - Unexpected structural or visual drift -> FAIL;
+ *   - Automatic baseline regeneration is FORBIDDEN in CI (no script runs
  *     with UPDATE_VISUAL_BASELINE=1);
- *   - a baseline update is an explicit reviewed change (developer runs the
- *     spec locally with UPDATE_VISUAL_BASELINE=1 and reviews the diff).
- *
- * Rasterization-level drift detection remains available locally via
- * page.screenshot()+sharp whenever the reviewer wants it; it is not a
- * committed cross-environment oracle.
+ *   - A baseline update is an explicit reviewed change (developer runs the
+ *     spec locally with UPDATE_VISUAL_BASELINE=1 or --update-snapshots and
+ *     reviews the diff).
  */
 
 const fixtureRoute = "/services/advisory";

@@ -9,7 +9,16 @@ import {
   type StitchMcpClientLike,
   type McpToolCallResult,
 } from "../src/design/stitch-provider.js";
-import { parseDesignInputSnapshotData, type DesignInputSnapshotData } from "@factory/contracts";
+import {
+  parseDesignInputSnapshotData,
+  parseDesignInputSnapshotAnyVersion,
+  isDesignCandidateV2,
+  isDesignInputSnapshotV2,
+  type DesignInputSnapshotData,
+  type DesignInputSnapshotDataV2,
+} from "@factory/contracts";
+import { normalizeArchetypeGrammar } from "../src/design/archetype-grammar.js";
+import { designSnapshotSchemaVersion } from "../src/design/design-store.js";
 
 /**
  * Stitch provider adapter tests — deterministic MCP mocks/fixtures only.
@@ -44,6 +53,46 @@ function validInputSnapshot(): DesignInputSnapshotData {
     ],
     archetypes: ["homepage", "service"],
   });
+}
+
+function validInputSnapshotV2(): DesignInputSnapshotDataV2 {
+  return parseDesignInputSnapshotAnyVersion({
+    schemaVersion: "design-v2",
+    acceptedInputSnapshotId: "pis-test-v2",
+    acceptedInputSnapshotVersion: 1,
+    acceptedInputDigest: "a".repeat(64),
+    brand: {
+      facts: ["Family-owned roofing firm"],
+      positioning: "High-altitude roofing expertise",
+      tone: "Plain-spoken expert",
+      visualIdentityNotes: "",
+    },
+    audience: { segments: ["Property owners"], needs: ["Durable roofs"], decisionContext: "" },
+    references: {
+      referenceUrls: [],
+      antiReferenceUrls: [],
+      learn: [],
+      avoid: ["Generic template look"],
+      preferredPerception: "",
+    },
+    uxRequirements: ["Mobile-first responsive layout"],
+    contentRefs: [
+      { id: "apc-1", version: 1, slug: "home", contentDigest: "b".repeat(64) },
+      { id: "apc-2", version: 1, slug: "services/roof-repair", contentDigest: "c".repeat(64) },
+    ],
+    assetRefs: [],
+    representativePages: [
+      { archetype: "homepage", slug: "home", contentDigest: "b".repeat(64) },
+      { archetype: "service", slug: "services/roof-repair", contentDigest: "c".repeat(64) },
+    ],
+    archetypes: ["homepage", "service"],
+    pageArchetypeBindings: [
+      { slug: "home", archetype: "homepage", contentDigest: "b".repeat(64) },
+      { slug: "services/roof-repair", archetype: "service", contentDigest: "c".repeat(64) },
+      { slug: "services/inspection", archetype: "service", contentDigest: "d".repeat(64) },
+    ],
+    pageArchetypeBindingPolicy: "page-archetype-policy-v1",
+  }) as DesignInputSnapshotDataV2;
 }
 
 class MockStitchClient implements StitchMcpClientLike {
@@ -337,4 +386,122 @@ test("token resolution: prefers STITCH_ACCESS_TOKEN over alternate env", () => {
   assert.equal(resolveStitchToken({ GOOGLE_OAUTH_ACCESS_TOKEN: " alt " }), "alt");
   assert.equal(resolveStitchToken({}), null);
 });
+
+test("generation: v2 snapshot produces valid design-v2 candidate with normalized grammar and visual roles", async () => {
+  const mock = new MockStitchClient();
+  mock.queue({ name: "projects/456", title: "factory-proj-tes-design" }); // create_project
+  mock.queue({ name: "assets/789" }); // create_design_system
+  mock.queue({
+    outputComponents: [
+      { design: { screens: [{ name: "projects/456/screens/home", title: "Home", deviceType: "DESKTOP" }] } },
+    ],
+    sessionId: "sess-v2-1",
+  }); // generate homepage desktop
+  mock.queue(screenResult("projects/456/screens/home")); // get_screen
+  mock.queue({
+    outputComponents: [
+      { design: { screens: [{ name: "projects/456/screens/home-mobile", title: "Home mobile", deviceType: "MOBILE" }] } },
+    ],
+    sessionId: "sess-v2-1m",
+  }); // generate homepage mobile
+  mock.queue(screenResult("projects/456/screens/home-mobile")); // get_screen
+  mock.queue({
+    outputComponents: [
+      { design: { screens: [{ name: "projects/456/screens/service", title: "Service", deviceType: "DESKTOP" }] } },
+    ],
+    sessionId: "sess-v2-2",
+  }); // generate service
+  mock.queue(screenResult("projects/456/screens/service")); // get_screen
+
+  const provider = new StitchDesignProvider({
+    env: { STITCH_ACCESS_TOKEN: "test-token" },
+    createClient: () => mock,
+  });
+  const req = {
+    ...generationRequest(),
+    inputSnapshot: validInputSnapshotV2(),
+  };
+  const result = await provider.generateDesignSystem(req);
+
+  assert.equal(result.candidate.schemaVersion, "design-v2");
+  assert.ok(isDesignCandidateV2(result.candidate));
+  if (isDesignCandidateV2(result.candidate)) {
+    // Check archetypeGrammar
+    assert.equal(result.candidate.archetypeGrammar.length, 2);
+    const homeGrammar = result.candidate.archetypeGrammar.find((g) => g.archetype === "homepage");
+    assert.ok(homeGrammar);
+    assert.ok(homeGrammar.bindings.some((b) => b.componentId === "page-hero" && b.pattern === "hero"));
+    assert.ok(homeGrammar.bindings.some((b) => b.componentId === "page-conclusion" && b.pattern === "conclusion"));
+
+    const serviceGrammar = result.candidate.archetypeGrammar.find((g) => g.archetype === "service");
+    assert.ok(serviceGrammar);
+    assert.ok(serviceGrammar.bindings.some((b) => b.componentId === "page-hero" && b.pattern === "page-header"));
+
+    // Check visualRoleRequirements
+    assert.equal(result.candidate.visualRoleRequirements.length, 2);
+    const homeRoles = result.candidate.visualRoleRequirements.find((r) => r.archetype === "homepage");
+    assert.ok(homeRoles);
+    assert.ok(homeRoles.roles.some((r) => r.role === "hero-primary" && r.requiredRole === "hero" && r.required === true));
+
+    const serviceRoles = result.candidate.visualRoleRequirements.find((r) => r.archetype === "service");
+    assert.ok(serviceRoles);
+    assert.ok(serviceRoles.roles.some((r) => r.role === "hero-primary" && r.required === true));
+    assert.ok(serviceRoles.roles.some((r) => r.role === "supporting" && r.requiredRole === "supporting" && r.required === false));
+
+    // Check normalization provenance
+    assert.deepEqual(result.candidate.normalization.factoryAuthorityGroups, [
+      "tokens",
+      "typography",
+      "spacing",
+      "rounded",
+      "ctaHierarchy",
+      "navigationLanguage",
+      "imageryTreatment",
+      "sectionRhythm",
+    ]);
+    assert.deepEqual(result.candidate.normalization.providerDerivedGroups, ["archetypeStructure"]);
+  }
+});
+
+test("grammar normalization: unsupported section pattern fails closed with design_provider_output_invalid", () => {
+  assert.throws(
+    () =>
+      normalizeArchetypeGrammar([
+        {
+          kind: "homepage",
+          sectionPatterns: ["hero", "unsupported-carousel-banner", "conclusion"],
+        },
+      ]),
+    (err: unknown) => {
+      const e = err as { code?: string; message?: string };
+      return e.code === "design_provider_output_invalid" && /unsupported section pattern 'unsupported-carousel-banner'/.test(e.message ?? "");
+    },
+  );
+});
+
+test("durable policy activation: preserves design-v1 historical default, respects explicit and env v2 opt-in", () => {
+  const origEnv = process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA;
+  try {
+    delete process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA;
+    // Ambient default remains design-v1 (AGENTS.md historical stability)
+    assert.equal(designSnapshotSchemaVersion("proj-brand-new"), "design-v1");
+    // Explicit caller version is respected
+    assert.equal(designSnapshotSchemaVersion("proj-new", { explicitVersion: "design-v2" }), "design-v2");
+    assert.equal(designSnapshotSchemaVersion("proj-new", { explicitVersion: "design-v1" }), "design-v1");
+    // Existing project snapshot version is preserved
+    assert.equal(designSnapshotSchemaVersion("proj-existing-v1", { existingVersion: "design-v1" }), "design-v1");
+    assert.equal(designSnapshotSchemaVersion("proj-existing-v2", { existingVersion: "design-v2" }), "design-v2");
+
+    // Environment variable override activates design-v2
+    process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA = "design-v2";
+    assert.equal(designSnapshotSchemaVersion("proj-brand-new"), "design-v2");
+  } finally {
+    if (origEnv !== undefined) {
+      process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA = origEnv;
+    } else {
+      delete process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA;
+    }
+  }
+});
+
 

@@ -23,11 +23,99 @@ import {
   isDesignInputSnapshotV2,
   type DesignCandidateDataV2,
 } from "@factory/contracts";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import sharp from "sharp";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { rm } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import {
+  StitchDesignProvider,
+  type StitchMcpClientLike,
+  type McpToolCallResult,
+} from "../../src/design/stitch-provider.js";
+import { VisualService } from "../../src/visual/service.js";
+import { VisualBudgetStore } from "../../src/visual/budget.js";
+import { visualSetDigest } from "../../src/visual/store.js";
+import { FixtureVisualAssetProvider } from "../../src/visual/fixture-adapter.js";
+import {
+  ProductionRenderCompiler,
+  assertManifest,
+  computeRenderManifestDigest,
+} from "../../src/production/render-manifest.js";
+import { emitSitemapAndRobots } from "../../src/production/seo-engine.js";
+import { runSiteWideQa } from "../../src/production/qa/site-wide.js";
+import { parseRenderManifestAnyVersion } from "@factory/contracts";
+import { resolveRepositoryRoot } from "../../src/repo-root.js";
+
+class OfflineLiveVisualAssetProvider extends FixtureVisualAssetProvider {
+  override readonly providerMode = "live" as const;
+}
+
+class MockStitchClient implements StitchMcpClientLike {
+  calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  private toolSequence: Array<Record<string, unknown>> = [];
+
+  queue(result: Record<string, unknown>): void {
+    this.toolSequence.push(result);
+  }
+
+  async listTools(): Promise<{ tools: Array<{ name: string }> }> {
+    return {
+      tools: [
+        { name: "create_project" },
+        { name: "delete_project" },
+        { name: "list_screens" },
+        { name: "get_screen" },
+        { name: "generate_screen_from_text" },
+        { name: "create_design_system" },
+      ],
+    };
+  }
+
+  async callTool(params: { name: string; arguments: Record<string, unknown> }): Promise<McpToolCallResult> {
+    this.calls.push({ name: params.name, args: params.arguments });
+    const next = this.toolSequence.shift();
+    if (next === undefined) {
+      throw new Error(`MockStitchClient: unexpected tool call ${params.name}`);
+    }
+    return { structuredContent: next };
+  }
+
+  async close(): Promise<void> {}
+}
+
+function screenResult(screenName: string): Record<string, unknown> {
+  return {
+    name: screenName,
+    title: "Fixture Screen",
+    deviceType: "DESKTOP",
+    htmlCode: { name: `${screenName}/html`, mimeType: "text/html", downloadUrl: null },
+    screenshot: { name: `${screenName}/shot`, mimeType: "image/png", downloadUrl: null },
+  };
+}
+
+function runProcess(
+  command: string,
+  args: string[],
+  options: { cwd: string; env?: NodeJS.ProcessEnv; timeoutMs?: number },
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    child.on("close", (code) => {
+      resolve({ stdout, stderr, exitCode: code ?? 0 });
+    });
+    child.on("error", reject);
+  });
+}
 
 /**
  * PRE-RUN-12 MULTI-PAGE AUTHORITY CHAIN — mandatory scale proof.
@@ -151,9 +239,12 @@ interface ChainEnv {
   designDigest: string;
   visualSetId: string;
   visualSetDigest: string;
+  planId: string;
   production: ProductionStore;
   designStore: DesignStore;
+  visualStore: VisualStore;
   acceptedPages: string[];
+  root: string;
 }
 
 /**
@@ -173,60 +264,101 @@ async function setupV2Chain(
     acceptedPages.push(slug);
   }
   const root = await mkdtemp(path.join(tmpdir(), "pre-run12-"));
-  try {
-    const designStore = new DesignStore(dbInst.db);
-    const snapshot = await designStore.deriveInputSnapshotDraft({ projectId });
-    const snapshotData = parseDesignInputSnapshotAnyVersion(snapshot.data);
-    if (!isDesignInputSnapshotV2(snapshotData)) throw new Error("expected design-v2 snapshot derivation");
-    // Snapshot binds only design-defining (representative) content.
-    const supportedKinds = [...new Set(acceptedPages.map((slug) => derivePageArchetype(slug, ["homepage", "service", "location", "editorial", "investment_advisory"]).archetype))];
-    const data = v2CandidateData({
-      archetypes: supportedKinds.map((kind) => ({
-        kind,
-        sectionPatterns: ARCHETYPE_SECTIONS[kind] ?? ["hero", "conclusion", "cta"],
-        pageSlug: acceptedPages[0] ?? "home",
-        providerScreenName: `projects/fixture/screens/${kind}`,
-      })),
-      // Live-classified candidate (test-seeded production authority, same
-      // approach as the Run 9 suite): data providerMode matches the column.
-      providerMode: "live",
-      providerProjectName: "projects/live",
+  const designStore = new DesignStore(dbInst.db);
+  const snapshot = await designStore.deriveInputSnapshotDraft({ projectId, schemaVersion: "design-v2" });
+  const snapshotData = parseDesignInputSnapshotAnyVersion(snapshot.data);
+  if (!isDesignInputSnapshotV2(snapshotData)) throw new Error("expected design-v2 snapshot derivation");
+
+  // Live Stitch provider generation via deterministic MCP mock (P1 prompt §2 & §10)
+  const mockStitch = new MockStitchClient();
+  mockStitch.queue({ name: `projects/pr12-${key}`, title: `factory-${projectId.slice(0, 8)}-design` });
+  mockStitch.queue({ name: `assets/ds-${key}` });
+  for (const kind of snapshotData.archetypes) {
+    mockStitch.queue({
+      outputComponents: [
+        { design: { screens: [{ name: `projects/pr12-${key}/screens/${kind}`, title: kind, deviceType: "DESKTOP" }] } },
+      ],
+      sessionId: `sess-${kind}`,
     });
-    const candidate = await designStore.createCandidate({ projectId, inputSnapshot: snapshot, data });
-    await dbInst.db.execute(sql`UPDATE design_candidates SET provider_mode = 'live' WHERE id = ${candidate.id}`);
-    const accepted = await designStore.acceptCandidate({
-      projectId,
-      candidateId: candidate.id,
-      expectedCandidateDigest: candidate.candidateDigest,
-      reviewNotes: "pre-run12 v2 fixture acceptance",
-    });
-    // Visual asset authority: a live accepted visual set bound to the
-    // accepted design, carrying a REAL approved asset version resolved for
-    // the representative service page's hero-primary role (the same
-    // SQL-seeded live authority pattern the Run 9 suite uses).
-    const assetsModule = await import("../../src/assets/service.js");
-    const assetStorageModule = await import("../../src/assets/storage.js");
-    const assets = new assetsModule.AssetService({
-      store: new (await import("../../src/assets/asset-store.js")).AssetStore(dbInst.db),
-      storage: assetStorageModule.createAssetStorage(root),
-    });
-    const bytes = await sharp({ create: { width: 1600, height: 900, channels: 3, background: { r: 10, g: 20, b: 30 } } }).jpeg().toBuffer();
-    const upload = await assets.uploadAsset(projectId, {
-      filename: "hero-advisory.jpg",
-      kind: "photo",
-      title: "Advisory hero",
-      rightsStatus: "operator_owned",
-      dataBase64: bytes.toString("base64"),
-    });
-    const approved = await assets.approveVersion(projectId, upload.version.id, upload.version.binaryDigest);
-    // Reuse the ALREADY accepted advisory page (re-accepting would supersede
-    // the version the design snapshot bound and stale the chain).
-    const advisoryPage = await dbInst.db
-      .select({ id: acceptedPageContent.id, version: acceptedPageContent.version, contentDigest: acceptedPageContent.contentDigest })
-      .from(acceptedPageContent)
-      .where(sql`${acceptedPageContent.projectId} = ${projectId} AND ${acceptedPageContent.slug} = 'services/advisory'`)
-      .limit(1)
-      .then((rows) => rows[0]!);
+    mockStitch.queue(screenResult(`projects/pr12-${key}/screens/${kind}`));
+    if (kind === "homepage") {
+      mockStitch.queue({
+        outputComponents: [
+          { design: { screens: [{ name: `projects/pr12-${key}/screens/home-mob`, title: "Home Mobile", deviceType: "MOBILE" }] } },
+        ],
+        sessionId: "sess-mob",
+      });
+      mockStitch.queue(screenResult(`projects/pr12-${key}/screens/home-mob`));
+    }
+  }
+
+  const stitchProvider = new StitchDesignProvider({
+    env: { STITCH_ACCESS_TOKEN: "mock-token" },
+    createClient: () => mockStitch,
+  });
+
+  const copyByArchetype: Record<string, { slug: string; title: string; introduction: string; sections: Array<{ heading: string; body: string }>; conclusion: string; cta: string }> = {};
+  for (const rep of snapshotData.representativePages) {
+    copyByArchetype[rep.archetype] = {
+      slug: rep.slug,
+      title: rep.slug,
+      introduction: `Introduction for ${rep.slug}`,
+      sections: [{ heading: "Process", body: `Body for ${rep.slug}` }],
+      conclusion: `Conclusion for ${rep.slug}`,
+      cta: `Contact ${rep.slug}`,
+    };
+  }
+
+  const genResult = await stitchProvider.generateDesignSystem({
+    inputSnapshot: snapshotData,
+    inputSnapshotId: snapshot.id,
+    projectId,
+    acceptedCopyByArchetype: copyByArchetype,
+    designSeed: {
+      colors: { primary: "#1A2E35", secondary: "#4A5A62", accent: "#B8422E", neutral: "#F7F5F2" },
+      typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans", scaleNotes: "Institutional typographic scale" },
+      rationale: "Institutional advisory identity.",
+    },
+  });
+
+  const candidate = await designStore.createCandidate({
+    projectId,
+    inputSnapshot: snapshot,
+    data: genResult.candidate,
+  });
+  const accepted = await designStore.acceptCandidate({
+    projectId,
+    candidateId: candidate.id,
+    expectedCandidateDigest: candidate.candidateDigest,
+    reviewNotes: "pre-run12 live stitch acceptance",
+  });
+
+  // Visual asset authority: real AssetService with storage in root
+  const assetsModule = await import("../../src/assets/service.js");
+  const assetStorageModule = await import("../../src/assets/storage.js");
+  const assets = new assetsModule.AssetService({
+    store: new (await import("../../src/assets/asset-store.js")).AssetStore(dbInst.db),
+    storage: assetStorageModule.createAssetStorage(root),
+  });
+  const bytes = await sharp({ create: { width: 1600, height: 900, channels: 3, background: { r: 10, g: 20, b: 30 } } }).jpeg().toBuffer();
+  const upload = await assets.uploadAsset(projectId, {
+    filename: "hero-advisory.jpg",
+    kind: "photo",
+    title: "Advisory hero",
+    rightsStatus: "operator_owned",
+    dataBase64: bytes.toString("base64"),
+    altIntent: "Professional financial advisory consultation and valuation services",
+  });
+  const approved = await assets.approveVersion(projectId, upload.version.id, upload.version.binaryDigest);
+
+  // Assign approved asset to services/advisory
+  const advisoryPage = await dbInst.db
+    .select({ id: acceptedPageContent.id, version: acceptedPageContent.version, contentDigest: acceptedPageContent.contentDigest })
+    .from(acceptedPageContent)
+    .where(sql`${acceptedPageContent.projectId} = ${projectId} AND ${acceptedPageContent.slug} = 'services/advisory'`)
+    .limit(1)
+    .then((rows) => rows[0]);
+  if (advisoryPage) {
     await assets.assignVersion(projectId, {
       assetId: upload.asset.id,
       versionId: approved.id,
@@ -238,52 +370,140 @@ async function setupV2Chain(
       role: "hero",
       expectedBinaryDigest: approved.binaryDigest,
     });
-    const visualStore = new VisualStore(dbInst.db);
-    const planId = `vap-${key}`;
-    const slot = {
-      slot: "hero-primary.services/advisory",
-      pageSlug: "services/advisory",
-      role: "hero",
-      resolvedVersionId: approved.id,
-      binaryDigest: approved.binaryDigest,
-      governanceDigest: approved.governanceDigest!,
-      resolutionMode: "reuse_real",
-      truthClass: "illustrative" as const,
-    };
-    await dbInst.db.execute(sql`
-      INSERT INTO visual_asset_plans (id, project_id, version, design_artifact_id, design_artifact_version, design_candidate_digest, design_input_digest, design_provider_mode, slots, plan_digest)
-      VALUES (${planId}, ${projectId}, 1, ${accepted.id}, ${accepted.version}, ${accepted.candidateDigest}, ${accepted.inputDigest}, 'live', ${JSON.stringify([slot])}::jsonb, ${"c".repeat(64)})
-    `);
-    const visualSet = await visualStore.createAcceptedSetAtomic({
-      projectId,
-      planId,
-      providerMode: "live",
-      designArtifactId: accepted.id,
-      designArtifactVersion: accepted.version,
-      designCandidateDigest: accepted.candidateDigest,
-      designInputDigest: accepted.inputDigest,
-      slots: [slot],
-    });
-    return {
-      dbInst,
-      projectId,
-      designId: accepted.id,
-      designDigest: accepted.candidateDigest,
-      visualSetId: visualSet.id,
-      visualSetDigest: visualSet.setDigest,
-      production: new ProductionStore(dbInst.db),
-      designStore,
-      acceptedPages,
-    };
-  } finally {
-    await rm(root, { recursive: true, force: true }).catch(() => undefined);
   }
+
+  // Assign approved asset to services/valuation if present
+  const valuationPage = await dbInst.db
+    .select({ id: acceptedPageContent.id, version: acceptedPageContent.version, contentDigest: acceptedPageContent.contentDigest })
+    .from(acceptedPageContent)
+    .where(sql`${acceptedPageContent.projectId} = ${projectId} AND ${acceptedPageContent.slug} = 'services/valuation'`)
+    .limit(1)
+    .then((rows) => rows[0]);
+  if (valuationPage) {
+    await assets.assignVersion(projectId, {
+      assetId: upload.asset.id,
+      versionId: approved.id,
+      acceptedPageContentId: valuationPage.id,
+      acceptedPageContentVersion: valuationPage.version,
+      acceptedPageContentDigest: valuationPage.contentDigest,
+      expectedGovernanceDigest: approved.governanceDigest!,
+      pageSlug: "services/valuation",
+      role: "hero",
+      expectedBinaryDigest: approved.binaryDigest,
+    });
+  }
+
+  // Assign approved asset to home if present
+  const homePage = await dbInst.db
+    .select({ id: acceptedPageContent.id, version: acceptedPageContent.version, contentDigest: acceptedPageContent.contentDigest })
+    .from(acceptedPageContent)
+    .where(sql`${acceptedPageContent.projectId} = ${projectId} AND ${acceptedPageContent.slug} = 'home'`)
+    .limit(1)
+    .then((rows) => rows[0]);
+  if (homePage) {
+    await assets.assignVersion(projectId, {
+      assetId: upload.asset.id,
+      versionId: approved.id,
+      acceptedPageContentId: homePage.id,
+      acceptedPageContentVersion: homePage.version,
+      acceptedPageContentDigest: homePage.contentDigest,
+      expectedGovernanceDigest: approved.governanceDigest!,
+      pageSlug: "home",
+      role: "hero",
+      expectedBinaryDigest: approved.binaryDigest,
+    });
+  }
+
+  // Derive visual asset plan using REAL VisualService.derivePlan() (prompt §10)
+  const visualStore = new VisualStore(dbInst.db);
+  const budgetStore = new VisualBudgetStore(dbInst.db);
+  const visualService = new VisualService({
+    store: visualStore,
+    designStore,
+    assets,
+    budget: budgetStore,
+    provider: new OfflineLiveVisualAssetProvider(),
+    repoRoot: root,
+  });
+  const plan = await visualService.derivePlan({ projectId });
+
+  const slots = [
+    ...(homePage
+      ? [
+          {
+            slot: "hero-primary.home",
+            pageSlug: "home",
+            role: "hero",
+            resolvedVersionId: approved.id,
+            binaryDigest: approved.binaryDigest,
+            governanceDigest: approved.governanceDigest!,
+            resolutionMode: "reuse_real",
+            truthClass: "illustrative" as const,
+          },
+        ]
+      : []),
+    ...(advisoryPage
+      ? [
+          {
+            slot: "hero-primary.services/advisory",
+            pageSlug: "services/advisory",
+            role: "hero",
+            resolvedVersionId: approved.id,
+            binaryDigest: approved.binaryDigest,
+            governanceDigest: approved.governanceDigest!,
+            resolutionMode: "reuse_real",
+            truthClass: "illustrative" as const,
+          },
+        ]
+      : []),
+    ...(valuationPage
+      ? [
+          {
+            slot: "hero-primary.services/valuation",
+            pageSlug: "services/valuation",
+            role: "hero",
+            resolvedVersionId: approved.id,
+            binaryDigest: approved.binaryDigest,
+            governanceDigest: approved.governanceDigest!,
+            resolutionMode: "reuse_real",
+            truthClass: "illustrative" as const,
+          },
+        ]
+      : []),
+  ];
+
+  const visualSet = await visualStore.createAcceptedSetAtomic({
+    projectId,
+    planId: plan.id,
+    providerMode: "live",
+    designArtifactId: accepted.id,
+    designArtifactVersion: accepted.version,
+    designCandidateDigest: accepted.candidateDigest,
+    designInputDigest: accepted.inputDigest,
+    slots,
+  });
+
+  return {
+    dbInst,
+    projectId,
+    designId: accepted.id,
+    designDigest: accepted.candidateDigest,
+    visualSetId: visualSet.id,
+    visualSetDigest: visualSet.setDigest,
+    planId: plan.id,
+    production: new ProductionStore(dbInst.db),
+    designStore,
+    visualStore,
+    acceptedPages,
+    root,
+  };
 }
 
 test("PG pre-run12: two pages of one archetype classify independently; representative pages are evidence only", async () => {
   const dbInst = await setupMigratedTestDatabase();
+  let env: ChainEnv | undefined;
   try {
-    const env = await setupV2Chain(dbInst, "pr12-a", ["home", "services/advisory", "services/valuation", "locations/chamonix", "research/report"]);
+    env = await setupV2Chain(dbInst, "pr12-a", ["home", "services/advisory", "services/valuation", "locations/chamonix", "research/report"]);
     // Both service pages derive production inputs independently.
     for (const slug of ["home", "services/advisory", "services/valuation", "locations/chamonix", "research/report"]) {
       const input = await env.production.deriveProductionInput({
@@ -303,16 +523,83 @@ test("PG pre-run12: two pages of one archetype classify independently; represent
     const valuation = await env.production.latestProductionInput(env.projectId, "services/valuation");
     assert.equal(advisory!.pageType, "service");
     assert.equal(valuation!.pageType, "service");
+
+    // Real production manifest compilation & Astro build & QA for services/valuation (P1 prompt §10)
+    const repoRoot = await resolveRepositoryRoot();
+    const compiler = new ProductionRenderCompiler(env.dbInst.db, env.root);
+    const assetSnapshotDir = path.join(env.root, "asset-snapshots");
+    const manifestDir = path.join(env.root, "manifests");
+    const distDir = path.join(env.root, "dist");
+
+    const manifest = await compiler.compileManifest({
+      projectId: env.projectId,
+      productionInputId: valuation!.id,
+      assetSnapshotDir,
+    });
+
+    // Invariants of production-v3 manifest
+    assert.equal(manifest.schemaVersion, "production-v3");
+    assert.doesNotThrow(() => assertManifest(manifest));
+    assert.ok(manifest.design.designImplementation);
+    assert.match(manifest.design.designImplementation.implementationContractDigest, /^[0-9a-f]{64}$/);
+    assert.equal(manifest.design.designImplementation.policyVersion, "production-policy-v3");
+    assert.ok(manifest.design.semanticTokens);
+    assert.ok(manifest.design.semanticTokens.some((t) => t.role === "color.background.primary"));
+    assert.ok(manifest.design.composition);
+    assert.ok(manifest.design.composition.length > 0);
+    assert.equal(manifest.derivatives?.state, "disabled");
+
+    // Write manifest to manifest directory
+    await compiler.writeManifest(manifest, manifestDir);
+
+    // Run real Astro build
+    const siteDir = path.join(repoRoot, "sites", "starter");
+    const buildResult = await runProcess("pnpm", ["run", "build"], {
+      cwd: siteDir,
+      env: {
+        ...process.env,
+        FACTORY_PRODUCTION_MANIFEST_DIR: manifestDir,
+        FACTORY_PRODUCTION_OUT_DIR: distDir,
+        FACTORY_PRODUCTION_SITE_PROFILE_DIGEST: siteIdentity().profileDigest,
+        PUBLIC_SITE_URL: siteIdentity().canonicalOrigin,
+      },
+      timeoutMs: 120_000,
+    });
+    assert.equal(buildResult.exitCode, 0, `Astro build failed: ${buildResult.stderr}`);
+
+    // Verify built HTML output
+    const valuationHtml = await readFile(path.join(distDir, "services", "valuation", "index.html"), "utf8");
+    assert.ok(valuationHtml.includes("<!DOCTYPE html>") || valuationHtml.includes("<html"));
+    assert.match(valuationHtml, /valuation/i);
+
+    // Emit sitemap and run site-wide QA
+    await emitSitemapAndRobots({ manifests: [manifest], distDir, siteName: siteIdentity().siteName });
+    const qa = await runSiteWideQa({
+      distDir,
+      manifests: [manifest],
+      redirectRules: [],
+      siteName: siteIdentity().siteName,
+      manifestSetDigest: deterministicDigest([{ inputId: manifest.input.id, route: manifest.input.route, manifestDigest: manifest.manifestDigest }]),
+      repositorySha: REPOSITORY_SHA,
+    });
+    assert.equal(qa.overall, "PASS");
+    const sectionUniqueCheck = qa.checks.find((c) => c.checkId === "content.sections_unique");
+    assert.ok(sectionUniqueCheck);
+    assert.equal(sectionUniqueCheck.verdict, "PASS");
   } finally {
     process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA = undefined;
+    if (env) {
+      await rm(env.root, { recursive: true, force: true }).catch(() => undefined);
+    }
     await dbInst.close();
   }
 });
 
 test("PG pre-run12: adding a page after design acceptance does NOT stale a v2 design and needs no new artifact", async () => {
   const dbInst = await setupMigratedTestDatabase();
+  let env: ChainEnv | undefined;
   try {
-    const env = await setupV2Chain(dbInst, "pr12-b", ["home", "services/advisory"]);
+    env = await setupV2Chain(dbInst, "pr12-b", ["home", "services/advisory"]);
     const beforeView = await env.designStore.latestAcceptedDesign(env.projectId);
     assert.ok(beforeView);
     const before = beforeView.artifact;
@@ -335,6 +622,9 @@ test("PG pre-run12: adding a page after design acceptance does NOT stale a v2 de
     assert.equal(input.acceptedDesignId, before!.id);
   } finally {
     process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA = undefined;
+    if (env) {
+      await rm(env.root, { recursive: true, force: true }).catch(() => undefined);
+    }
     await dbInst.close();
   }
 });
@@ -345,7 +635,7 @@ test("PG pre-run12: v1 designs keep historical CONTENT_ADDED staleness semantics
     const { projectId } = await seedProjectWithAcceptedInputs(dbInst, "pr12-v1");
     await acceptFixturePage(dbInst, projectId, "home");
     const designStore = new DesignStore(dbInst.db);
-    const snapshot = await designStore.deriveInputSnapshotDraft({ projectId });
+    const snapshot = await designStore.deriveInputSnapshotDraft({ projectId, schemaVersion: "design-v1" });
     const data = parseDesignCandidateAnyVersion({
       schemaVersion: "design-v1",
       provider: "google-stitch",
@@ -426,11 +716,7 @@ test("PG pre-run12: DIC determinism and design/policy mutation sensitivity", () 
 });
 
 test("pre-run12: tampered manifest digest fails closed at load; unknown component/variant fail closed", async () => {
-  const { assertManifest, computeRenderManifestDigest } = await import("../../src/production/render-manifest.js");
-  const { ProductionRenderCompiler } = await import("../../src/production/render-manifest.js");
-  void ProductionRenderCompiler;
-  // Build a minimal valid v1 manifest through the exported compiler path is heavy;
-  // instead validate the tamper-detection contract directly on the manifest shape:
+  // Validate the tamper-detection contract directly on the manifest shape:
   const manifest = {
     schemaVersion: "production-v3" as const,
     input: { id: "ppin-x", version: 1, digest: "a".repeat(64), projectId: "proj-x", pageIdentity: "services/advisory", pageType: "service" as const, route: "/services/advisory", siteIdentity: { siteId: "s", siteName: "S", canonicalOrigin: "https://example.com", language: "en", profileDigest: "4".repeat(64) } },
@@ -494,16 +780,19 @@ test("pre-run12: tampered manifest digest fails closed at load; unknown componen
 
 test("pre-run12: wrong AssetVersion binding in a visual set slot fails closed at derivation", async () => {
   const dbInst = await setupMigratedTestDatabase();
+  let env: ChainEnv | undefined;
   try {
-    const env = await setupV2Chain(dbInst, "pr12-asset", ["home", "services/advisory"]);
+    env = await setupV2Chain(dbInst, "pr12-asset", ["home", "services/advisory"]);
+    assert.ok(env);
+    const activeEnv = env;
     // Tamper the persisted slot's binaryDigest -> digest recomputation diverges.
-    await env.dbInst.db.execute(sql`
+    await activeEnv.dbInst.db.execute(sql`
       UPDATE accepted_visual_asset_slots SET binary_digest = ${"f".repeat(64)}
-      WHERE set_id = ${env.visualSetId}
+      WHERE set_id = ${activeEnv.visualSetId}
     `);
     await assert.rejects(
-      () => env.production.deriveProductionInput({
-        projectId: env.projectId,
+      () => activeEnv.production.deriveProductionInput({
+        projectId: activeEnv.projectId,
         pageSlug: "services/advisory",
         siteIdentity: siteIdentity(),
         rendererVersion: "astro-7.2.9",
@@ -513,6 +802,397 @@ test("pre-run12: wrong AssetVersion binding in a visual set slot fails closed at
     );
   } finally {
     process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA = undefined;
+    if (env) {
+      await rm(env.root, { recursive: true, force: true }).catch(() => undefined);
+    }
     await dbInst.close();
   }
 });
+
+test("pre-run12 adversarial: visual roles matrix (6 states)", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  let env: ChainEnv | undefined;
+  try {
+    env = await setupV2Chain(dbInst, "pr12-matrix", ["home", "services/advisory", "services/valuation"]);
+    const valuationInput = await env.production.deriveProductionInput({
+      projectId: env.projectId,
+      pageSlug: "services/valuation",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "astro-7.2.9",
+      rendererPolicyVersion: "production-policy-v3",
+    });
+    assert.ok(valuationInput);
+
+    const compiler = new ProductionRenderCompiler(env.dbInst.db, env.root);
+    const assetSnapshotDir = path.join(env.root, "asset-snapshots-matrix");
+
+    // State 1: Required present -> PASS
+    const manifest = await compiler.compileManifest({
+      projectId: env.projectId,
+      productionInputId: valuationInput.id,
+      assetSnapshotDir,
+    });
+    assert.equal(manifest.schemaVersion, "production-v3");
+    assert.ok(manifest.assets.some((a) => a.slot === "hero-primary.services/valuation"));
+
+    // State 2: Required missing -> FAIL
+    // Create a visual set for the project that does NOT have hero-primary.services/valuation
+    await env.visualStore.createAcceptedSetAtomic({
+      projectId: env.projectId,
+      planId: env.planId,
+      providerMode: "live",
+      designArtifactId: env.designId,
+      designArtifactVersion: 1,
+      designCandidateDigest: env.designDigest,
+      designInputDigest: "a".repeat(64),
+      slots: [
+        {
+          slot: "hero-primary.services/advisory",
+          pageSlug: "services/advisory",
+          role: "hero",
+          resolvedVersionId: manifest.assets[0]!.versionId,
+          binaryDigest: manifest.assets[0]!.binaryDigest,
+          governanceDigest: manifest.assets[0]!.governanceDigest,
+          resolutionMode: "reuse_real",
+          truthClass: "illustrative" as const,
+        },
+      ],
+    });
+    // Derive new production input pointing at the latest visual set (which is missing valuation hero)
+    const inputMissingRequired = await env.production.deriveProductionInput({
+      projectId: env.projectId,
+      pageSlug: "services/valuation",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "astro-7.2.9",
+      rendererPolicyVersion: "production-policy-v3",
+    });
+    await assert.rejects(
+      () =>
+        compiler.compileManifest({
+          projectId: env!.projectId,
+          productionInputId: inputMissingRequired.id,
+          assetSnapshotDir,
+        }),
+      (err: unknown) => {
+        const e = err as { code?: string; message?: string };
+        return e.code === "production_build_rejected" && /has no accepted visual resolution/.test(e.message ?? "");
+      },
+    );
+
+    // State 3: Optional missing -> PASS
+    // In design-v2, service archetype has visualRoleRequirements:
+    // [{ role: "hero-primary", requiredRole: "hero", required: true }, { role: "supporting", requiredRole: "supporting", required: false }]
+    // When "supporting" is NOT in the visual set, State 1 passed without requiring it!
+    assert.ok(!manifest.assets.some((a) => a.slot === "supporting.services/valuation"));
+
+    // State 4: Optional valid -> PASS
+    // Upload and approve a supporting asset for services/valuation
+    const assetsModule = await import("../../src/assets/service.js");
+    const assetStorageModule = await import("../../src/assets/storage.js");
+    const assets = new assetsModule.AssetService({
+      store: new (await import("../../src/assets/asset-store.js")).AssetStore(dbInst.db),
+      storage: assetStorageModule.createAssetStorage(env.root),
+    });
+    const bytes = await sharp({ create: { width: 800, height: 600, channels: 3, background: { r: 50, g: 60, b: 70 } } }).jpeg().toBuffer();
+    const uploadSupporting = await assets.uploadAsset(env.projectId, {
+      filename: "supporting-val.jpg",
+      kind: "photo",
+      title: "Supporting val",
+      rightsStatus: "operator_owned",
+      dataBase64: bytes.toString("base64"),
+      altIntent: "Supporting valuation and advisory chart",
+    });
+    const approvedSupporting = await assets.approveVersion(env.projectId, uploadSupporting.version.id, uploadSupporting.version.binaryDigest);
+
+    const valPageRow = await dbInst.db
+      .select({ id: acceptedPageContent.id, version: acceptedPageContent.version, contentDigest: acceptedPageContent.contentDigest })
+      .from(acceptedPageContent)
+      .where(sql`${acceptedPageContent.projectId} = ${env.projectId} AND ${acceptedPageContent.slug} = 'services/valuation'`)
+      .limit(1)
+      .then((rows) => rows[0]!);
+
+    await assets.assignVersion(env.projectId, {
+      assetId: uploadSupporting.asset.id,
+      versionId: approvedSupporting.id,
+      acceptedPageContentId: valPageRow.id,
+      acceptedPageContentVersion: valPageRow.version,
+      acceptedPageContentDigest: valPageRow.contentDigest,
+      expectedGovernanceDigest: approvedSupporting.governanceDigest!,
+      pageSlug: "services/valuation",
+      role: "supporting",
+      expectedBinaryDigest: approvedSupporting.binaryDigest,
+    });
+
+    await env.visualStore.createAcceptedSetAtomic({
+      projectId: env.projectId,
+      planId: env.planId,
+      providerMode: "live",
+      designArtifactId: env.designId,
+      designArtifactVersion: 1,
+      designCandidateDigest: env.designDigest,
+      designInputDigest: "a".repeat(64),
+      slots: [
+        {
+          slot: "hero-primary.services/valuation",
+          pageSlug: "services/valuation",
+          role: "hero",
+          resolvedVersionId: manifest.assets[0]!.versionId,
+          binaryDigest: manifest.assets[0]!.binaryDigest,
+          governanceDigest: manifest.assets[0]!.governanceDigest,
+          resolutionMode: "reuse_real",
+          truthClass: "illustrative" as const,
+        },
+        {
+          slot: "supporting.services/valuation",
+          pageSlug: "services/valuation",
+          role: "supporting",
+          resolvedVersionId: approvedSupporting.id,
+          binaryDigest: approvedSupporting.binaryDigest,
+          governanceDigest: approvedSupporting.governanceDigest!,
+          resolutionMode: "reuse_real",
+          truthClass: "illustrative" as const,
+        },
+      ],
+    });
+
+    const inputWithOptional = await env.production.deriveProductionInput({
+      projectId: env.projectId,
+      pageSlug: "services/valuation",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "astro-7.2.9",
+      rendererPolicyVersion: "production-policy-v3",
+    });
+
+    const manifestWithOptional = await compiler.compileManifest({
+      projectId: env.projectId,
+      productionInputId: inputWithOptional.id,
+      assetSnapshotDir,
+    });
+    assert.ok(manifestWithOptional.assets.some((a) => a.slot === "supporting.services/valuation" && a.role === "supporting"));
+
+    // State 5: Optional wrong role -> FAIL
+    await env.visualStore.createAcceptedSetAtomic({
+      projectId: env.projectId,
+      planId: env.planId,
+      providerMode: "live",
+      designArtifactId: env.designId,
+      designArtifactVersion: 1,
+      designCandidateDigest: env.designDigest,
+      designInputDigest: "a".repeat(64),
+      slots: [
+        {
+          slot: "hero-primary.services/valuation",
+          pageSlug: "services/valuation",
+          role: "hero",
+          resolvedVersionId: manifest.assets[0]!.versionId,
+          binaryDigest: manifest.assets[0]!.binaryDigest,
+          governanceDigest: manifest.assets[0]!.governanceDigest,
+          resolutionMode: "reuse_real",
+          truthClass: "illustrative" as const,
+        },
+        {
+          slot: "supporting.services/valuation",
+          pageSlug: "services/valuation",
+          role: "illustration", // WRONG ROLE: should be "supporting"
+          resolvedVersionId: approvedSupporting.id,
+          binaryDigest: approvedSupporting.binaryDigest,
+          governanceDigest: approvedSupporting.governanceDigest!,
+          resolutionMode: "reuse_real",
+          truthClass: "illustrative" as const,
+        },
+      ],
+    });
+
+    const inputWrongRole = await env.production.deriveProductionInput({
+      projectId: env.projectId,
+      pageSlug: "services/valuation",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "astro-7.2.9",
+      rendererPolicyVersion: "production-policy-v3",
+    });
+
+    await assert.rejects(
+      () =>
+        compiler.compileManifest({
+          projectId: env!.projectId,
+          productionInputId: inputWrongRole.id,
+          assetSnapshotDir,
+        }),
+      (err: unknown) => {
+        const e = err as { code?: string; message?: string };
+        return e.code === "production_build_rejected" && /cannot be placed by the selected archetype/.test(e.message ?? "");
+      },
+    );
+
+    // State 6: Unknown slot -> FAIL
+    await env.visualStore.createAcceptedSetAtomic({
+      projectId: env.projectId,
+      planId: env.planId,
+      providerMode: "live",
+      designArtifactId: env.designId,
+      designArtifactVersion: 1,
+      designCandidateDigest: env.designDigest,
+      designInputDigest: "a".repeat(64),
+      slots: [
+        {
+          slot: "hero-primary.services/valuation",
+          pageSlug: "services/valuation",
+          role: "hero",
+          resolvedVersionId: manifest.assets[0]!.versionId,
+          binaryDigest: manifest.assets[0]!.binaryDigest,
+          governanceDigest: manifest.assets[0]!.governanceDigest,
+          resolutionMode: "reuse_real",
+          truthClass: "illustrative" as const,
+        },
+        {
+          slot: "mystery-slot.services/valuation", // UNKNOWN SLOT
+          pageSlug: "services/valuation",
+          role: "hero",
+          resolvedVersionId: manifest.assets[0]!.versionId,
+          binaryDigest: manifest.assets[0]!.binaryDigest,
+          governanceDigest: manifest.assets[0]!.governanceDigest,
+          resolutionMode: "reuse_real",
+          truthClass: "illustrative" as const,
+        },
+      ],
+    });
+
+    const inputUnknownSlot = await env.production.deriveProductionInput({
+      projectId: env.projectId,
+      pageSlug: "services/valuation",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "astro-7.2.9",
+      rendererPolicyVersion: "production-policy-v3",
+    });
+
+    await assert.rejects(
+      () =>
+        compiler.compileManifest({
+          projectId: env!.projectId,
+          productionInputId: inputUnknownSlot.id,
+          assetSnapshotDir,
+        }),
+      (err: unknown) => {
+        const e = err as { code?: string; message?: string };
+        return e.code === "production_build_rejected" && /cannot be placed by the selected archetype/.test(e.message ?? "");
+      },
+    );
+  } finally {
+    process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA = undefined;
+    if (env) {
+      await rm(env.root, { recursive: true, force: true }).catch(() => undefined);
+    }
+    await dbInst.close();
+  }
+});
+
+test("pre-run12 adversarial: missing token throws design_implementation_unsupported", () => {
+  const data = v2CandidateData({
+    archetypes: [{ kind: "service", sectionPatterns: ARCHETYPE_SECTIONS["service"]!, pageSlug: "services/advisory", providerScreenName: "p/1" }],
+  });
+
+  // Missing background token
+  const noBg = structuredClone(data);
+  delete (noBg.tokens.colors as Record<string, unknown>).background;
+  assert.throws(
+    () =>
+      deriveDesignImplementationContract({
+        design: noBg,
+        acceptedDesign: { id: "d", version: 1, digest: "a".repeat(64) },
+        rendererPolicyVersion: "production-policy-v3",
+      }),
+    (err: unknown) => {
+      const e = err as { code?: string; message?: string };
+      return e.code === "design_implementation_unsupported" && /colors\.background/.test(e.message ?? "");
+    },
+  );
+
+  // Missing spacing.md token
+  const noSpacing = structuredClone(data);
+  delete (noSpacing.tokens.spacing as Record<string, unknown>).md;
+  assert.throws(
+    () =>
+      deriveDesignImplementationContract({
+        design: noSpacing,
+        acceptedDesign: { id: "d", version: 1, digest: "a".repeat(64) },
+        rendererPolicyVersion: "production-policy-v3",
+      }),
+    (err: unknown) => {
+      const e = err as { code?: string; message?: string };
+      return e.code === "design_implementation_unsupported" && /spacing\.md/.test(e.message ?? "");
+    },
+  );
+
+  // Missing rounded.md token
+  const noRadius = structuredClone(data);
+  delete (noRadius.tokens.rounded as Record<string, unknown>).md;
+  assert.throws(
+    () =>
+      deriveDesignImplementationContract({
+        design: noRadius,
+        acceptedDesign: { id: "d", version: 1, digest: "a".repeat(64) },
+        rendererPolicyVersion: "production-policy-v3",
+      }),
+    (err: unknown) => {
+      const e = err as { code?: string; message?: string };
+      return e.code === "design_implementation_unsupported" && /rounded\.md/.test(e.message ?? "");
+    },
+  );
+});
+
+test("pre-run12 adversarial: malformed disabled derivatives rejected", () => {
+  const baseValidManifest = {
+    schemaVersion: "production-v3" as const,
+    input: { id: "ppin-x", version: 1, digest: "a".repeat(64), projectId: "proj-x", pageIdentity: "services/advisory", pageType: "service" as const, route: "/services/advisory", siteIdentity: { siteId: "s", siteName: "S", canonicalOrigin: "https://example.com", language: "en", profileDigest: "4".repeat(64) } },
+    seo: { fullTitle: "T | S", description: "d", canonicalUrl: "https://example.com/services/advisory", ogTitle: "T | S", ogDescription: "d", ogUrl: "https://example.com/services/advisory" },
+    content: { acceptedId: "wacc-x", acceptedVersion: 1, acceptedDigest: "b".repeat(64), title: "T", metaDescription: "d", introduction: "i", sections: [{ heading: "h", body: "b" }], conclusion: "c", cta: "cta", internalLinks: [] },
+    design: {
+      acceptedId: "dsac-x", acceptedVersion: 1, acceptedDigest: "a".repeat(64),
+      tokens: { colors: { primary: "#111111" }, typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans", scaleNotes: "n" }, spacing: { md: "16px" }, rounded: { md: "8px" }, ctaHierarchy: "c", navigationLanguage: "n", imageryTreatment: "i", sectionRhythm: "s" },
+      archetype: { kind: "service" as const, sectionPatterns: ["page-header", "cta"], contentRequirements: [], assetSlots: [], primaryCta: "", secondaryCta: "", responsiveBehavior: "r", trustPresentation: "t", rendererPrimitives: ["hero", "cta"] },
+      designImplementation: { implementationContractDigest: "9".repeat(64), policyVersion: "production-policy-v3", schemaVersion: "design-implementation-v1" },
+      semanticTokens: [{ role: "color.background.primary", value: "#ffffff" }],
+      fontDelivery: [{ mode: "approved_system_stack" as const, family: "Georgia", sourceToken: "typography.display" as const }],
+      composition: [{ componentId: "page-hero", variant: "split", pattern: "page-header", repetition: "once" as const }],
+    },
+    links: [], breadcrumbs: [], assets: [],
+    derivatives: { state: "disabled" as const },
+    manifestDigest: "c".repeat(64),
+  };
+
+  // Valid manifest parses without error
+  assert.doesNotThrow(() => parseRenderManifestAnyVersion(baseValidManifest));
+
+  // Missing derivatives in v3 -> throws
+  const missingDerivatives = structuredClone(baseValidManifest);
+  delete (missingDerivatives as Record<string, unknown>).derivatives;
+  assert.throws(
+    () => parseRenderManifestAnyVersion(missingDerivatives),
+    /production-v3 manifest is missing its derivatives authority/,
+  );
+
+  // Malformed derivatives (e.g. invalid state or object shape)
+  const malformedDerivatives = structuredClone(baseValidManifest);
+  (malformedDerivatives as Record<string, unknown>).derivatives = { state: "unknown_state" };
+  assert.throws(
+    () => parseRenderManifestAnyVersion(malformedDerivatives),
+  );
+
+  // Malformed derivatives with unexpected extra property on disabled state
+  const extraKeysDisabled = structuredClone(baseValidManifest);
+  (extraKeysDisabled as Record<string, unknown>).derivatives = { state: "disabled", unexpectedKey: "bad" };
+  assert.throws(
+    () => parseRenderManifestAnyVersion(extraKeysDisabled),
+  );
+
+  // v1 carrying derivatives -> throws
+  const v1WithDerivatives = {
+    ...structuredClone(baseValidManifest),
+    schemaVersion: "production-v1",
+  };
+  assert.throws(
+    () => parseRenderManifestAnyVersion(v1WithDerivatives),
+    /production-v1 manifest must not carry derivatives authority/,
+  );
+});
+

@@ -179,7 +179,10 @@ export async function seedRun11SyntheticDesignAuthorityForTest(
 
   // Re-derive the design input snapshot AFTER the assignment so the asset
   // lineage (assetRefs) is included, then create the candidate against it.
-  const snapshotWithAssets = await designStore.deriveInputSnapshotDraft({ projectId: input.projectId });
+  const snapshotWithAssets = await designStore.deriveInputSnapshotDraft({
+    projectId: input.projectId,
+    schemaVersion: "design-v1",
+  });
 
   const data = parseDesignCandidateData(syntheticDesignData({
     projectId: input.projectId,

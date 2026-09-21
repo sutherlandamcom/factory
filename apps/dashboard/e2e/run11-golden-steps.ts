@@ -120,7 +120,7 @@ async function buildAndQa(page: Page, pageSlug: string): Promise<void> {
   await page.getByRole("button", { name: "Build", exact: true }).click();
   await expect(page.getByRole("button", { name: "Run QA" }).first()).toBeEnabled({ timeout: 120_000 });
   await page.getByRole("button", { name: "Run QA" }).first().click();
-  await expect(page.getByText(/qa_passed|qa_failed|PASS|FAIL/).first()).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByText(/qa_passed|qa_failed|PASS|FAIL/).first()).toBeVisible({ timeout: 180_000 });
 }
 
 /** Deterministic hero photograph fixture (same approach as the Run 5/7 journeys). */

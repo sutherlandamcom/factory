@@ -52,7 +52,7 @@ function supervisorCall(path: string): Promise<void> {
 const UNIQUE = `${Date.now()}`;
 const KEY = `design-auth-${UNIQUE}`;
 const NAME = "Design Authority E2E";
-const PAGE_SLUG = "roof-repair-austin";
+const PAGE_SLUG = "homepage";
 
 async function createProject(page: Page, key: string, name: string): Promise<void> {
   await page.goto("/");

@@ -679,6 +679,7 @@ export {
   cachePolicyEntrySchema,
   cachePolicyDataSchema,
   parseCachePolicyData,
+  pageArchetypeAuthoritySchema,
 } from "./production.js";
 export type {
   ProductionAuthorityRef,
@@ -701,6 +702,7 @@ export type {
   RedirectAuthorityData,
   CachePolicyEntry,
   CachePolicyData,
+  PageArchetypeAuthority,
 } from "./production.js";
 export {
   DERIVATIVES_SCHEMA_VERSION,

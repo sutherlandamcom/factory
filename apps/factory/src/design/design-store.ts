@@ -1,4 +1,5 @@
 import { PageAuthorityReader } from "../writer/page-authority.js";
+import { PageArchetypeStore } from "../page-authority/store.js";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, sql } from "drizzle-orm";
 import {
@@ -17,7 +18,7 @@ import {
   type DesignStaleness,
   type DesignStalenessCode,
 } from "@factory/contracts";
-import { derivePageArchetype, PAGE_ARCHETYPE_POLICY_VERSION } from "../production/page-archetype.js";
+
 import type { FactoryDb } from "../persistence/db.js";
 import {
   acceptedDesignArtifacts,
@@ -164,7 +165,7 @@ export class DesignStore {
       pageSlug: row.pageSlug,
       role: row.role,
     }));
-    const representativePages = deriveRepresentativePages(contentRows);
+    let representativePages = deriveRepresentativePages(contentRows);
 
     // Snapshot schema version: design-v2 scopes the snapshot to
     // DESIGN-DEFINING material (representative pages only) and records the
@@ -196,6 +197,20 @@ export class DesignStore {
       explicitVersion: input.schemaVersion,
       existingVersion,
     });
+    const pageBindings: import("@factory/contracts").DesignPageArchetypeBinding[] = [];
+    if (designSchemaVersion === DESIGN_SCHEMA_VERSION_V2) for (const row of contentRows) {
+      pageBindings.push({ slug: row.slug, contentDigest: row.contentDigest, archetype: await new PageArchetypeStore(this.db).requireArchetype(input.projectId, row.slug) });
+    }
+    if (designSchemaVersion === DESIGN_SCHEMA_VERSION_V2) {
+      // Preserve established representatives on ordinary page addition. Otherwise
+      // choose the first explicitly classified page, before provider generation.
+      const previous = existingSnapshot ? parseDesignInputSnapshotAnyVersion(existingSnapshot.data) : null;
+      representativePages = [...new Set(pageBindings.map(row => row.archetype))].map(archetype => {
+        const old = previous?.representativePages.find(row => row.archetype === archetype);
+        return pageBindings.find(row => row.archetype === archetype && row.slug === old?.slug)
+          ?? pageBindings.filter(row => row.archetype === archetype).sort((a, b) => contentRows.find(row => row.slug === a.slug)!.version - contentRows.find(row => row.slug === b.slug)!.version)[0]!;
+      });
+    }
     const data =
       designSchemaVersion === DESIGN_SCHEMA_VERSION_V2
         ? parseDesignInputSnapshotAnyVersion({
@@ -215,19 +230,15 @@ export class DesignStore {
             }),
             // design-defining assets ONLY: assets belonging to representative pages.
             assetRefs: assetRefs.filter((ref) => representativePages.some((r) => r.slug === ref.pageSlug)),
-            archetypes: deriveArchetypes(contentRows.map((row) => row.slug)),
+            archetypes:
+              pageBindings.length > 0
+                ? [...new Set(pageBindings.map((row) => row.archetype))]
+                : (["homepage"] as const),
             representativePages,
             // Whole current page inventory -> typed archetype bindings
             // (fail-closed derivation; provenance record, not runtime truth).
-            pageArchetypeBindings: contentRows.map((row) => ({
-              slug: row.slug,
-              archetype: derivePageArchetype(
-                row.slug,
-                deriveArchetypes(contentRows.map((entry) => entry.slug)),
-              ).archetype,
-              contentDigest: row.contentDigest,
-            })),
-            pageArchetypeBindingPolicy: PAGE_ARCHETYPE_BINDING_POLICY_V1,
+            pageArchetypeBindings: pageBindings,
+            pageArchetypeBindingPolicy: "approved-content-brief-archetype-v1",
           })
         : parseDesignInputSnapshotData({
             schemaVersion: "design-v1",
@@ -334,10 +345,9 @@ export class DesignStore {
   }
 
   /**
-   * Snapshot schema version for NEW derivations in this project. design-v2
-   * activates when the project opts in via trusted server configuration
-   * (FACTORY_DESIGN_SNAPSHOT_SCHEMA); the default remains design-v1 so
-   * existing behavior and historical semantics never change silently.
+   * Fresh-project schema policy only. Existing authority is preserved by
+   * deriveInputSnapshot, which supplies existingVersion to the policy.
+   * Fresh projects default to design-v2; overrides cannot migrate authority.
    */
   designSnapshotSchemaVersion(projectId: string): "design-v1" | "design-v2" {
     return designSnapshotSchemaVersion(projectId);
@@ -359,6 +369,10 @@ export class DesignStore {
       .from(designInputSnapshots)
       .where(eq(designInputSnapshots.projectId, projectId))
       .orderBy(desc(designInputSnapshots.version));
+  }
+
+  async requirePageArchetype(projectId: string, pageIdOrSlug: string, supported: import("@factory/contracts").DesignArchetypeKind[]) {
+    return new PageArchetypeStore(this.db).requireArchetype(projectId, pageIdOrSlug, supported);
   }
 
   /** Accepted page content rows for copy resolution (digest-verified upstream). */
@@ -975,24 +989,24 @@ export const DESIGN_SNAPSHOT_POLICY_VERSION = "design-policy-v2";
  * Snapshot schema version for design input snapshot derivations in a project.
  *
  * Repository-owned production policy:
- * - If explicitVersion is supplied in options, honor caller intent.
- * - Else if FACTORY_DESIGN_SNAPSHOT_SCHEMA is explicitly configured, honor it (dev/test override).
- * - Else if the project already has an established snapshot or design authority in DB, preserve that project's established schema version (existing v1 remains v1; no automatic mutation/rewrite).
+ * - Preserve an established snapshot or design authority schema first.
+ * - For fresh projects only, honor explicitVersion, then the dev/test environment override.
+ * - Ordinary overrides are not governed migration operations.
  * - Else for new design authority created under current Pre-Run-12 policy: design-v2 by repository-owned production policy.
  */
 export function designSnapshotSchemaVersion(
   _projectId: string,
   options?: { explicitVersion?: "design-v1" | "design-v2"; existingVersion?: "design-v1" | "design-v2" },
 ): "design-v1" | "design-v2" {
+  if (options?.existingVersion) {
+    return options.existingVersion;
+  }
   if (options?.explicitVersion) {
     return options.explicitVersion;
   }
   const configured = process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA?.trim();
   if (configured === "design-v1" || configured === DESIGN_SCHEMA_VERSION_V2) {
     return configured;
-  }
-  if (options?.existingVersion) {
-    return options.existingVersion;
   }
   return DESIGN_SCHEMA_VERSION_V2;
 }

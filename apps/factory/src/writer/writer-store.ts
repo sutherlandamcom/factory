@@ -1,6 +1,7 @@
 import { GapAuthorityReader } from "../competitors/authority.js";
 import { CompetitorStore } from "../competitors/competitor-store.js";
 import { ProjectIntakeStore } from "../operator/intake-store.js";
+import { PageArchetypeStore } from "../page-authority/store.js";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, sql } from "drizzle-orm";
 import {
@@ -247,6 +248,27 @@ export class WriterStore {
     noGapLineageAcknowledged?: boolean;
   }): Promise<{ id: string; version: number; digest: string }> {
     const pageTarget = parsePageTarget(input.pageTarget);
+    const pageArchetypeStore = new PageArchetypeStore(this.db);
+    let effectiveTarget = pageTarget;
+    const existingArchetype = await pageArchetypeStore.getArchetype(input.projectId, pageTarget.slug);
+    if (existingArchetype) {
+      if (pageTarget.designBinding && pageTarget.designBinding.archetype !== existingArchetype) {
+        throw new FactoryError(
+          "page_archetype_conflict",
+          `Content brief specifies archetype ${pageTarget.designBinding.archetype} which conflicts with durable page archetype ${existingArchetype} for ${pageTarget.slug}.`,
+        );
+      }
+      effectiveTarget = {
+        ...pageTarget,
+        designBinding: { schemaVersion: "page-design-binding-v1" as const, archetype: existingArchetype },
+      };
+    } else if (pageTarget.designBinding) {
+      await pageArchetypeStore.setPageArchetype({
+        projectId: input.projectId,
+        pageIdentity: pageTarget.slug,
+        archetype: pageTarget.designBinding.archetype,
+      });
+    }
     const snapshot = await this.latestAcceptedInputSnapshot(input.projectId);
     const policy = await this.latestWriterPolicy(input.projectId);
     if (!policy || policy.state !== "approved") {
@@ -281,7 +303,7 @@ export class WriterStore {
       }
     }
 
-    const data = this.composeBriefData({ snapshot, policy, pageTarget, keyPoints: input.contentBriefKeyPoints, gap, noGapLineageAcknowledged: acknowledged });
+    const data = this.composeBriefData({ snapshot, policy, pageTarget: effectiveTarget, keyPoints: input.contentBriefKeyPoints, gap, noGapLineageAcknowledged: acknowledged });
     const briefDigest = deterministicDigest(data);
     return await this.db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);

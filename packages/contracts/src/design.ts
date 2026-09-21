@@ -679,7 +679,24 @@ export const designCandidateDataV2Schema = designCandidateDataSchema.omit({ sche
   /** Bounded per-archetype composition grammar derived from provider evidence. */
   archetypeGrammar: z.array(archetypeGrammarSchema).min(1).max(5),
   normalization: designNormalizationProvenanceSchema,
-}).strict();
+}).strict().superRefine((data, ctx) => {
+  if (data.providerMode !== "live" || !data.normalization.providerDerivedGroups.includes("archetypeStructure")) return;
+  for (const grammar of data.archetypeGrammar) {
+    if (!grammar.providerEvidence) {
+      ctx.addIssue({ code: "custom", message: "Provider-derived grammar requires exact normalized provider evidence." });
+      continue;
+    }
+    for (const ref of grammar.providerEvidence.screens) {
+      const screen = data.screens.find(screen => screen.providerScreenName === ref.screenName && screen.archetype === grammar.archetype);
+      if (!screen || screen.htmlDigest !== ref.htmlDigest || screen.screenshotDigest !== ref.screenshotDigest) {
+        ctx.addIssue({ code: "custom", message: "Normalized grammar evidence differs from the bound provider screen." });
+      }
+    }
+    if (data.screens.filter(screen => screen.archetype === grammar.archetype).length !== grammar.providerEvidence.screens.length) {
+      ctx.addIssue({ code: "custom", message: "Every reviewed provider screen must bind normalized semantics." });
+    }
+  }
+});
 export type DesignCandidateDataV2 = z.infer<typeof designCandidateDataV2Schema>;
 
 export type DesignInputSnapshotAnyVersion = DesignInputSnapshotData | DesignInputSnapshotDataV2;

@@ -44,6 +44,7 @@ import { requireProductionDerivativeSet } from "../derivatives/production-verifi
 import type { ProjectDerivativePolicyData, PageDerivativeOverrideData } from "@factory/contracts";
 import { assertCompleteProductionQa, hasValidQaExecutionDigest, TRUSTED_PRODUCTION_QA_GATES } from "./qa/registry.js";
 import { PageAuthorityReader } from "../writer/page-authority.js";
+import { PageArchetypeStore } from "../page-authority/store.js";
 import { DesignStore } from "../design/design-store.js";
 import { VisualStore } from "../visual/store.js";
 import { AssetStore } from "../assets/asset-store.js";
@@ -287,7 +288,10 @@ export class ProductionStore {
       );
     let pageType: DesignArchetypeKind;
     try {
-      pageType = derivePageArchetype(input.pageSlug, supportedKinds).archetype;
+      // v1 remains historical compatibility; v3/v2 never infer page type.
+      pageType = (bundle.design.data as { schemaVersion?: string }).schemaVersion === "design-v2"
+        ? await new PageArchetypeStore(this.db).requireArchetype(input.projectId, input.pageSlug, supportedKinds)
+        : derivePageArchetype(input.pageSlug, supportedKinds).archetype;
     } catch (error) {
       if (error instanceof PageArchetypeError) {
         throw productionError(error.code, error.message);

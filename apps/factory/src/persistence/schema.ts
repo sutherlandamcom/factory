@@ -2062,6 +2062,59 @@ export const productionRouteAuthorities = pgTable(
 );
 
 /**
+ * Durable typed page archetype authority.
+ * Binds a page identity (slug) within a project to its explicit DesignArchetypeKind.
+ * Upstream chain:
+ * durable typed page authority
+ *   ↓
+ * ContentBrief / writer pipeline consumes it
+ *   ↓
+ * DesignInputSnapshot records/binds it
+ *   ↓
+ * AcceptedDesignArtifact supports that archetype
+ *   ↓
+ * ProductionStore consumes the SAME binding
+ */
+export const pageArchetypeAuthorities = pgTable(
+  "page_archetype_authorities",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    archetype: text("archetype").notNull(),
+    version: integer("version").notNull(),
+    authorityDigest: text("authority_digest").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("page_archetype_authorities_project_page_version_unique").on(
+      table.projectId,
+      table.pageIdentity,
+      table.version,
+    ),
+    check(
+      "page_archetype_authorities_archetype_valid",
+      sql`${table.archetype} IN ('homepage', 'service', 'location', 'editorial', 'investment_advisory')`,
+    ),
+    check(
+      "page_archetype_authorities_digest_shape",
+      sql`${table.authorityDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+    index("page_archetype_authorities_project_page_idx").on(
+      table.projectId,
+      table.pageIdentity,
+      table.version,
+    ),
+  ],
+);
+
+export type PageArchetypeAuthorityRecord = typeof pageArchetypeAuthorities.$inferSelect;
+export type InsertPageArchetypeAuthority = typeof pageArchetypeAuthorities.$inferInsert;
+
+/**
  * Immutable production build result. A candidate proves exactly which
  * authority versions/digests it was built from, the rendered artifact
  * digest, and its QA state. Upstream mutation never mutates a historical

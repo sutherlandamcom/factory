@@ -1,11 +1,45 @@
+import { parseContentBriefData, type DesignArchetypeKind } from "@factory/contracts";
 import { and, desc, eq } from "drizzle-orm";
 import type { FactoryDb } from "../persistence/db.js";
 import { acceptedPageContent, pageContentProposals, writerPromptSnapshots, contentBriefs } from "../persistence/schema.js";
 import { WriterStore, WriterSnapshotStore } from "./writer-store.js";
+import { PageArchetypeStore } from "../page-authority/store.js";
 import { FactoryError } from "../executor/errors.js";
 
 export class PageAuthorityReader {
   constructor(private readonly db: FactoryDb) {}
+  /** Durable typed page authority in PageArchetypeStore owns page classification. */
+  async requireArchetype(projectId: string, pageIdOrSlug: string, supported?: readonly DesignArchetypeKind[]): Promise<DesignArchetypeKind> {
+    const pageArchetypeStore = new PageArchetypeStore(this.db);
+    const page = await this.historical(projectId, pageIdOrSlug);
+    const pageSlug = page ? page.slug : pageIdOrSlug;
+    if (page) {
+      await this.requireCurrent(projectId, page);
+    }
+    const archetype = await pageArchetypeStore.getArchetype(projectId, pageSlug);
+    if (archetype) {
+      if (supported && !supported.includes(archetype)) {
+        throw new FactoryError("page_archetype_unsupported", `Accepted design does not support approved archetype ${archetype}.`);
+      }
+      return archetype;
+    }
+    // Backward compatibility fallback for historical briefs before page_archetype_authorities table
+    if (page) {
+      const [row] = await this.db.select({ data: contentBriefs.data, state: contentBriefs.state }).from(pageContentProposals)
+        .innerJoin(writerPromptSnapshots, eq(pageContentProposals.snapshotId, writerPromptSnapshots.id))
+        .innerJoin(contentBriefs, eq(writerPromptSnapshots.briefId, contentBriefs.id))
+        .where(and(eq(pageContentProposals.id, page.proposalId), eq(pageContentProposals.projectId, projectId), eq(contentBriefs.projectId, projectId)));
+      const briefArchetype = row?.state === "approved" ? parseContentBriefData(row.data).pageTarget.designBinding?.archetype : undefined;
+      if (briefArchetype) {
+        if (supported && !supported.includes(briefArchetype)) {
+          throw new FactoryError("page_archetype_unsupported", `Accepted design does not support approved archetype ${briefArchetype}.`);
+        }
+        return briefArchetype;
+      }
+    }
+    throw new FactoryError("page_archetype_unclassified", `Page "${pageSlug}" has no durable accepted archetype authority; register page archetype first.`);
+  }
+
   async currentPages(projectId: string) {
     const rows = await this.db.select().from(acceptedPageContent).where(eq(acceptedPageContent.projectId, projectId)).orderBy(desc(acceptedPageContent.version));
     return rows.filter((row, i) => rows.findIndex(other => other.slug === row.slug) === i);

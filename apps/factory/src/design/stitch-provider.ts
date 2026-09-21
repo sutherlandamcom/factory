@@ -16,7 +16,8 @@ import {
   type DesignProvider,
   type DesignProviderPreflight,
 } from "@factory/contracts";
-import { normalizeArchetypeGrammar } from "./archetype-grammar.js";
+import { normalizeStitchDesign, STITCH_SEMANTIC_DOM_INSTRUCTIONS } from "./stitch-normalizer.js";
+import { deterministicDigest } from "../intelligence/digest.js";
 import { FactoryError } from "../executor/errors.js";
 import { validateUrlResolved } from "../competitors/ssrf-guard.js";
 
@@ -473,6 +474,7 @@ export class StitchDesignProvider implements DesignProvider {
       const rawArtifacts: DesignGenerationResult["rawArtifacts"] = [];
       const screens: DesignCandidateData["screens"] = [];
       const archetypes: DesignCandidateData["archetypes"] = [];
+      const normalizedGrammar: import("@factory/contracts").ArchetypeGrammar[] = [];
       const promptBase = {
         brand: input.brand,
         audience: input.audience,
@@ -488,7 +490,7 @@ export class StitchDesignProvider implements DesignProvider {
           archetype,
           ...promptBase,
           representativePage: request.acceptedCopyByArchetype[kind] ?? null,
-        });
+        }) + (isV2 ? STITCH_SEMANTIC_DOM_INSTRUCTIONS : "");
         const genResult = await this.callTool(client, "generate_screen_from_text", {
           projectId,
           prompt,
@@ -503,6 +505,14 @@ export class StitchDesignProvider implements DesignProvider {
           ...(await this.fetchScreenArtifacts(client, desktopScreen, rawArtifacts)),
           id: `screen-${screens.length + 1}`,
         });
+
+        const normalizeScreen = (screen: DesignCandidateData["screens"][number]) => {
+          const html = rawArtifacts.find(artifact => artifact.kind === "screen_html" && artifact.providerRef === screen.providerScreenName);
+          const page = request.acceptedCopyByArchetype[kind];
+          if (!html || !page) throw stitchError("design_provider_output_invalid", "Normalization requires exact provider HTML and representative accepted copy.");
+          return normalizeStitchDesign({ screenName: screen.providerScreenName, html: html.bytes, ...(screen.screenshotDigest ? { screenshotDigest: screen.screenshotDigest } : {}) }, kind, page);
+        };
+        if (isV2) normalizedGrammar.push(normalizeScreen(screens.at(-1)!));
 
         // One MOBILE homepage screen: meaningful responsive review evidence
         // (desktop + mobile inspectable) at bounded provider spend.
@@ -521,10 +531,17 @@ export class StitchDesignProvider implements DesignProvider {
             ...(await this.fetchScreenArtifacts(client, mobileScreen, rawArtifacts)),
             id: `screen-${screens.length + 1}`,
           });
+          if (isV2) {
+            const mobile = normalizeScreen(screens.at(-1)!);
+            const desktop = normalizedGrammar.at(-1)!;
+            if (deterministicDigest(mobile.bindings) !== deterministicDigest(desktop.bindings)) throw stitchError("design_provider_output_invalid", "Desktop/mobile provider compositions disagree; unsupported responsive design.");
+            desktop.providerEvidence!.screens.push(...mobile.providerEvidence!.screens);
+          }
         }
 
         archetypes.push({
           ...archetype,
+          ...(isV2 ? { sectionPatterns: normalizedGrammar.at(-1)!.bindings.map(binding => binding.pattern) } : {}),
           kind,
           providerScreenNames: screens
             .filter((s) => s.archetype === kind)
@@ -627,7 +644,7 @@ export class StitchDesignProvider implements DesignProvider {
                   : []),
               ],
             })),
-            archetypeGrammar: normalizeArchetypeGrammar(archetypes),
+            archetypeGrammar: normalizedGrammar,
             normalization: {
               factoryAuthorityGroups: ["tokens", "typography", "spacing", "rounded", "ctaHierarchy", "navigationLanguage", "imageryTreatment", "sectionRhythm"],
               providerDerivedGroups: ["archetypeStructure"],
@@ -821,7 +838,7 @@ export class StitchDesignProvider implements DesignProvider {
   }
 
   /** Download a provider artifact (HTML/screenshot) over HTTPS only. */
-  private async downloadArtifact(url: string): Promise<Uint8Array> {
+  protected async downloadArtifact(url: string): Promise<Uint8Array> {
     let firstUrl: URL;
     try {
       firstUrl = new URL(url);

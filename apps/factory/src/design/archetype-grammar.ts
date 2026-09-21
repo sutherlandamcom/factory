@@ -55,7 +55,7 @@ export const APPROVED_GRAMMAR_BY_ARCHETYPE: Readonly<
   ]),
 });
 
-function patternToBinding(kind: DesignArchetypeKind, pattern: string): ArchetypeComponentBinding {
+export function patternToBinding(kind: DesignArchetypeKind, pattern: string): ArchetypeComponentBinding {
   const approved = APPROVED_GRAMMAR_BY_ARCHETYPE[kind];
   const exact = approved.find((b) => b.pattern === pattern);
   if (exact) return { ...exact };
@@ -124,5 +124,35 @@ export function normalizeArchetypeGrammar(
       archetype: kind,
       bindings,
     };
+  });
+}
+
+/** Variant behavior already implemented by the approved registry; not design inference. */
+export function responsiveProfileFor(componentId: string, variant: string): "stack" | "split-at-md" | "readable" {
+  const profiles: Record<string, "stack" | "split-at-md" | "readable"> = {
+    "page-hero/split": "split-at-md", "page-hero/stacked": "stack",
+    "content-section/plain": "readable", "content-section/evidence": "readable", "content-section/structured": "split-at-md",
+    "page-conclusion/surface": "readable", "page-cta/text": "readable", "related-links/list": "stack",
+  };
+  const profile = profiles[`${componentId}/${variant}`];
+  if (!profile) throw new FactoryError("design_provider_output_invalid", `Unsupported component/layout ${componentId}/${variant}.`);
+  return profile;
+}
+
+/** Explicit fixture-only design proposal, produced BEFORE acceptance. */
+export function fixtureSectionGrammar(archetypes: Array<{ kind: DesignArchetypeKind; sectionPatterns: string[] }>, pages: Partial<Record<DesignArchetypeKind, { sections: unknown[] }>>): ArchetypeGrammar[] {
+  return normalizeArchetypeGrammar(archetypes).map(entry => {
+    const body = entry.bindings.find(binding => binding.repetition === "per_section");
+    const count = pages[entry.archetype]?.sections.length ?? 0;
+    if (count && !body) throw new FactoryError("design_provider_output_invalid", "Fixture has no body capability.");
+    const bindings: ArchetypeComponentBinding[] = [];
+    let inserted = false;
+    for (const binding of entry.bindings) {
+      if (binding.repetition === "per_section") {
+        if (!inserted) for (let sectionIndex = 0; sectionIndex < count; sectionIndex++) bindings.push({ ...body!, sectionIndex });
+        inserted = true;
+      } else bindings.push(binding);
+    }
+    return { archetype: entry.archetype, bindings: bindings.map(binding => ({ ...binding, responsiveProfile: responsiveProfileFor(binding.componentId, binding.variant), ...(binding.componentId === "page-hero" ? { visualRole: "hero-primary" as const } : {}) })) };
   });
 }

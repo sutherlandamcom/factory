@@ -152,6 +152,12 @@ export const archetypeComponentBindingSchema = z
     repetition: z.enum(["once", "per_section"]),
     /** Required bindings must appear; optional bindings may be omitted. */
     required: z.boolean(),
+    /** Exact content section index, required by governed production for body bindings. */
+    sectionIndex: z.number().int().min(0).max(29).optional(),
+    /** Bounded responsive semantics, validated against the registered variant. */
+    responsiveProfile: z.enum(["stack", "split-at-md", "readable"]).optional(),
+    /** Generic accepted role, resolved to page-exact visual authority downstream. */
+    visualRole: z.literal("hero-primary").optional(),
   })
   .strict();
 export type ArchetypeComponentBinding = z.infer<typeof archetypeComponentBindingSchema>;
@@ -161,7 +167,15 @@ export const archetypeGrammarSchema = z
   .object({
     archetype: z.enum(["homepage", "service", "location", "editorial", "investment_advisory"]),
     /** Ordered component bindings (the ONLY permitted page composition). */
-    bindings: z.array(archetypeComponentBindingSchema).min(1).max(12),
+    bindings: z.array(archetypeComponentBindingSchema).min(1).max(34),
+    providerEvidence: z.object({
+      normalizerVersion: z.literal("stitch-dom-v1"),
+      screens: z.array(z.object({
+        screenName: z.string().min(1).max(300),
+        htmlDigest: z.string().regex(/^[0-9a-f]{64}$/),
+        screenshotDigest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+      }).strict()).min(1).max(2),
+    }).strict().optional(),
   })
   .strict();
 export type ArchetypeGrammar = z.infer<typeof archetypeGrammarSchema>;

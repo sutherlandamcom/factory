@@ -244,7 +244,8 @@ export class ProductionRenderCompiler {
       throw renderError("production_build_rejected", `Accepted design must contain exactly one ${productionInput.pageType} archetype.`);
     }
     const archetype = matches[0]!;
-    const rendererPrimitives = archetype.sectionPatterns.map((pattern) => {
+    // Historical renderer-only compatibility. Governed v3 consumes exact DIC composition.
+    const rendererPrimitives = isDesignCandidateV2(designData) ? [] : archetype.sectionPatterns.map((pattern) => {
       const primitive = SUPPORTED_PATTERNS.get(pattern);
       if (!primitive) throw renderError("production_build_rejected", `Unsupported accepted design pattern: ${pattern}`);
       return primitive;
@@ -588,7 +589,7 @@ function deriveV2DeclaredSlots(
  * bindings map accepted content section i to the i-th body section binding.
  * Exactly N accepted sections -> exactly N body section renders in exact accepted order.
  */
-function deriveManifestComposition(
+export function deriveManifestComposition(
   dic: DesignImplementationContract,
   content: ProductionRenderManifest["content"],
   requiredSlots: Array<{ slot: string; role: string; requiredRole: string }>,
@@ -601,32 +602,20 @@ function deriveManifestComposition(
   const composition: NonNullable<ProductionRenderManifest["design"]["composition"]> = [];
   const sectionCount = content.sections.length;
   const bodyBindings = archetypeGrammar.bindings.filter((b) => b.repetition === "per_section");
-  let bodySectionsRendered = false;
-
+  if (bodyBindings.length !== sectionCount || bodyBindings.some((binding, index) => binding.sectionIndex !== index)) {
+    throw renderError("production_build_rejected", "Accepted design must bind every content section exactly once in accepted order; missing or duplicate bindings require new authority.");
+  }
   for (const binding of archetypeGrammar.bindings) {
     if (binding.repetition === "per_section") {
-      if (!bodySectionsRendered) {
-        bodySectionsRendered = true;
-        for (let index = 0; index < sectionCount; index += 1) {
-          const bodyBinding = bodyBindings.length > 0 ? bodyBindings[index % bodyBindings.length]! : binding;
-          composition.push({
-            componentId: bodyBinding.componentId,
-            variant: bodyBinding.variant,
-            pattern: bodyBinding.pattern,
-            repetition: "per_section",
-            sectionIndex: index,
-          });
-        }
-      }
+      composition.push({ componentId: binding.componentId, variant: binding.variant, pattern: binding.pattern, repetition: binding.repetition, sectionIndex: binding.sectionIndex! });
       continue;
     }
 
     // "once" bindings: bind the page's matching visual asset slot when the
     // binding's component carries a visual role this page requires.
-    const boundSlot = requiredSlots.find((slot) => {
-      const family = dic.componentFamilies.find((candidate) => candidate.componentId === binding.componentId);
-      return family ? family.visualRoles.some((role) => slot.slot.startsWith(`${role}.`)) : false;
-    });
+    const boundSlot = binding.visualRole
+      ? requiredSlots.find(slot => slot.slot.startsWith(`${binding.visualRole}.`))
+      : undefined;
     composition.push({
       componentId: binding.componentId,
       variant: binding.variant,

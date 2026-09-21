@@ -11,7 +11,7 @@ import type {
 } from "@factory/contracts";
 import { parseDesignCandidateAnyVersion, parseDesignInputSnapshotAnyVersion, isDesignInputSnapshotV2 } from "@factory/contracts";
 import { buildDesignMd, DESIGN_MD_TOOL_VERSION } from "./stitch-provider.js";
-import { normalizeArchetypeGrammar } from "./archetype-grammar.js";
+import { fixtureSectionGrammar } from "./archetype-grammar.js";
 
 /**
  * FIXTURE DESIGN PROVIDER — dev/test provider-mode adapter (trusted server
@@ -285,7 +285,7 @@ export class FixtureDesignProvider implements DesignProvider {
         archetype: archetype.kind,
         roles: fixtureVisualRoleRequirements(archetype.kind),
       })),
-      archetypeGrammar: normalizeArchetypeGrammar(archetypeViews),
+      archetypeGrammar: fixtureSectionGrammar(archetypeViews, request.acceptedCopyByArchetype),
       normalization: {
         factoryAuthorityGroups: ["tokens", "typography", "spacing", "rounded", "ctaHierarchy", "navigationLanguage", "imageryTreatment", "sectionRhythm", "archetypeStructure"],
         providerDerivedGroups: [],

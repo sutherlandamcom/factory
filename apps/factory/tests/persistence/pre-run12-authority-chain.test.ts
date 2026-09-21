@@ -1,3 +1,4 @@
+import { EvidenceStitchProvider } from "../fixtures/stitch-evidence.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { sql } from "drizzle-orm";
@@ -9,6 +10,7 @@ import { FactoryStore } from "../../src/persistence/store.js";
 import { ProjectIntakeStore } from "../../src/operator/intake-store.js";
 import { DesignStore } from "../../src/design/design-store.js";
 import { ProductionStore } from "../../src/production/store.js";
+import { PageArchetypeStore } from "../../src/page-authority/store.js";
 import { VisualStore } from "../../src/visual/store.js";
 import { buildIntakePayload } from "../fixtures/intake-payloads.js";
 import { deterministicDigest } from "../../src/intelligence/digest.js";
@@ -90,7 +92,7 @@ function screenResult(screenName: string): Record<string, unknown> {
     name: screenName,
     title: "Fixture Screen",
     deviceType: "DESKTOP",
-    htmlCode: { name: `${screenName}/html`, mimeType: "text/html", downloadUrl: null },
+    htmlCode: { name: `${screenName}/html`, mimeType: "text/html", downloadUrl: `https://example.com/${screenName}` },
     screenshot: { name: `${screenName}/shot`, mimeType: "image/png", downloadUrl: null },
   };
 }
@@ -128,7 +130,7 @@ function runProcess(
  *
  *   /                    -> homepage
  *   services/advisory    -> service   (representative page)
- *   services/valuation   -> service   (SAME archetype, NOT representative)
+ *   offer-x92   -> service   (SAME archetype, NOT representative)
  *   locations/chamonix   -> location
  *   research/report      -> editorial
  *
@@ -261,7 +263,7 @@ async function setupV2Chain(
   const { projectId } = await seedProjectWithAcceptedInputs(dbInst, key);
   const acceptedPages: string[] = [];
   for (const slug of pageSlugs) {
-    await acceptFixturePage(dbInst, projectId, slug);
+    await acceptFixturePage(dbInst, projectId, slug, false, slug === "offer-x92" ? "service" : undefined);
     acceptedPages.push(slug);
   }
   const root = await mkdtemp(path.join(tmpdir(), "pre-run12-"));
@@ -293,21 +295,15 @@ async function setupV2Chain(
     }
   }
 
-  const stitchProvider = new StitchDesignProvider({
+  const stitchProvider = new EvidenceStitchProvider({
     env: { STITCH_ACCESS_TOKEN: "mock-token" },
     createClient: () => mockStitch,
   });
 
   const copyByArchetype: Record<string, { slug: string; title: string; introduction: string; sections: Array<{ heading: string; body: string }>; conclusion: string; cta: string }> = {};
   for (const rep of snapshotData.representativePages) {
-    copyByArchetype[rep.archetype] = {
-      slug: rep.slug,
-      title: rep.slug,
-      introduction: `Introduction for ${rep.slug}`,
-      sections: [{ heading: "Process", body: `Body for ${rep.slug}` }],
-      conclusion: `Conclusion for ${rep.slug}`,
-      cta: `Contact ${rep.slug}`,
-    };
+    const row = (await designStore.getAcceptedContentForProject(projectId)).find(page => page.slug === rep.slug)!;
+    copyByArchetype[rep.archetype] = { slug: rep.slug, ...(row.data as { title: string; introduction: string; sections: Array<{ heading: string; body: string }>; conclusion: string; cta: string }) };
   }
 
   const genResult = await stitchProvider.generateDesignSystem({
@@ -423,9 +419,9 @@ test("PG pre-run12: two pages of one archetype classify independently; represent
   const dbInst = await setupMigratedTestDatabase();
   let env: ChainEnv | undefined;
   try {
-    env = await setupV2Chain(dbInst, "pr12-a", ["home", "services/advisory", "services/valuation", "locations/chamonix", "research/report"]);
+    env = await setupV2Chain(dbInst, "pr12-a", ["home", "services/advisory", "offer-x92", "locations/chamonix", "research/report"]);
     // Both service pages derive production inputs independently.
-    for (const slug of ["home", "services/advisory", "services/valuation", "locations/chamonix", "research/report"]) {
+    for (const slug of ["home", "services/advisory", "offer-x92", "locations/chamonix", "research/report"]) {
       const input = await env.production.deriveProductionInput({
         projectId: env.projectId,
         pageSlug: slug,
@@ -433,18 +429,18 @@ test("PG pre-run12: two pages of one archetype classify independently; represent
         rendererVersion: "astro-7.2.9",
         rendererPolicyVersion: "production-policy-v3",
       });
-      const expected = derivePageArchetype(slug, ["homepage", "service", "location", "editorial", "investment_advisory"]).archetype;
+      const expected = ({ home: "homepage", "services/advisory": "service", "offer-x92": "service", "locations/chamonix": "location", "research/report": "editorial" } as const)[slug as "home"];
       assert.equal(input.pageType, expected, `${slug} -> ${expected}`);
       assert.equal(input.acceptedDesignId, env.designId);
     }
-    // services/advisory and services/valuation BOTH classify as service
+    // services/advisory and offer-x92 BOTH classify as service
     // although only one was the representative page.
     const advisory = await env.production.latestProductionInput(env.projectId, "services/advisory");
-    const valuation = await env.production.latestProductionInput(env.projectId, "services/valuation");
+    const valuation = await env.production.latestProductionInput(env.projectId, "offer-x92");
     assert.equal(advisory!.pageType, "service");
     assert.equal(valuation!.pageType, "service");
 
-    // Real production manifest compilation & Astro build & QA for services/valuation (P1 prompt §10)
+    // Real production manifest compilation & Astro build & QA for offer-x92 (P1 prompt §10)
     const repoRoot = await resolveRepositoryRoot();
     const compiler = new ProductionRenderCompiler(env.dbInst.db, env.root);
     const assetSnapshotDir = path.join(env.root, "asset-snapshots");
@@ -471,6 +467,13 @@ test("PG pre-run12: two pages of one archetype classify independently; represent
 
     // Write manifest to manifest directory
     await compiler.writeManifest(manifest, manifestDir);
+    const manifests = [manifest];
+    for (const slug of ["home", "services/advisory", "locations/chamonix", "research/report"]) {
+      const ppi = await env.production.latestProductionInput(env.projectId, slug);
+      const other = await compiler.compileManifest({ projectId: env.projectId, productionInputId: ppi!.id, assetSnapshotDir });
+      manifests.push(other);
+      await compiler.writeManifest(other, manifestDir);
+    }
 
     // Run real Astro build
     const siteDir = path.join(repoRoot, "sites", "starter");
@@ -488,20 +491,21 @@ test("PG pre-run12: two pages of one archetype classify independently; represent
     assert.equal(buildResult.exitCode, 0, `Astro build failed: ${buildResult.stderr}`);
 
     // Verify built HTML output
-    const valuationHtml = await readFile(path.join(distDir, "services", "valuation", "index.html"), "utf8");
+    const valuationHtml = await readFile(path.join(distDir, "offer-x92", "index.html"), "utf8");
     assert.ok(valuationHtml.includes("<!DOCTYPE html>") || valuationHtml.includes("<html"));
-    assert.match(valuationHtml, /valuation/i);
+    assert.ok(valuationHtml.includes(manifest.content.title));
 
     // Emit sitemap and run site-wide QA
-    await emitSitemapAndRobots({ manifests: [manifest], distDir, siteName: siteIdentity().siteName });
+    await emitSitemapAndRobots({ manifests, distDir, siteName: siteIdentity().siteName });
     const qa = await runSiteWideQa({
       distDir,
-      manifests: [manifest],
+      manifests,
       redirectRules: [],
       siteName: siteIdentity().siteName,
-      manifestSetDigest: deterministicDigest([{ inputId: manifest.input.id, route: manifest.input.route, manifestDigest: manifest.manifestDigest }]),
+      manifestSetDigest: deterministicDigest(manifests.map(item => ({ inputId: item.input.id, route: item.input.route, manifestDigest: item.manifestDigest }))),
       repositorySha: REPOSITORY_SHA,
     });
+    if (qa.overall !== "PASS") console.error("QA FAILING CHECKS:", qa.checks.filter((c) => c.verdict !== "PASS"));
     assert.equal(qa.overall, "PASS");
     const sectionUniqueCheck = qa.checks.find((c) => c.checkId === "content.sections_unique");
     assert.ok(sectionUniqueCheck);
@@ -524,7 +528,7 @@ test("PG pre-run12: adding a page after design acceptance does NOT stale a v2 de
     assert.ok(beforeView);
     const before = beforeView.artifact;
     // Case B: a NEW ordinary service page after design acceptance.
-    await acceptFixturePage(dbInst, env.projectId, "services/valuation");
+    await acceptFixturePage(dbInst, env.projectId, "offer-x92", false, "service");
     const stalenessView = await env.designStore.latestAcceptedDesign(env.projectId);
     assert.equal(stalenessView!.staleness.stale, false, `v2 design must not stale on ordinary page addition: ${stalenessView!.staleness.reason}`);
     const after = stalenessView!.artifact;
@@ -533,7 +537,7 @@ test("PG pre-run12: adding a page after design acceptance does NOT stale a v2 de
     // The new page classifies and derives production input with the SAME design.
     const input = await env.production.deriveProductionInput({
       projectId: env.projectId,
-      pageSlug: "services/valuation",
+      pageSlug: "offer-x92",
       siteIdentity: siteIdentity(),
       rendererVersion: "astro-7.2.9",
       rendererPolicyVersion: "production-policy-v3",
@@ -614,6 +618,67 @@ test("PG pre-run12: archetype classification negative paths fail closed", () => 
   // determinism: same slug -> same archetype
   assert.equal(derivePageArchetype("services/advisory", supported).archetype, derivePageArchetype("services/advisory", supported).archetype);
   assert.equal(derivePageArchetype("/", supported).archetype, "homepage");
+});
+
+test("PG pre-run12: durable page archetype authority required by production; regex is not authority", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  let env: ChainEnv | undefined;
+  try {
+    env = await setupV2Chain(dbInst, "pr12-arch-auth", ["home", "services/advisory"]);
+
+    // 1. offer-x92 with explicit durable service authority -> PASS (even though slug has no /services/)
+    const pageArchetypeStore = new PageArchetypeStore(dbInst.db);
+    await pageArchetypeStore.setPageArchetype({
+      projectId: env.projectId,
+      pageIdentity: "offer-x92",
+      archetype: "service",
+    });
+    await acceptFixturePage(dbInst, env.projectId, "offer-x92", false, "service");
+    const offerInput = await env.production.deriveProductionInput({
+      projectId: env.projectId,
+      pageSlug: "offer-x92",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "astro-7.2.9",
+      rendererPolicyVersion: "production-policy-v3",
+    });
+    assert.equal(offerInput.pageType, "service");
+
+    // 2. services/fake-looking-page has content accepted, but NO durable archetype authority -> FAIL (page_archetype_unclassified)
+    await acceptFixturePage(dbInst, env.projectId, "services/fake-looking-page", false, null);
+    await assert.rejects(
+      env.production.deriveProductionInput({
+        projectId: env.projectId,
+        pageSlug: "services/fake-looking-page",
+        siteIdentity: siteIdentity(),
+        rendererVersion: "astro-7.2.9",
+        rendererPolicyVersion: "production-policy-v3",
+      }),
+      (err: any) => err.code === "page_archetype_unclassified",
+    );
+
+    // 3. Accepted binding references archetype not supported by AcceptedDesignArtifact -> FAIL (page_archetype_unsupported)
+    // Register investment_advisory which is not in the design's supported archetypes (homepage, service)
+    await pageArchetypeStore.setPageArchetype({
+      projectId: env.projectId,
+      pageIdentity: "wealth-mgmt",
+      archetype: "investment_advisory",
+    });
+    await acceptFixturePage(dbInst, env.projectId, "wealth-mgmt", false, "investment_advisory");
+    await assert.rejects(
+      env.production.deriveProductionInput({
+        projectId: env.projectId,
+        pageSlug: "wealth-mgmt",
+        siteIdentity: siteIdentity(),
+        rendererVersion: "astro-7.2.9",
+        rendererPolicyVersion: "production-policy-v3",
+      }),
+      (err: any) => err.code === "page_archetype_unsupported",
+    );
+  } finally {
+    if (env) {
+      await rm(env.root, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
 });
 
 test("PG pre-run12: DIC determinism and design/policy mutation sensitivity", () => {
@@ -733,10 +798,10 @@ test("pre-run12 adversarial: visual roles matrix (6 states)", async () => {
   const dbInst = await setupMigratedTestDatabase();
   let env: ChainEnv | undefined;
   try {
-    env = await setupV2Chain(dbInst, "pr12-matrix", ["home", "services/advisory", "services/valuation"]);
+    env = await setupV2Chain(dbInst, "pr12-matrix", ["home", "services/advisory", "offer-x92"]);
     const valuationInput = await env.production.deriveProductionInput({
       projectId: env.projectId,
-      pageSlug: "services/valuation",
+      pageSlug: "offer-x92",
       siteIdentity: siteIdentity(),
       rendererVersion: "astro-7.2.9",
       rendererPolicyVersion: "production-policy-v3",
@@ -753,7 +818,7 @@ test("pre-run12 adversarial: visual roles matrix (6 states)", async () => {
       assetSnapshotDir,
     });
     assert.equal(manifest.schemaVersion, "production-v3");
-    assert.ok(manifest.assets.some((a) => a.slot === "hero-primary.services/valuation"));
+    assert.ok(manifest.assets.some((a) => a.slot === "hero-primary.offer-x92"));
 
     // State 2: Required missing -> FAIL
     // A new visual plan has unclassified and unresolved required slots. Calling acceptSet fails closed:
@@ -770,7 +835,7 @@ test("pre-run12 adversarial: visual roles matrix (6 states)", async () => {
     await env.visualService.confirmClassification({
       projectId: env.projectId,
       planId: planMissingRequired.id,
-      slot: "hero-primary.services/valuation",
+      slot: "hero-primary.offer-x92",
       truthClass: "illustrative",
     });
     await assert.rejects(
@@ -785,10 +850,10 @@ test("pre-run12 adversarial: visual roles matrix (6 states)", async () => {
     // In design-v2, service archetype has visualRoleRequirements:
     // [{ role: "hero-primary", requiredRole: "hero", required: true }, { role: "supporting", requiredRole: "supporting", required: false }]
     // When "supporting" is NOT resolved in the visual plan, acceptSet passed cleanly and omitted it from the accepted set.
-    assert.ok(!manifest.assets.some((a) => a.slot === "supporting.services/valuation"));
+    assert.ok(!manifest.assets.some((a) => a.slot === "supporting.offer-x92"));
 
     // State 4: Optional valid -> PASS
-    // Upload and approve a supporting asset for services/valuation
+    // Upload and approve a supporting asset for offer-x92
     const bytes = await sharp({ create: { width: 1200, height: 800, channels: 3, background: { r: 50, g: 60, b: 70 } } }).jpeg().toBuffer();
     const uploadSupporting = await env.assets.uploadAsset(env.projectId, {
       filename: "supporting-val.jpg",
@@ -823,13 +888,13 @@ test("pre-run12 adversarial: visual roles matrix (6 states)", async () => {
     await env.visualService.confirmClassification({
       projectId: env.projectId,
       planId: planWithOptional.id,
-      slot: "supporting.services/valuation",
+      slot: "supporting.offer-x92",
       truthClass: "illustrative",
     });
     await env.visualService.resolveReuse({
       projectId: env.projectId,
       planId: planWithOptional.id,
-      slot: "supporting.services/valuation",
+      slot: "supporting.offer-x92",
       versionId: approvedSupporting.id,
     });
 
@@ -838,11 +903,11 @@ test("pre-run12 adversarial: visual roles matrix (6 states)", async () => {
       planId: planWithOptional.id,
     });
     const setWithOptionalSlots = await env.visualStore.listAcceptedSlots(acceptedRecord.id);
-    assert.ok(setWithOptionalSlots.some((s) => s.slot === "supporting.services/valuation" && s.role === "supporting"));
+    assert.ok(setWithOptionalSlots.some((s) => s.slot === "supporting.offer-x92" && s.role === "supporting"));
 
     const inputWithOptional = await env.production.deriveProductionInput({
       projectId: env.projectId,
-      pageSlug: "services/valuation",
+      pageSlug: "offer-x92",
       siteIdentity: siteIdentity(),
       rendererVersion: "astro-7.2.9",
       rendererPolicyVersion: "production-policy-v3",
@@ -853,7 +918,7 @@ test("pre-run12 adversarial: visual roles matrix (6 states)", async () => {
       productionInputId: inputWithOptional.id,
       assetSnapshotDir,
     });
-    assert.ok(manifestWithOptional.assets.some((a) => a.slot === "supporting.services/valuation" && a.role === "supporting"));
+    assert.ok(manifestWithOptional.assets.some((a) => a.slot === "supporting.offer-x92" && a.role === "supporting"));
 
     // State 5: Wrong role / incompatible binding -> FAIL
     // 5A: Version conflict / incompatible binding between assignment and recorded resolution:
@@ -888,7 +953,7 @@ test("pre-run12 adversarial: visual roles matrix (6 states)", async () => {
     const conflictingApproved = await env.assets.approveVersion(env.projectId, conflictingUpload.version.id, conflictingUpload.version.binaryDigest);
     const ws = await env.assets.workspace(env.projectId);
     const existingHeroAssignment = ws.assignments.find(
-      (a) => a.pageSlug === "services/valuation" && a.role === "hero",
+      (a) => a.pageSlug === "offer-x92" && a.role === "hero",
     )!;
     await env.assets.casReplaceAssignment(env.projectId, existingHeroAssignment.id, {
       expectedCurrentAssetId: existingHeroAssignment.assetId,
@@ -922,7 +987,7 @@ test("pre-run12 adversarial: visual roles matrix (6 states)", async () => {
       () => env!.visualService.resolveReuse({
         projectId: env!.projectId,
         planId: planConflict.id,
-        slot: "hero-primary.services/valuation",
+        slot: "hero-primary.offer-x92",
         versionId: smallApproved.id,
       }),
       (err: unknown) => {
@@ -937,7 +1002,7 @@ test("pre-run12 adversarial: visual roles matrix (6 states)", async () => {
       () => env!.visualService.confirmClassification({
         projectId: env!.projectId,
         planId: planConflict.id,
-        slot: "mystery-slot.services/valuation",
+        slot: "mystery-slot.offer-x92",
         truthClass: "illustrative",
       }),
       (err: unknown) => {
@@ -951,7 +1016,7 @@ test("pre-run12 adversarial: visual roles matrix (6 states)", async () => {
       () => env!.visualService.resolveReuse({
         projectId: env!.projectId,
         planId: planConflict.id,
-        slot: "mystery-slot.services/valuation",
+        slot: "mystery-slot.offer-x92",
         versionId: approvedSupporting.id,
       }),
       (err: unknown) => {
@@ -964,8 +1029,8 @@ test("pre-run12 adversarial: visual roles matrix (6 states)", async () => {
     await env.visualStore.recordSlotResolution({
       projectId: env.projectId,
       planId: planConflict.id,
-      slot: "mystery-slot.services/valuation",
-      pageSlug: "services/valuation",
+      slot: "mystery-slot.offer-x92",
+      pageSlug: "offer-x92",
       role: "hero",
       fromAssetId: null,
       fromVersionId: null,
@@ -1116,7 +1181,7 @@ test("pre-run12 ordinary path: fresh project enters hardened design-v2 path with
     const { projectId } = await seedProjectWithAcceptedInputs(dbInst, "fresh-ord");
     await acceptFixturePage(dbInst, projectId, "home");
     await acceptFixturePage(dbInst, projectId, "services/advisory");
-    await acceptFixturePage(dbInst, projectId, "services/valuation");
+    await acceptFixturePage(dbInst, projectId, "offer-x92");
 
     root = await mkdtemp(path.join(tmpdir(), "pre-run12-fresh-"));
     const designStore = new DesignStore(dbInst.db);
@@ -1150,21 +1215,15 @@ test("pre-run12 ordinary path: fresh project enters hardened design-v2 path with
       }
     }
 
-    const stitchProvider = new StitchDesignProvider({
+    const stitchProvider = new EvidenceStitchProvider({
       env: { STITCH_ACCESS_TOKEN: "mock-token" },
       createClient: () => mockStitch,
     });
 
     const copyByArchetype: Record<string, { slug: string; title: string; introduction: string; sections: Array<{ heading: string; body: string }>; conclusion: string; cta: string }> = {};
     for (const rep of snapshotData.representativePages) {
-      copyByArchetype[rep.archetype] = {
-        slug: rep.slug,
-        title: rep.slug,
-        introduction: `Introduction for ${rep.slug}`,
-        sections: [{ heading: "Process", body: `Body for ${rep.slug}` }],
-        conclusion: `Conclusion for ${rep.slug}`,
-        cta: `Contact ${rep.slug}`,
-      };
+      const row = (await designStore.getAcceptedContentForProject(projectId)).find(page => page.slug === rep.slug)!;
+    copyByArchetype[rep.archetype] = { slug: rep.slug, ...(row.data as { title: string; introduction: string; sections: Array<{ heading: string; body: string }>; conclusion: string; cta: string }) };
     }
 
     const genResult = await stitchProvider.generateDesignSystem({
@@ -1226,8 +1285,8 @@ test("pre-run12 ordinary path: fresh project enters hardened design-v2 path with
 
     const plan = await visualService.derivePlan({ projectId });
     const planData = visualStore.planData(plan);
-    const heroVal = planData.slots.find((s) => s.slot === "hero-primary.services/valuation");
-    const suppVal = planData.slots.find((s) => s.slot === "supporting.services/valuation");
+    const heroVal = planData.slots.find((s) => s.slot === "hero-primary.offer-x92");
+    const suppVal = planData.slots.find((s) => s.slot === "supporting.offer-x92");
     assert.ok(heroVal);
     assert.equal(heroVal.required, true, "hero-primary on service archetype must be required");
     assert.ok(suppVal);
@@ -1264,14 +1323,14 @@ test("pre-run12 ordinary path: fresh project enters hardened design-v2 path with
 
     const freshRecord = await visualService.acceptSet({ projectId, planId: plan.id });
     const acceptedSlots = await visualStore.listAcceptedSlots(freshRecord.id);
-    assert.ok(acceptedSlots.some((s) => s.slot === "hero-primary.services/valuation"));
-    assert.ok(!acceptedSlots.some((s) => s.slot === "supporting.services/valuation"), "unresolved optional slot omitted");
+    assert.ok(acceptedSlots.some((s) => s.slot === "hero-primary.offer-x92"));
+    assert.ok(!acceptedSlots.some((s) => s.slot === "supporting.offer-x92"), "unresolved optional slot omitted");
 
     // 6. Derive production input and compile production-v3 manifest
     const production = new ProductionStore(dbInst.db);
     const prodInput = await production.deriveProductionInput({
       projectId,
-      pageSlug: "services/valuation",
+      pageSlug: "offer-x92",
       siteIdentity: siteIdentity(),
       rendererVersion: "astro-7.2.9",
       rendererPolicyVersion: "production-policy-v3",
@@ -1289,8 +1348,8 @@ test("pre-run12 ordinary path: fresh project enters hardened design-v2 path with
     assert.equal(manifest.schemaVersion, "production-v3");
     assert.ok(manifest.design.designImplementation);
     assert.equal(manifest.design.designImplementation.implementationContractDigest, dic.implementationContractDigest);
-    assert.ok(manifest.assets.some((a) => a.slot === "hero-primary.services/valuation"));
-    assert.ok(!manifest.assets.some((a) => a.slot === "supporting.services/valuation"));
+    assert.ok(manifest.assets.some((a) => a.slot === "hero-primary.offer-x92"));
+    assert.ok(!manifest.assets.some((a) => a.slot === "supporting.offer-x92"));
 
     // 7. Backward compatibility: read existing design-v1 records cleanly without mutation
     const v1ProjectId = (await seedProjectWithAcceptedInputs(dbInst, "v1-compat")).projectId;

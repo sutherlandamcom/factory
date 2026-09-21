@@ -192,6 +192,7 @@ export function deriveDesignImplementationContract(input: {
   // Grammar bindings must reference registered families/variants only.
   const grammar = design.archetypeGrammar.map((entry) => ({
     archetype: entry.archetype,
+    ...(entry.providerEvidence ? { providerEvidence: entry.providerEvidence } : {}),
     bindings: entry.bindings.map((binding) => {
       const family = REGISTRY_FAMILIES.find((candidate) => candidate.componentId === binding.componentId);
       if (!family) {

@@ -654,3 +654,21 @@ export function parseRenderManifestAnyVersion(input: unknown): z.infer<typeof re
   }
   return parsed;
 }
+
+// ---------------------------------------------------------------------------
+// Page Archetype Authority (Pre-Run-12 Durable Typed Page Authority)
+// ---------------------------------------------------------------------------
+
+export const pageArchetypeAuthoritySchema = z
+  .object({
+    id: z.string().trim().min(1),
+    projectId: z.string().trim().min(1),
+    pageIdentity: z.string().trim().min(1),
+    archetype: designArchetypeKindSchema,
+    version: z.number().int().min(1),
+    authorityDigest: z.string().regex(/^[0-9a-f]{64}$/),
+    createdAt: z.date(),
+    updatedAt: z.date(),
+  })
+  .strict();
+export type PageArchetypeAuthority = z.infer<typeof pageArchetypeAuthoritySchema>;

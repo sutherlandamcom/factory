@@ -232,6 +232,13 @@
       "when": 1789720000000,
       "tag": "0032_accepted_derivatives_page_scoped_uniques",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1789730000000,
+      "tag": "0033_page_archetype_authority",
+      "breakpoints": true
     }
   ]
 }

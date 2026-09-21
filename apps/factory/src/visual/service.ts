@@ -22,7 +22,7 @@ import {
   type VisualCandidateC2pa,
   type VisualCandidateQa,
 } from "@factory/contracts";
-import { derivePageArchetype } from "../production/page-archetype.js";
+
 import { FactoryError } from "../executor/errors.js";
 import { resolveRepositoryRoot } from "../repo-root.js";
 import { deterministicDigest } from "../intelligence/digest.js";
@@ -361,7 +361,7 @@ export class VisualService {
       const pages = await this.designStore.getAcceptedContentForProject(input.projectId);
       const archetypeKinds = designData.archetypes.map((entry) => entry.kind);
       for (const page of pages) {
-        const derived = derivePageArchetype(page.slug, archetypeKinds);
+        const derived = { archetype: await this.designStore.requirePageArchetype(input.projectId, page.id, archetypeKinds) };
         const requirement = designData.visualRoleRequirements.find((entry) => entry.archetype === derived.archetype);
         if (!requirement) continue;
         for (const role of requirement.roles) {

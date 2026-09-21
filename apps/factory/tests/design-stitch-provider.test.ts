@@ -1,3 +1,4 @@
+import { EvidenceStitchProvider } from "./fixtures/stitch-evidence.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { DesignGenerationRequest } from "@factory/contracts";
@@ -137,12 +138,12 @@ class MockStitchClient implements StitchMcpClientLike {
   }
 }
 
-function screenResult(screenName: string): Record<string, unknown> {
+function screenResult(screenName: string, evidence = false): Record<string, unknown> {
   return {
     name: screenName,
     title: "Fixture Screen",
     deviceType: "DESKTOP",
-    htmlCode: { name: `${screenName}/html`, mimeType: "text/html", downloadUrl: null },
+    htmlCode: { name: `${screenName}/html`, mimeType: "text/html", downloadUrl: evidence ? `https://example.com/${screenName}` : null },
     screenshot: { name: `${screenName}/shot`, mimeType: "image/png", downloadUrl: null },
   };
 }
@@ -397,23 +398,23 @@ test("generation: v2 snapshot produces valid design-v2 candidate with normalized
     ],
     sessionId: "sess-v2-1",
   }); // generate homepage desktop
-  mock.queue(screenResult("projects/456/screens/home")); // get_screen
+  mock.queue(screenResult("projects/456/screens/home", true)); // get_screen
   mock.queue({
     outputComponents: [
       { design: { screens: [{ name: "projects/456/screens/home-mobile", title: "Home mobile", deviceType: "MOBILE" }] } },
     ],
     sessionId: "sess-v2-1m",
   }); // generate homepage mobile
-  mock.queue(screenResult("projects/456/screens/home-mobile")); // get_screen
+  mock.queue(screenResult("projects/456/screens/home-mobile", true)); // get_screen
   mock.queue({
     outputComponents: [
       { design: { screens: [{ name: "projects/456/screens/service", title: "Service", deviceType: "DESKTOP" }] } },
     ],
     sessionId: "sess-v2-2",
   }); // generate service
-  mock.queue(screenResult("projects/456/screens/service")); // get_screen
+  mock.queue(screenResult("projects/456/screens/service", true)); // get_screen
 
-  const provider = new StitchDesignProvider({
+  const provider = new EvidenceStitchProvider({
     env: { STITCH_ACCESS_TOKEN: "test-token" },
     createClient: () => mock,
   });
@@ -479,23 +480,27 @@ test("grammar normalization: unsupported section pattern fails closed with desig
   );
 });
 
-test("durable policy activation: design-v2 repository-owned policy for fresh projects, preserves existing v1 without mutation, respects explicit and env overrides", () => {
+test("durable policy activation: design-v2 repository-owned policy for fresh projects, preserves established authority over explicit and env overrides", () => {
   const origEnv = process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA;
   try {
     delete process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA;
     // Fresh project without prior authority defaults to design-v2 by repository-owned production policy
     assert.equal(designSnapshotSchemaVersion("proj-brand-new"), "design-v2");
-    // Explicit caller version is respected
+    // Explicit caller version is respected for fresh projects only
     assert.equal(designSnapshotSchemaVersion("proj-new", { explicitVersion: "design-v2" }), "design-v2");
     assert.equal(designSnapshotSchemaVersion("proj-new", { explicitVersion: "design-v1" }), "design-v1");
     // Existing project snapshot version is preserved (v1 remains v1 without silent migration)
     assert.equal(designSnapshotSchemaVersion("proj-existing-v1", { existingVersion: "design-v1" }), "design-v1");
     assert.equal(designSnapshotSchemaVersion("proj-existing-v2", { existingVersion: "design-v2" }), "design-v2");
 
-    // Environment variable override works for testing
+    // Environment overrides apply only to fresh projects; neither override migrates authority
     process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA = "design-v1";
     assert.equal(designSnapshotSchemaVersion("proj-brand-new"), "design-v1");
+    assert.equal(designSnapshotSchemaVersion("proj-existing-v2", { existingVersion: "design-v2" }), "design-v2");
+    assert.equal(designSnapshotSchemaVersion("proj-existing-v2", { existingVersion: "design-v2", explicitVersion: "design-v1" }), "design-v2");
     process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA = "design-v2";
+    assert.equal(designSnapshotSchemaVersion("proj-existing-v1", { existingVersion: "design-v1" }), "design-v1");
+    assert.equal(designSnapshotSchemaVersion("proj-existing-v1", { existingVersion: "design-v1", explicitVersion: "design-v2" }), "design-v1");
     assert.equal(designSnapshotSchemaVersion("proj-brand-new"), "design-v2");
   } finally {
     if (origEnv !== undefined) {

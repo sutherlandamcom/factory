@@ -177,9 +177,20 @@ export class DesignStore {
       .orderBy(desc(designInputSnapshots.version))
       .limit(1);
 
-    const existingVersion = existingSnapshot
-      ? parseDesignInputSnapshotAnyVersion(existingSnapshot.data).schemaVersion
-      : undefined;
+    let existingVersion: "design-v1" | "design-v2" | undefined = undefined;
+    if (existingSnapshot) {
+      existingVersion = parseDesignInputSnapshotAnyVersion(existingSnapshot.data).schemaVersion;
+    } else {
+      const [existingArtifact] = await this.db
+        .select({ data: acceptedDesignArtifacts.data })
+        .from(acceptedDesignArtifacts)
+        .where(eq(acceptedDesignArtifacts.projectId, input.projectId))
+        .orderBy(desc(acceptedDesignArtifacts.version))
+        .limit(1);
+      if (existingArtifact) {
+        existingVersion = parseDesignCandidateAnyVersion(existingArtifact.data).schemaVersion;
+      }
+    }
 
     const designSchemaVersion = designSnapshotSchemaVersion(input.projectId, {
       explicitVersion: input.schemaVersion,
@@ -963,11 +974,11 @@ export const DESIGN_SNAPSHOT_POLICY_VERSION = "design-policy-v2";
 /**
  * Snapshot schema version for design input snapshot derivations in a project.
  *
- * Durable activation policy (§11):
+ * Repository-owned production policy:
  * - If explicitVersion is supplied in options, honor caller intent.
  * - Else if FACTORY_DESIGN_SNAPSHOT_SCHEMA is explicitly configured, honor it (dev/test override).
- * - Else if the project already has an established snapshot in DB, preserve that project's established schema version.
- * - Else for ambient new project derivations, default to design-v1 to preserve historical semantics without silent migration.
+ * - Else if the project already has an established snapshot or design authority in DB, preserve that project's established schema version (existing v1 remains v1; no automatic mutation/rewrite).
+ * - Else for new design authority created under current Pre-Run-12 policy: design-v2 by repository-owned production policy.
  */
 export function designSnapshotSchemaVersion(
   _projectId: string,
@@ -983,7 +994,7 @@ export function designSnapshotSchemaVersion(
   if (options?.existingVersion) {
     return options.existingVersion;
   }
-  return "design-v1";
+  return DESIGN_SCHEMA_VERSION_V2;
 }
 
 function designUxRequirements(intake: Record<string, unknown>): string[] {

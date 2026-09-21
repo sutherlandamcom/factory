@@ -243,20 +243,21 @@ interface ChainEnv {
   production: ProductionStore;
   designStore: DesignStore;
   visualStore: VisualStore;
+  visualService: VisualService;
+  assets: import("../../src/assets/service.js").AssetService;
   acceptedPages: string[];
   root: string;
 }
 
 /**
- * Derive the design input snapshot with FACTORY_DESIGN_SNAPSHOT_SCHEMA=v2
- * (env must be set BEFORE deriveInputSnapshotDraft).
+ * Derive the design input snapshot using repository-owned default policy
+ * (fresh projects default to design-v2 without requiring env overrides).
  */
 async function setupV2Chain(
   dbInst: Awaited<ReturnType<typeof setupMigratedTestDatabase>>,
   key: string,
   pageSlugs: string[],
 ): Promise<ChainEnv> {
-  process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA = DESIGN_SCHEMA_VERSION_V2;
   const { projectId } = await seedProjectWithAcceptedInputs(dbInst, key);
   const acceptedPages: string[] = [];
   for (const slug of pageSlugs) {
@@ -265,7 +266,7 @@ async function setupV2Chain(
   }
   const root = await mkdtemp(path.join(tmpdir(), "pre-run12-"));
   const designStore = new DesignStore(dbInst.db);
-  const snapshot = await designStore.deriveInputSnapshotDraft({ projectId, schemaVersion: "design-v2" });
+  const snapshot = await designStore.deriveInputSnapshotDraft({ projectId });
   const snapshotData = parseDesignInputSnapshotAnyVersion(snapshot.data);
   if (!isDesignInputSnapshotV2(snapshotData)) throw new Error("expected design-v2 snapshot derivation");
 
@@ -340,79 +341,27 @@ async function setupV2Chain(
     store: new (await import("../../src/assets/asset-store.js")).AssetStore(dbInst.db),
     storage: assetStorageModule.createAssetStorage(root),
   });
-  const bytes = await sharp({ create: { width: 1600, height: 900, channels: 3, background: { r: 10, g: 20, b: 30 } } }).jpeg().toBuffer();
-  const upload = await assets.uploadAsset(projectId, {
+  const heroBytes = await sharp({ create: { width: 1600, height: 900, channels: 3, background: { r: 10, g: 20, b: 30 } } }).jpeg().toBuffer();
+  const heroUpload = await assets.uploadAsset(projectId, {
     filename: "hero-advisory.jpg",
     kind: "photo",
     title: "Advisory hero",
     rightsStatus: "operator_owned",
-    dataBase64: bytes.toString("base64"),
+    dataBase64: heroBytes.toString("base64"),
     altIntent: "Professional financial advisory consultation and valuation services",
   });
-  const approved = await assets.approveVersion(projectId, upload.version.id, upload.version.binaryDigest);
+  const approvedHero = await assets.approveVersion(projectId, heroUpload.version.id, heroUpload.version.binaryDigest);
 
-  // Assign approved asset to services/advisory
-  const advisoryPage = await dbInst.db
-    .select({ id: acceptedPageContent.id, version: acceptedPageContent.version, contentDigest: acceptedPageContent.contentDigest })
-    .from(acceptedPageContent)
-    .where(sql`${acceptedPageContent.projectId} = ${projectId} AND ${acceptedPageContent.slug} = 'services/advisory'`)
-    .limit(1)
-    .then((rows) => rows[0]);
-  if (advisoryPage) {
-    await assets.assignVersion(projectId, {
-      assetId: upload.asset.id,
-      versionId: approved.id,
-      acceptedPageContentId: advisoryPage.id,
-      acceptedPageContentVersion: advisoryPage.version,
-      acceptedPageContentDigest: advisoryPage.contentDigest,
-      expectedGovernanceDigest: approved.governanceDigest!,
-      pageSlug: "services/advisory",
-      role: "hero",
-      expectedBinaryDigest: approved.binaryDigest,
-    });
-  }
-
-  // Assign approved asset to services/valuation if present
-  const valuationPage = await dbInst.db
-    .select({ id: acceptedPageContent.id, version: acceptedPageContent.version, contentDigest: acceptedPageContent.contentDigest })
-    .from(acceptedPageContent)
-    .where(sql`${acceptedPageContent.projectId} = ${projectId} AND ${acceptedPageContent.slug} = 'services/valuation'`)
-    .limit(1)
-    .then((rows) => rows[0]);
-  if (valuationPage) {
-    await assets.assignVersion(projectId, {
-      assetId: upload.asset.id,
-      versionId: approved.id,
-      acceptedPageContentId: valuationPage.id,
-      acceptedPageContentVersion: valuationPage.version,
-      acceptedPageContentDigest: valuationPage.contentDigest,
-      expectedGovernanceDigest: approved.governanceDigest!,
-      pageSlug: "services/valuation",
-      role: "hero",
-      expectedBinaryDigest: approved.binaryDigest,
-    });
-  }
-
-  // Assign approved asset to home if present
-  const homePage = await dbInst.db
-    .select({ id: acceptedPageContent.id, version: acceptedPageContent.version, contentDigest: acceptedPageContent.contentDigest })
-    .from(acceptedPageContent)
-    .where(sql`${acceptedPageContent.projectId} = ${projectId} AND ${acceptedPageContent.slug} = 'home'`)
-    .limit(1)
-    .then((rows) => rows[0]);
-  if (homePage) {
-    await assets.assignVersion(projectId, {
-      assetId: upload.asset.id,
-      versionId: approved.id,
-      acceptedPageContentId: homePage.id,
-      acceptedPageContentVersion: homePage.version,
-      acceptedPageContentDigest: homePage.contentDigest,
-      expectedGovernanceDigest: approved.governanceDigest!,
-      pageSlug: "home",
-      role: "hero",
-      expectedBinaryDigest: approved.binaryDigest,
-    });
-  }
+  const bgBytes = await sharp({ create: { width: 1200, height: 800, channels: 3, background: { r: 20, g: 30, b: 40 } } }).jpeg().toBuffer();
+  const bgUpload = await assets.uploadAsset(projectId, {
+    filename: "bg-location.jpg",
+    kind: "photo",
+    title: "Location background",
+    rightsStatus: "operator_owned",
+    dataBase64: bgBytes.toString("base64"),
+    altIntent: "Location landscape background",
+  });
+  const approvedBg = await assets.approveVersion(projectId, bgUpload.version.id, bgUpload.version.binaryDigest);
 
   // Derive visual asset plan using REAL VisualService.derivePlan() (prompt §10)
   const visualStore = new VisualStore(dbInst.db);
@@ -427,60 +376,29 @@ async function setupV2Chain(
   });
   const plan = await visualService.derivePlan({ projectId });
 
-  const slots = [
-    ...(homePage
-      ? [
-          {
-            slot: "hero-primary.home",
-            pageSlug: "home",
-            role: "hero",
-            resolvedVersionId: approved.id,
-            binaryDigest: approved.binaryDigest,
-            governanceDigest: approved.governanceDigest!,
-            resolutionMode: "reuse_real",
-            truthClass: "illustrative" as const,
-          },
-        ]
-      : []),
-    ...(advisoryPage
-      ? [
-          {
-            slot: "hero-primary.services/advisory",
-            pageSlug: "services/advisory",
-            role: "hero",
-            resolvedVersionId: approved.id,
-            binaryDigest: approved.binaryDigest,
-            governanceDigest: approved.governanceDigest!,
-            resolutionMode: "reuse_real",
-            truthClass: "illustrative" as const,
-          },
-        ]
-      : []),
-    ...(valuationPage
-      ? [
-          {
-            slot: "hero-primary.services/valuation",
-            pageSlug: "services/valuation",
-            role: "hero",
-            resolvedVersionId: approved.id,
-            binaryDigest: approved.binaryDigest,
-            governanceDigest: approved.governanceDigest!,
-            resolutionMode: "reuse_real",
-            truthClass: "illustrative" as const,
-          },
-        ]
-      : []),
-  ];
+  // Resolve required slots via real VisualService lifecycle; optional slots remain unresolved.
+  const planData = visualStore.planData(plan);
+  for (const slot of planData.slots) {
+    if (slot.required) {
+      const approvedToUse = slot.role === "hero" ? approvedHero : approvedBg;
+      await visualService.confirmClassification({
+        projectId,
+        planId: plan.id,
+        slot: slot.slot,
+        truthClass: "illustrative",
+      });
+      await visualService.resolveReuse({
+        projectId,
+        planId: plan.id,
+        slot: slot.slot,
+        versionId: approvedToUse.id,
+      });
+    }
+  }
 
-  const visualSet = await visualStore.createAcceptedSetAtomic({
+  const visualRecord = await visualService.acceptSet({
     projectId,
     planId: plan.id,
-    providerMode: "live",
-    designArtifactId: accepted.id,
-    designArtifactVersion: accepted.version,
-    designCandidateDigest: accepted.candidateDigest,
-    designInputDigest: accepted.inputDigest,
-    slots,
   });
 
   return {
@@ -488,12 +406,14 @@ async function setupV2Chain(
     projectId,
     designId: accepted.id,
     designDigest: accepted.candidateDigest,
-    visualSetId: visualSet.id,
-    visualSetDigest: visualSet.setDigest,
+    visualSetId: visualRecord.id,
+    visualSetDigest: visualRecord.setDigest,
     planId: plan.id,
     production: new ProductionStore(dbInst.db),
     designStore,
     visualStore,
+    visualService,
+    assets,
     acceptedPages,
     root,
   };
@@ -836,65 +756,41 @@ test("pre-run12 adversarial: visual roles matrix (6 states)", async () => {
     assert.ok(manifest.assets.some((a) => a.slot === "hero-primary.services/valuation"));
 
     // State 2: Required missing -> FAIL
-    // Create a visual set for the project that does NOT have hero-primary.services/valuation
-    await env.visualStore.createAcceptedSetAtomic({
-      projectId: env.projectId,
-      planId: env.planId,
-      providerMode: "live",
-      designArtifactId: env.designId,
-      designArtifactVersion: 1,
-      designCandidateDigest: env.designDigest,
-      designInputDigest: "a".repeat(64),
-      slots: [
-        {
-          slot: "hero-primary.services/advisory",
-          pageSlug: "services/advisory",
-          role: "hero",
-          resolvedVersionId: manifest.assets[0]!.versionId,
-          binaryDigest: manifest.assets[0]!.binaryDigest,
-          governanceDigest: manifest.assets[0]!.governanceDigest,
-          resolutionMode: "reuse_real",
-          truthClass: "illustrative" as const,
-        },
-      ],
-    });
-    // Derive new production input pointing at the latest visual set (which is missing valuation hero)
-    const inputMissingRequired = await env.production.deriveProductionInput({
-      projectId: env.projectId,
-      pageSlug: "services/valuation",
-      siteIdentity: siteIdentity(),
-      rendererVersion: "astro-7.2.9",
-      rendererPolicyVersion: "production-policy-v3",
-    });
+    // A new visual plan has unclassified and unresolved required slots. Calling acceptSet fails closed:
+    const planMissingRequired = await env.visualService.derivePlan({ projectId: env.projectId });
     await assert.rejects(
-      () =>
-        compiler.compileManifest({
-          projectId: env!.projectId,
-          productionInputId: inputMissingRequired.id,
-          assetSnapshotDir,
-        }),
+      () => env!.visualService.acceptSet({ projectId: env!.projectId, planId: planMissingRequired.id }),
       (err: unknown) => {
         const e = err as { code?: string; message?: string };
-        return e.code === "production_build_rejected" && /has no accepted visual resolution/.test(e.message ?? "");
+        return e.code === "visual_classification_required" || e.code === "visual_slot_unresolved";
+      },
+    );
+
+    // If classification is confirmed but required slot is left unresolved, acceptSet still fails closed:
+    await env.visualService.confirmClassification({
+      projectId: env.projectId,
+      planId: planMissingRequired.id,
+      slot: "hero-primary.services/valuation",
+      truthClass: "illustrative",
+    });
+    await assert.rejects(
+      () => env!.visualService.acceptSet({ projectId: env!.projectId, planId: planMissingRequired.id }),
+      (err: unknown) => {
+        const e = err as { code?: string; message?: string };
+        return e.code === "visual_slot_unresolved";
       },
     );
 
     // State 3: Optional missing -> PASS
     // In design-v2, service archetype has visualRoleRequirements:
     // [{ role: "hero-primary", requiredRole: "hero", required: true }, { role: "supporting", requiredRole: "supporting", required: false }]
-    // When "supporting" is NOT in the visual set, State 1 passed without requiring it!
+    // When "supporting" is NOT resolved in the visual plan, acceptSet passed cleanly and omitted it from the accepted set.
     assert.ok(!manifest.assets.some((a) => a.slot === "supporting.services/valuation"));
 
     // State 4: Optional valid -> PASS
     // Upload and approve a supporting asset for services/valuation
-    const assetsModule = await import("../../src/assets/service.js");
-    const assetStorageModule = await import("../../src/assets/storage.js");
-    const assets = new assetsModule.AssetService({
-      store: new (await import("../../src/assets/asset-store.js")).AssetStore(dbInst.db),
-      storage: assetStorageModule.createAssetStorage(env.root),
-    });
-    const bytes = await sharp({ create: { width: 800, height: 600, channels: 3, background: { r: 50, g: 60, b: 70 } } }).jpeg().toBuffer();
-    const uploadSupporting = await assets.uploadAsset(env.projectId, {
+    const bytes = await sharp({ create: { width: 1200, height: 800, channels: 3, background: { r: 50, g: 60, b: 70 } } }).jpeg().toBuffer();
+    const uploadSupporting = await env.assets.uploadAsset(env.projectId, {
       filename: "supporting-val.jpg",
       kind: "photo",
       title: "Supporting val",
@@ -902,58 +798,47 @@ test("pre-run12 adversarial: visual roles matrix (6 states)", async () => {
       dataBase64: bytes.toString("base64"),
       altIntent: "Supporting valuation and advisory chart",
     });
-    const approvedSupporting = await assets.approveVersion(env.projectId, uploadSupporting.version.id, uploadSupporting.version.binaryDigest);
+    const approvedSupporting = await env.assets.approveVersion(env.projectId, uploadSupporting.version.id, uploadSupporting.version.binaryDigest);
 
-    const valPageRow = await dbInst.db
-      .select({ id: acceptedPageContent.id, version: acceptedPageContent.version, contentDigest: acceptedPageContent.contentDigest })
-      .from(acceptedPageContent)
-      .where(sql`${acceptedPageContent.projectId} = ${env.projectId} AND ${acceptedPageContent.slug} = 'services/valuation'`)
-      .limit(1)
-      .then((rows) => rows[0]!);
+    // Resolve the optional slot through real VisualService lifecycle on a new plan version
+    const planWithOptional = await env.visualService.derivePlan({ projectId: env.projectId });
+    const planDataWithOptional = env.visualStore.planData(planWithOptional);
+    for (const slot of planDataWithOptional.slots) {
+      if (slot.required && slot.existingVersionId) {
+        await env.visualService.confirmClassification({
+          projectId: env.projectId,
+          planId: planWithOptional.id,
+          slot: slot.slot,
+          truthClass: "illustrative",
+        });
+        await env.visualService.resolveReuse({
+          projectId: env.projectId,
+          planId: planWithOptional.id,
+          slot: slot.slot,
+          versionId: slot.existingVersionId,
+        });
+      }
+    }
 
-    await assets.assignVersion(env.projectId, {
-      assetId: uploadSupporting.asset.id,
-      versionId: approvedSupporting.id,
-      acceptedPageContentId: valPageRow.id,
-      acceptedPageContentVersion: valPageRow.version,
-      acceptedPageContentDigest: valPageRow.contentDigest,
-      expectedGovernanceDigest: approvedSupporting.governanceDigest!,
-      pageSlug: "services/valuation",
-      role: "supporting",
-      expectedBinaryDigest: approvedSupporting.binaryDigest,
-    });
-
-    await env.visualStore.createAcceptedSetAtomic({
+    await env.visualService.confirmClassification({
       projectId: env.projectId,
-      planId: env.planId,
-      providerMode: "live",
-      designArtifactId: env.designId,
-      designArtifactVersion: 1,
-      designCandidateDigest: env.designDigest,
-      designInputDigest: "a".repeat(64),
-      slots: [
-        {
-          slot: "hero-primary.services/valuation",
-          pageSlug: "services/valuation",
-          role: "hero",
-          resolvedVersionId: manifest.assets[0]!.versionId,
-          binaryDigest: manifest.assets[0]!.binaryDigest,
-          governanceDigest: manifest.assets[0]!.governanceDigest,
-          resolutionMode: "reuse_real",
-          truthClass: "illustrative" as const,
-        },
-        {
-          slot: "supporting.services/valuation",
-          pageSlug: "services/valuation",
-          role: "supporting",
-          resolvedVersionId: approvedSupporting.id,
-          binaryDigest: approvedSupporting.binaryDigest,
-          governanceDigest: approvedSupporting.governanceDigest!,
-          resolutionMode: "reuse_real",
-          truthClass: "illustrative" as const,
-        },
-      ],
+      planId: planWithOptional.id,
+      slot: "supporting.services/valuation",
+      truthClass: "illustrative",
     });
+    await env.visualService.resolveReuse({
+      projectId: env.projectId,
+      planId: planWithOptional.id,
+      slot: "supporting.services/valuation",
+      versionId: approvedSupporting.id,
+    });
+
+    const acceptedRecord = await env.visualService.acceptSet({
+      projectId: env.projectId,
+      planId: planWithOptional.id,
+    });
+    const setWithOptionalSlots = await env.visualStore.listAcceptedSlots(acceptedRecord.id);
+    assert.ok(setWithOptionalSlots.some((s) => s.slot === "supporting.services/valuation" && s.role === "supporting"));
 
     const inputWithOptional = await env.production.deriveProductionInput({
       projectId: env.projectId,
@@ -970,111 +855,135 @@ test("pre-run12 adversarial: visual roles matrix (6 states)", async () => {
     });
     assert.ok(manifestWithOptional.assets.some((a) => a.slot === "supporting.services/valuation" && a.role === "supporting"));
 
-    // State 5: Optional wrong role -> FAIL
-    await env.visualStore.createAcceptedSetAtomic({
-      projectId: env.projectId,
-      planId: env.planId,
-      providerMode: "live",
-      designArtifactId: env.designId,
-      designArtifactVersion: 1,
-      designCandidateDigest: env.designDigest,
-      designInputDigest: "a".repeat(64),
-      slots: [
-        {
-          slot: "hero-primary.services/valuation",
-          pageSlug: "services/valuation",
-          role: "hero",
-          resolvedVersionId: manifest.assets[0]!.versionId,
-          binaryDigest: manifest.assets[0]!.binaryDigest,
-          governanceDigest: manifest.assets[0]!.governanceDigest,
-          resolutionMode: "reuse_real",
-          truthClass: "illustrative" as const,
-        },
-        {
-          slot: "supporting.services/valuation",
-          pageSlug: "services/valuation",
-          role: "illustration", // WRONG ROLE: should be "supporting"
-          resolvedVersionId: approvedSupporting.id,
-          binaryDigest: approvedSupporting.binaryDigest,
-          governanceDigest: approvedSupporting.governanceDigest!,
-          resolutionMode: "reuse_real",
-          truthClass: "illustrative" as const,
-        },
-      ],
-    });
+    // State 5: Wrong role / incompatible binding -> FAIL
+    // 5A: Version conflict / incompatible binding between assignment and recorded resolution:
+    const planConflict = await env.visualService.derivePlan({ projectId: env.projectId });
+    const planConflictData = env.visualStore.planData(planConflict);
+    for (const slot of planConflictData.slots) {
+      if (slot.required && slot.existingVersionId) {
+        await env.visualService.confirmClassification({
+          projectId: env.projectId,
+          planId: planConflict.id,
+          slot: slot.slot,
+          truthClass: "illustrative",
+        });
+        await env.visualService.resolveReuse({
+          projectId: env.projectId,
+          planId: planConflict.id,
+          slot: slot.slot,
+          versionId: slot.existingVersionId,
+        });
+      }
+    }
 
-    const inputWrongRole = await env.production.deriveProductionInput({
-      projectId: env.projectId,
-      pageSlug: "services/valuation",
-      siteIdentity: siteIdentity(),
-      rendererVersion: "astro-7.2.9",
-      rendererPolicyVersion: "production-policy-v3",
+    const conflictBytes = await sharp({ create: { width: 1600, height: 900, channels: 3, background: { r: 99, g: 88, b: 77 } } }).jpeg().toBuffer();
+    const conflictingUpload = await env.assets.uploadAsset(env.projectId, {
+      filename: "conflicting-hero.jpg",
+      kind: "photo",
+      title: "Conflicting hero",
+      rightsStatus: "operator_owned",
+      dataBase64: conflictBytes.toString("base64"),
+      altIntent: "Conflicting hero asset",
+    });
+    const conflictingApproved = await env.assets.approveVersion(env.projectId, conflictingUpload.version.id, conflictingUpload.version.binaryDigest);
+    const ws = await env.assets.workspace(env.projectId);
+    const existingHeroAssignment = ws.assignments.find(
+      (a) => a.pageSlug === "services/valuation" && a.role === "hero",
+    )!;
+    await env.assets.casReplaceAssignment(env.projectId, existingHeroAssignment.id, {
+      expectedCurrentAssetId: existingHeroAssignment.assetId,
+      expectedCurrentVersionId: existingHeroAssignment.versionId,
+      expectedCurrentGovernanceDigest: existingHeroAssignment.versionDigest,
+      toAssetId: conflictingUpload.asset.id,
+      toVersionId: conflictingApproved.id,
+      expectedTargetBinaryDigest: conflictingApproved.binaryDigest,
     });
 
     await assert.rejects(
-      () =>
-        compiler.compileManifest({
-          projectId: env!.projectId,
-          productionInputId: inputWrongRole.id,
-          assetSnapshotDir,
-        }),
+      () => env!.visualService.acceptSet({ projectId: env!.projectId, planId: planConflict.id }),
       (err: unknown) => {
         const e = err as { code?: string; message?: string };
-        return e.code === "production_build_rejected" && /cannot be placed by the selected archetype/.test(e.message ?? "");
+        return e.code === "visual_slot_resolution_conflict";
+      },
+    );
+
+    // 5B: Incompatible dimensions / output invalid fails closed during resolution:
+    const smallBytes = await sharp({ create: { width: 100, height: 100, channels: 3, background: { r: 1, g: 2, b: 3 } } }).jpeg().toBuffer();
+    const smallUpload = await env.assets.uploadAsset(env.projectId, {
+      filename: "too-small.jpg",
+      kind: "photo",
+      title: "Too small",
+      rightsStatus: "operator_owned",
+      dataBase64: smallBytes.toString("base64"),
+      altIntent: "Too small",
+    });
+    const smallApproved = await env.assets.approveVersion(env.projectId, smallUpload.version.id, smallUpload.version.binaryDigest);
+    await assert.rejects(
+      () => env!.visualService.resolveReuse({
+        projectId: env!.projectId,
+        planId: planConflict.id,
+        slot: "hero-primary.services/valuation",
+        versionId: smallApproved.id,
+      }),
+      (err: unknown) => {
+        const e = err as { code?: string; message?: string };
+        return e.code === "visual_acceptance_failed" && /do not meet slot minimum dimensions/.test(e.message ?? "");
       },
     );
 
     // State 6: Unknown slot -> FAIL
-    await env.visualStore.createAcceptedSetAtomic({
-      projectId: env.projectId,
-      planId: env.planId,
-      providerMode: "live",
-      designArtifactId: env.designId,
-      designArtifactVersion: 1,
-      designCandidateDigest: env.designDigest,
-      designInputDigest: "a".repeat(64),
-      slots: [
-        {
-          slot: "hero-primary.services/valuation",
-          pageSlug: "services/valuation",
-          role: "hero",
-          resolvedVersionId: manifest.assets[0]!.versionId,
-          binaryDigest: manifest.assets[0]!.binaryDigest,
-          governanceDigest: manifest.assets[0]!.governanceDigest,
-          resolutionMode: "reuse_real",
-          truthClass: "illustrative" as const,
-        },
-        {
-          slot: "mystery-slot.services/valuation", // UNKNOWN SLOT
-          pageSlug: "services/valuation",
-          role: "hero",
-          resolvedVersionId: manifest.assets[0]!.versionId,
-          binaryDigest: manifest.assets[0]!.binaryDigest,
-          governanceDigest: manifest.assets[0]!.governanceDigest,
-          resolutionMode: "reuse_real",
-          truthClass: "illustrative" as const,
-        },
-      ],
-    });
-
-    const inputUnknownSlot = await env.production.deriveProductionInput({
-      projectId: env.projectId,
-      pageSlug: "services/valuation",
-      siteIdentity: siteIdentity(),
-      rendererVersion: "astro-7.2.9",
-      rendererPolicyVersion: "production-policy-v3",
-    });
-
+    // 6A: Confirm classification on unknown slot fails closed:
     await assert.rejects(
-      () =>
-        compiler.compileManifest({
-          projectId: env!.projectId,
-          productionInputId: inputUnknownSlot.id,
-          assetSnapshotDir,
-        }),
+      () => env!.visualService.confirmClassification({
+        projectId: env!.projectId,
+        planId: planConflict.id,
+        slot: "mystery-slot.services/valuation",
+        truthClass: "illustrative",
+      }),
       (err: unknown) => {
         const e = err as { code?: string; message?: string };
-        return e.code === "production_build_rejected" && /cannot be placed by the selected archetype/.test(e.message ?? "");
+        return e.code === "visual_not_found";
+      },
+    );
+
+    // 6B: Resolve reuse on unknown slot fails closed:
+    await assert.rejects(
+      () => env!.visualService.resolveReuse({
+        projectId: env!.projectId,
+        planId: planConflict.id,
+        slot: "mystery-slot.services/valuation",
+        versionId: approvedSupporting.id,
+      }),
+      (err: unknown) => {
+        const e = err as { code?: string; message?: string };
+        return e.code === "visual_not_found";
+      },
+    );
+
+    // 6C: Recorded resolution for an unknown slot causes acceptSet to fail closed:
+    await env.visualStore.recordSlotResolution({
+      projectId: env.projectId,
+      planId: planConflict.id,
+      slot: "mystery-slot.services/valuation",
+      pageSlug: "services/valuation",
+      role: "hero",
+      fromAssetId: null,
+      fromVersionId: null,
+      fromBinaryDigest: null,
+      fromGovernanceDigest: null,
+      toAssetId: conflictingUpload.asset.id,
+      toVersionId: conflictingApproved.id,
+      toBinaryDigest: conflictingApproved.binaryDigest,
+      toGovernanceDigest: conflictingApproved.governanceDigest!,
+      resolutionMode: "reuse_real",
+      visualProviderConsumedSourceAsset: false,
+      visualProviderProducedAsset: false,
+    });
+    await assert.rejects(
+      () => env!.visualService.acceptSet({ projectId: env!.projectId, planId: planConflict.id }),
+      (err: unknown) => {
+        const e = err as { code?: string; message?: string };
+        return e.code === "visual_acceptance_failed" && /does not belong to any declared plan slot/.test(e.message ?? "");
       },
     );
   } finally {
@@ -1194,5 +1103,211 @@ test("pre-run12 adversarial: malformed disabled derivatives rejected", () => {
     () => parseRenderManifestAnyVersion(v1WithDerivatives),
     /production-v1 manifest must not carry derivatives authority/,
   );
+});
+
+test("pre-run12 ordinary path: fresh project enters hardened design-v2 path without test-only overrides", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  let root: string | undefined;
+  try {
+    // Ensure clean environment without test-only overrides
+    delete process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA;
+    assert.equal(process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA, undefined);
+
+    const { projectId } = await seedProjectWithAcceptedInputs(dbInst, "fresh-ord");
+    await acceptFixturePage(dbInst, projectId, "home");
+    await acceptFixturePage(dbInst, projectId, "services/advisory");
+    await acceptFixturePage(dbInst, projectId, "services/valuation");
+
+    root = await mkdtemp(path.join(tmpdir(), "pre-run12-fresh-"));
+    const designStore = new DesignStore(dbInst.db);
+
+    // 1. Derive snapshot draft with NO explicit schemaVersion
+    const snapshot = await designStore.deriveInputSnapshotDraft({ projectId });
+    const snapshotData = parseDesignInputSnapshotAnyVersion(snapshot.data);
+    assert.ok(isDesignInputSnapshotV2(snapshotData));
+    assert.equal(snapshotData.schemaVersion, "design-v2", "fresh project must derive design-v2 snapshot by default");
+
+    // 2. Generate and accept design-v2 candidate
+    const mockStitch = new MockStitchClient();
+    mockStitch.queue({ name: "projects/fresh-ord", title: `factory-${projectId.slice(0, 8)}-design` });
+    mockStitch.queue({ name: "assets/ds-fresh-ord" });
+    for (const kind of snapshotData.archetypes) {
+      mockStitch.queue({
+        outputComponents: [
+          { design: { screens: [{ name: `projects/fresh-ord/screens/${kind}`, title: kind, deviceType: "DESKTOP" }] } },
+        ],
+        sessionId: `sess-${kind}`,
+      });
+      mockStitch.queue(screenResult(`projects/fresh-ord/screens/${kind}`));
+      if (kind === "homepage") {
+        mockStitch.queue({
+          outputComponents: [
+            { design: { screens: [{ name: "projects/fresh-ord/screens/home-mob", title: "Home Mobile", deviceType: "MOBILE" }] } },
+          ],
+          sessionId: "sess-mob",
+        });
+        mockStitch.queue(screenResult("projects/fresh-ord/screens/home-mob"));
+      }
+    }
+
+    const stitchProvider = new StitchDesignProvider({
+      env: { STITCH_ACCESS_TOKEN: "mock-token" },
+      createClient: () => mockStitch,
+    });
+
+    const copyByArchetype: Record<string, { slug: string; title: string; introduction: string; sections: Array<{ heading: string; body: string }>; conclusion: string; cta: string }> = {};
+    for (const rep of snapshotData.representativePages) {
+      copyByArchetype[rep.archetype] = {
+        slug: rep.slug,
+        title: rep.slug,
+        introduction: `Introduction for ${rep.slug}`,
+        sections: [{ heading: "Process", body: `Body for ${rep.slug}` }],
+        conclusion: `Conclusion for ${rep.slug}`,
+        cta: `Contact ${rep.slug}`,
+      };
+    }
+
+    const genResult = await stitchProvider.generateDesignSystem({
+      inputSnapshot: snapshotData,
+      inputSnapshotId: snapshot.id,
+      projectId,
+      acceptedCopyByArchetype: copyByArchetype,
+      designSeed: {
+        colors: { primary: "#1A2E35", secondary: "#4A5A62", accent: "#B8422E", neutral: "#F7F5F2" },
+        typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans", scaleNotes: "Institutional typographic scale" },
+        rationale: "Institutional advisory identity.",
+      },
+    });
+
+    const candidate = await designStore.createCandidate({
+      projectId,
+      inputSnapshot: snapshot,
+      data: genResult.candidate,
+    });
+    const candidateData = parseDesignCandidateAnyVersion(candidate.data);
+    assert.equal(candidateData.schemaVersion, "design-v2");
+
+    const accepted = await designStore.acceptCandidate({
+      projectId,
+      candidateId: candidate.id,
+      expectedCandidateDigest: candidate.candidateDigest,
+      reviewNotes: "fresh-project design-v2 acceptance",
+    });
+    const acceptedData = parseDesignCandidateAnyVersion(accepted.data);
+    assert.equal(acceptedData.schemaVersion, "design-v2");
+
+    // 3. Compile DIC directly to verify governed grammar and visual requirements
+    const dic = deriveDesignImplementationContract({
+      design: candidateData as DesignCandidateDataV2,
+      acceptedDesign: { id: accepted.id, version: accepted.version, digest: accepted.candidateDigest },
+      rendererPolicyVersion: "production-policy-v3",
+    });
+    assert.equal(dic.schemaVersion, "design-implementation-v1");
+    assert.match(dic.implementationContractDigest, /^[0-9a-f]{64}$/);
+    assert.ok(dic.archetypeGrammar.length > 0);
+
+    // 4. Derive visual asset plan with real VisualService and verify slot optionality
+    const assetsModule = await import("../../src/assets/service.js");
+    const assetStorageModule = await import("../../src/assets/storage.js");
+    const assets = new assetsModule.AssetService({
+      store: new (await import("../../src/assets/asset-store.js")).AssetStore(dbInst.db),
+      storage: assetStorageModule.createAssetStorage(root),
+    });
+    const visualStore = new VisualStore(dbInst.db);
+    const budgetStore = new VisualBudgetStore(dbInst.db);
+    const visualService = new VisualService({
+      store: visualStore,
+      designStore,
+      assets,
+      budget: budgetStore,
+      provider: new OfflineLiveVisualAssetProvider(),
+      repoRoot: root,
+    });
+
+    const plan = await visualService.derivePlan({ projectId });
+    const planData = visualStore.planData(plan);
+    const heroVal = planData.slots.find((s) => s.slot === "hero-primary.services/valuation");
+    const suppVal = planData.slots.find((s) => s.slot === "supporting.services/valuation");
+    assert.ok(heroVal);
+    assert.equal(heroVal.required, true, "hero-primary on service archetype must be required");
+    assert.ok(suppVal);
+    assert.equal(suppVal.required, false, "supporting on service archetype must be optional");
+
+    // 5. Upload asset, resolve required slots, leave optional slot unresolved, accept set
+    const bytes = await sharp({ create: { width: 1600, height: 900, channels: 3, background: { r: 10, g: 20, b: 30 } } }).jpeg().toBuffer();
+    const upload = await assets.uploadAsset(projectId, {
+      filename: "hero-fresh.jpg",
+      kind: "photo",
+      title: "Hero fresh",
+      rightsStatus: "operator_owned",
+      dataBase64: bytes.toString("base64"),
+      altIntent: "Hero fresh asset",
+    });
+    const approved = await assets.approveVersion(projectId, upload.version.id, upload.version.binaryDigest);
+
+    for (const slot of planData.slots) {
+      if (slot.required) {
+        await visualService.confirmClassification({
+          projectId,
+          planId: plan.id,
+          slot: slot.slot,
+          truthClass: "illustrative",
+        });
+        await visualService.resolveReuse({
+          projectId,
+          planId: plan.id,
+          slot: slot.slot,
+          versionId: approved.id,
+        });
+      }
+    }
+
+    const freshRecord = await visualService.acceptSet({ projectId, planId: plan.id });
+    const acceptedSlots = await visualStore.listAcceptedSlots(freshRecord.id);
+    assert.ok(acceptedSlots.some((s) => s.slot === "hero-primary.services/valuation"));
+    assert.ok(!acceptedSlots.some((s) => s.slot === "supporting.services/valuation"), "unresolved optional slot omitted");
+
+    // 6. Derive production input and compile production-v3 manifest
+    const production = new ProductionStore(dbInst.db);
+    const prodInput = await production.deriveProductionInput({
+      projectId,
+      pageSlug: "services/valuation",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "astro-7.2.9",
+      rendererPolicyVersion: "production-policy-v3",
+    });
+    assert.equal(prodInput.pageType, "service");
+    assert.equal(prodInput.acceptedDesignId, accepted.id);
+
+    const compiler = new ProductionRenderCompiler(dbInst.db, root);
+    const assetSnapshotDir = path.join(root, "fresh-snapshots");
+    const manifest = await compiler.compileManifest({
+      projectId,
+      productionInputId: prodInput.id,
+      assetSnapshotDir,
+    });
+    assert.equal(manifest.schemaVersion, "production-v3");
+    assert.ok(manifest.design.designImplementation);
+    assert.equal(manifest.design.designImplementation.implementationContractDigest, dic.implementationContractDigest);
+    assert.ok(manifest.assets.some((a) => a.slot === "hero-primary.services/valuation"));
+    assert.ok(!manifest.assets.some((a) => a.slot === "supporting.services/valuation"));
+
+    // 7. Backward compatibility: read existing design-v1 records cleanly without mutation
+    const v1ProjectId = (await seedProjectWithAcceptedInputs(dbInst, "v1-compat")).projectId;
+    await acceptFixturePage(dbInst, v1ProjectId, "home");
+    const v1Snapshot = await designStore.deriveInputSnapshotDraft({ projectId: v1ProjectId, schemaVersion: "design-v1" });
+    const v1SnapshotData = parseDesignInputSnapshotAnyVersion(v1Snapshot.data);
+    assert.equal(v1SnapshotData.schemaVersion, "design-v1");
+    // Next snapshot draft on v1 project preserves established v1 version:
+    const v1NextSnapshot = await designStore.deriveInputSnapshotDraft({ projectId: v1ProjectId });
+    const v1NextData = parseDesignInputSnapshotAnyVersion(v1NextSnapshot.data);
+    assert.equal(v1NextData.schemaVersion, "design-v1", "existing v1 project must preserve design-v1");
+  } finally {
+    delete process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA;
+    if (root) {
+      await rm(root, { recursive: true, force: true }).catch(() => undefined);
+    }
+    await dbInst.close();
+  }
 });
 

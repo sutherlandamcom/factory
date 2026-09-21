@@ -184,6 +184,8 @@ export const visualPlanSlotSchema = z
     pageSlug: z.string().trim().min(1).max(120),
     role: z.string().trim().min(1).max(60),
     requiredRole: z.enum(["hero", "background", "inline", "chart", "illustration", "logo", "supporting"]),
+    /** Whether this slot is required before visual set and production acceptance (design-v2 governed optionality). */
+    required: z.boolean().default(true),
     /** Visual requirement verbatim from the accepted design artifact. */
     requirement: boundedText(500),
     /** Deterministic truth-class PROPOSAL (operator must confirm). */

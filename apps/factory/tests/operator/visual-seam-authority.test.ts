@@ -117,7 +117,7 @@ async function createHarness() {
 async function seedTestProject(h: Awaited<ReturnType<typeof createHarness>>, key: string): Promise<string> {
   const { projectId } = await seedProjectWithAcceptedInputs(dbInst!, key);
   await acceptFixturePage(dbInst!, projectId, "home");
-  await h.design.deriveInputSnapshotDraft(projectId);
+  await h.design.deriveInputSnapshotDraft(projectId, { schemaVersion: "design-v1" });
   const cand = await h.design.generateCandidate({ projectId });
   await h.design.acceptCandidate({
     projectId,
@@ -150,7 +150,7 @@ async function seedPreBoundProject(h: Awaited<ReturnType<typeof createHarness>>,
     role: "hero",
     expectedBinaryDigest: approved.binaryDigest,
   });
-  await h.design.deriveInputSnapshotDraft(projectId);
+  await h.design.deriveInputSnapshotDraft(projectId, { schemaVersion: "design-v1" });
   const cand = await h.design.generateCandidate({ projectId });
   await h.design.acceptCandidate({
     projectId,
@@ -226,7 +226,7 @@ test("AUTHORITY 2: same slot changed externally to another approved asset (no Ru
     role: "hero",
     expectedBinaryDigest: approved.binaryDigest,
   });
-  await h.design.deriveInputSnapshotDraft(projectId);
+  await h.design.deriveInputSnapshotDraft(projectId, { schemaVersion: "design-v1" });
   const cand = await h.design.generateCandidate({ projectId });
   await h.design.acceptCandidate({
     projectId,
@@ -281,7 +281,7 @@ test("AUTHORITY 3: wrong page slot mutation -> ASSET_ASSIGNMENT_CHANGED (Run 7 r
     role: "hero",
     expectedBinaryDigest: approved.binaryDigest,
   });
-  await h.design.deriveInputSnapshotDraft(projectId);
+  await h.design.deriveInputSnapshotDraft(projectId, { schemaVersion: "design-v1" });
   const cand = await h.design.generateCandidate({ projectId });
   await h.design.acceptCandidate({
     projectId,
@@ -553,7 +553,7 @@ test("TRUTHFULNESS 2: reuse_real slot reports providerConsumed=false (provider n
     role: "hero",
     expectedBinaryDigest: approved.binaryDigest,
   });
-  await h.design.deriveInputSnapshotDraft(projectId);
+  await h.design.deriveInputSnapshotDraft(projectId, { schemaVersion: "design-v1" });
   const cand = await h.design.generateCandidate({ projectId });
   await h.design.acceptCandidate({
     projectId,

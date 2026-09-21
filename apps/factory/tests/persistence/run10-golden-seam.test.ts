@@ -145,7 +145,7 @@ async function setupGoldenEnvironment(dbInst: FactoryDatabaseInstance, repoRoot:
   const approved = await assets.approveVersion(projectId, upload.version.id, upload.version.binaryDigest);
 
   const designStore = new DesignStore(dbInst.db);
-  const snapshot = await designStore.deriveInputSnapshotDraft({ projectId });
+  const snapshot = await designStore.deriveInputSnapshotDraft({ projectId, schemaVersion: "design-v1" });
   const liveData = parseDesignCandidateData({ ...candidateData(pageSlug), providerMode: "live", providerProjectName: "projects/live" });
   const candidate = await designStore.createCandidate({ projectId, inputSnapshot: snapshot, data: liveData });
   await dbInst.db.execute(sql`UPDATE design_candidates SET provider_mode = 'live' WHERE id = ${candidate.id}`);

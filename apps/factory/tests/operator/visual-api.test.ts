@@ -169,6 +169,7 @@ async function acceptFixtureDesign(baseUrl: string, projectId: string): Promise<
   const deriveRes = await fetch(`${baseUrl}/api/projects/${projectId}/design/input-snapshot`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ schemaVersion: "design-v1" }),
   });
   assert.equal(deriveRes.status, 201);
   const genRes = await fetch(`${baseUrl}/api/projects/${projectId}/design/generate`, {
@@ -574,7 +575,7 @@ test("visual API: byte-identical candidate from a new request binds to the exist
   try {
     const projectId = await createProjectWithAcceptedInputs(baseUrl, "vapbind");
     // Accept a LIVE-mode design (providerMode live matches the live provider path).
-    await fetch(`${baseUrl}/api/projects/${projectId}/design/input-snapshot`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    await fetch(`${baseUrl}/api/projects/${projectId}/design/input-snapshot`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ schemaVersion: "design-v1" }) });
     const genRes = await fetch(`${baseUrl}/api/projects/${projectId}/design/generate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     assert.equal(genRes.status, 201);
     const gen = (await genRes.json()) as { id: string; candidateDigest: string };

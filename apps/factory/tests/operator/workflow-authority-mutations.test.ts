@@ -326,7 +326,7 @@ async function setupValidReadyChain(key: string, opts?: { withAsset?: boolean })
   }
 
   const designStore = new DesignStore(dbInst.db);
-  const designSnapshot = await designStore.deriveInputSnapshotDraft({ projectId: project.id });
+  const designSnapshot = await designStore.deriveInputSnapshotDraft({ projectId: project.id, schemaVersion: "design-v1" });
   const cData = candidateData(
     assetInfo
       ? {

@@ -130,7 +130,7 @@ async function seedTestProject(harness: Awaited<ReturnType<typeof createHarness>
   // Seed representative homepage content
   await acceptFixturePage(dbInst!, projectId, "home");
 
-  await harness.design.deriveInputSnapshotDraft(projectId);
+  await harness.design.deriveInputSnapshotDraft(projectId, { schemaVersion: "design-v1" });
   const cand = await harness.design.generateCandidate({ projectId });
   await harness.design.acceptCandidate({
     projectId,
@@ -361,7 +361,7 @@ test("ADVERSARIAL 4: exact accepted Run 7 replacement triggers RUN7_EXACT_ASSET_
   });
 
   // 2. Derive design input snapshot and accept candidate
-  await h.design.deriveInputSnapshotDraft(project.id);
+  await h.design.deriveInputSnapshotDraft(project.id, { schemaVersion: "design-v1" });
   const cand = await h.design.generateCandidate({ projectId: project.id });
   await h.design.acceptCandidate({
     projectId: project.id,
@@ -436,7 +436,7 @@ test("ADVERSARIAL 4: exact accepted Run 7 replacement triggers RUN7_EXACT_ASSET_
     expectedBinaryDigest: uploadB1.version.binaryDigest,
   });
 
-  await h.design.deriveInputSnapshotDraft(projectB.id);
+  await h.design.deriveInputSnapshotDraft(projectB.id, { schemaVersion: "design-v1" });
   const candB = await h.design.generateCandidate({ projectId: projectB.id });
   await h.design.acceptCandidate({
     projectId: projectB.id,

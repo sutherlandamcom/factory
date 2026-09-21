@@ -479,20 +479,22 @@ test("grammar normalization: unsupported section pattern fails closed with desig
   );
 });
 
-test("durable policy activation: preserves design-v1 historical default, respects explicit and env v2 opt-in", () => {
+test("durable policy activation: design-v2 repository-owned policy for fresh projects, preserves existing v1 without mutation, respects explicit and env overrides", () => {
   const origEnv = process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA;
   try {
     delete process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA;
-    // Ambient default remains design-v1 (AGENTS.md historical stability)
-    assert.equal(designSnapshotSchemaVersion("proj-brand-new"), "design-v1");
+    // Fresh project without prior authority defaults to design-v2 by repository-owned production policy
+    assert.equal(designSnapshotSchemaVersion("proj-brand-new"), "design-v2");
     // Explicit caller version is respected
     assert.equal(designSnapshotSchemaVersion("proj-new", { explicitVersion: "design-v2" }), "design-v2");
     assert.equal(designSnapshotSchemaVersion("proj-new", { explicitVersion: "design-v1" }), "design-v1");
-    // Existing project snapshot version is preserved
+    // Existing project snapshot version is preserved (v1 remains v1 without silent migration)
     assert.equal(designSnapshotSchemaVersion("proj-existing-v1", { existingVersion: "design-v1" }), "design-v1");
     assert.equal(designSnapshotSchemaVersion("proj-existing-v2", { existingVersion: "design-v2" }), "design-v2");
 
-    // Environment variable override activates design-v2
+    // Environment variable override works for testing
+    process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA = "design-v1";
+    assert.equal(designSnapshotSchemaVersion("proj-brand-new"), "design-v1");
     process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA = "design-v2";
     assert.equal(designSnapshotSchemaVersion("proj-brand-new"), "design-v2");
   } finally {

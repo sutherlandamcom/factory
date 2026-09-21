@@ -1257,6 +1257,7 @@ export interface VisualSlotView {
   pageSlug: string;
   role: string;
   requiredRole: string;
+  required?: boolean;
   requirement: string;
   truthClassProposal: string;
   truthClassRationale: string;

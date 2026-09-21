@@ -651,7 +651,7 @@ export type DesignNormalizationProvenance = z.infer<typeof designNormalizationPr
 export const designInputSnapshotDataV2Schema = designInputSnapshotDataSchema.omit({ schemaVersion: true }).extend({
   schemaVersion: z.literal(DESIGN_SCHEMA_VERSION_V2),
   /** Exact accepted page -> archetype bindings for the WHOLE current page inventory. */
-  pageArchetypeBindings: z.array(designPageArchetypeBindingSchema).min(1).max(200),
+  pageArchetypeBindings: z.array(designPageArchetypeBindingSchema).max(200),
   /** Versioned policy that derived the bindings (provenance, not authority). */
   pageArchetypeBindingPolicy: z.string().trim().min(1).max(100),
 }).strict();

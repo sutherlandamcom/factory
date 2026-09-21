@@ -139,8 +139,8 @@ export class DesignService {
 
   // ---- Input snapshot ---------------------------------------------------------
 
-  async deriveInputSnapshotDraft(projectId: string): Promise<DesignInputSnapshotView> {
-    const row = await this.store.deriveInputSnapshotDraft({ projectId });
+  async deriveInputSnapshotDraft(projectId: string, options?: { schemaVersion?: "design-v1" | "design-v2" }): Promise<DesignInputSnapshotView> {
+    const row = await this.store.deriveInputSnapshotDraft({ projectId, schemaVersion: options?.schemaVersion });
     return this.toInputSnapshotView(row, await this.store.inputSnapshotStaleness(projectId, row));
   }
 

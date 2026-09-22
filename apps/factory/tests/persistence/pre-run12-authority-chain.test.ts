@@ -1,9 +1,9 @@
 import { EvidenceStitchProvider } from "../fixtures/stitch-evidence.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { setupMigratedTestDatabase } from "../persistence/helpers.js";
-import { acceptedPageContent } from "../../src/persistence/schema.js";
+import { acceptedDesignArtifacts, acceptedPageContent } from "../../src/persistence/schema.js";
 import { acceptFixturePage } from "../fixtures/accepted-page.js";
 import { seedProjectWithAcceptedInputs } from "../fixtures/writer-seeds.js";
 import { FactoryStore } from "../../src/persistence/store.js";
@@ -247,8 +247,11 @@ interface ChainEnv {
   visualStore: VisualStore;
   visualService: VisualService;
   assets: import("../../src/assets/service.js").AssetService;
+  approvedHero: import("../../src/assets/asset-store.js").AssetVersionRow;
+  approvedBg: import("../../src/assets/asset-store.js").AssetVersionRow;
   acceptedPages: string[];
   root: string;
+  mockStitch: MockStitchClient;
 }
 
 /**
@@ -410,8 +413,11 @@ async function setupV2Chain(
     visualStore,
     visualService,
     assets,
+    approvedHero,
+    approvedBg,
     acceptedPages,
     root,
+    mockStitch,
   };
 }
 
@@ -527,14 +533,71 @@ test("PG pre-run12: adding a page after design acceptance does NOT stale a v2 de
     const beforeView = await env.designStore.latestAcceptedDesign(env.projectId);
     assert.ok(beforeView);
     const before = beforeView.artifact;
-    // Case B: a NEW ordinary service page after design acceptance.
+
+    // Track baseline artifact count and provider generation calls before adding offer-x92
+    const stitchCallsBefore = env.mockStitch.calls.length;
+    const designArtifactsBefore = await dbInst.db
+      .select()
+      .from(acceptedDesignArtifacts)
+      .where(eq(acceptedDesignArtifacts.projectId, env.projectId));
+    const designArtifactCountBefore = designArtifactsBefore.length;
+
+    // Case B: a NEW ordinary service page after design acceptance with durable typed archetype authority
+    const pageArchetypeStore = new PageArchetypeStore(dbInst.db);
+    const serviceAuth = await pageArchetypeStore.setPageArchetype({
+      projectId: env.projectId,
+      pageIdentity: "offer-x92",
+      archetype: "service",
+    });
+    assert.equal(serviceAuth.archetype, "service");
     await acceptFixturePage(dbInst, env.projectId, "offer-x92", false, "service");
+
     const stalenessView = await env.designStore.latestAcceptedDesign(env.projectId);
     assert.equal(stalenessView!.staleness.stale, false, `v2 design must not stale on ordinary page addition: ${stalenessView!.staleness.reason}`);
     const after = stalenessView!.artifact;
     assert.equal(after.id, before.id);
     assert.equal(after.version, before.version);
-    // The new page classifies and derives production input with the SAME design.
+
+    // Verify zero new Stitch calls and zero new AcceptedDesignArtifacts
+    const stitchCallsAfter = env.mockStitch.calls.length;
+    assert.equal(stitchCallsAfter, stitchCallsBefore, "zero new Stitch calls when adding page under supported archetype");
+    const designArtifactsAfter = await dbInst.db
+      .select()
+      .from(acceptedDesignArtifacts)
+      .where(eq(acceptedDesignArtifacts.projectId, env.projectId));
+    assert.equal(designArtifactsAfter.length, designArtifactCountBefore, "zero new AcceptedDesignArtifact created");
+
+    // Real VisualService lifecycle: derivePlan -> classify -> resolve page-specific assets -> acceptSet
+    const planB = await env.visualService.derivePlan({ projectId: env.projectId });
+    const planBData = env.visualStore.planData(planB);
+    for (const slot of planBData.slots) {
+      if (slot.required) {
+        await env.visualService.confirmClassification({
+          projectId: env.projectId,
+          planId: planB.id,
+          slot: slot.slot,
+          truthClass: "illustrative",
+        });
+        await env.visualService.resolveReuse({
+          projectId: env.projectId,
+          planId: planB.id,
+          slot: slot.slot,
+          versionId: env.approvedHero.id,
+        });
+      }
+    }
+    const visualRecordB = await env.visualService.acceptSet({
+      projectId: env.projectId,
+      planId: planB.id,
+    });
+    // New page-specific AcceptedVisualAssetSet version is EXPECTED
+    assert.ok(visualRecordB.version >= 2, "new page-specific visual asset set version generated");
+    // New visual set remains bound to the same accepted design
+    assert.equal(visualRecordB.designArtifactId, before.id);
+    assert.equal(visualRecordB.designArtifactVersion, before.version);
+    assert.equal(visualRecordB.designCandidateDigest, before.candidateDigest);
+
+    // Derive ProductionPageInput for offer-x92
     const input = await env.production.deriveProductionInput({
       projectId: env.projectId,
       pageSlug: "offer-x92",
@@ -543,7 +606,81 @@ test("PG pre-run12: adding a page after design acceptance does NOT stale a v2 de
       rendererPolicyVersion: "production-policy-v3",
     });
     assert.equal(input.pageType, "service");
-    assert.equal(input.acceptedDesignId, before!.id);
+    assert.equal(input.acceptedDesignId, before.id);
+    assert.equal(input.acceptedVisualSetId, visualRecordB.id);
+    assert.equal(input.acceptedVisualSetVersion, visualRecordB.version);
+
+    const ppiData = input.data as import("@factory/contracts").ProductionPageInputData;
+    assert.ok(ppiData.pageArchetypeAuthority);
+    assert.equal(ppiData.pageArchetypeAuthority.id, serviceAuth.id);
+    assert.equal(ppiData.pageArchetypeAuthority.archetype, "service");
+    assert.equal(ppiData.pageArchetypeAuthority.pageIdentity, "offer-x92");
+
+    // Full publication proof: compile manifest, write production-v3 manifest, run real Astro build and QA
+    const repoRoot = await resolveRepositoryRoot();
+    const compiler = new ProductionRenderCompiler(env.dbInst.db, env.root);
+    const assetSnapshotDir = path.join(env.root, "asset-snapshots-b");
+    const manifestDir = path.join(env.root, "manifests-b");
+    const distDir = path.join(env.root, "dist-b");
+
+    const offerManifest = await compiler.compileManifest({
+      projectId: env.projectId,
+      productionInputId: input.id,
+      assetSnapshotDir,
+    });
+    assert.equal(offerManifest.schemaVersion, "production-v3");
+    assert.doesNotThrow(() => assertManifest(offerManifest));
+    assert.ok(offerManifest.design.composition);
+    assert.ok(offerManifest.design.semanticTokens);
+    await compiler.writeManifest(offerManifest, manifestDir);
+
+    const manifests = [offerManifest];
+    for (const slug of ["home", "services/advisory"]) {
+      const ppi = await env.production.deriveProductionInput({
+        projectId: env.projectId,
+        pageSlug: slug,
+        siteIdentity: siteIdentity(),
+        rendererVersion: "astro-7.2.9",
+        rendererPolicyVersion: "production-policy-v3",
+      });
+      const m = await compiler.compileManifest({
+        projectId: env.projectId,
+        productionInputId: ppi.id,
+        assetSnapshotDir,
+      });
+      manifests.push(m);
+      await compiler.writeManifest(m, manifestDir);
+    }
+
+    const siteDir = path.join(repoRoot, "sites", "starter");
+    const buildResult = await runProcess("pnpm", ["run", "build"], {
+      cwd: siteDir,
+      env: {
+        ...process.env,
+        FACTORY_PRODUCTION_MANIFEST_DIR: manifestDir,
+        FACTORY_PRODUCTION_OUT_DIR: distDir,
+        FACTORY_PRODUCTION_SITE_PROFILE_DIGEST: siteIdentity().profileDigest,
+        PUBLIC_SITE_URL: siteIdentity().canonicalOrigin,
+      },
+      timeoutMs: 120_000,
+    });
+    assert.equal(buildResult.exitCode, 0, `Astro build failed: ${buildResult.stderr}`);
+
+    const offerHtml = await readFile(path.join(distDir, "offer-x92", "index.html"), "utf8");
+    assert.ok(offerHtml.includes("<!DOCTYPE html>") || offerHtml.includes("<html"));
+    assert.ok(offerHtml.includes(offerManifest.content.title));
+
+    await emitSitemapAndRobots({ manifests, distDir, siteName: siteIdentity().siteName });
+    const qa = await runSiteWideQa({
+      distDir,
+      manifests,
+      redirectRules: [],
+      siteName: siteIdentity().siteName,
+      manifestSetDigest: deterministicDigest(manifests.map(item => ({ inputId: item.input.id, route: item.input.route, manifestDigest: item.manifestDigest }))),
+      repositorySha: REPOSITORY_SHA,
+    });
+    if (qa.overall !== "PASS") console.error("Case B QA FAILING CHECKS:", qa.checks.filter(c => c.verdict !== "PASS"));
+    assert.equal(qa.overall, "PASS");
   } finally {
     process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA = undefined;
     if (env) {
@@ -624,16 +761,21 @@ test("PG pre-run12: durable page archetype authority required by production; reg
   const dbInst = await setupMigratedTestDatabase();
   let env: ChainEnv | undefined;
   try {
-    env = await setupV2Chain(dbInst, "pr12-arch-auth", ["home", "services/advisory"]);
+    // Chain with design supporting homepage, service, and editorial archetypes
+    env = await setupV2Chain(dbInst, "pr12-arch-auth", ["home", "services/advisory", "research/report"]);
 
-    // 1. offer-x92 with explicit durable service authority -> PASS (even though slug has no /services/)
     const pageArchetypeStore = new PageArchetypeStore(dbInst.db);
-    await pageArchetypeStore.setPageArchetype({
+
+    // A. Exact binding & F. Weird slug without regex inference
+    // offer-x92 with explicit durable service authority -> PASS (even though slug has no /services/)
+    const serviceAuth = await pageArchetypeStore.setPageArchetype({
       projectId: env.projectId,
       pageIdentity: "offer-x92",
       archetype: "service",
     });
+    assert.equal(serviceAuth.version, 1);
     await acceptFixturePage(dbInst, env.projectId, "offer-x92", false, "service");
+
     const offerInput = await env.production.deriveProductionInput({
       projectId: env.projectId,
       pageSlug: "offer-x92",
@@ -642,8 +784,59 @@ test("PG pre-run12: durable page archetype authority required by production; reg
       rendererPolicyVersion: "production-policy-v3",
     });
     assert.equal(offerInput.pageType, "service");
+    const ppiData = offerInput.data as import("@factory/contracts").ProductionPageInputData;
+    assert.ok(ppiData.pageArchetypeAuthority, "PPI must bind exact pageArchetypeAuthority");
+    assert.equal(ppiData.pageArchetypeAuthority.id, serviceAuth.id);
+    assert.equal(ppiData.pageArchetypeAuthority.version, 1);
+    assert.equal(ppiData.pageArchetypeAuthority.digest, serviceAuth.authorityDigest);
+    assert.equal(ppiData.pageArchetypeAuthority.pageIdentity, "offer-x92");
+    assert.equal(ppiData.pageArchetypeAuthority.archetype, "service");
 
-    // 2. services/fake-looking-page has content accepted, but NO durable archetype authority -> FAIL (page_archetype_unclassified)
+    const freshCheck = await env.production.inputStaleness(offerInput);
+    assert.equal(freshCheck.stale, false, "PPI bound to current service authority v1 must be fresh");
+
+    // C. Same-value idempotency: re-setting same archetype returns same record without fake version bump
+    const serviceAuthRepeat = await pageArchetypeStore.setPageArchetype({
+      projectId: env.projectId,
+      pageIdentity: "offer-x92",
+      archetype: "service",
+    });
+    assert.equal(serviceAuthRepeat.version, 1, "idempotent setPageArchetype must not bump version");
+    assert.equal(serviceAuthRepeat.authorityDigest, serviceAuth.authorityDigest);
+
+    // B. Authority mutation: offer-x92 service v1 -> editorial v2 makes old PPI stale
+    const editorialAuth = await pageArchetypeStore.setPageArchetype({
+      projectId: env.projectId,
+      pageIdentity: "offer-x92",
+      archetype: "editorial",
+    });
+    assert.equal(editorialAuth.version, 2, "new archetype assignment bumps version");
+    assert.notEqual(editorialAuth.authorityDigest, serviceAuth.authorityDigest);
+
+    const staleCheck = await env.production.inputStaleness(offerInput);
+    assert.equal(staleCheck.stale, true, "old PPI bound to service v1 must be stale after authority mutation");
+    assert.match(staleCheck.reason!, /Page archetype authority changed or was superseded/);
+
+    // Derive new PPI -> binds editorial v2
+    const offerInputV2 = await env.production.deriveProductionInput({
+      projectId: env.projectId,
+      pageSlug: "offer-x92",
+      siteIdentity: siteIdentity(),
+      rendererVersion: "astro-7.2.9",
+      rendererPolicyVersion: "production-policy-v3",
+    });
+    assert.equal(offerInputV2.pageType, "editorial");
+    const ppiDataV2 = offerInputV2.data as import("@factory/contracts").ProductionPageInputData;
+    assert.ok(ppiDataV2.pageArchetypeAuthority);
+    assert.equal(ppiDataV2.pageArchetypeAuthority.id, editorialAuth.id);
+    assert.equal(ppiDataV2.pageArchetypeAuthority.version, 2);
+    assert.equal(ppiDataV2.pageArchetypeAuthority.digest, editorialAuth.authorityDigest);
+    assert.equal(ppiDataV2.pageArchetypeAuthority.archetype, "editorial");
+
+    const freshCheckV2 = await env.production.inputStaleness(offerInputV2);
+    assert.equal(freshCheckV2.stale, false, "new PPI bound to editorial v2 must be fresh");
+
+    // E. Missing authority: services/fake-looking-page has content accepted, but NO durable archetype authority -> FAIL (page_archetype_unclassified)
     await acceptFixturePage(dbInst, env.projectId, "services/fake-looking-page", false, null);
     await assert.rejects(
       env.production.deriveProductionInput({
@@ -656,8 +849,8 @@ test("PG pre-run12: durable page archetype authority required by production; reg
       (err: any) => err.code === "page_archetype_unclassified",
     );
 
-    // 3. Accepted binding references archetype not supported by AcceptedDesignArtifact -> FAIL (page_archetype_unsupported)
-    // Register investment_advisory which is not in the design's supported archetypes (homepage, service)
+    // D. Unsupported new archetype: Accepted binding references archetype not supported by AcceptedDesignArtifact -> FAIL (page_archetype_unsupported)
+    // Register investment_advisory which is not in the design's supported archetypes (homepage, service, editorial)
     await pageArchetypeStore.setPageArchetype({
       projectId: env.projectId,
       pageIdentity: "wealth-mgmt",

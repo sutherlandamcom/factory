@@ -590,6 +590,25 @@ export interface DesignStaleness {
 export const PAGE_ARCHETYPE_BINDING_POLICY_V1 = "page-archetype-policy-v1" as const;
 export type PageArchetypeBindingPolicy = typeof PAGE_ARCHETYPE_BINDING_POLICY_V1;
 
+export const pageArchetypeAuthorityIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^paa-[0-9a-f-]{36}$/, "page archetype authority id must match paa-<uuid>");
+
+/** Exact durable page-archetype authority reference. */
+export const pageArchetypeAuthorityRefSchema = z
+  .object({
+    id: pageArchetypeAuthorityIdSchema,
+    version: z.number().int().min(1),
+    digest: designDigestSchema,
+    pageIdentity: z.string().trim().min(1).max(200),
+    archetype: designArchetypeKindSchema,
+  })
+  .strict();
+export type PageArchetypeAuthorityRef = z.infer<typeof pageArchetypeAuthorityRefSchema>;
+
 /** One accepted page's archetype binding as recorded at snapshot time. */
 export const designPageArchetypeBindingSchema = z
   .object({
@@ -597,6 +616,8 @@ export const designPageArchetypeBindingSchema = z
     archetype: designArchetypeKindSchema,
     /** Exact contentDigest of the page at binding time. */
     contentDigest: designDigestSchema,
+    /** Exact page-archetype authority reference at binding time. */
+    pageArchetypeAuthority: pageArchetypeAuthorityRefSchema.optional(),
   })
   .strict();
 export type DesignPageArchetypeBinding = z.infer<typeof designPageArchetypeBindingSchema>;

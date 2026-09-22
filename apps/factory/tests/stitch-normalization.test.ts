@@ -43,13 +43,62 @@ test("unsupported provider output and missing/duplicate section identities fail 
   ]) assert.throws(() => normalize(bad), (error: unknown) => (error as { code: string }).code === "design_provider_output_invalid");
 });
 
+test("provider HTML copy alterations and unbound claims fail closed", () => {
+  const html = providerHtml("service", page, a);
+  // rewrite title -> FAIL
+  assert.throws(
+    () => normalize(html.replace(`<h1>${page.title}</h1>`, `<h1>Rewritten Title</h1>`)),
+    (err: any) => err.code === "design_provider_output_invalid",
+  );
+  // shorten introduction -> FAIL
+  assert.throws(
+    () => normalize(html.replace(`<p>${page.introduction}</p>`, `<p>Intro</p>`)),
+    (err: any) => err.code === "design_provider_output_invalid",
+  );
+  // change section heading -> FAIL
+  assert.throws(
+    () => normalize(html.replace(`<h2>${page.sections[0]!.heading}</h2>`, `<h2>Altered Heading</h2>`)),
+    (err: any) => err.code === "design_provider_output_invalid",
+  );
+  // rewrite section body -> FAIL
+  assert.throws(
+    () => normalize(html.replace(`<p>${page.sections[0]!.body}</p>`, `<p>Altered section body copy.</p>`)),
+    (err: any) => err.code === "design_provider_output_invalid",
+  );
+  // drop paragraph -> FAIL
+  assert.throws(
+    () => normalize(html.replace(`<p>${page.sections[0]!.body}</p>`, ``)),
+    (err: any) => err.code === "design_provider_output_invalid",
+  );
+  // change conclusion -> FAIL
+  assert.throws(
+    () => normalize(html.replace(page.conclusion, "Altered conclusion text")),
+    (err: any) => err.code === "design_provider_output_invalid",
+  );
+  // change CTA -> FAIL
+  assert.throws(
+    () => normalize(html.replace(page.cta, "Altered CTA text")),
+    (err: any) => err.code === "design_provider_output_invalid",
+  );
+  // append unbound marketing claim -> FAIL
+  assert.throws(
+    () => normalize(html.replace(`<p>${page.sections[0]!.body}</p>`, `<p>${page.sections[0]!.body}</p><p>Industry-leading guaranteed returns</p>`)),
+    (err: any) => err.code === "design_provider_output_invalid",
+  );
+  // append unbound marketing claim in hero -> FAIL
+  assert.throws(
+    () => normalize(html.replace(`<p>${page.introduction}</p>`, `<p>${page.introduction}</p><span>Industry-leading guaranteed returns</span>`)),
+    (err: any) => err.code === "design_provider_output_invalid",
+  );
+});
+
 async function design(): Promise<DesignCandidateDataV2> {
   const input = parseDesignInputSnapshotAnyVersion({
     schemaVersion: "design-v2", acceptedInputSnapshotId: "pis-test", acceptedInputSnapshotVersion: 1, acceptedInputDigest: "a".repeat(64),
     brand: { facts: [], positioning: "Advisory", tone: "Clear", visualIdentityNotes: "" }, audience: { segments: [], needs: [], decisionContext: "" },
     references: { referenceUrls: [], antiReferenceUrls: [], learn: [], avoid: [], preferredPerception: "" }, uxRequirements: [], contentRefs: [], assetRefs: [],
     archetypes: ["service"], representativePages: [{ archetype: "service", slug: page.slug, contentDigest: "b".repeat(64) }],
-    pageArchetypeBindings: [{ archetype: "service", slug: page.slug, contentDigest: "b".repeat(64) }], pageArchetypeBindingPolicy: "approved-content-brief-archetype-v1",
+    pageArchetypeBindings: [{ archetype: "service", slug: page.slug, contentDigest: "b".repeat(64) }], pageArchetypeBindingPolicy: "page-archetype-policy-v1",
   }) as DesignInputSnapshotDataV2;
   const result = await new FixtureDesignProvider().generateDesignSystem({ inputSnapshot: input, inputSnapshotId: "dsi-test", projectId: "proj-test", acceptedCopyByArchetype: { service: page }, designSeed: {
     colors: { primary: "#1A2E35", secondary: "#4A5A62", accent: "#B8422E", neutral: "#F7F5F2" }, typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans", scaleNotes: "" }, rationale: "Fixture seed",

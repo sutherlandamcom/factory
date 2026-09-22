@@ -199,7 +199,19 @@ export class DesignStore {
     });
     const pageBindings: import("@factory/contracts").DesignPageArchetypeBinding[] = [];
     if (designSchemaVersion === DESIGN_SCHEMA_VERSION_V2) for (const row of contentRows) {
-      pageBindings.push({ slug: row.slug, contentDigest: row.contentDigest, archetype: await new PageArchetypeStore(this.db).requireArchetype(input.projectId, row.slug) });
+      const auth = await new PageArchetypeStore(this.db).requireAuthority(input.projectId, row.slug);
+      pageBindings.push({
+        slug: row.slug,
+        contentDigest: row.contentDigest,
+        archetype: auth.archetype as import("@factory/contracts").DesignArchetypeKind,
+        pageArchetypeAuthority: {
+          id: auth.id,
+          version: auth.version,
+          digest: auth.authorityDigest,
+          pageIdentity: auth.pageIdentity,
+          archetype: auth.archetype as import("@factory/contracts").DesignArchetypeKind,
+        },
+      });
     }
     if (designSchemaVersion === DESIGN_SCHEMA_VERSION_V2) {
       // Preserve established representatives on ordinary page addition. Otherwise
@@ -207,8 +219,13 @@ export class DesignStore {
       const previous = existingSnapshot ? parseDesignInputSnapshotAnyVersion(existingSnapshot.data) : null;
       representativePages = [...new Set(pageBindings.map(row => row.archetype))].map(archetype => {
         const old = previous?.representativePages.find(row => row.archetype === archetype);
-        return pageBindings.find(row => row.archetype === archetype && row.slug === old?.slug)
+        const match = pageBindings.find(row => row.archetype === archetype && row.slug === old?.slug)
           ?? pageBindings.filter(row => row.archetype === archetype).sort((a, b) => contentRows.find(row => row.slug === a.slug)!.version - contentRows.find(row => row.slug === b.slug)!.version)[0]!;
+        return {
+          archetype: match.archetype,
+          slug: match.slug,
+          contentDigest: match.contentDigest,
+        };
       });
     }
     const data =
@@ -238,7 +255,7 @@ export class DesignStore {
             // Whole current page inventory -> typed archetype bindings
             // (fail-closed derivation; provenance record, not runtime truth).
             pageArchetypeBindings: pageBindings,
-            pageArchetypeBindingPolicy: "approved-content-brief-archetype-v1",
+            pageArchetypeBindingPolicy: PAGE_ARCHETYPE_BINDING_POLICY_V1,
           })
         : parseDesignInputSnapshotData({
             schemaVersion: "design-v1",
@@ -849,6 +866,19 @@ export class DesignStore {
           reason: `New accepted content exists (${addedContent.map((r) => r.slug).join(", ")}).`,
           code: "CONTENT_ADDED",
         };
+      }
+    } else {
+      // For design-v2: if a representative page's archetype changed, the design input snapshot is stale.
+      const pageArchStore = new PageArchetypeStore(tx);
+      for (const rep of data.representativePages) {
+        const currentArch = await pageArchStore.getArchetype(projectId, rep.slug);
+        if (currentArch && currentArch !== rep.archetype) {
+          return {
+            stale: true,
+            reason: `Representative page "${rep.slug}" archetype changed from ${rep.archetype} to ${currentArch}.`,
+            code: "CONTENT_CHANGED",
+          };
+        }
       }
     }
 

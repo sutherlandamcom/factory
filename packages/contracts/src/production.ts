@@ -1,7 +1,10 @@
 import { z } from "zod";
-import { canonicalOriginSchema } from "./site-profile.js";
-import { siteProfileLanguageSchema, siteNameSchema } from "./site-profile.js";
-import { designArchetypeKindSchema } from "./design.js";
+import { canonicalOriginSchema, siteProfileLanguageSchema, siteNameSchema } from "./site-profile.js";
+import {
+  designArchetypeKindSchema,
+  pageArchetypeAuthorityRefSchema,
+  type PageArchetypeAuthorityRef,
+} from "./design.js";
 import { qaVerdictSchema } from "./writer-content.js";
 
 /**
@@ -114,9 +117,12 @@ export const productionPageInputDataSchema = z
     acceptedDesign: productionAuthorityRefSchema,
     acceptedVisualSet: productionAuthorityRefSchema,
     renderer: productionRendererIdentitySchema,
+    /** Exact durable page archetype authority that classified this page. */
+    pageArchetypeAuthority: pageArchetypeAuthorityRefSchema.optional(),
   })
   .strict();
 export type ProductionPageInputData = z.infer<typeof productionPageInputDataSchema>;
+export { pageArchetypeAuthorityRefSchema, type PageArchetypeAuthorityRef };
 
 // ---------------------------------------------------------------------------
 // production-v2 — Run 10 derivative-aware production input

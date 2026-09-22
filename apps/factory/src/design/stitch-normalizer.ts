@@ -14,12 +14,29 @@ const invalid = (message: string): never => {
   throw new FactoryError("design_provider_output_invalid", `Stitch normalization: ${message}`);
 };
 
+export function canonicalizeText(value: string): string {
+  return value
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /**
  * Provider-produced semantic DOM protocol. These attributes are requested in
  * the generation prompt and read ONLY from the returned HTML bytes. They are
  * not a claimed native Stitch MCP API. Unannotated output fails closed.
  * Factory maps declared semantics to reviewed capabilities; it never infers
  * section meaning from position, headings, screenshots or its prompt template.
+ *
+ * Responsive layout validation enforces bounded provider-declared responsive
+ * semantic profiles (data-factory-responsive), validated against Factory-supported
+ * responsive profiles (stack, split-at-md, readable) for each component/variant.
+ * It does not claim arbitrary CSS breakpoint inspection.
  */
 export function normalizeStitchDesign(
   evidence: RawStitchProviderPackage,
@@ -49,15 +66,74 @@ export function normalizeStitchDesign(
     if (visualRole && (componentId !== "page-hero" || visualRole !== "hero-primary")) invalid(`unsupported visual-role placement ${visualRole}/${componentId}`);
     if (node.querySelector("img") && visualRole !== "hero-primary") invalid("unbound visual in provider composition");
     const binding = { ...base, variant, responsiveProfile, ...(visualRole ? { visualRole: "hero-primary" as const } : {}) };
+
+    if (componentId === "page-hero") {
+      const h1s = node.querySelectorAll("h1");
+      if (h1s.length !== 1 || canonicalizeText(h1s[0]!.textContent) !== canonicalizeText(page.title)) {
+        invalid("hero title differs from accepted page title");
+      }
+      const paragraphs = node.querySelectorAll("p");
+      if (paragraphs.length === 0) {
+        invalid("hero introduction differs from accepted page introduction");
+      }
+      const introText = canonicalizeText(paragraphs.map(p => p.textContent).join(" "));
+      if (introText !== canonicalizeText(page.introduction)) {
+        invalid("hero introduction differs from accepted page introduction");
+      }
+      for (const child of node.children) {
+        if (child.tagName === "H1" || child.tagName === "P" || child.tagName === "IMG") continue;
+        if (canonicalizeText(child.textContent).length > 0) invalid("unbound provider copy in page-hero");
+      }
+      for (const childNode of node.childNodes) {
+        if (childNode.nodeType === 3 && canonicalizeText(childNode.textContent).length > 0) {
+          invalid("unbound provider copy in page-hero");
+        }
+      }
+    }
+
     if (base.repetition === "per_section") {
       if (node.getAttribute("data-factory-section-index") !== String(nextSection)) invalid("section binding missing, duplicated or out of accepted order");
       const section = page.sections[nextSection];
       if (!section) return invalid("provider binds a nonexistent accepted section");
       const headings = node.querySelectorAll("h2");
-      if (headings.length !== 1 || headings[0]!.textContent.trim() !== section.heading.trim()) invalid("section heading differs from its explicit accepted identity");
+      if (headings.length !== 1 || canonicalizeText(headings[0]!.textContent) !== canonicalizeText(section.heading)) {
+        invalid("section heading differs from its explicit accepted identity");
+      }
+      const paragraphs = node.querySelectorAll("p");
+      if (paragraphs.length === 0 && canonicalizeText(section.body).length > 0) {
+        invalid(`section body differs from accepted copy for section ${nextSection}`);
+      }
+      const bodyText = canonicalizeText(paragraphs.map(p => p.textContent).join(" "));
+      if (bodyText !== canonicalizeText(section.body)) {
+        invalid(`section body differs from accepted copy for section ${nextSection}`);
+      }
+      for (const child of node.children) {
+        if (child.tagName === "H2" || child.tagName === "P" || child.tagName === "IMG") continue;
+        if (canonicalizeText(child.textContent).length > 0) invalid(`unbound provider copy in section ${nextSection}`);
+      }
+      for (const childNode of node.childNodes) {
+        if (childNode.nodeType === 3 && canonicalizeText(childNode.textContent).length > 0) {
+          invalid(`unbound provider copy in section ${nextSection}`);
+        }
+      }
       return { ...binding, sectionIndex: nextSection++ };
     }
     if (node.hasAttribute("data-factory-section-index")) invalid("non-body component claims a section index");
+
+    if (componentId === "page-conclusion") {
+      const conclusionText = canonicalizeText(node.textContent);
+      if (conclusionText !== canonicalizeText(page.conclusion)) {
+        invalid("page conclusion differs from accepted text");
+      }
+    }
+
+    if (componentId === "page-cta") {
+      const ctaText = canonicalizeText(node.textContent);
+      if (ctaText !== canonicalizeText(page.cta)) {
+        invalid("page CTA differs from accepted text");
+      }
+    }
+
     return binding;
   });
   if (nextSection !== page.sections.length) invalid("provider omitted accepted sections");

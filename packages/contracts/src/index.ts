@@ -546,6 +546,7 @@ export {
   isDesignInputSnapshotV2,
   isDesignCandidateV2,
   designStalenessCodeSchema,
+  pageArchetypeAuthorityRefSchema,
 } from "./design.js";
 export type {
   DesignArchetypeKind,
@@ -559,6 +560,7 @@ export type {
   DesignCandidateDataV2,
   DesignCandidateAnyVersion,
   DesignPageArchetypeBinding,
+  PageArchetypeAuthorityRef,
   DesignVisualRoleRequirement,
   DesignNormalizationProvenance,
   DesignTokenColors,

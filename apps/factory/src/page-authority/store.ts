@@ -95,15 +95,15 @@ export class PageArchetypeStore {
   }
 
   /**
-   * Reads the current durable archetype for a page identity if one exists.
+   * Reads the current durable page archetype authority record for a page identity if one exists.
    */
-  async getArchetype(
+  async getAuthority(
     projectId: string,
     pageIdentity: string,
-  ): Promise<DesignArchetypeKind | null> {
+  ): Promise<PageArchetypeAuthorityRecord | null> {
     const norm = normalizePageIdentity(pageIdentity);
     const [latest] = await this.db
-      .select({ archetype: pageArchetypeAuthorities.archetype })
+      .select()
       .from(pageArchetypeAuthorities)
       .where(
         and(
@@ -115,7 +115,7 @@ export class PageArchetypeStore {
       .limit(1);
 
     if (latest) {
-      return (latest.archetype as DesignArchetypeKind);
+      return latest;
     }
 
     if (pageIdentity.startsWith("wacc-")) {
@@ -129,15 +129,56 @@ export class PageArchetypeStore {
           ),
         );
       if (page) {
-        return this.getArchetype(projectId, page.slug);
+        return this.getAuthority(projectId, page.slug);
       }
     }
 
     if (norm === "home") {
-      return "homepage";
+      return this.setPageArchetype({
+        projectId,
+        pageIdentity: "home",
+        archetype: "homepage",
+      });
     }
 
     return null;
+  }
+
+  /**
+   * Reads the current durable archetype for a page identity if one exists.
+   */
+  async getArchetype(
+    projectId: string,
+    pageIdentity: string,
+  ): Promise<DesignArchetypeKind | null> {
+    const authority = await this.getAuthority(projectId, pageIdentity);
+    return authority ? (authority.archetype as DesignArchetypeKind) : null;
+  }
+
+  /**
+   * Requires a durable archetype authority record for a page identity. Fails closed if unclassified
+   * or if the archetype is not supported by the design.
+   */
+  async requireAuthority(
+    projectId: string,
+    pageIdentity: string,
+    supported?: readonly DesignArchetypeKind[],
+  ): Promise<PageArchetypeAuthorityRecord> {
+    const authority = await this.getAuthority(projectId, pageIdentity);
+    if (!authority) {
+      throw new FactoryError(
+        "page_archetype_unclassified",
+        `Page "${pageIdentity}" has no durable accepted archetype authority; register page archetype first.`,
+      );
+    }
+    const archetype = authority.archetype as DesignArchetypeKind;
+    if (supported && !supported.includes(archetype)) {
+      throw new FactoryError(
+        "page_archetype_unsupported",
+        `Accepted design does not support page archetype "${archetype}" for "${pageIdentity}".`,
+      );
+    }
+    return authority;
   }
 
   /**
@@ -149,20 +190,8 @@ export class PageArchetypeStore {
     pageIdentity: string,
     supported?: readonly DesignArchetypeKind[],
   ): Promise<DesignArchetypeKind> {
-    const archetype = await this.getArchetype(projectId, pageIdentity);
-    if (!archetype) {
-      throw new FactoryError(
-        "page_archetype_unclassified",
-        `Page "${pageIdentity}" has no durable accepted archetype authority; register page archetype first.`,
-      );
-    }
-    if (supported && !supported.includes(archetype)) {
-      throw new FactoryError(
-        "page_archetype_unsupported",
-        `Accepted design does not support page archetype "${archetype}" for "${pageIdentity}".`,
-      );
-    }
-    return archetype;
+    const authority = await this.requireAuthority(projectId, pageIdentity, supported);
+    return authority.archetype as DesignArchetypeKind;
   }
 
   /**

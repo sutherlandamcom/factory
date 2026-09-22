@@ -34,6 +34,7 @@ import {
   type ProductionQaCheckResult,
   type ProductionSiteIdentity,
   type DesignArchetypeKind,
+  type PageArchetypeAuthorityRef,
 } from "@factory/contracts";
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
@@ -287,11 +288,22 @@ export class ProductionStore {
         ["homepage", "service", "location", "editorial", "investment_advisory"].includes(kind),
       );
     let pageType: DesignArchetypeKind;
+    let pageArchetypeAuthorityRef: PageArchetypeAuthorityRef | undefined;
     try {
       // v1 remains historical compatibility; v3/v2 never infer page type.
-      pageType = (bundle.design.data as { schemaVersion?: string }).schemaVersion === "design-v2"
-        ? await new PageArchetypeStore(this.db).requireArchetype(input.projectId, input.pageSlug, supportedKinds)
-        : derivePageArchetype(input.pageSlug, supportedKinds).archetype;
+      if ((bundle.design.data as { schemaVersion?: string }).schemaVersion === "design-v2") {
+        const auth = await new PageArchetypeStore(this.db).requireAuthority(input.projectId, input.pageSlug, supportedKinds);
+        pageType = auth.archetype as DesignArchetypeKind;
+        pageArchetypeAuthorityRef = {
+          id: auth.id,
+          version: auth.version,
+          digest: auth.authorityDigest,
+          pageIdentity: auth.pageIdentity,
+          archetype: auth.archetype as DesignArchetypeKind,
+        };
+      } else {
+        pageType = derivePageArchetype(input.pageSlug, supportedKinds).archetype;
+      }
     } catch (error) {
       if (error instanceof PageArchetypeError) {
         throw productionError(error.code, error.message);
@@ -400,6 +412,7 @@ export class ProductionStore {
             version: input.rendererVersion,
             policyVersion: input.rendererPolicyVersion,
           },
+          ...(pageArchetypeAuthorityRef ? { pageArchetypeAuthority: pageArchetypeAuthorityRef } : {}),
         }
       : {
           schemaVersion: "production-v1",
@@ -428,6 +441,7 @@ export class ProductionStore {
             version: input.rendererVersion,
             policyVersion: input.rendererPolicyVersion,
           },
+          ...(pageArchetypeAuthorityRef ? { pageArchetypeAuthority: pageArchetypeAuthorityRef } : {}),
         };
     if (hasDerivativeSet) {
       parseProductionPageInputV2Data(data);
@@ -603,10 +617,42 @@ export class ProductionStore {
       }
     }
 
+    // Page archetype authority: verify exact binding against current durable authority in PageArchetypeStore.
+    const inputData = input.data as {
+      schemaVersion?: string;
+      pageArchetypeAuthority?: PageArchetypeAuthorityRef;
+    };
+    if (inputData.pageArchetypeAuthority) {
+      const boundAuth = inputData.pageArchetypeAuthority;
+      const currentAuth = await new PageArchetypeStore(this.db).getAuthority(input.projectId, input.pageIdentity);
+      if (
+        !currentAuth ||
+        currentAuth.id !== boundAuth.id ||
+        currentAuth.version !== boundAuth.version ||
+        currentAuth.authorityDigest !== boundAuth.digest ||
+        currentAuth.archetype !== boundAuth.archetype
+      ) {
+        return {
+          stale: true,
+          reason: `Page archetype authority changed or was superseded for "${input.pageIdentity}".`,
+        };
+      }
+    } else {
+      const designData = design.data as { schemaVersion?: string };
+      if (designData?.schemaVersion === "design-v2") {
+        const currentArch = await new PageArchetypeStore(this.db).getArchetype(input.projectId, input.pageIdentity);
+        if (currentArch && currentArch !== input.pageType) {
+          return {
+            stale: true,
+            reason: `Page archetype changed from ${input.pageType} to ${currentArch} for "${input.pageIdentity}".`,
+          };
+        }
+      }
+    }
+
     // Run 10: a derivative-aware (production-v2) input is stale when its bound
     // AcceptedDerivativeSet is superseded or no longer current. No hidden
     // exceptions: staleness propagates through the existing candidate rules.
-    const inputData = input.data as { schemaVersion?: string };
     if (inputData.schemaVersion === "production-v2") {
       const boundSet = (input.data as { acceptedDerivativeSet?: { id: string; version: number; digest: string } }).acceptedDerivativeSet;
       if (!boundSet) {

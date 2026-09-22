@@ -88,13 +88,23 @@ function validInputSnapshotV2(): DesignInputSnapshotDataV2 {
     ],
     archetypes: ["homepage", "service"],
     pageArchetypeBindings: [
-      { slug: "home", archetype: "homepage", contentDigest: "b".repeat(64) },
-      { slug: "services/roof-repair", archetype: "service", contentDigest: "c".repeat(64) },
-      { slug: "services/inspection", archetype: "service", contentDigest: "d".repeat(64) },
+      { slug: "home", archetype: "homepage", contentDigest: "b".repeat(64), pageArchetypeAuthority: { id: "paa-00000000-0000-4000-8000-000000000001", version: 1, digest: "b".repeat(64), pageIdentity: "home", archetype: "homepage" } },
+      { slug: "services/roof-repair", archetype: "service", contentDigest: "c".repeat(64), pageArchetypeAuthority: { id: "paa-00000000-0000-4000-8000-000000000002", version: 1, digest: "c".repeat(64), pageIdentity: "services/roof-repair", archetype: "service" } },
+      { slug: "services/inspection", archetype: "service", contentDigest: "d".repeat(64), pageArchetypeAuthority: { id: "paa-00000000-0000-4000-8000-000000000003", version: 1, digest: "d".repeat(64), pageIdentity: "services/inspection", archetype: "service" } },
     ],
     pageArchetypeBindingPolicy: "page-archetype-policy-v1",
   }) as DesignInputSnapshotDataV2;
 }
+
+test("design-v2 snapshot bindings require exact page archetype authority", () => {
+  const input = validInputSnapshotV2();
+  const missingAuthority = structuredClone(input);
+  delete (missingAuthority.pageArchetypeBindings[0] as { pageArchetypeAuthority?: unknown }).pageArchetypeAuthority;
+  assert.throws(
+    () => parseDesignInputSnapshotAnyVersion(missingAuthority),
+    /pageArchetypeAuthority/,
+  );
+});
 
 class MockStitchClient implements StitchMcpClientLike {
   calls: Array<{ name: string; args: Record<string, unknown> }> = [];
@@ -510,5 +520,4 @@ test("durable policy activation: design-v2 repository-owned policy for fresh pro
     }
   }
 });
-
 

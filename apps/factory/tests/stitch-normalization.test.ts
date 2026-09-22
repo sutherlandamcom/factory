@@ -98,7 +98,7 @@ async function design(): Promise<DesignCandidateDataV2> {
     brand: { facts: [], positioning: "Advisory", tone: "Clear", visualIdentityNotes: "" }, audience: { segments: [], needs: [], decisionContext: "" },
     references: { referenceUrls: [], antiReferenceUrls: [], learn: [], avoid: [], preferredPerception: "" }, uxRequirements: [], contentRefs: [], assetRefs: [],
     archetypes: ["service"], representativePages: [{ archetype: "service", slug: page.slug, contentDigest: "b".repeat(64) }],
-    pageArchetypeBindings: [{ archetype: "service", slug: page.slug, contentDigest: "b".repeat(64) }], pageArchetypeBindingPolicy: "page-archetype-policy-v1",
+    pageArchetypeBindings: [{ archetype: "service", slug: page.slug, contentDigest: "b".repeat(64), pageArchetypeAuthority: { id: "paa-00000000-0000-4000-8000-000000000001", version: 1, digest: "b".repeat(64), pageIdentity: page.slug, archetype: "service" } }], pageArchetypeBindingPolicy: "page-archetype-policy-v1",
   }) as DesignInputSnapshotDataV2;
   const result = await new FixtureDesignProvider().generateDesignSystem({ inputSnapshot: input, inputSnapshotId: "dsi-test", projectId: "proj-test", acceptedCopyByArchetype: { service: page }, designSeed: {
     colors: { primary: "#1A2E35", secondary: "#4A5A62", accent: "#B8422E", neutral: "#F7F5F2" }, typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans", scaleNotes: "" }, rationale: "Fixture seed",

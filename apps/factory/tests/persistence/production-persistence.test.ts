@@ -823,6 +823,11 @@ test("PG INTEGRATION: real Run7 accepted visual set roundtrips through productio
     });
     assert.equal(productionInput.acceptedVisualSetId, set.id);
     assert.equal(productionInput.acceptedVisualSetDigest, set.setDigest);
+    assert.equal(
+      (productionInput.data as { pageArchetypeAuthority?: unknown }).pageArchetypeAuthority,
+      undefined,
+      "historical design-v1 production inputs remain valid without page archetype authority",
+    );
 
     const staleness = await env.production.inputStaleness(productionInput);
     assert.equal(staleness.stale, false, "derived production input from real Run 7 service must be fresh");

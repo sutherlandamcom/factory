@@ -795,6 +795,19 @@ test("PG pre-run12: durable page archetype authority required by production; reg
     const freshCheck = await env.production.inputStaleness(offerInput);
     assert.equal(freshCheck.stale, false, "PPI bound to current service authority v1 must be fresh");
 
+    // A hardened PPI without the exact ref is invalid even before the
+    // authority changes: design-v2 must never fall back to inferred state.
+    const ppiWithoutAuthority = structuredClone(ppiData) as {
+      pageArchetypeAuthority?: import("@factory/contracts").PageArchetypeAuthorityRef;
+    };
+    delete ppiWithoutAuthority.pageArchetypeAuthority;
+    const missingAuthorityCheck = await env.production.inputStaleness({
+      ...offerInput,
+      data: ppiWithoutAuthority,
+    });
+    assert.equal(missingAuthorityCheck.stale, true);
+    assert.match(missingAuthorityCheck.reason!, /design-v2 ProductionPageInput is missing exact page archetype authority binding/);
+
     // C. Same-value idempotency: re-setting same archetype returns same record without fake version bump
     const serviceAuthRepeat = await pageArchetypeStore.setPageArchetype({
       projectId: env.projectId,
@@ -1562,4 +1575,3 @@ test("pre-run12 ordinary path: fresh project enters hardened design-v2 path with
     await dbInst.close();
   }
 });
-

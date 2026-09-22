@@ -287,11 +287,12 @@ export class ProductionStore {
         typeof kind === "string" &&
         ["homepage", "service", "location", "editorial", "investment_advisory"].includes(kind),
       );
+    const designSchemaVersion = (bundle.design.data as { schemaVersion?: string }).schemaVersion;
     let pageType: DesignArchetypeKind;
     let pageArchetypeAuthorityRef: PageArchetypeAuthorityRef | undefined;
     try {
       // v1 remains historical compatibility; v3/v2 never infer page type.
-      if ((bundle.design.data as { schemaVersion?: string }).schemaVersion === "design-v2") {
+      if (designSchemaVersion === "design-v2") {
         const auth = await new PageArchetypeStore(this.db).requireAuthority(input.projectId, input.pageSlug, supportedKinds);
         pageType = auth.archetype as DesignArchetypeKind;
         pageArchetypeAuthorityRef = {
@@ -309,6 +310,12 @@ export class ProductionStore {
         throw productionError(error.code, error.message);
       }
       throw error;
+    }
+    if (designSchemaVersion === "design-v2" && !pageArchetypeAuthorityRef) {
+      throw productionError(
+        "page_archetype_authority_missing",
+        "design-v2 production derivation requires an exact page archetype authority binding.",
+      );
     }
 
     const route = normalizeRoute(input.pageSlug);
@@ -622,6 +629,13 @@ export class ProductionStore {
       schemaVersion?: string;
       pageArchetypeAuthority?: PageArchetypeAuthorityRef;
     };
+    const designData = design.data as { schemaVersion?: string };
+    if (designData.schemaVersion === "design-v2" && !inputData.pageArchetypeAuthority) {
+      return {
+        stale: true,
+        reason: "design-v2 ProductionPageInput is missing exact page archetype authority binding.",
+      };
+    }
     if (inputData.pageArchetypeAuthority) {
       const boundAuth = inputData.pageArchetypeAuthority;
       const currentAuth = await new PageArchetypeStore(this.db).getAuthority(input.projectId, input.pageIdentity);
@@ -630,6 +644,7 @@ export class ProductionStore {
         currentAuth.id !== boundAuth.id ||
         currentAuth.version !== boundAuth.version ||
         currentAuth.authorityDigest !== boundAuth.digest ||
+        boundAuth.pageIdentity !== input.pageIdentity ||
         currentAuth.archetype !== boundAuth.archetype
       ) {
         return {
@@ -638,7 +653,6 @@ export class ProductionStore {
         };
       }
     } else {
-      const designData = design.data as { schemaVersion?: string };
       if (designData?.schemaVersion === "design-v2") {
         const currentArch = await new PageArchetypeStore(this.db).getArchetype(input.projectId, input.pageIdentity);
         if (currentArch && currentArch !== input.pageType) {

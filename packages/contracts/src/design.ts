@@ -609,7 +609,13 @@ export const pageArchetypeAuthorityRefSchema = z
   .strict();
 export type PageArchetypeAuthorityRef = z.infer<typeof pageArchetypeAuthorityRefSchema>;
 
-/** One accepted page's archetype binding as recorded at snapshot time. */
+/**
+ * One accepted page's archetype binding as recorded by a design-v2 snapshot.
+ *
+ * design-v1 predates page-archetype bindings entirely.  A v2 binding is
+ * therefore never historical compatibility data: its exact authority
+ * provenance is required at the contract boundary.
+ */
 export const designPageArchetypeBindingSchema = z
   .object({
     slug: z.string().trim().min(1).max(120),
@@ -617,7 +623,7 @@ export const designPageArchetypeBindingSchema = z
     /** Exact contentDigest of the page at binding time. */
     contentDigest: designDigestSchema,
     /** Exact page-archetype authority reference at binding time. */
-    pageArchetypeAuthority: pageArchetypeAuthorityRefSchema.optional(),
+    pageArchetypeAuthority: pageArchetypeAuthorityRefSchema,
   })
   .strict();
 export type DesignPageArchetypeBinding = z.infer<typeof designPageArchetypeBindingSchema>;
@@ -752,4 +758,3 @@ export function isDesignInputSnapshotV2(
 export function isDesignCandidateV2(data: DesignCandidateData | DesignCandidateDataV2): data is DesignCandidateDataV2 {
   return data.schemaVersion === DESIGN_SCHEMA_VERSION_V2;
 }
-

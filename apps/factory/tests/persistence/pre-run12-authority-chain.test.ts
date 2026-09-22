@@ -3,9 +3,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { eq, sql } from "drizzle-orm";
 import { setupMigratedTestDatabase } from "../persistence/helpers.js";
-import { acceptedDesignArtifacts, acceptedPageContent } from "../../src/persistence/schema.js";
+import { acceptedDesignArtifacts, acceptedPageContent, pageArchetypeAuthorities } from "../../src/persistence/schema.js";
 import { acceptFixturePage } from "../fixtures/accepted-page.js";
-import { seedProjectWithAcceptedInputs } from "../fixtures/writer-seeds.js";
+import { seedProjectWithAcceptedInputs, samplePageTarget } from "../fixtures/writer-seeds.js";
+import { WriterStore } from "../../src/writer/writer-store.js";
 import { FactoryStore } from "../../src/persistence/store.js";
 import { ProjectIntakeStore } from "../../src/operator/intake-store.js";
 import { DesignStore } from "../../src/design/design-store.js";
@@ -1572,6 +1573,64 @@ test("pre-run12 ordinary path: fresh project enters hardened design-v2 path with
     if (root) {
       await rm(root, { recursive: true, force: true }).catch(() => undefined);
     }
+    await dbInst.close();
+  }
+});
+
+test("PG pre-run12: page archetype reads are pure; homepage authority is created only by governed planning", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  try {
+    const { projectId } = await seedProjectWithAcceptedInputs(dbInst, "pr12-pure-read");
+    const pageArchetypeStore = new PageArchetypeStore(dbInst.db);
+    const authorityRowCount = async () => {
+      const rows = await dbInst.db
+        .select({ id: pageArchetypeAuthorities.id })
+        .from(pageArchetypeAuthorities)
+        .where(eq(pageArchetypeAuthorities.projectId, projectId));
+      return rows.length;
+    };
+
+    // B1: getAuthority is a PURE READ — an absent authority stays absent, no DB row is created.
+    assert.equal(await pageArchetypeStore.getAuthority(projectId, "home"), null);
+    assert.equal(await pageArchetypeStore.getArchetype(projectId, "home"), null);
+    assert.equal(await authorityRowCount(), 0, "pure read must not create any authority row");
+
+    // B2: requireAuthority remains fail-closed without creating anything.
+    await assert.rejects(
+      pageArchetypeStore.requireAuthority(projectId, "home"),
+      (err: unknown) => (err as { code?: string }).code === "page_archetype_unclassified",
+    );
+    assert.equal(await authorityRowCount(), 0, "fail-closed require must not create any authority row");
+
+    // B3: the governed planning path (content brief drafting) explicitly creates
+    // durable homepage authority, after which the pure read returns it.
+    const store = new WriterStore(dbInst.db);
+    const policy = await store.deriveWriterPolicyDraft({ projectId });
+    await store.approveWriterPolicy({ projectId, policyId: policy.id, expectedVersion: policy.version, expectedDigest: policy.policyDigest });
+    const { designBinding: _omitted, ...homeTarget } = samplePageTarget;
+    await store.saveBriefDraft({
+      projectId,
+      pageTarget: { ...homeTarget, slug: "home" },
+      contentBriefKeyPoints: [],
+    });
+    const homeAuthority = await pageArchetypeStore.getAuthority(projectId, "home");
+    assert.ok(homeAuthority, "governed planning must create durable homepage authority");
+    assert.equal(homeAuthority!.archetype, "homepage");
+    assert.equal(homeAuthority!.pageIdentity, "home");
+    assert.equal(homeAuthority!.version, 1);
+    assert.equal(await authorityRowCount(), 1, "exactly one authority row exists after governed planning");
+
+    // Explicit operator-supplied design binding lands on the same durable authority (idempotent).
+    await store.saveBriefDraft({
+      projectId,
+      pageTarget: { ...samplePageTarget, slug: "home", designBinding: { schemaVersion: "page-design-binding-v1" as const, archetype: "homepage" as const } },
+      contentBriefKeyPoints: [],
+      expectedRevision: 1,
+    });
+    const homeAuthorityAfter = await pageArchetypeStore.getAuthority(projectId, "home");
+    assert.equal(homeAuthorityAfter!.id, homeAuthority!.id, "idempotent governed planning must not create a second authority");
+    assert.equal(homeAuthorityAfter!.version, 1);
+  } finally {
     await dbInst.close();
   }
 });

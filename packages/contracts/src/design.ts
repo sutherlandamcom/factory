@@ -575,10 +575,13 @@ export interface DesignStaleness {
 // deterministic implementation requires and separates DESIGN-DEFINING input
 // material from ordinary page instances that consume the design:
 //
-//   pageArchetypeBindings — every current accepted page -> one archetype,
-//     derived by the versioned page-archetype policy (explicit, inspectable,
-//     fail-closed). Recorded at snapshot time as provenance; production
-//     classification re-derives with the same policy and must agree.
+//   pageArchetypeBindings — every current accepted page -> one archetype.
+//     design-v2 snapshots read the EXACT durable authorities from
+//     PageArchetypeStore at snapshot time and record each binding's exact
+//     pageArchetypeAuthority reference (id/version/digest/pageIdentity/
+//     archetype). Recorded as provenance, not runtime truth: production
+//     classification for design-v2 consumes the durable authority, never
+//     re-derivation.
 //   visualRoleRequirements — generic per-archetype visual requirements
 //     (page-exact asset binding stays downstream in VisualAssetPlan /
 //     AcceptedVisualAssetSet).
@@ -586,7 +589,12 @@ export interface DesignStaleness {
 //     (Factory seed authority vs provider-derived evidence).
 // ---------------------------------------------------------------------------
 
-/** Versioned page-archetype binding policy identity (provenance record). */
+/**
+ * Versioned page-archetype binding policy identity. PROVENANCE ONLY: it
+ * describes which classification/planning policy was in effect when the
+ * snapshot bindings were recorded. It is NOT runtime authority and NOT a
+ * substitute for the exact durable pageArchetypeAuthority references.
+ */
 export const PAGE_ARCHETYPE_BINDING_POLICY_V1 = "page-archetype-policy-v1" as const;
 export type PageArchetypeBindingPolicy = typeof PAGE_ARCHETYPE_BINDING_POLICY_V1;
 
@@ -679,7 +687,12 @@ export const designInputSnapshotDataV2Schema = designInputSnapshotDataSchema.omi
   schemaVersion: z.literal(DESIGN_SCHEMA_VERSION_V2),
   /** Exact accepted page -> archetype bindings for the WHOLE current page inventory. */
   pageArchetypeBindings: z.array(designPageArchetypeBindingSchema).max(200),
-  /** Versioned policy that derived the bindings (provenance, not authority). */
+  /**
+   * PROVENANCE ONLY: identity of the classification/planning policy that was
+   * in effect when pageArchetypeBindings were recorded. NOT runtime
+   * authority and NOT a substitute for the exact durable
+   * pageArchetypeAuthority reference on each binding.
+   */
   pageArchetypeBindingPolicy: z.string().trim().min(1).max(100),
 }).strict();
 export type DesignInputSnapshotDataV2 = z.infer<typeof designInputSnapshotDataV2Schema>;

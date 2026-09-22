@@ -37,6 +37,13 @@ export function normalizePageIdentity(slug: string): string {
  *   ProductionStore consumes the SAME binding
  *
  * Slug regex is never production authority.
+ *
+ * READ != WRITE invariant: read methods (getAuthority, getArchetype,
+ * requireAuthority, requireArchetype) are PURE reads. They never create or
+ * mutate durable authority. Authority is created only through
+ * setPageArchetype() via explicit governed planning paths (e.g. content
+ * brief drafting in WriterStore.saveBriefDraft) or operator/fixture
+ * planning that supplies an explicit design binding.
  */
 export class PageArchetypeStore {
   constructor(private readonly db: FactoryDb) {}
@@ -95,7 +102,10 @@ export class PageArchetypeStore {
   }
 
   /**
-   * Reads the current durable page archetype authority record for a page identity if one exists.
+   * PURE READ of the current durable page archetype authority record for a
+   * page identity. Returns null when no durable authority exists — never
+   * creates or infers one. READ != WRITE: authority creation happens only
+   * through explicit setPageArchetype() planning paths.
    */
   async getAuthority(
     projectId: string,
@@ -133,19 +143,11 @@ export class PageArchetypeStore {
       }
     }
 
-    if (norm === "home") {
-      return this.setPageArchetype({
-        projectId,
-        pageIdentity: "home",
-        archetype: "homepage",
-      });
-    }
-
     return null;
   }
 
   /**
-   * Reads the current durable archetype for a page identity if one exists.
+   * PURE READ of the current durable archetype for a page identity if one exists.
    */
   async getArchetype(
     projectId: string,
@@ -156,8 +158,10 @@ export class PageArchetypeStore {
   }
 
   /**
-   * Requires a durable archetype authority record for a page identity. Fails closed if unclassified
-   * or if the archetype is not supported by the design.
+   * Requires a durable archetype authority record for a page identity. PURE
+   * read: fails closed with page_archetype_unclassified if no durable
+   * authority exists (never creates one), or with page_archetype_unsupported
+   * if the archetype is not supported by the design.
    */
   async requireAuthority(
     projectId: string,

@@ -2,23 +2,31 @@ import type { DesignArchetypeKind } from "@factory/contracts";
 import { FactoryError } from "../executor/errors.js";
 
 /**
- * PAGE-ARCHETYPE DERIVATION POLICY — Pre-Run-12 hardening.
+ * PAGE-ARCHETYPE DERIVATION POLICY — deterministic slug-pattern helper.
  *
- * Typed, deterministic, versioned derivation of every accepted page's
- * production archetype. This is the EXPLICIT page→archetype authority for
- * production classification — it replaces the previous behavior of finding
- * a page's slug inside the accepted design's representativePages (which is
- * provider-generation evidence only and can never classify the full page
- * inventory).
+ * Bounded role: this regex policy is a PLANNING PROPOSAL / LEGACY design-v1
+ * COMPATIBILITY classification helper. It deterministically proposes a
+ * page→archetype mapping for fixtures, tests, and historical design-v1
+ * classification paths.
  *
- * Invariants:
+ * It is NOT production runtime authority for design-v2. The hardened
+ * design-v2 authority chain is:
+ *
+ *   explicit planning / classification
+ *     → PageArchetypeStore (setPageArchetype)
+ *     → durable PageArchetypeAuthority
+ *     → DesignInputSnapshot records exact authority
+ *     → ProductionPageInput binds exact authority
+ *     → ProductionStore verifies current authority
+ *
+ * Legacy invariants (unchanged):
  * - deterministic: same slug -> same archetype, always;
  * - fail-closed: unclassified (no pattern match), ambiguous (multiple
  *   disjoint patterns match) and unsupported (derived kind is not supported
  *   by the accepted design) are typed errors, never silent fallbacks;
  * - independent of representative-page selection;
- * - inspectable: the policy version is recorded wherever the derivation is
- *   consumed so auditors can see which policy classified a page.
+ * - inspectable: the policy version is recorded wherever the helper is
+ *   consumed so auditors can see which legacy policy classified a page.
  */
 
 export const PAGE_ARCHETYPE_POLICY_VERSION = "page-archetype-policy-v1" as const;
@@ -55,8 +63,10 @@ export interface DerivedPageArchetype {
 }
 
 /**
- * Derive the archetype for one page slug against the archetype kinds the
- * accepted design supports. Fails closed on:
+ * Legacy/planning slug-pattern classification for one page slug against the
+ * archetype kinds the accepted design supports. NOT design-v2 runtime
+ * authority — see the module docblock for the hardened authority chain.
+ * Fails closed on:
  * - unclassified: no pattern matches (a new page kind needs either a policy
  *   revision or a new accepted design archetype — never a silent default);
  * - ambiguous: multiple disjoint patterns match;
@@ -91,7 +101,7 @@ export function derivePageArchetype(
   return { slug: normalized, archetype, policyVersion: PAGE_ARCHETYPE_POLICY_VERSION };
 }
 
-/** Derive archetypes for many pages, failing closed on the first violation. */
+/** Legacy/planning batch helper over derivePageArchetype; fails closed on the first violation. */
 export function derivePageArchetypes(
   slugs: ReadonlyArray<string>,
   supportedKinds: ReadonlyArray<DesignArchetypeKind>,

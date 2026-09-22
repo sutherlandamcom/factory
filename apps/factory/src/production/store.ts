@@ -275,11 +275,15 @@ export class ProductionStore {
       pageSlug: input.pageSlug,
     });
 
-    // Pre-Run-12 page→archetype authority: every page classifies through the
-    // typed versioned derivation policy against the archetype kinds the
-    // accepted design supports. Representative pages are provider-generation
-    // evidence only and are NEVER consulted for production classification.
-    // Fail-closed: unclassified/ambiguous/unsupported all block derivation.
+    // Pre-Run-12 page→archetype authority: design-v2 classifies every page
+    // through the durable typed PageArchetypeAuthority (requireAuthority).
+    // Representative pages are provider-generation evidence only and are
+    // NEVER consulted for production classification. Fail-closed: a missing
+    // or unsupported durable authority blocks derivation.
+    //
+    // The slug-pattern derivation policy (derivePageArchetype) is NOT
+    // design-v2 runtime authority; it remains only as the legacy design-v1
+    // compatibility classification path below.
     const designData = bundle.design.data as { archetypes?: Array<{ kind?: string }> };
     const supportedKinds = (designData.archetypes ?? [])
       .map((entry) => entry.kind)
@@ -291,7 +295,9 @@ export class ProductionStore {
     let pageType: DesignArchetypeKind;
     let pageArchetypeAuthorityRef: PageArchetypeAuthorityRef | undefined;
     try {
-      // v1 remains historical compatibility; v3/v2 never infer page type.
+      // design-v2 requires exact durable authority; design-v1 remains
+      // historical compatibility and classifies via the legacy slug-pattern
+      // helper (never inferred for v2/v3).
       if (designSchemaVersion === "design-v2") {
         const auth = await new PageArchetypeStore(this.db).requireAuthority(input.projectId, input.pageSlug, supportedKinds);
         pageType = auth.archetype as DesignArchetypeKind;

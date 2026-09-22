@@ -9,8 +9,10 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
  * Deterministic visual oracle over the governed production-v3 fixture page.
  * Model A font delivery (design policy §27 & prompt §13): self-hosted WOFF2
  * web fonts (Source Serif 4 and Public Sans) are bundled locally in the site
- * under /fonts/, providing byte-identical font rasterization across both Linux
- * and macOS environments.
+ * under /fonts/, so every environment loads identical vendored font bytes.
+ * Identical font bytes do NOT guarantee identical rasterized pixels: Linux
+ * (FreeType) and macOS (CoreText) rasterize text differently, so a bounded
+ * pixel-difference tolerance below absorbs that cross-platform variance.
  *
  * Two complementary oracles are enforced:
  *   1. STRUCTURAL ORACLE (governed-service-fixture.structure.json):
@@ -133,8 +135,11 @@ test.describe("governed production visual regression", () => {
       .toEqual(baseline.components.map((entry) => ({ x: entry.box.x, width: entry.box.width })));
 
     // Deterministic pixel visual regression oracle with vendored WOFF2 fonts.
-    // Cross-platform font rasterization variance (FreeType on Linux CI vs CoreText on macOS)
-    // is bounded to maxDiffPixelRatio: 0.05 (observed cross-platform antialiasing ratio: 0.02).
+    // Cross-platform font rasterization variance (FreeType on Linux CI vs
+    // CoreText on macOS) is absorbed by the bounded maxDiffPixelRatio: 0.05
+    // allowance below. That allowance is a bounded implementation-regression
+    // tolerance: it is not design authority and is not independently
+    // calibrated against a durable Linux/macOS measurement dataset.
     await expect(page).toHaveScreenshot("governed-service-fixture.png", {
       fullPage: true,
       animations: "disabled",

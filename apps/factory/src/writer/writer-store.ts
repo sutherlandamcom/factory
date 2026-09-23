@@ -14,6 +14,7 @@ import {
   type ContentBriefData,
   type WriterPromptSnapshotData,
   type PageContentProposalData,
+  type DesignArchetypeKind,
 } from "@factory/contracts";
 import type { FactoryDb } from "../persistence/db.js";
 import {
@@ -248,75 +249,89 @@ export class WriterStore {
     noGapLineageAcknowledged?: boolean;
   }): Promise<{ id: string; version: number; digest: string }> {
     const pageTarget = parsePageTarget(input.pageTarget);
-    const pageArchetypeStore = new PageArchetypeStore(this.db);
-    let effectiveTarget = pageTarget;
-    const existingArchetype = await pageArchetypeStore.getArchetype(input.projectId, pageTarget.slug);
-    if (existingArchetype) {
-      if (pageTarget.designBinding && pageTarget.designBinding.archetype !== existingArchetype) {
-        throw new FactoryError(
-          "page_archetype_conflict",
-          `Content brief specifies archetype ${pageTarget.designBinding.archetype} which conflicts with durable page archetype ${existingArchetype} for ${pageTarget.slug}.`,
-        );
-      }
-      effectiveTarget = {
-        ...pageTarget,
-        designBinding: { schemaVersion: "page-design-binding-v1" as const, archetype: existingArchetype },
-      };
-    } else if (pageTarget.designBinding) {
-      await pageArchetypeStore.setPageArchetype({
-        projectId: input.projectId,
-        pageIdentity: pageTarget.slug,
-        archetype: pageTarget.designBinding.archetype,
-      });
-    } else if (normalizePageIdentity(pageTarget.slug) === "home") {
-      await pageArchetypeStore.setPageArchetype({
-        projectId: input.projectId,
-        pageIdentity: pageTarget.slug,
-        archetype: "homepage",
-      });
-      effectiveTarget = {
-        ...pageTarget,
-        designBinding: { schemaVersion: "page-design-binding-v1" as const, archetype: "homepage" },
-      };
-    }
-    const snapshot = await this.latestAcceptedInputSnapshot(input.projectId);
-    const policy = await this.latestWriterPolicy(input.projectId);
-    if (!policy || policy.state !== "approved") {
-      throw new FactoryError(
-        "writer_policy_not_approved",
-        "An approved Factory Writer Policy is required before a Content Production Brief can be drafted.",
-      );
-    }
-    const acknowledged = input.noGapLineageAcknowledged === true;
-    // Gap lineage: default REQUIRED (typed failure when missing). Drafting
-    // without a gap snapshot is only possible with the explicit flag.
-    const gap = await this.latestAcceptedGapSnapshot(input.projectId);
-    if (gap) {
-      const freshness = await this.gapStaleness(input.projectId, gap.id);
-      if (freshness.stale) throw staleError(freshness.reason!);
-    }
-    if (!gap) {
-      if (!acknowledged) {
-        throw new FactoryError(
-          "content_gap_lineage_missing",
-          "No accepted ContentGap snapshot exists for this project. Accept a gap snapshot first, or explicitly acknowledge the missing gap lineage at draft and approval time.",
-        );
-      }
-    } else {
-      if (acknowledged) {
-        throw approvalError(
-          "noGapLineageAcknowledged is only valid when the brief has no accepted gap lineage.",
-        );
-      }
-      if (gap.acceptedInputSnapshotId !== snapshot.id || gap.acceptedInputDigest !== snapshot.digest) {
-        throw staleError("Accepted ContentGap snapshot is stale versus the current accepted ProjectInputSnapshot.");
-      }
-    }
-
-    const data = this.composeBriefData({ snapshot, policy, pageTarget: effectiveTarget, keyPoints: input.contentBriefKeyPoints, gap, noGapLineageAcknowledged: acknowledged });
-    const briefDigest = deterministicDigest(data);
+    // ONE atomic planning transaction: the intended PageArchetypeAuthority
+    // mutation and the ContentBrief persistence commit together or not at all.
+    // A failed planning operation must leave ZERO durable authority mutation
+    // (no new authority, no version bump) and no brief mutation.
     return await this.db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
+      const txStore = new WriterStore(tx as unknown as FactoryDb);
+      const pageArchetypeStore = new PageArchetypeStore(tx);
+
+      // Read current durable authority INSIDE the locked transaction so the
+      // conflict decision cannot race a concurrent authority write.
+      const existingArchetype = await pageArchetypeStore.getArchetype(input.projectId, pageTarget.slug);
+      let effectiveTarget = pageTarget;
+      let intendedArchetype: DesignArchetypeKind | null = null;
+      if (existingArchetype) {
+        if (pageTarget.designBinding && pageTarget.designBinding.archetype !== existingArchetype) {
+          throw new FactoryError(
+            "page_archetype_conflict",
+            `Content brief specifies archetype ${pageTarget.designBinding.archetype} which conflicts with durable page archetype ${existingArchetype} for ${pageTarget.slug}.`,
+          );
+        }
+        effectiveTarget = {
+          ...pageTarget,
+          designBinding: { schemaVersion: "page-design-binding-v1" as const, archetype: existingArchetype },
+        };
+      } else if (pageTarget.designBinding) {
+        // Explicit non-home binding: authority is created only as part of the
+        // successful governed brief operation below (same transaction).
+        intendedArchetype = pageTarget.designBinding.archetype;
+        effectiveTarget = {
+          ...pageTarget,
+          designBinding: { schemaVersion: "page-design-binding-v1" as const, archetype: pageTarget.designBinding.archetype },
+        };
+      } else if (normalizePageIdentity(pageTarget.slug) === "home") {
+        // Governed homepage fallback: same transactional rule as above.
+        intendedArchetype = "homepage";
+        effectiveTarget = {
+          ...pageTarget,
+          designBinding: { schemaVersion: "page-design-binding-v1" as const, archetype: "homepage" },
+        };
+      }
+
+      // ---- All governed validations happen BEFORE any durable write. -------
+      const snapshot = await txStore.latestAcceptedInputSnapshot(input.projectId);
+      const policy = await txStore.latestWriterPolicy(input.projectId);
+      if (!policy || policy.state !== "approved") {
+        throw new FactoryError(
+          "writer_policy_not_approved",
+          "An approved Factory Writer Policy is required before a Content Production Brief can be drafted.",
+        );
+      }
+      const acknowledged = input.noGapLineageAcknowledged === true;
+      // Gap lineage: default REQUIRED (typed failure when missing). Drafting
+      // without a gap snapshot is only possible with the explicit flag.
+      const gap = await txStore.latestAcceptedGapSnapshot(input.projectId);
+      if (gap) {
+        const freshness = await txStore.gapStaleness(input.projectId, gap.id);
+        if (freshness.stale) throw staleError(freshness.reason!);
+      }
+      if (!gap) {
+        if (!acknowledged) {
+          throw new FactoryError(
+            "content_gap_lineage_missing",
+            "No accepted ContentGap snapshot exists for this project. Accept a gap snapshot first, or explicitly acknowledge the missing gap lineage at draft and approval time.",
+          );
+        }
+      } else {
+        if (acknowledged) {
+          throw approvalError(
+            "noGapLineageAcknowledged is only valid when the brief has no accepted gap lineage.",
+          );
+        }
+        if (gap.acceptedInputSnapshotId !== snapshot.id || gap.acceptedInputDigest !== snapshot.digest) {
+          throw staleError("Accepted ContentGap snapshot is stale versus the current accepted ProjectInputSnapshot.");
+        }
+      }
+
+      const data = txStore.composeBriefData({ snapshot, policy, pageTarget: effectiveTarget, keyPoints: input.contentBriefKeyPoints, gap, noGapLineageAcknowledged: acknowledged });
+      const briefDigest = deterministicDigest(data);
+
+      // Brief revision conflict validation happens inside the same transaction,
+      // before the authority write, so a stale-revision attempt cannot mutate
+      // durable authority.
       const [current] = await tx
         .select({ id: contentBriefs.id, version: contentBriefs.version, state: contentBriefs.state })
         .from(contentBriefs)
@@ -330,6 +345,21 @@ export class WriterStore {
             `Brief draft revision mismatch: expected ${input.expectedRevision ?? "none"}, current ${current.version}.`,
           );
         }
+      }
+
+      // Intended authority mutation THROUGH THE SAME TRANSACTION — no
+      // autonomous commit; it rolls back with the brief if anything below fails.
+      if (intendedArchetype) {
+        await pageArchetypeStore.setPageArchetypeLocked(tx, {
+          projectId: input.projectId,
+          pageIdentity: pageTarget.slug,
+          archetype: intendedArchetype,
+        });
+      }
+
+      // Brief persistence (same transaction): update existing draft in place,
+      // or insert the next version.
+      if (current && current.state === "draft") {
         // Update the existing draft in place (same version, re-digest).
         await tx
           .update(contentBriefs)

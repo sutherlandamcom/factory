@@ -50,55 +50,78 @@ export class PageArchetypeStore {
 
   /**
    * Sets or updates the durable archetype for a page identity within a project.
-   * Participates in project advisory lock (104). Idempotent if archetype is unchanged.
+   * Atomic on its own: starts one transaction and participates in the project
+   * advisory lock (104). Idempotent if archetype is unchanged.
+   *
+   * When the authority mutation belongs to a larger governed operation (e.g.
+   * WriterStore.saveBriefDraft), the caller MUST use setPageArchetypeLocked()
+   * with its own transaction instead, so authority and dependent writes commit
+   * or roll back as ONE logical planning operation.
    */
   async setPageArchetype(input: {
     projectId: string;
     pageIdentity: string;
     archetype: DesignArchetypeKind;
   }): Promise<PageArchetypeAuthorityRecord> {
-    const norm = normalizePageIdentity(input.pageIdentity);
     return this.db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
-      const [latest] = await tx
-        .select()
-        .from(pageArchetypeAuthorities)
-        .where(
-          and(
-            eq(pageArchetypeAuthorities.projectId, input.projectId),
-            eq(pageArchetypeAuthorities.pageIdentity, norm),
-          ),
-        )
-        .orderBy(desc(pageArchetypeAuthorities.version))
-        .limit(1);
+      return this.setPageArchetypeLocked(tx, input);
+    });
+  }
 
-      if (latest && latest.archetype === input.archetype) {
-        return latest;
-      }
+  /**
+   * Transaction-aware internal mutation: writes the durable archetype through
+   * the CALLER-PROVIDED transaction. Never starts its own transaction and never
+   * acquires the project advisory lock — the caller must already hold it on the
+   * same transaction. Idempotent if archetype is unchanged.
+   */
+  async setPageArchetypeLocked(
+    tx: FactoryDb,
+    input: {
+      projectId: string;
+      pageIdentity: string;
+      archetype: DesignArchetypeKind;
+    },
+  ): Promise<PageArchetypeAuthorityRecord> {
+    const norm = normalizePageIdentity(input.pageIdentity);
+    const [latest] = await tx
+      .select()
+      .from(pageArchetypeAuthorities)
+      .where(
+        and(
+          eq(pageArchetypeAuthorities.projectId, input.projectId),
+          eq(pageArchetypeAuthorities.pageIdentity, norm),
+        ),
+      )
+      .orderBy(desc(pageArchetypeAuthorities.version))
+      .limit(1);
 
-      const nextVersion = latest ? latest.version + 1 : 1;
-      const id = `paa-${randomUUID()}`;
-      const authorityDigest = deterministicDigest({
+    if (latest && latest.archetype === input.archetype) {
+      return latest;
+    }
+
+    const nextVersion = latest ? latest.version + 1 : 1;
+    const id = `paa-${randomUUID()}`;
+    const authorityDigest = deterministicDigest({
+      projectId: input.projectId,
+      pageIdentity: norm,
+      archetype: input.archetype,
+      version: nextVersion,
+    });
+
+    const [inserted] = await tx
+      .insert(pageArchetypeAuthorities)
+      .values({
+        id,
         projectId: input.projectId,
         pageIdentity: norm,
         archetype: input.archetype,
         version: nextVersion,
-      });
+        authorityDigest,
+      })
+      .returning();
 
-      const [inserted] = await tx
-        .insert(pageArchetypeAuthorities)
-        .values({
-          id,
-          projectId: input.projectId,
-          pageIdentity: norm,
-          archetype: input.archetype,
-          version: nextVersion,
-          authorityDigest,
-        })
-        .returning();
-
-      return inserted!;
-    });
+    return inserted!;
   }
 
   /**

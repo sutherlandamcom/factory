@@ -333,3 +333,32 @@ export { deterministicDigest as seoDeterministicDigest };
 export function seoError(code: string, message: string): FactoryError {
   return new FactoryError(code, message);
 }
+
+// ---------------------------------------------------------------------------
+// Governed root redirect stub (Run 12)
+// ---------------------------------------------------------------------------
+
+/**
+ * Emit a deterministic root redirect stub when the governed route set has no
+ * "/" route (e.g. the homepage identity is `home` -> route `/home`). The stub
+ * is a delivery concern (like 404.html): it is NOT a governed page, carries
+ * `noindex`, and redirects humans and agents to the governed homepage route.
+ * The redirect target is authority-derived (the manifest route whose page
+ * identity is the site homepage), never hardcoded. The stub is excluded from
+ * the sitemap by construction (the sitemap lists governed routes only).
+ */
+export function generateRootRedirectStub(input: {
+  manifests: ProductionRenderManifest[];
+}): { html: string; targetRoute: string } | null {
+  if (input.manifests.some((manifest) => manifest.input.route === "/")) return null;
+  const homepage =
+    input.manifests.find((manifest) => manifest.input.pageIdentity === "home") ??
+    input.manifests.find((manifest) => manifest.input.pageType === "homepage");
+  if (!homepage) return null;
+  const targetRoute = homepage.input.route;
+  const canonicalUrl = `${homepage.input.siteIdentity.canonicalOrigin.replace(/\/$/, "")}${targetRoute}`;
+  const title = homepage.seo.fullTitle;
+  const description = homepage.seo.description;
+  const html = `<!DOCTYPE html><html lang="${homepage.input.siteIdentity.language}"><head><meta charset="utf-8"><meta name="robots" content="noindex"><title>${title} | ${homepage.input.siteIdentity.siteName}</title><meta name="description" content="${description}"><link rel="canonical" href="${canonicalUrl}"><meta http-equiv="refresh" content="0; url=${targetRoute}"><link rel="alternate" hreflang="x-default" href="${canonicalUrl}"></head><body><p>This page has moved to <a href="${targetRoute}">${title}</a>.</p></body></html>`;
+  return { html, targetRoute };
+}

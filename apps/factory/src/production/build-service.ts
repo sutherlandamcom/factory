@@ -8,7 +8,7 @@ import { deterministicDigest } from "../intelligence/digest.js";
 import { parseAcceptedPageContentData } from "@factory/contracts";
 import { ProductionStore, candidateBuildStaleness } from "./store.js";
 import { ProductionRenderCompiler, type ProductionRenderManifest } from "./render-manifest.js";
-import { emitSitemapAndRobots } from "./seo-engine.js";
+import { emitSitemapAndRobots , generateRootRedirectStub } from "./seo-engine.js";
 import { loadProductionBuildIdentity } from "./identity.js";
 import { PageAuthorityReader } from "../writer/page-authority.js";
 
@@ -140,6 +140,14 @@ export class ProductionBuildService {
       const expectedRoutes = manifests.map((manifest) => manifest.input.route).sort();
       if (htmlRoutes.filter((route) => route !== "/404").join("\0") !== expectedRoutes.join("\0")) {
         throw buildError("production_build_rejected", `Astro route set differs from candidate snapshot: ${htmlRoutes.join(", ")}`);
+      }
+      // Governed root redirect stub (Run 12): when the governed route set has
+      // no "/" route, emit a deterministic noindex redirect to the homepage
+      // route so the domain root serves users instead of a 404. Delivery
+      // concern (like 404.html); excluded from the sitemap by construction.
+      const rootStub = generateRootRedirectStub({ manifests });
+      if (rootStub) {
+        await writeFile(path.join(distDir, "index.html"), rootStub.html, "utf8");
       }
       const artifactDigest = await computeArtifactDigest(distDir);
       const finalIdentity = await loadProductionBuildIdentity(this.repoRoot);

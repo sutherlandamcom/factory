@@ -165,3 +165,28 @@ test("credential gate: no evidence -> not publishable", () => {
   assert.equal(credentialPublishable({ name: "CFA", evidenceRef: "", evidenceKind: "registry" }), false);
   assert.equal(credentialPublishable({ name: "CFA", evidenceRef: "registry-entry-123", evidenceKind: "registry" }), true);
 });
+
+test("Run 12: root redirect stub is deterministic, noindex, and targets the governed homepage", async () => {
+  const { generateRootRedirectStub } = await import("../src/production/seo-engine.js");
+  const manifest = {
+    input: {
+      id: "ppin-x", version: 1, digest: "a".repeat(64), projectId: "proj-x",
+      pageIdentity: "home", pageType: "homepage" as const, route: "/home",
+      siteIdentity: { siteId: "s", siteName: "Sutherland Private Office", canonicalOrigin: "https://sutherlandam.com", language: "en", profileDigest: "4".repeat(64) },
+    },
+    seo: { fullTitle: "Independent Advisory", description: "Evidence-led advisory.", canonicalUrl: "https://sutherlandam.com/home", ogTitle: "", ogDescription: "", ogUrl: "" },
+  } as never;
+  const stub = generateRootRedirectStub({ manifests: [manifest] });
+  assert.ok(stub, "stub emitted when no / route exists");
+  assert.equal(stub.targetRoute, "/home");
+  assert.match(stub.html, /noindex/);
+  assert.match(stub.html, /url=\/home/);
+  assert.match(stub.html, /rel="canonical" href="https:\/\/sutherlandam\.com\/home"/);
+  // Deterministic: identical manifests -> identical stub.
+  const stub2 = generateRootRedirectStub({ manifests: [manifest] });
+  assert.equal(stub.html, stub2!.html);
+  // No stub when a / route already exists.
+  const withRoot = structuredClone(manifest) as { input: { route: string } };
+  withRoot.input.route = "/";
+  assert.equal(generateRootRedirectStub({ manifests: [withRoot as never] }), null);
+});

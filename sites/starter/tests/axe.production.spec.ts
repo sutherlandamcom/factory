@@ -38,6 +38,21 @@ for (const route of routes) {
   for (const project of ["desktop", "mobile"]) {
     test(`axe: ${route} [${project}] has 0 critical/serious violations`, async ({ page }, testInfo) => {
       test.skip(testInfo.project.name !== project, `scoped to ${project} project`);
+      await page.goto(route, { waitUntil: "commit" }).catch(() => undefined);
+      // A governed root redirect stub (noindex meta-refresh to the homepage
+      // route) is a delivery artifact, not a content page: axe analysis on it
+      // races the navigation and is meaningless. Skip stubs explicitly. The
+      // meta-refresh may destroy the execution context before evaluate runs,
+      // so detect the stub from the fetched document instead of the live DOM.
+      let isRedirectStub = false;
+      try {
+        const response = await page.request.get(route === "/" ? "/index.html" : route);
+        const body = await response.text();
+        isRedirectStub = /http-equiv="refresh"/i.test(body) && /name="robots" content="noindex"/i.test(body);
+      } catch {
+        isRedirectStub = false;
+      }
+      test.skip(isRedirectStub, `${route} is a governed noindex redirect stub, not a content page`);
       await page.goto(route);
       const results = await new AxeBuilder({ page }).analyze();
       const blocking = results.violations.filter(

@@ -170,7 +170,7 @@ const SUTHERLAND_PAGES: Array<{
     objective: "Publish the original decision framework with methodology, sources and limits.",
     audience: "Buyers and researchers evaluating alpine property decisions.",
     structureGuidance: ["Framework introduction", "Methodology", "Sources and limits"],
-    internalLinkIntent: ["Link to the service page"],
+    internalLinkIntent: ["Link to the service page", "Link to the decision framework"],
     ctaIntent: "Explain how an engagement begins (Mode B: no conversion element)",
     ymyl: "YMYL_DECISION_SUPPORT",
     decisionRole: "INFORMATIONAL_RESEARCH",
@@ -180,7 +180,7 @@ const SUTHERLAND_PAGES: Array<{
     siteRole: "Research credibility",
     mainUserTask: "Evaluate the framework's methodology and apply its structure",
     primaryConversionAction: "Understand how an engagement begins (Mode B prose)",
-    internalLinksOut: ["services/buyer-side-advisory"],
+    internalLinksOut: ["services/buyer-side-advisory", "advisory/investment-decision-framework"],
   },
 ];
 
@@ -893,7 +893,7 @@ test("RUN 12: Sutherland five-page governed production proof (writer -> design -
             }
           : section,
       ),
-      internalLinks: ["/research/alpine-decision-framework"],
+      internalLinks: ["/research/alpine-decision-framework", "/services/buyer-side-advisory"],
     };
     const proposal6 = await writer.generateProposal(
       { projectId: seeded.projectId, snapshotId: snapshot6.id },

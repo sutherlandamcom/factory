@@ -82,7 +82,11 @@ export default defineConfig({
   webServer: remoteBaseUrl
     ? undefined
     : {
-        command: immutableArtifactDir ? `pnpm run preview --port ${port}` : `pnpm run build && pnpm run preview --port ${port}`,
+        // --host binds all loopback interfaces: astro preview defaults to the
+        // IPv6 loopback ([::1]) only, which the webServer health check cannot
+        // reach when localhost resolves to IPv4. Binding all interfaces keeps
+        // the health check and the tests on the same server instance.
+        command: immutableArtifactDir ? `pnpm run preview --port ${port} --host` : `pnpm run build && pnpm run preview --port ${port} --host`,
         url: baseUrl,
         reuseExistingServer: false,
         timeout: 180_000,

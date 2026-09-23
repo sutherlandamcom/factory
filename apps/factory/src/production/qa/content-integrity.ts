@@ -466,7 +466,7 @@ export function validateHtmlSemantics(input: ContentIntegrityInput): ContentInte
   const actualBodyLinks = root.querySelectorAll('nav[aria-label="Related pages"] a').map((node) => ({ href: node.getAttribute("href") ?? "", title: normalizeText(node.text ?? "") }));
   const expectedBodyLinks = input.manifest.links.map((link) => ({ href: link.href, title: normalizeText(link.title) }));
   const linksOk = JSON.stringify(actualBodyLinks) === JSON.stringify(expectedBodyLinks);
-  checks.push(check("seo.internal_links", "seo", linksOk ? "PASS" : "FAIL", linksOk ? "Every accepted internal link is rendered exactly once." : "Rendered internal links differ from accepted authority."));
+  checks.push(check("seo.internal_links", "seo", linksOk ? "PASS" : "FAIL", linksOk ? "Every accepted internal link is rendered exactly once." : `Rendered internal links differ from accepted authority: rendered=${JSON.stringify(actualBodyLinks)} expected=${JSON.stringify(expectedBodyLinks)}`));
   checks.push(check("links.internal_resolvable", "links", linksOk ? "PASS" : "FAIL", linksOk ? "Rendered internal links resolve through the candidate registry." : "Rendered internal-link surface is incomplete or mutated."));
   const breadcrumbNav = root.querySelector('nav[aria-label="Breadcrumb"]');
   const visibleBreadcrumbs = breadcrumbNav?.querySelectorAll("li").map((node) => normalizeText(node.text ?? "").replace(/\s*\/\s*$/, "")) ?? [];

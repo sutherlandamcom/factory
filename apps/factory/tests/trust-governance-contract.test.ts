@@ -1,0 +1,167 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  parsePageIntentAuthority,
+  parseClaimLineage,
+  parseReviewAuthority,
+  checkCannibalization,
+  sourceAuthorityVerdict,
+  claimLineageVerdict,
+  reviewStaleness,
+  credentialPublishable,
+  UNCERTAIN_CLAIM_TYPES,
+  type PageIntentAuthority,
+  type ClaimLineage,
+} from "@factory/contracts";
+
+/**
+ * RUN 12 TRUST GOVERNANCE — deterministic contract tests (no DB needed).
+ *
+ * Proves the fail-closed semantics of the trust contracts:
+ *   - page intent authority schema (YMYL, decision roles, lineage)
+ *   - cannibalization pair detection (FAIL/REVIEW/PASS, no numeric score)
+ *   - claim lineage verdicts (calculation provenance, uncertainty labelling)
+ *   - source authority floors per YMYL level (tier hierarchy)
+ *   - review staleness (content digest binding)
+ *   - credential evidence gate (no evidence -> not publishable)
+ */
+
+const BASE_INTENT: Omit<PageIntentAuthority, "pageIdentity" | "primaryIntent" | "primaryQueryCluster" | "decisionRole" | "ymylClassification"> = {
+  schemaVersion: "trust-governance-v1",
+  projectId: "proj-1",
+  secondaryIntents: [],
+  secondaryQueryClusters: [],
+  contentGapPurpose: "gap",
+  siteRole: "role",
+  targetAudience: "audience",
+  mainUserTask: "task",
+  primaryConversionAction: "action",
+  internalLinksOut: [],
+};
+
+function intent(overrides: Partial<PageIntentAuthority>): PageIntentAuthority {
+  return parsePageIntentAuthority({ ...BASE_INTENT, pageIdentity: "p1", primaryIntent: "i", primaryQueryCluster: "c", decisionRole: "INFORMATIONAL_RESEARCH", ymylClassification: "NON_YMYL", ...overrides });
+}
+
+const BASE_CLAIM: Omit<ClaimLineage, "claimId" | "claimText" | "claimType" | "sourceRefs" | "pageIdentity"> = {
+  limitation: "",
+};
+
+function claim(overrides: Partial<ClaimLineage>): ClaimLineage {
+  return parseClaimLineage({
+    ...BASE_CLAIM,
+    claimId: "claim-1",
+    claimText: "text",
+    claimType: "FACT",
+    sourceRefs: [],
+    pageIdentity: "p1",
+    ...overrides,
+  });
+}
+
+test("page intent authority parses with all mandatory strategy fields", () => {
+  const parsed = intent({});
+  assert.equal(parsed.ymylClassification, "NON_YMYL");
+  assert.equal(parsed.decisionRole, "INFORMATIONAL_RESEARCH");
+});
+
+test("page intent authority rejects unknown YMYL classification and decision roles", () => {
+  assert.throws(() => intent({ ymylClassification: "SOMETHING_ELSE" as never }));
+  assert.throws(() => intent({ decisionRole: "RANDOM_ROLE" as never }));
+});
+
+test("cannibalization: identical intent+cluster+role FAILS closed", () => {
+  const a = intent({ pageIdentity: "a", primaryIntent: "Buy advisory", primaryQueryCluster: "advisory", decisionRole: "COMMERCIAL_SERVICE_EVALUATION", ymylClassification: "YMYL_INFORMATIONAL" });
+  const b = intent({ pageIdentity: "b", primaryIntent: "Buy advisory", primaryQueryCluster: "advisory", decisionRole: "COMMERCIAL_SERVICE_EVALUATION", ymylClassification: "YMYL_INFORMATIONAL" });
+  const result = checkCannibalization([a, b]);
+  assert.equal(result.verdict, "FAIL");
+  assert.equal(result.findings[0]!.verdict, "FAIL");
+});
+
+test("cannibalization: two-of-three overlap surfaces REVIEW (human judgment), never a score", () => {
+  const a = intent({ pageIdentity: "a", primaryIntent: "Buy advisory", primaryQueryCluster: "advisory", decisionRole: "COMMERCIAL_SERVICE_EVALUATION" });
+  const b = intent({ pageIdentity: "b", primaryIntent: "Buy advisory", primaryQueryCluster: "advisory", decisionRole: "FINANCIAL_DECISION_SUPPORT" });
+  const result = checkCannibalization([a, b]);
+  assert.equal(result.verdict, "REVIEW");
+});
+
+test("cannibalization: differentiated pages PASS (keyword overlap with different task is permitted)", () => {
+  const a = intent({ pageIdentity: "service", primaryIntent: "Evaluate advisory engagement", primaryQueryCluster: "property advisory france", decisionRole: "COMMERCIAL_SERVICE_EVALUATION" });
+  const b = intent({ pageIdentity: "research", primaryIntent: "Understand market methodology", primaryQueryCluster: "alpine market data", decisionRole: "INFORMATIONAL_RESEARCH" });
+  assert.equal(checkCannibalization([a, b]).verdict, "PASS");
+});
+
+test("claim lineage: CALCULATION without provenance FAILS", () => {
+  const c = claim({ claimType: "CALCULATION", sourceRefs: [{ ref: "s", tier: "TIER_A", sourceDate: "2026-01-01", freshnessBasis: "observation_date" }] });
+  assert.equal(claimLineageVerdict(c), "FAIL");
+});
+
+test("claim lineage: CALCULATION with full provenance PASSES", () => {
+  const c = claim({
+    claimType: "CALCULATION",
+    sourceRefs: [{ ref: "s", tier: "TIER_A", sourceDate: "2026-01-01", freshnessBasis: "observation_date" }],
+    calculationRef: {
+      modelId: "yield-model-v1",
+      inputs: [{ name: "price", value: "100", unit: "EUR" }],
+      assumptionRefs: [],
+      output: { value: "7.2", unit: "%" },
+      calculatedAt: "2026-09-01",
+    },
+  });
+  assert.equal(claimLineageVerdict(c), "PASS");
+});
+
+test("claim lineage: FORECAST without limitation FAILS; with limitation PASSES", () => {
+  const noLimit = claim({ claimType: "FORECAST", sourceRefs: [{ ref: "s", tier: "TIER_B", sourceDate: "2026-01-01", freshnessBasis: "model_as_of_date" }] });
+  assert.equal(claimLineageVerdict(noLimit), "FAIL");
+  const withLimit = claim({ claimType: "FORECAST", limitation: "Model forecast, not a guaranteed outcome.", sourceRefs: [{ ref: "s", tier: "TIER_B", sourceDate: "2026-01-01", freshnessBasis: "model_as_of_date" }] });
+  assert.equal(claimLineageVerdict(withLimit), "PASS");
+});
+
+test("claim lineage: material FACT without any source FAILS", () => {
+  const c = claim({ claimType: "SOURCE_DERIVED_FACT" });
+  assert.equal(claimLineageVerdict(c), "FAIL");
+});
+
+test("uncertain claim types set matches Block 10 hard rule", () => {
+  for (const t of ["ASSUMPTION", "ESTIMATE", "FORECAST", "SCENARIO", "EXPERT_INTERPRETATION", "OPINION"]) {
+    assert.ok(UNCERTAIN_CLAIM_TYPES.has(t as never), `${t} must be uncertain`);
+  }
+  assert.ok(!UNCERTAIN_CLAIM_TYPES.has("FACT"));
+  assert.ok(!UNCERTAIN_CLAIM_TYPES.has("CALCULATION"));
+});
+
+test("source authority: HIGH_IMPACT with only Tier D FAILS; Tier A/B PASSES", () => {
+  const tierD = [{ ref: "blog", tier: "TIER_D" as const, sourceDate: "2026-01-01", freshnessBasis: "observation_date" as const }];
+  assert.equal(sourceAuthorityVerdict(tierD, "YMYL_HIGH_IMPACT"), "FAIL");
+  const tierA = [{ ref: "regulator", tier: "TIER_A" as const, sourceDate: "2026-01-01", freshnessBasis: "observation_date" as const }];
+  assert.equal(sourceAuthorityVerdict(tierA, "YMYL_HIGH_IMPACT"), "PASS");
+});
+
+test("source authority: empty sources on YMYL page FAIL", () => {
+  assert.equal(sourceAuthorityVerdict([], "YMYL_INFORMATIONAL"), "FAIL");
+  assert.equal(sourceAuthorityVerdict([], "NON_YMYL"), "PASS");
+});
+
+test("review staleness: digest change makes review stale", () => {
+  const review = parseReviewAuthority({
+    schemaVersion: "trust-governance-v1",
+    projectId: "proj-1",
+    pageIdentity: "research/report",
+    reviewerRef: "person-1",
+    reviewerExpertise: "Property market analysis",
+    reviewedContentDigest: "a".repeat(64),
+    reviewedAt: "2026-09-20",
+    result: "APPROVED",
+    note: "",
+  });
+  assert.equal(reviewStaleness(review, "a".repeat(64)).stale, false);
+  const stale = reviewStaleness(review, "b".repeat(64));
+  assert.equal(stale.stale, true);
+  assert.match(stale.reason!, /stale/);
+});
+
+test("credential gate: no evidence -> not publishable", () => {
+  assert.equal(credentialPublishable({ name: "CFA", evidenceRef: "", evidenceKind: "registry" }), false);
+  assert.equal(credentialPublishable({ name: "CFA", evidenceRef: "registry-entry-123", evidenceKind: "registry" }), true);
+});

@@ -405,6 +405,15 @@ export const productionQaCheckIdSchema = z.enum([
   "design.token_governance",
   "design.composition_valid",
   "design.drift_source_scan",
+  // Run 12 trust governance gates
+  "trust.page_intent_present",
+  "trust.cannibalization",
+  "trust.ymll_classification",
+  "trust.claim_lineage",
+  "trust.source_authority",
+  "trust.review_authority",
+  "trust.original_value",
+  "trust.fixture_leakage",
 ]);
 export type ProductionQaCheckId = z.infer<typeof productionQaCheckIdSchema>;
 

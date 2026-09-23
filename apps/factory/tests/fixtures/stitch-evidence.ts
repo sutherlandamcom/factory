@@ -13,12 +13,17 @@ export function providerHtml(kind: DesignArchetypeKind, page: Copy, choices?: Ar
     const profile = variant === "split" || variant === "structured" ? "split-at-md" : variant === "stacked" || component === "related-links" ? "stack" : "readable";
     return `<section data-factory-component="${component}" data-factory-variant="${variant}" data-factory-pattern="${pattern}" data-factory-responsive="${profile}" ${extra}>${body}</section>`;
   };
+  // Editorial archetype structurally supports a related-pages band (approved
+  // grammar: optional). The renderer omits it when a page carries no links.
+  const related = kind === "editorial"
+    ? block("related-links", "list", "related", `<ul>${(page as { internalLinks?: string[] }).internalLinks?.map((href) => `<li><a href="${escape(href)}">${escape(href)}</a></li>`).join("") ?? ""}</ul>`)
+    : "";
   return `<!doctype html><html><body><main data-factory-design="stitch-dom-v1">${
     block("page-hero", heroVariant, heroPattern, `<h1>${escape(page.title)}</h1><p>${escape(page.introduction)}</p>`, 'data-factory-visual-role="hero-primary"')
   }${page.sections.map((section, index) => {
     const choice = choices?.[index] ?? { pattern: intro, variant: "plain" };
     return block("content-section", choice.variant, choice.pattern, `<h2>${escape(section.heading)}</h2><p>${escape(section.body)}</p>`, `data-factory-section-index="${index}"`);
-  }).join("")}${block("page-conclusion", "surface", "conclusion", escape(page.conclusion))}${block("page-cta", "text", "cta", escape(page.cta))}</main></body></html>`;
+  }).join("")}${related}${block("page-conclusion", "surface", "conclusion", escape(page.conclusion))}${block("page-cta", "text", "cta", escape(page.cta))}</main></body></html>`;
 }
 
 /** Only artifact transport is mocked; normalization and the MCP provider path are real. */

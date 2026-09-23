@@ -2730,3 +2730,112 @@ export type NarrationTextSnapshotRecord = typeof narrationTextSnapshots.$inferSe
 export type AudioCandidateRecord = typeof audioCandidates.$inferSelect;
 export type AcceptedAudioArtifactRecord = typeof acceptedAudioArtifacts.$inferSelect;
 export type AcceptedDerivativeSetRecord = typeof acceptedDerivativeSets.$inferSelect;
+
+// ---------------------------------------------------------------------------
+// Run 12 trust governance tables
+// ---------------------------------------------------------------------------
+
+export const pageIntentAuthorities = pgTable(
+  "page_intent_authorities",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    version: integer("version").notNull(),
+    intentDigest: text("intent_digest").notNull(),
+    data: jsonb("data").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("page_intent_authorities_project_page_version_unique").on(
+      table.projectId,
+      table.pageIdentity,
+      table.version,
+    ),
+    check(
+      "page_intent_authorities_digest_shape",
+      sql`${table.intentDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+    index("page_intent_authorities_project_page_idx").on(table.projectId, table.pageIdentity, table.version),
+  ],
+);
+
+export const claimLineageRecords = pgTable(
+  "claim_lineage_records",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    claimId: text("claim_id").notNull(),
+    contentDigest: text("content_digest").notNull(),
+    data: jsonb("data").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check(
+      "claim_lineage_records_digest_shape",
+      sql`${table.contentDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+    index("claim_lineage_records_project_page_idx").on(table.projectId, table.pageIdentity, table.contentDigest),
+  ],
+);
+
+export const reviewAuthorities = pgTable(
+  "review_authorities",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    version: integer("version").notNull(),
+    reviewerRef: text("reviewer_ref").notNull(),
+    reviewedContentDigest: text("reviewed_content_digest").notNull(),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }).notNull(),
+    result: text("result").notNull(),
+    data: jsonb("data").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("review_authorities_project_page_version_unique").on(
+      table.projectId,
+      table.pageIdentity,
+      table.version,
+    ),
+    check(
+      "review_authorities_result_valid",
+      sql`${table.result} IN ('APPROVED', 'CHANGES_REQUESTED')`,
+    ),
+    check(
+      "review_authorities_digest_shape",
+      sql`${table.reviewedContentDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+    index("review_authorities_project_page_idx").on(table.projectId, table.pageIdentity, table.version),
+  ],
+);
+
+export const originalValueRecords = pgTable(
+  "original_value_records",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    data: jsonb("data").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("original_value_records_project_page_idx").on(table.projectId, table.pageIdentity),
+  ],
+);
+
+export type PageIntentAuthorityRecord = typeof pageIntentAuthorities.$inferSelect;
+export type ClaimLineageRecord = typeof claimLineageRecords.$inferSelect;
+export type ReviewAuthorityRecord = typeof reviewAuthorities.$inferSelect;
+export type OriginalValueRecordRow = typeof originalValueRecords.$inferSelect;

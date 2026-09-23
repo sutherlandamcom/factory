@@ -80,7 +80,22 @@ const inlineAssets = isGoverned
   ? assets.filter((asset) => asset !== heroAsset && !composition?.some((entry) => entry.assetSlot === asset.slot))
   : assets.filter((asset) => asset !== heroAsset && asset.role !== "hero" && asset.role !== "background");
 
-const pageJsonLd = { "@context": "https://schema.org", "@type": "WebPage", name: content.title, description: manifest.seo.description, url: manifest.seo.canonicalUrl };
+// Truthful structured-data projection of VISIBLE page content (Run 12):
+// the site name is visible in header/footer, the canonical URL matches the
+// route, and the publisher is the operating organization shown on the site.
+// No field is emitted that visible content does not possess.
+const siteOrigin = manifest.input.siteIdentity.canonicalOrigin.replace(/\/$/, "");
+const publisherJsonLd = { "@type": "Organization", name: manifest.input.siteIdentity.siteName, url: `${siteOrigin}/` };
+const pageJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "WebPage",
+  name: content.title,
+  description: manifest.seo.description,
+  url: manifest.seo.canonicalUrl,
+  isPartOf: { "@type": "WebSite", name: manifest.input.siteIdentity.siteName, url: `${siteOrigin}/` },
+  publisher: publisherJsonLd,
+  author: publisherJsonLd,
+};
 const breadcrumbJsonLd = breadcrumbs.length === 0 ? null : { "@context": "https://schema.org", "@type": "BreadcrumbList", itemListElement: breadcrumbs.map((entry, index) => ({ "@type": "ListItem", position: index + 1, name: entry.name, ...(entry.url ? { item: entry.url } : {}) })) };
 const jsonLd = breadcrumbJsonLd ? [pageJsonLd, breadcrumbJsonLd] : [pageJsonLd];
 

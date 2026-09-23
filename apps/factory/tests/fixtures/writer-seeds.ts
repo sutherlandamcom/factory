@@ -179,6 +179,7 @@ export async function latestGapSnapshot(
 }
 
 export const samplePageTarget = {
+  designBinding: { schemaVersion: "page-design-binding-v1" as const, archetype: "service" as const },
   slug: "roof-replacement-denver",
   title: "Roof Replacement in Denver",
   objective: "Convert homeowners researching replacement into inspection requests.",

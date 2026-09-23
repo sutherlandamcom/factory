@@ -720,6 +720,7 @@ export interface ContentBriefView {
   slug: string;
   lineage: Record<string, unknown>;
   pageTarget: {
+    designBinding?: { schemaVersion: "page-design-binding-v1"; archetype: "homepage" | "service" | "location" | "editorial" | "investment_advisory" };
     slug: string;
     title: string;
     objective: string;
@@ -838,6 +839,7 @@ export const writerApi = {
     projectId: string,
     input: {
       pageTarget: {
+        designBinding?: { schemaVersion: "page-design-binding-v1"; archetype: "homepage" | "service" | "location" | "editorial" | "investment_advisory" };
         slug: string;
         title: string;
         objective: string;
@@ -1257,6 +1259,7 @@ export interface VisualSlotView {
   pageSlug: string;
   role: string;
   requiredRole: string;
+  required?: boolean;
   requirement: string;
   truthClassProposal: string;
   truthClassRationale: string;

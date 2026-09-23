@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { archetypeGrammarSchema, type ArchetypeGrammar } from "./design-implementation.js";
 
 /**
  * DESIGN CONTRACTS — Macro Run 6 (Google Stitch Design Provider).
@@ -24,6 +25,15 @@ import { z } from "zod";
  */
 
 export const DESIGN_SCHEMA_VERSION = "design-v1" as const;
+/**
+ * Pre-Run-12 additive schema evolution. design-v2 keeps the exact
+ * AcceptedDesignArtifact authority concept but scopes the design input
+ * snapshot to DESIGN-DEFINING upstream material (representative pages +
+ * brand/UX inputs) instead of the whole accepted page inventory, and adds
+ * typed page→archetype bindings plus generic per-archetype visual-role
+ * requirements. Historical design-v1 records are never reinterpreted.
+ */
+export const DESIGN_SCHEMA_VERSION_V2 = "design-v2" as const;
 
 const boundedText = (max: number) => z.string().trim().min(1).max(max);
 /** Bounded text where an empty string is meaningful ("not specified"). */
@@ -434,7 +444,7 @@ export type DesignProviderPreflight =
 
 export interface DesignGenerationRequest {
   /** Exact DesignInputSnapshot to generate from (already persisted). */
-  inputSnapshot: DesignInputSnapshotData;
+  inputSnapshot: DesignInputSnapshotData | DesignInputSnapshotDataV2;
   inputSnapshotId: string;
   projectId: string;
   /**
@@ -469,7 +479,7 @@ export interface DesignGenerationAcceptedPage {
 
 export interface DesignGenerationResult {
   /** Normalized candidate payload (validated against the contract). */
-  candidate: DesignCandidateData;
+  candidate: DesignCandidateData | DesignCandidateDataV2;
   /** Raw provider artifacts for content-addressed storage. */
   rawArtifacts: Array<{
     kind: "design_md" | "screen_html" | "screen_screenshot" | "provider_response";
@@ -557,3 +567,207 @@ export interface DesignStaleness {
   code?: DesignStalenessCode | null;
 }
 
+// ---------------------------------------------------------------------------
+// design-v2 — additive evolution (Pre-Run-12 hardening)
+//
+// Authority concept is UNCHANGED: a normalized provider candidate reviewed by
+// a human becomes the immutable AcceptedDesignArtifact. v2 adds exactly what
+// deterministic implementation requires and separates DESIGN-DEFINING input
+// material from ordinary page instances that consume the design:
+//
+//   pageArchetypeBindings — every current accepted page -> one archetype.
+//     design-v2 snapshots read the EXACT durable authorities from
+//     PageArchetypeStore at snapshot time and record each binding's exact
+//     pageArchetypeAuthority reference (id/version/digest/pageIdentity/
+//     archetype). Recorded as provenance, not runtime truth: production
+//     classification for design-v2 consumes the durable authority, never
+//     re-derivation.
+//   visualRoleRequirements — generic per-archetype visual requirements
+//     (page-exact asset binding stays downstream in VisualAssetPlan /
+//     AcceptedVisualAssetSet).
+//   normalization — explicit provenance of structured candidate values
+//     (Factory seed authority vs provider-derived evidence).
+// ---------------------------------------------------------------------------
+
+/**
+ * Versioned page-archetype binding policy identity. PROVENANCE ONLY: it
+ * describes which classification/planning policy was in effect when the
+ * snapshot bindings were recorded. It is NOT runtime authority and NOT a
+ * substitute for the exact durable pageArchetypeAuthority references.
+ */
+export const PAGE_ARCHETYPE_BINDING_POLICY_V1 = "page-archetype-policy-v1" as const;
+export type PageArchetypeBindingPolicy = typeof PAGE_ARCHETYPE_BINDING_POLICY_V1;
+
+export const pageArchetypeAuthorityIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^paa-[0-9a-f-]{36}$/, "page archetype authority id must match paa-<uuid>");
+
+/** Exact durable page-archetype authority reference. */
+export const pageArchetypeAuthorityRefSchema = z
+  .object({
+    id: pageArchetypeAuthorityIdSchema,
+    version: z.number().int().min(1),
+    digest: designDigestSchema,
+    pageIdentity: z.string().trim().min(1).max(200),
+    archetype: designArchetypeKindSchema,
+  })
+  .strict();
+export type PageArchetypeAuthorityRef = z.infer<typeof pageArchetypeAuthorityRefSchema>;
+
+/**
+ * One accepted page's archetype binding as recorded by a design-v2 snapshot.
+ *
+ * design-v1 predates page-archetype bindings entirely.  A v2 binding is
+ * therefore never historical compatibility data: its exact authority
+ * provenance is required at the contract boundary.
+ */
+export const designPageArchetypeBindingSchema = z
+  .object({
+    slug: z.string().trim().min(1).max(120),
+    archetype: designArchetypeKindSchema,
+    /** Exact contentDigest of the page at binding time. */
+    contentDigest: designDigestSchema,
+    /** Exact page-archetype authority reference at binding time. */
+    pageArchetypeAuthority: pageArchetypeAuthorityRefSchema,
+  })
+  .strict();
+export type DesignPageArchetypeBinding = z.infer<typeof designPageArchetypeBindingSchema>;
+
+/** Generic visual-role requirement for one archetype (NOT page-exact). */
+export const designVisualRoleRequirementSchema = z
+  .object({
+    /** Generic role identity, e.g. "hero-primary", "supporting". */
+    role: z
+      .string()
+      .trim()
+      .min(1)
+      .max(60)
+      .regex(/^[a-z0-9][a-z0-9-]*$/, "visual role must be lowercase dotted/dashed identity"),
+    /** What the role requires (human-readable, bounded). */
+    requirement: boundedText(500),
+    /** Required asset role type, mirroring the Run 5/7 vocabulary. */
+    requiredRole: z.enum(["hero", "background", "inline", "chart", "illustration", "logo", "supporting"]),
+    /** Whether the role must resolve to an exact asset before production. */
+    required: z.boolean(),
+  })
+  .strict();
+export type DesignVisualRoleRequirement = z.infer<typeof designVisualRoleRequirementSchema>;
+
+/**
+ * Normalization provenance: which structured candidate values are Factory
+ * authority (seed/accepted inputs) and which are provider-derived evidence
+ * mapped into supported vocabulary. Fail-closed vocabulary: provider output
+ * that cannot map is rejected upstream, never silently approximated.
+ */
+export const designNormalizationProvenanceSchema = z
+  .object({
+    /** Which field groups came from the Factory operator/seed authority. */
+    factoryAuthorityGroups: z.array(z.enum(["tokens", "typography", "spacing", "rounded", "ctaHierarchy", "navigationLanguage", "imageryTreatment", "sectionRhythm", "archetypeStructure"])).max(10),
+    /** Which field groups were derived from provider evidence. */
+    providerDerivedGroups: z.array(z.enum(["tokens", "typography", "spacing", "rounded", "ctaHierarchy", "navigationLanguage", "imageryTreatment", "sectionRhythm", "archetypeStructure"])).max(10),
+    /** Bounded note describing the normalization applied. */
+    note: optionalBoundedText(1000),
+  })
+  .strict()
+  .refine((data) => data.factoryAuthorityGroups.length + data.providerDerivedGroups.length > 0, {
+    message: "normalization provenance must record at least one field group",
+  });
+export type DesignNormalizationProvenance = z.infer<typeof designNormalizationProvenanceSchema>;
+
+/**
+ * design-v2 input snapshot: identical lineage discipline for brand/UX
+ * inputs, but contentRefs bind ONLY design-defining (representative) pages.
+ * Ordinary page instances added later under a supported archetype do NOT
+ * stale the design.
+ */
+export const designInputSnapshotDataV2Schema = designInputSnapshotDataSchema.omit({ schemaVersion: true }).extend({
+  schemaVersion: z.literal(DESIGN_SCHEMA_VERSION_V2),
+  /** Exact accepted page -> archetype bindings for the WHOLE current page inventory. */
+  pageArchetypeBindings: z.array(designPageArchetypeBindingSchema).max(200),
+  /**
+   * PROVENANCE ONLY: identity of the classification/planning policy that was
+   * in effect when pageArchetypeBindings were recorded. NOT runtime
+   * authority and NOT a substitute for the exact durable
+   * pageArchetypeAuthority reference on each binding.
+   */
+  pageArchetypeBindingPolicy: z.string().trim().min(1).max(100),
+}).strict();
+export type DesignInputSnapshotDataV2 = z.infer<typeof designInputSnapshotDataV2Schema>;
+
+/**
+ * design-v2 candidate payload: same authority concept as v1 with additive
+ * generic visual-role requirements per archetype and explicit normalization
+ * provenance. Provider evidence linkage (screens/designMd digests) unchanged.
+ */
+export const designCandidateDataV2Schema = designCandidateDataSchema.omit({ schemaVersion: true }).extend({
+  schemaVersion: z.literal(DESIGN_SCHEMA_VERSION_V2),
+  /** Generic per-archetype visual-role requirements (page-exact downstream). */
+  visualRoleRequirements: z
+    .array(
+      z
+        .object({
+          archetype: designArchetypeKindSchema,
+          roles: z.array(designVisualRoleRequirementSchema).max(10),
+        })
+        .strict(),
+    )
+    .min(1)
+    .max(5),
+  /** Bounded per-archetype composition grammar derived from provider evidence. */
+  archetypeGrammar: z.array(archetypeGrammarSchema).min(1).max(5),
+  normalization: designNormalizationProvenanceSchema,
+}).strict().superRefine((data, ctx) => {
+  if (data.providerMode !== "live" || !data.normalization.providerDerivedGroups.includes("archetypeStructure")) return;
+  for (const grammar of data.archetypeGrammar) {
+    if (!grammar.providerEvidence) {
+      ctx.addIssue({ code: "custom", message: "Provider-derived grammar requires exact normalized provider evidence." });
+      continue;
+    }
+    for (const ref of grammar.providerEvidence.screens) {
+      const screen = data.screens.find(screen => screen.providerScreenName === ref.screenName && screen.archetype === grammar.archetype);
+      if (!screen || screen.htmlDigest !== ref.htmlDigest || screen.screenshotDigest !== ref.screenshotDigest) {
+        ctx.addIssue({ code: "custom", message: "Normalized grammar evidence differs from the bound provider screen." });
+      }
+    }
+    if (data.screens.filter(screen => screen.archetype === grammar.archetype).length !== grammar.providerEvidence.screens.length) {
+      ctx.addIssue({ code: "custom", message: "Every reviewed provider screen must bind normalized semantics." });
+    }
+  }
+});
+export type DesignCandidateDataV2 = z.infer<typeof designCandidateDataV2Schema>;
+
+export type DesignInputSnapshotAnyVersion = DesignInputSnapshotData | DesignInputSnapshotDataV2;
+export type DesignCandidateAnyVersion = DesignCandidateData | DesignCandidateDataV2;
+
+/** Parse either schema version of a design input snapshot (fail closed). */
+export function parseDesignInputSnapshotAnyVersion(input: unknown): DesignInputSnapshotAnyVersion {
+  const data = input as { schemaVersion?: unknown };
+  if (data?.schemaVersion === DESIGN_SCHEMA_VERSION_V2) {
+    return designInputSnapshotDataV2Schema.parse(input);
+  }
+  return designInputSnapshotDataSchema.parse(input);
+}
+
+/** Parse either schema version of a design candidate (fail closed). */
+export function parseDesignCandidateAnyVersion(input: unknown): DesignCandidateData | DesignCandidateDataV2 {
+  const data = input as { schemaVersion?: unknown };
+  if (data?.schemaVersion === DESIGN_SCHEMA_VERSION_V2) {
+    return designCandidateDataV2Schema.parse(input);
+  }
+  return designCandidateDataSchema.parse(input);
+}
+
+/** Type guard: is this snapshot the v2 (design-defining scope) shape? */
+export function isDesignInputSnapshotV2(
+  data: DesignInputSnapshotData | DesignInputSnapshotDataV2,
+): data is DesignInputSnapshotDataV2 {
+  return data.schemaVersion === DESIGN_SCHEMA_VERSION_V2;
+}
+
+/** Type guard: is this candidate the v2 shape? */
+export function isDesignCandidateV2(data: DesignCandidateData | DesignCandidateDataV2): data is DesignCandidateDataV2 {
+  return data.schemaVersion === DESIGN_SCHEMA_VERSION_V2;
+}

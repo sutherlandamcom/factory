@@ -179,11 +179,13 @@ export const visualPlanSlotSchema = z
       .trim()
       .min(1)
       .max(120)
-      .regex(/^[a-z0-9][a-z0-9.-]*$/),
+      .regex(/^[a-z0-9][a-z0-9./-]*$/),
     /** Exact page/role lineage from the accepted design asset slot. */
     pageSlug: z.string().trim().min(1).max(120),
     role: z.string().trim().min(1).max(60),
     requiredRole: z.enum(["hero", "background", "inline", "chart", "illustration", "logo", "supporting"]),
+    /** Whether this slot is required before visual set and production acceptance (design-v2 governed optionality). */
+    required: z.boolean().default(true),
     /** Visual requirement verbatim from the accepted design artifact. */
     requirement: boundedText(500),
     /** Deterministic truth-class PROPOSAL (operator must confirm). */
@@ -240,7 +242,7 @@ export const visualClassificationSchema = z
       .trim()
       .min(1)
       .max(120)
-      .regex(/^[a-z0-9][a-z0-9.-]*$/),
+      .regex(/^[a-z0-9][a-z0-9./-]*$/),
     truthClass: visualTruthClassSchema,
     /** Required operator acknowledgment of the classification consequences. */
     acknowledged: z.literal(true),
@@ -301,7 +303,7 @@ export const visualPromptSnapshotDataSchema = z
     designCandidateDigest: visualDigestSchema,
     /** Slot context. */
     archetype: z.enum(["homepage", "service", "location", "editorial", "investment_advisory"]),
-    slot: z.string().trim().min(1).max(120).regex(/^[a-z0-9][a-z0-9.-]*$/),
+    slot: z.string().trim().min(1).max(120).regex(/^[a-z0-9][a-z0-9./-]*$/),
     pageSlug: z.string().trim().min(1).max(120),
     role: z.string().trim().min(1).max(60),
     /** Confirmed truth class (classification authority flowed in). */

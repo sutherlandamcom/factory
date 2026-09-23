@@ -8,7 +8,7 @@ import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
 
 const execFileAsync = promisify(execFile);
-export const PRODUCTION_RENDERER_POLICY_VERSION = "production-policy-v2";
+export const PRODUCTION_RENDERER_POLICY_VERSION = "production-policy-v3";
 
 export async function loadProductionBuildIdentity(repoRoot: string) {
   const profile = await loadWorktreeSiteProfile(repoRoot);

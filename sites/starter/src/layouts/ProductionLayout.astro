@@ -1,12 +1,114 @@
 ---
 import "../styles/global.css";
 import type { ProductionRenderManifest } from "../lib/production-manifest";
+
+/**
+ * GOVERNED PRODUCTION LAYOUT — root token scope (Pre-Run-12).
+ *
+ * Semantic tokens are projected ONCE at the <html> root from the manifest's
+ * governed semantic token projection, so header, main, footer and page
+ * content all consume the SAME accepted token projection. There are no
+ * fallback defaults: a missing required token fails the build (fail closed).
+ * Font families come from the manifest's deterministic font delivery.
+ */
 interface Props { manifest: ProductionRenderManifest; jsonLd: Record<string, unknown>[] }
 const { manifest, jsonLd } = Astro.props;
 const { seo, input } = manifest;
+const design = manifest.design;
+// Semantic token authority: production-v3 manifests carry the governed
+// projection. Historical v1/v2 manifests keep their historical semantics:
+// their accepted design tokens project deterministically here (same
+// projection rules as the DIC compiler, applied to the same accepted token
+// values) — never invented, never silently defaulted. A required token
+// that cannot be derived fails the build.
+/** Fail-closed token read: empty/whitespace values are missing tokens. */
+function requireToken(value: string | undefined, provenance: string): string {
+  const trimmed = value?.trim();
+  if (!trimmed) throw new Error(`Historical manifest design tokens lack ${provenance}; cannot project semantic tokens.`);
+  return trimmed;
+}
+const semanticTokens = design.semanticTokens ?? (() => {
+  const colors = design.tokens.colors;
+  requireToken(colors.primary, "colors.primary");
+  // Historical projection precedence is deterministic authority fallback
+  // WITHIN the accepted token set (never an invented literal): an absent
+  // optional token resolves to another accepted token value or FAILS.
+  const background = requireToken(colors.background ?? colors.primary, "colors.background|colors.primary");
+  const surface = requireToken(colors.surface ?? colors.neutral ?? colors.background ?? colors.primary, "colors.surface|colors.neutral");
+  const textPrimary = requireToken(colors.textPrimary ?? colors.primary, "colors.textPrimary|colors.primary");
+  const textMuted = requireToken(colors.textSecondary ?? colors.secondary ?? colors.neutral ?? colors.primary, "colors.textSecondary|colors.secondary|colors.neutral");
+  const action = requireToken(colors.accent ?? colors.primary, "colors.accent|colors.primary");
+  const border = requireToken(colors.secondary ?? colors.neutral ?? colors.primary, "colors.secondary|colors.neutral");
+  const spacingMd = requireToken(design.tokens.spacing.md, "spacing.md");
+  const spacingLg = requireToken(design.tokens.spacing.lg ?? design.tokens.spacing.md, "spacing.lg|spacing.md");
+  const spacingXs = requireToken(design.tokens.spacing.xs ?? design.tokens.spacing.sm ?? design.tokens.spacing.md, "spacing.xs|spacing.sm|spacing.md");
+  const spacingSm = requireToken(design.tokens.spacing.sm ?? design.tokens.spacing.md, "spacing.sm|spacing.md");
+  const radiusMd = requireToken(design.tokens.rounded.md, "rounded.md");
+  const radiusSm = requireToken(design.tokens.rounded.sm ?? design.tokens.rounded.md, "rounded.sm|rounded.md");
+  return [
+    { role: "color.background.primary", value: background },
+    { role: "color.background.surface", value: surface },
+    { role: "color.text.primary", value: textPrimary },
+    { role: "color.text.muted", value: textMuted },
+    { role: "color.action.primary", value: action },
+    { role: "color.border.subtle", value: border },
+    { role: "spacing.page-x", value: spacingMd },
+    { role: "spacing.section-y", value: spacingLg },
+    { role: "spacing.stack-sm", value: spacingXs },
+    { role: "spacing.stack-md", value: spacingSm },
+    { role: "spacing.stack-lg", value: spacingMd },
+    { role: "radius.surface", value: radiusMd },
+    { role: "radius.control", value: radiusSm },
+    { role: "typography.display", value: `'${design.tokens.typography.headingFont.replaceAll("'", "\\'")}'` },
+    { role: "typography.heading", value: `'${design.tokens.typography.headingFont.replaceAll("'", "\\'")}'` },
+    { role: "typography.body", value: `'${design.tokens.typography.bodyFont.replaceAll("'", "\\'")}'` },
+  ];
+})();
+const fontDelivery = design.fontDelivery ?? [
+  { mode: "approved_system_stack" as const, family: `'${design.tokens.typography.headingFont.replaceAll("'", "\\'")}'`, sourceToken: "typography.display" as const },
+  { mode: "approved_system_stack" as const, family: `'${design.tokens.typography.headingFont.replaceAll("'", "\\'")}'`, sourceToken: "typography.heading" as const },
+  { mode: "approved_system_stack" as const, family: `'${design.tokens.typography.bodyFont.replaceAll("'", "\\'")}'`, sourceToken: "typography.body" as const },
+];
+const governedDesign = { ...design, semanticTokens, fontDelivery };
+
+// Fail closed on required semantic tokens: every governed role MUST be
+// present with a non-empty value. No defaults, no silent fallback.
+const REQUIRED_TOKEN_ROLES = [
+  "color.background.primary",
+  "color.background.surface",
+  "color.text.primary",
+  "color.text.muted",
+  "color.action.primary",
+  "color.border.subtle",
+  "spacing.page-x",
+  "spacing.section-y",
+  "spacing.stack-sm",
+  "spacing.stack-md",
+  "spacing.stack-lg",
+  "radius.surface",
+  "radius.control",
+  "typography.display",
+  "typography.heading",
+  "typography.body",
+] as const;
+const tokenValues = new Map(governedDesign.semanticTokens?.map((token) => [token.role, token.value]) ?? []);
+for (const role of REQUIRED_TOKEN_ROLES) {
+  const value = tokenValues.get(role);
+  if (!value || value.trim() === "") {
+    throw new Error(`Production manifest is missing required semantic token "${role}".`);
+  }
+}
+const style = REQUIRED_TOKEN_ROLES.map((role) => `--${role.replace(/\./g, "-")}:${tokenValues.get(role)}`).join(";");
+
+// Deterministic font delivery: resolved families from the accepted design.
+const displayFont = governedDesign.fontDelivery?.find((entry) => entry.sourceToken === "typography.display");
+const bodyFont = governedDesign.fontDelivery?.find((entry) => entry.sourceToken === "typography.body");
+if (!displayFont || !bodyFont) {
+  throw new Error("Production manifest font delivery does not resolve typography.display and typography.body.");
+}
 ---
 <!doctype html>
-<html lang={input.siteIdentity.language}>
+<html lang={input.siteIdentity.language} style={style}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -17,13 +119,29 @@ const { seo, input } = manifest;
     <meta property="og:title" content={seo.ogTitle} />
     <meta property="og:description" content={seo.ogDescription} />
     <meta property="og:url" content={seo.ogUrl} />
+    <style is:global>
+      @font-face {
+        font-family: "Source Serif 4";
+        font-style: normal;
+        font-weight: 400;
+        font-display: swap;
+        src: url("/fonts/SourceSerif4-Regular.woff2") format("woff2");
+      }
+      @font-face {
+        font-family: "Public Sans";
+        font-style: normal;
+        font-weight: 400;
+        font-display: swap;
+        src: url("/fonts/PublicSans-Regular.woff2") format("woff2");
+      }
+    </style>
     {jsonLd.map((node) => <script type="application/ld+json" is:inline set:html={JSON.stringify(node)} />)}
   </head>
-  <body class="min-h-screen bg-[var(--design-background)] font-[var(--design-body-font)] text-[var(--design-text)] antialiased">
-    <header class="border-b border-[var(--design-secondary)] px-6 py-[var(--space-md)]">
-      <nav aria-label="Primary"><a href="/" class="font-[var(--design-heading-font)] font-semibold text-[var(--design-primary)]">{input.siteIdentity.siteName}</a></nav>
+  <body class="min-h-screen bg-[var(--color-background-primary)] text-[var(--color-text-primary)] antialiased" style={`font-family:${bodyFont.family}`}>
+    <header class="border-b border-[var(--color-border-subtle)] px-[var(--spacing-page-x)] py-[var(--spacing-stack-md)]">
+      <nav aria-label="Primary"><a href="/" class="font-[var(--typography-heading)] font-semibold text-[var(--color-text-primary)]">{input.siteIdentity.siteName}</a></nav>
     </header>
     <main><slot /></main>
-    <footer class="border-t border-[var(--design-secondary)] px-6 py-[var(--space-lg)]">{input.siteIdentity.siteName}</footer>
+    <footer class="border-t border-[var(--color-border-subtle)] px-[var(--spacing-page-x)] py-[var(--spacing-section-y)]">{input.siteIdentity.siteName}</footer>
   </body>
 </html>

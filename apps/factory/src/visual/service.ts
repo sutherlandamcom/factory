@@ -5,11 +5,13 @@ import {
   ASSETS_SCHEMA_VERSION,
   DOCUMENTARY_FORBIDDEN_EDITS,
   VISUAL_ASSETS_SCHEMA_VERSION,
+  isDesignCandidateV2,
   parseVisualPlanData,
   parseVisualPromptSnapshotData,
   type AssetDerivation,
   type AssetProvenance,
   type DesignCandidateData,
+  type DesignCandidateDataV2,
   type VisualPlanData,
   type VisualPlanSlot,
   type VisualPromptSnapshotData,
@@ -20,6 +22,7 @@ import {
   type VisualCandidateC2pa,
   type VisualCandidateQa,
 } from "@factory/contracts";
+
 import { FactoryError } from "../executor/errors.js";
 import { resolveRepositoryRoot } from "../repo-root.js";
 import { deterministicDigest } from "../intelligence/digest.js";
@@ -134,6 +137,7 @@ export interface VisualSlotView {
   pageSlug: string;
   role: string;
   requiredRole: string;
+  required?: boolean;
   requirement: string;
   truthClassProposal: VisualTruthClass;
   truthClassRationale: string;
@@ -336,7 +340,7 @@ export class VisualService {
       throw new FactoryError("visual_design_not_eligible", "No accepted design artifact exists for this project; accept a design first.");
     }
     this.assertDesignAuthorityEligible(latest);
-    const designData = latest.artifact.data as DesignCandidateData;
+    const designData = latest.artifact.data as DesignCandidateData | DesignCandidateDataV2;
     if (designData.providerMode === "fixture" && this.provider.providerMode === "live") {
       throw new FactoryError(
         "visual_design_not_eligible",
@@ -344,37 +348,92 @@ export class VisualService {
       );
     }
 
-    // Collect required slots from every archetype's assetSlots (page-exact).
+    // Collect required slots. design-v1: page-exact slots live on the
+    // archetype itself (representative-page era). design-v2: archetypes
+    // define GENERIC visual-role requirements; the plan derives page-exact
+    // slots for every current accepted page of that archetype (deterministic
+    // "<role>.<pageSlug>" identity), so each page gets its own exact asset
+    // authority — representative-page slots are never reused as another
+    // page's authority.
     const slots: VisualPlanSlot[] = [];
     const seen = new Set<string>();
-    for (const archetype of designData.archetypes) {
-      for (const designSlot of archetype.assetSlots) {
-        const key = `${designSlot.pageSlug}::${designSlot.role}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const bound = designSlot.boundAssetVersionId != null && designSlot.boundBinaryDigest != null;
-        const proposal = proposeTruthClass(designSlot.requiredRole);
-        const strategy = proposeResolutionStrategy({ hasBoundAsset: bound, truthClass: proposal.truthClass });
-        slots.push({
-          slot: designSlot.slot,
-          pageSlug: designSlot.pageSlug,
-          role: designSlot.role,
-          requiredRole: designSlot.requiredRole,
-          requirement: designSlot.requirement,
-          truthClassProposal: proposal.truthClass,
-          truthClassRationale: proposal.rationale,
-          aspectRatio: designSlot.requiredRole === "hero" ? "16:9" : "3:2",
-          minDimensions: designSlot.requiredRole === "hero" ? { width: 1200, height: 675 } : { width: 800, height: 533 },
-          ...(bound
+    if (isDesignCandidateV2(designData)) {
+      const pages = await this.designStore.getAcceptedContentForProject(input.projectId);
+      const archetypeKinds = designData.archetypes.map((entry) => entry.kind);
+      for (const page of pages) {
+        const derived = { archetype: await this.designStore.requirePageArchetype(input.projectId, page.id, archetypeKinds) };
+        const requirement = designData.visualRoleRequirements.find((entry) => entry.archetype === derived.archetype);
+        if (!requirement) continue;
+        for (const role of requirement.roles) {
+          const slotId = `${role.role}.${page.slug}`;
+          if (seen.has(slotId)) continue;
+          seen.add(slotId);
+          // Existing exact assignment for this page+role binds the plan
+          // (governance digest is the assignment's version digest).
+          const existingAssignment = await this.findAssignment(input.projectId, page.slug, role.requiredRole);
+          const existing = existingAssignment
             ? {
-                existingVersionId: designSlot.boundAssetVersionId,
-                existingBinaryDigest: designSlot.boundBinaryDigest,
-                existingGovernanceDigest: designSlot.boundGovernanceDigest,
+                versionId: existingAssignment.versionId,
+                binaryDigest: existingAssignment.binaryDigest,
+                governanceDigest: existingAssignment.versionDigest,
               }
-            : {}),
-          proposedStrategy: strategy.strategy,
-          unresolvedReason: strategy.reason.slice(0, 300),
-        });
+            : null;
+          const proposal = proposeTruthClass(role.requiredRole);
+          const strategy = proposeResolutionStrategy({ hasBoundAsset: existing != null, truthClass: proposal.truthClass });
+          slots.push({
+            slot: slotId,
+            pageSlug: page.slug,
+            role: role.requiredRole,
+            requiredRole: role.requiredRole,
+            required: role.required,
+            requirement: role.requirement,
+            truthClassProposal: proposal.truthClass,
+            truthClassRationale: proposal.rationale,
+            aspectRatio: role.requiredRole === "hero" ? "16:9" : "3:2",
+            minDimensions: role.requiredRole === "hero" ? { width: 1200, height: 675 } : { width: 800, height: 533 },
+            ...(existing
+              ? {
+                  existingVersionId: existing.versionId,
+                  existingBinaryDigest: existing.binaryDigest,
+                  existingGovernanceDigest: existing.governanceDigest,
+                }
+              : {}),
+            proposedStrategy: strategy.strategy,
+            unresolvedReason: strategy.reason.slice(0, 300),
+          });
+        }
+      }
+    } else {
+      for (const archetype of designData.archetypes) {
+        for (const designSlot of archetype.assetSlots) {
+          const key = `${designSlot.pageSlug}::${designSlot.role}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const bound = designSlot.boundAssetVersionId != null && designSlot.boundBinaryDigest != null;
+          const proposal = proposeTruthClass(designSlot.requiredRole);
+          const strategy = proposeResolutionStrategy({ hasBoundAsset: bound, truthClass: proposal.truthClass });
+          slots.push({
+            slot: designSlot.slot,
+            pageSlug: designSlot.pageSlug,
+            role: designSlot.role,
+            requiredRole: designSlot.requiredRole,
+            required: true,
+            requirement: designSlot.requirement,
+            truthClassProposal: proposal.truthClass,
+            truthClassRationale: proposal.rationale,
+            aspectRatio: designSlot.requiredRole === "hero" ? "16:9" : "3:2",
+            minDimensions: designSlot.requiredRole === "hero" ? { width: 1200, height: 675 } : { width: 800, height: 533 },
+            ...(bound
+              ? {
+                  existingVersionId: designSlot.boundAssetVersionId,
+                  existingBinaryDigest: designSlot.boundBinaryDigest,
+                  existingGovernanceDigest: designSlot.boundGovernanceDigest,
+                }
+              : {}),
+            proposedStrategy: strategy.strategy,
+            unresolvedReason: strategy.reason.slice(0, 300),
+          });
+        }
       }
     }
     if (slots.length === 0) {
@@ -1420,27 +1479,66 @@ export class VisualService {
       generationRequestId: string | null;
       candidateId: string | null;
     }> = [];
+
+    // Verify all recorded slot resolutions for this plan belong to declared plan slots (unknown slot fail closed)
+    const planResolutions = await this.store.listSlotResolutions(plan.id);
+    for (const res of planResolutions) {
+      if (!data.slots.some((s) => s.slot === res.slot)) {
+        throw new FactoryError(
+          "visual_acceptance_failed",
+          `Recorded slot resolution ${res.slot} does not belong to any declared plan slot.`,
+        );
+      }
+    }
+
     for (const slot of data.slots) {
+      const isRequired = slot.required !== false;
+      const assignment = assignments.find((a) => a.pageSlug === slot.pageSlug && a.role === slot.role);
+      const resolution = await this.store.getSlotResolution(plan.id, slot.slot);
+
+      // If slot is not resolved:
+      if (!assignment && !resolution) {
+        if (isRequired) {
+          const classification = await this.store.getClassification(plan.id, slot.slot);
+          if (!classification) {
+            throw new FactoryError("visual_classification_required", `Slot ${slot.slot} has no confirmed classification.`);
+          }
+          throw new FactoryError(
+            "visual_slot_unresolved",
+            `Slot ${slot.slot} (${slot.pageSlug}/${slot.role}) has no accepted resolution; accept every slot before accepting the set.`,
+          );
+        }
+        // Optional slot without resolution passes and is omitted from the accepted set
+        continue;
+      }
+
+      // Slot was resolved or resolution attempted:
       const classification = await this.store.getClassification(plan.id, slot.slot);
       if (!classification) {
         throw new FactoryError("visual_classification_required", `Slot ${slot.slot} has no confirmed classification.`);
       }
-      const assignment = assignments.find((a) => a.pageSlug === slot.pageSlug && a.role === slot.role);
       if (!assignment) {
         throw new FactoryError(
           "visual_slot_unresolved",
           `Slot ${slot.slot} (${slot.pageSlug}/${slot.role}) has no accepted resolution; accept every slot before accepting the set.`,
         );
       }
-      // Exact durable slot resolution authority (P1-01 / P1-02).
-      // Reading directly by (planId, slot) guarantees zero cross-plan candidate leakage.
-      const resolution = await this.store.getSlotResolution(plan.id, slot.slot);
       if (!resolution) {
         throw new FactoryError(
           "visual_slot_unresolved",
           `Slot ${slot.slot} (${slot.pageSlug}/${slot.role}) has no durable resolution record for plan ${plan.id}; resolve the slot before accepting the set.`,
         );
       }
+
+      // Role check: assignment role must match required role
+      if (assignment.role !== slot.requiredRole) {
+        throw new FactoryError(
+          "visual_acceptance_failed",
+          `Slot ${slot.slot} assignment role (${assignment.role}) does not match required role (${slot.requiredRole}).`,
+        );
+      }
+
+      // Conflict check
       if (
         assignment.versionId !== resolution.toVersionId ||
         assignment.binaryDigest !== resolution.toBinaryDigest ||
@@ -1451,6 +1549,19 @@ export class VisualService {
           `Slot ${slot.slot} assignment (${assignment.versionId}) conflicts with recorded plan resolution (${resolution.toVersionId}).`,
         );
       }
+
+      // Authority binding check: verify assigned asset version exists and is approved
+      const approvedVersion = await this.getApprovedVersionOrThrow(input.projectId, assignment.versionId);
+      if (
+        approvedVersion.binaryDigest !== assignment.binaryDigest ||
+        approvedVersion.governanceDigest !== assignment.versionDigest
+      ) {
+        throw new FactoryError(
+          "visual_acceptance_failed",
+          `Slot ${slot.slot} bound asset version digests do not match assignment authority.`,
+        );
+      }
+
       slotRows.push({
         slot: slot.slot,
         pageSlug: assignment.pageSlug,
@@ -1709,6 +1820,7 @@ export class VisualService {
               pageSlug: slot.pageSlug,
               role: slot.role,
               requiredRole: slot.requiredRole,
+              required: slot.required ?? true,
               requirement: slot.requirement,
               truthClassProposal: slot.truthClassProposal,
               truthClassRationale: slot.truthClassRationale,

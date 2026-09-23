@@ -939,8 +939,11 @@ export function createOperatorApi(deps: OperatorApiDeps) {
 
         // POST input-snapshot: derive the authority-bound design input snapshot.
         if (req.method === "POST" && segments.length === 4 && segments[3] === "input-snapshot") {
-          if (body.trim()) parseJsonBody(body);
-          const view = await design.deriveInputSnapshotDraft(project.id);
+          const payload = body.trim() ? parseJsonBody(body) : {};
+          const explicitVersion = typeof (payload as { schemaVersion?: unknown }).schemaVersion === "string"
+            ? (payload as { schemaVersion: "design-v1" | "design-v2" }).schemaVersion
+            : undefined;
+          const view = await design.deriveInputSnapshotDraft(project.id, { schemaVersion: explicitVersion });
           return sendJson(res, 201, {
             id: view.id,
             version: view.version,

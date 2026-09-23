@@ -183,7 +183,7 @@ async function insertDerivativeSet(
 
 async function insertDesign(db: FactoryDatabaseInstance["db"], projectId: string, _version = 1) {
   const designStore = new DesignStore(db);
-  const designSnapshot = await designStore.deriveInputSnapshotDraft({ projectId });
+  const designSnapshot = await designStore.deriveInputSnapshotDraft({ projectId, schemaVersion: "design-v1" });
   const [snapshot] = await db
     .select()
     .from(designInputSnapshots)

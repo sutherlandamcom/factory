@@ -1,7 +1,10 @@
 import { z } from "zod";
-import { canonicalOriginSchema } from "./site-profile.js";
-import { siteProfileLanguageSchema, siteNameSchema } from "./site-profile.js";
-import { designArchetypeKindSchema } from "./design.js";
+import { canonicalOriginSchema, siteProfileLanguageSchema, siteNameSchema } from "./site-profile.js";
+import {
+  designArchetypeKindSchema,
+  pageArchetypeAuthorityRefSchema,
+  type PageArchetypeAuthorityRef,
+} from "./design.js";
 import { qaVerdictSchema } from "./writer-content.js";
 
 /**
@@ -33,6 +36,15 @@ export const PRODUCTION_SCHEMA_VERSION = "production-v1" as const;
  * AcceptedDerivativeSet identity (id/version/digest).
  */
 export const PRODUCTION_SCHEMA_VERSION_V2 = "production-v2" as const;
+
+/**
+ * Pre-Run-12 render manifest schema (manifest-only; never a PPI version).
+ * production-v3 manifests carry the derived DesignImplementationContract
+ * digest + policy version and the projected semantic tokens/composition so
+ * the Astro renderer is a pure compositor. Historical v1/v2 manifests stay
+ * valid and parseable.
+ */
+export const PRODUCTION_SCHEMA_VERSION_V3 = "production-v3" as const;
 
 const boundedText = (max: number) => z.string().trim().min(1).max(max);
 export const productionDigestSchema = z.string().trim().regex(/^[0-9a-f]{64}$/);
@@ -105,9 +117,12 @@ export const productionPageInputDataSchema = z
     acceptedDesign: productionAuthorityRefSchema,
     acceptedVisualSet: productionAuthorityRefSchema,
     renderer: productionRendererIdentitySchema,
+    /** Exact durable page archetype authority that classified this page. */
+    pageArchetypeAuthority: pageArchetypeAuthorityRefSchema.optional(),
   })
   .strict();
 export type ProductionPageInputData = z.infer<typeof productionPageInputDataSchema>;
+export { pageArchetypeAuthorityRefSchema, type PageArchetypeAuthorityRef };
 
 // ---------------------------------------------------------------------------
 // production-v2 — Run 10 derivative-aware production input
@@ -135,6 +150,124 @@ export function parseProductionPageInputAnyVersion(
   }
   return productionPageInputDataSchema.parse(input);
 }
+
+// ---------------------------------------------------------------------------
+// production-v3 — render manifest composition authority (evidence, not PPI)
+// ---------------------------------------------------------------------------
+
+/** One resolved semantic token (governed projection of accepted design). */
+export const manifestSemanticTokenSchema = z
+  .object({
+    role: z
+      .string()
+      .trim()
+      .min(1)
+      .max(60)
+      .regex(/^[a-z0-9][a-z0-9.-]*$/),
+    value: z.string().trim().min(1).max(300),
+  })
+  .strict();
+export type ManifestSemanticToken = z.infer<typeof manifestSemanticTokenSchema>;
+
+/** One composed component instance in the page render order. */
+export const manifestCompositionEntrySchema = z
+  .object({
+    /** Registered production component id (unknown ids fail closed). */
+    componentId: z
+      .string()
+      .trim()
+      .min(1)
+      .max(60)
+      .regex(/^[a-z0-9][a-z0-9-]*$/),
+    /** Registered variant id (unknown variants fail closed). */
+    variant: z
+      .string()
+      .trim()
+      .min(1)
+      .max(60)
+      .regex(/^[a-z0-9][a-z0-9-]*$/),
+    /** The accepted design section pattern this instance realizes. */
+    pattern: z.string().trim().min(1).max(60),
+    /** once | per_section (bound to accepted content sections in order). */
+    repetition: z.enum(["once", "per_section"]),
+    /** Accepted content section index bound to a per_section instance. */
+    sectionIndex: z.number().int().min(0).max(29).optional(),
+    /** Visual asset slot bound to this instance (exact page authority). */
+    assetSlot: z.string().trim().max(120).optional(),
+  })
+  .strict();
+export type ManifestCompositionEntry = z.infer<typeof manifestCompositionEntrySchema>;
+
+/** DIC evidence block carried in production-v3 manifests. */
+export const manifestDesignImplementationSchema = z
+  .object({
+    /** Exact derived DIC digest (deterministic derivation evidence). */
+    implementationContractDigest: z.string().trim().regex(/^[0-9a-f]{64}$/),
+    /** Renderer policy version that derived the DIC. */
+    policyVersion: z.string().trim().min(1).max(60),
+    /** DIC schema version. */
+    schemaVersion: z.string().trim().min(1).max(40),
+  })
+  .strict();
+export type ManifestDesignImplementation = z.infer<typeof manifestDesignImplementationSchema>;
+
+/** Deterministic font delivery record in production-v3 manifests. */
+export const manifestFontDeliverySchema = z
+  .object({
+    mode: z.enum(["approved_system_stack", "bundled_local_asset"]),
+    family: z.string().trim().min(1).max(300),
+    sourceToken: z.enum(["typography.display", "typography.heading", "typography.body"]),
+  })
+  .strict();
+export type ManifestFontDelivery = z.infer<typeof manifestFontDeliverySchema>;
+
+export const manifestDerivativesDisabledSchema = z
+  .object({
+    state: z.literal("disabled"),
+  })
+  .strict();
+
+export const manifestDerivativesAcceptedSchema = z
+  .object({
+    state: z.literal("accepted").optional(),
+    setDigest: productionDigestSchema,
+    summary: z.discriminatedUnion("state", [
+      z.object({ state: z.literal("disabled") }).strict(),
+      z
+        .object({
+          state: z.literal("accepted"),
+          acceptedId: productionIdSchema,
+          acceptedVersion: z.number().int().min(1),
+          acceptedDigest: productionDigestSchema,
+          language: z.string().trim().min(1).max(40),
+          summaryText: z.string().min(1).max(20000),
+        })
+        .strict(),
+    ]),
+    audio: z.discriminatedUnion("state", [
+      z.object({ state: z.literal("disabled") }).strict(),
+      z
+        .object({
+          state: z.literal("accepted"),
+          acceptedId: productionIdSchema,
+          acceptedVersion: z.number().int().min(1),
+          acceptedDigest: productionDigestSchema,
+          binaryDigest: productionDigestSchema,
+          mimeType: z.string().trim().min(1).max(100),
+          durationSeconds: z.number().int().min(0).max(86400).nullable(),
+          publicPath: z.string().trim().min(1).max(300),
+        })
+        .strict(),
+    ]),
+  })
+  .strict();
+
+/** Run 10 derivative authority block (verbatim accepted summary/audio bindings). */
+export const manifestDerivativesSchema = z.union([
+  manifestDerivativesDisabledSchema,
+  manifestDerivativesAcceptedSchema,
+]);
+export type ManifestDerivatives = z.infer<typeof manifestDerivativesSchema>;
 
 /**
  * Canonical JSON: sorted keys, preserved array order, no whitespace.
@@ -209,6 +342,7 @@ export const qaGateGroupSchema = z.enum([
   "links",
   "performance",
   "security",
+  "design",
 ]);
 export type QaGateGroup = z.infer<typeof qaGateGroupSchema>;
 
@@ -266,6 +400,11 @@ export const productionQaCheckIdSchema = z.enum([
   "security.gitleaks",
   "security.osv",
   "security.public_output",
+  // design implementation hardening (Pre-Run-12)
+  "design.registry_integrity",
+  "design.token_governance",
+  "design.composition_valid",
+  "design.drift_source_scan",
 ]);
 export type ProductionQaCheckId = z.infer<typeof productionQaCheckIdSchema>;
 
@@ -374,3 +513,168 @@ export type CachePolicyData = z.infer<typeof cachePolicyDataSchema>;
 export function parseCachePolicyData(input: unknown): CachePolicyData {
   return cachePolicyDataSchema.parse(input);
 }
+
+// ---------------------------------------------------------------------------
+// Shared render-manifest contract (single structural truth)
+// ---------------------------------------------------------------------------
+
+/**
+ * The single shared render-manifest structural contract. The trusted
+ * Factory compiler PRODUCES manifests validated against this schema and the
+ * Astro build CONSUMES manifests validated against the SAME schema — there
+ * is no duplicated structural truth. Digest verification uses
+ * canonicalProductionJson over the manifest body (excluding manifestDigest).
+ */
+export const renderManifestBodySchema = z
+  .object({
+    schemaVersion: z.enum([PRODUCTION_SCHEMA_VERSION, PRODUCTION_SCHEMA_VERSION_V2, PRODUCTION_SCHEMA_VERSION_V3]),
+    input: z
+      .object({
+        id: productionIdSchema,
+        version: z.number().int().min(1),
+        digest: productionDigestSchema,
+        projectId: productionIdSchema,
+        pageIdentity: boundedText(200),
+        pageType: designArchetypeKindSchema,
+        route: productionRouteSchema,
+        siteIdentity: productionSiteIdentitySchema,
+      })
+      .strict(),
+    seo: z
+      .object({
+        fullTitle: boundedText(400),
+        description: z.string().trim().min(1).max(1000),
+        canonicalUrl: z.string().trim().min(1).max(2000),
+        ogTitle: boundedText(400),
+        ogDescription: z.string().trim().min(1).max(1000),
+        ogUrl: z.string().trim().min(1).max(2000),
+      })
+      .strict(),
+    content: z
+      .object({
+        acceptedId: productionIdSchema,
+        acceptedVersion: z.number().int().min(1),
+        acceptedDigest: productionDigestSchema,
+        title: boundedText(200),
+        metaDescription: z.string().min(1).max(400),
+        introduction: z.string().min(1).max(20000),
+        sections: z.array(z.object({ heading: boundedText(300), body: z.string().min(1).max(20000) }).strict()).max(30),
+        conclusion: z.string().min(1).max(20000),
+        cta: boundedText(1000),
+        internalLinks: z.array(boundedText(300)).max(10),
+      })
+      .strict(),
+    design: z
+      .object({
+        acceptedId: productionIdSchema,
+        acceptedVersion: z.number().int().min(1),
+        acceptedDigest: productionDigestSchema,
+        tokens: z
+          .object({
+            colors: z.record(z.string().trim().min(1).max(30), z.string().trim().max(60)),
+            typography: z.object({ headingFont: boundedText(120), bodyFont: boundedText(120), scaleNotes: z.string().trim().max(500) }).strict(),
+            spacing: z.record(z.string().trim().min(1).max(30), z.string().trim().min(1).max(40)),
+            rounded: z.record(z.string().trim().min(1).max(30), z.string().trim().min(1).max(40)),
+            ctaHierarchy: z.string().trim().max(500),
+            navigationLanguage: z.string().trim().max(500),
+            imageryTreatment: z.string().trim().max(500),
+            sectionRhythm: z.string().trim().max(500),
+          })
+          .strict(),
+        archetype: z
+          .object({
+            kind: designArchetypeKindSchema,
+            sectionPatterns: z.array(boundedText(120)).max(20),
+            contentRequirements: z.array(boundedText(300)).max(20),
+            assetSlots: z.array(z.object({ slot: z.string().trim().min(1).max(120), role: z.string().trim().min(1).max(60), requiredRole: z.string().trim().min(1).max(60) }).strict()).max(20),
+            primaryCta: z.string().trim().max(300),
+            secondaryCta: z.string().trim().max(300),
+            responsiveBehavior: boundedText(1000),
+            trustPresentation: boundedText(1000),
+            rendererPrimitives: z.array(boundedText(60)).max(20),
+          })
+          .strict(),
+        /** production-v3 only: DIC evidence + semantic tokens + composition. */
+        designImplementation: manifestDesignImplementationSchema.optional(),
+        semanticTokens: z.array(manifestSemanticTokenSchema).max(20).optional(),
+        fontDelivery: z.array(manifestFontDeliverySchema).max(3).optional(),
+        composition: z.array(manifestCompositionEntrySchema).max(40).optional(),
+      })
+      .strict(),
+    links: z.array(z.object({ href: z.string().trim().min(1).max(300), title: boundedText(200) }).strict()).max(50),
+    breadcrumbs: z.array(z.object({ name: boundedText(200), url: z.string().trim().max(2000) }).strict()).max(20),
+    assets: z
+      .array(
+        z
+          .object({
+            slot: z.string().trim().min(1).max(120),
+            role: z.string().trim().min(1).max(60),
+            truthClass: z.string().trim().min(1).max(40),
+            versionId: productionIdSchema,
+            binaryDigest: productionDigestSchema,
+            governanceDigest: productionDigestSchema,
+            publicPath: z.string().trim().min(1).max(300),
+            width: z.number().int().min(1).max(100000),
+            height: z.number().int().min(1).max(100000),
+            alt: z.string().max(1000),
+            altAuthorityComplete: z.boolean(),
+            isProbableLcp: z.boolean(),
+          })
+          .strict(),
+      )
+      .max(100),
+    /** Run 10 derivative authority (production-v2/v3 manifests only). */
+    derivatives: manifestDerivativesSchema.optional(),
+    manifestDigest: productionDigestSchema,
+  })
+  .strict();
+
+/** Version-aware manifest validation with version-specific invariants. */
+export function parseRenderManifestAnyVersion(input: unknown): z.infer<typeof renderManifestBodySchema> {
+  const parsed = renderManifestBodySchema.parse(input);
+  // NOTE: digest VERIFICATION lives with the consumers that have Node crypto
+  // (Factory compiler `assertManifest`, starter manifest loader) — this
+  // module stays Node/browser-neutral (no node:crypto import; the Dashboard
+  // bundles it for the browser). The canonical digest formula is:
+  //   sha256(canonicalProductionJson(bodyWithoutManifestDigestAndSchemaVersion))
+  // schemaVersion is structurally validated and NOT part of the digest body
+  // (historical manifest compatibility); the v3 design authority fields are
+  // inside `design` and ARE digest-bound.
+  if (parsed.schemaVersion === PRODUCTION_SCHEMA_VERSION_V2 && parsed.derivatives === undefined) {
+    throw new TypeError("production-v2 manifest is missing its derivatives authority.");
+  }
+  if (parsed.schemaVersion === PRODUCTION_SCHEMA_VERSION && parsed.derivatives !== undefined) {
+    throw new TypeError("production-v1 manifest must not carry derivatives authority.");
+  }
+  if (parsed.schemaVersion === PRODUCTION_SCHEMA_VERSION_V3) {
+    if (parsed.derivatives === undefined) {
+      throw new TypeError("production-v3 manifest is missing its derivatives authority (explicit disabled state is required).");
+    }
+    const design = parsed.design as { designImplementation?: unknown; semanticTokens?: unknown; fontDelivery?: unknown; composition?: unknown };
+    if (!design.designImplementation || !design.semanticTokens || !design.fontDelivery || !design.composition) {
+      throw new TypeError("production-v3 manifest is missing its designImplementation/semanticTokens/fontDelivery/composition authority.");
+    }
+  }
+  if (parsed.schemaVersion !== PRODUCTION_SCHEMA_VERSION_V3 && (parsed.design as { designImplementation?: unknown }).designImplementation !== undefined) {
+    throw new TypeError("Only production-v3 manifests may carry designImplementation evidence.");
+  }
+  return parsed;
+}
+
+// ---------------------------------------------------------------------------
+// Page Archetype Authority (Pre-Run-12 Durable Typed Page Authority)
+// ---------------------------------------------------------------------------
+
+export const pageArchetypeAuthoritySchema = z
+  .object({
+    id: z.string().trim().min(1),
+    projectId: z.string().trim().min(1),
+    pageIdentity: z.string().trim().min(1),
+    archetype: designArchetypeKindSchema,
+    version: z.number().int().min(1),
+    authorityDigest: z.string().regex(/^[0-9a-f]{64}$/),
+    createdAt: z.date(),
+    updatedAt: z.date(),
+  })
+  .strict();
+export type PageArchetypeAuthority = z.infer<typeof pageArchetypeAuthoritySchema>;

@@ -1,0 +1,256 @@
+{
+  "schemaVersion": "production-v3",
+  "input": {
+    "id": "ppin-visual-fixture",
+    "version": 1,
+    "digest": "c33d26a9d1f275b12e9a4b7c1031dc6b3f46ab1b296fda1480e2328436f6519c",
+    "projectId": "proj-visual-fixture",
+    "pageIdentity": "services/advisory",
+    "pageType": "service",
+    "route": "/services/advisory",
+    "siteIdentity": {
+      "siteId": "sutherland-private-office",
+      "siteName": "Sutherland Private Office",
+      "canonicalOrigin": "https://sutherlandam.com",
+      "language": "en",
+      "profileDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  },
+  "seo": {
+    "fullTitle": "Governed advisory service QA fixture | Sutherland Private Office",
+    "description": "A deterministic governed production-v3 fixture page for visual regression QA.",
+    "canonicalUrl": "https://sutherlandam.com/services/advisory",
+    "ogTitle": "Governed advisory service QA fixture | Sutherland Private Office",
+    "ogDescription": "A deterministic governed production-v3 fixture page for visual regression QA.",
+    "ogUrl": "https://sutherlandam.com/services/advisory"
+  },
+  "content": {
+    "acceptedId": "wacc-fixture-svc",
+    "acceptedVersion": 1,
+    "acceptedDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "title": "Governed advisory service QA fixture",
+    "metaDescription": "A deterministic governed production-v3 fixture page for visual regression QA.",
+    "introduction": "Fixture introduction for the governed advisory service page.",
+    "sections": [
+      {
+        "heading": "Fixture service overview",
+        "body": "Accepted overview body for the governed fixture.\n\nSecond paragraph of the accepted overview."
+      },
+      {
+        "heading": "Fixture process",
+        "body": "Accepted process body for the governed fixture."
+      }
+    ],
+    "conclusion": "Accepted conclusion for the governed fixture.",
+    "cta": "Accepted CTA text for the governed fixture.",
+    "internalLinks": [
+      "/"
+    ]
+  },
+  "design": {
+    "acceptedId": "dsac-fixture",
+    "acceptedVersion": 1,
+    "acceptedDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "tokens": {
+      "colors": {
+        "primary": "#1A2E35",
+        "secondary": "#4A5A62",
+        "accent": "#B8422E",
+        "neutral": "#F7F5F2",
+        "background": "#FFFFFF",
+        "surface": "#F7F5F2",
+        "textPrimary": "#1A2E35",
+        "textSecondary": "#4A5A62"
+      },
+      "typography": {
+        "headingFont": "Source Serif 4",
+        "bodyFont": "Public Sans",
+        "scaleNotes": "fixture"
+      },
+      "spacing": {
+        "xs": "4px",
+        "sm": "8px",
+        "md": "16px",
+        "lg": "32px"
+      },
+      "rounded": {
+        "sm": "4px",
+        "md": "8px"
+      },
+      "ctaHierarchy": "c",
+      "navigationLanguage": "n",
+      "imageryTreatment": "i",
+      "sectionRhythm": "s"
+    },
+    "archetype": {
+      "kind": "service",
+      "sectionPatterns": [
+        "page-header",
+        "service-overview",
+        "process",
+        "evidence",
+        "faq",
+        "cta"
+      ],
+      "contentRequirements": [
+        "c"
+      ],
+      "assetSlots": [],
+      "primaryCta": "",
+      "secondaryCta": "",
+      "responsiveBehavior": "r",
+      "trustPresentation": "t",
+      "rendererPrimitives": [
+        "hero",
+        "narrative",
+        "structured",
+        "evidence",
+        "structured",
+        "cta"
+      ]
+    },
+    "designImplementation": {
+      "implementationContractDigest": "ec80d49e5cc99063be9179fb0ba03f6a807a149f565ce15ee853a7e3e4cc062b",
+      "policyVersion": "production-policy-v3",
+      "schemaVersion": "design-implementation-v1"
+    },
+    "semanticTokens": [
+      {
+        "role": "color.background.primary",
+        "value": "#FFFFFF"
+      },
+      {
+        "role": "color.background.surface",
+        "value": "#F7F5F2"
+      },
+      {
+        "role": "color.text.primary",
+        "value": "#1A2E35"
+      },
+      {
+        "role": "color.text.muted",
+        "value": "#4A5A62"
+      },
+      {
+        "role": "color.action.primary",
+        "value": "#B8422E"
+      },
+      {
+        "role": "color.border.subtle",
+        "value": "#4A5A62"
+      },
+      {
+        "role": "spacing.page-x",
+        "value": "16px"
+      },
+      {
+        "role": "spacing.section-y",
+        "value": "32px"
+      },
+      {
+        "role": "spacing.stack-sm",
+        "value": "8px"
+      },
+      {
+        "role": "spacing.stack-md",
+        "value": "16px"
+      },
+      {
+        "role": "spacing.stack-lg",
+        "value": "32px"
+      },
+      {
+        "role": "radius.surface",
+        "value": "8px"
+      },
+      {
+        "role": "radius.control",
+        "value": "4px"
+      },
+      {
+        "role": "typography.display",
+        "value": "'Source Serif 4', serif"
+      },
+      {
+        "role": "typography.heading",
+        "value": "'Source Serif 4', serif"
+      },
+      {
+        "role": "typography.body",
+        "value": "'Public Sans', sans-serif"
+      }
+    ],
+    "fontDelivery": [
+      {
+        "mode": "bundled_local_asset",
+        "family": "'Source Serif 4', serif",
+        "sourceToken": "typography.display"
+      },
+      {
+        "mode": "bundled_local_asset",
+        "family": "'Source Serif 4', serif",
+        "sourceToken": "typography.heading"
+      },
+      {
+        "mode": "bundled_local_asset",
+        "family": "'Public Sans', sans-serif",
+        "sourceToken": "typography.body"
+      }
+    ],
+    "composition": [
+      {
+        "componentId": "page-hero",
+        "variant": "split",
+        "pattern": "page-header",
+        "repetition": "once"
+      },
+      {
+        "componentId": "content-section",
+        "variant": "plain",
+        "pattern": "service-overview",
+        "repetition": "per_section",
+        "sectionIndex": 0
+      },
+      {
+        "componentId": "content-section",
+        "variant": "structured",
+        "pattern": "process",
+        "repetition": "per_section",
+        "sectionIndex": 1
+      },
+      {
+        "componentId": "page-conclusion",
+        "variant": "surface",
+        "pattern": "conclusion",
+        "repetition": "once"
+      },
+      {
+        "componentId": "page-cta",
+        "variant": "text",
+        "pattern": "cta",
+        "repetition": "once"
+      }
+    ]
+  },
+  "links": [
+    {
+      "href": "/",
+      "title": "Home"
+    }
+  ],
+  "breadcrumbs": [
+    {
+      "name": "Home",
+      "url": "https://sutherlandam.com/"
+    },
+    {
+      "name": "Governed advisory service QA fixture",
+      "url": ""
+    }
+  ],
+  "assets": [],
+  "derivatives": {
+    "state": "disabled"
+  },
+  "manifestDigest": "31033b7fe8052d2585f0428586d9d9d52724ed4222793af07e2d12bbdb138243"
+}

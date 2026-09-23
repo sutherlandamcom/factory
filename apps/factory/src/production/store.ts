@@ -33,6 +33,8 @@ import {
   type ProductionPageInputData,
   type ProductionQaCheckResult,
   type ProductionSiteIdentity,
+  type DesignArchetypeKind,
+  type PageArchetypeAuthorityRef,
 } from "@factory/contracts";
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
@@ -43,9 +45,11 @@ import { requireProductionDerivativeSet } from "../derivatives/production-verifi
 import type { ProjectDerivativePolicyData, PageDerivativeOverrideData } from "@factory/contracts";
 import { assertCompleteProductionQa, hasValidQaExecutionDigest, TRUSTED_PRODUCTION_QA_GATES } from "./qa/registry.js";
 import { PageAuthorityReader } from "../writer/page-authority.js";
+import { PageArchetypeStore } from "../page-authority/store.js";
 import { DesignStore } from "../design/design-store.js";
 import { VisualStore } from "../visual/store.js";
 import { AssetStore } from "../assets/asset-store.js";
+import { derivePageArchetype, PageArchetypeError } from "./page-archetype.js";
 
 /**
  * PRODUCTION STORE — Macro Run 9.
@@ -271,23 +275,52 @@ export class ProductionStore {
       pageSlug: input.pageSlug,
     });
 
-    // Accepted content data carries the page title/meta. The archetype
-    // pageType comes from the accepted design's representative-page routing
-    // (bound in the design input snapshot at design acceptance time).
-    const designData = bundle.design.data as {
-      representativePages?: Array<{ slug?: string; archetype?: string }>;
-    };
-    const designInputData = bundle.designInputData as {
-      representativePages?: Array<{ slug?: string; archetype?: string }>;
-    };
-    const representative = (designData.representativePages ?? designInputData.representativePages ?? []).find(
-      (entry) => entry.slug === input.pageSlug,
-    );
-    const pageType = representative?.archetype;
-    if (!pageType) {
+    // Pre-Run-12 page→archetype authority: design-v2 classifies every page
+    // through the durable typed PageArchetypeAuthority (requireAuthority).
+    // Representative pages are provider-generation evidence only and are
+    // NEVER consulted for production classification. Fail-closed: a missing
+    // or unsupported durable authority blocks derivation.
+    //
+    // The slug-pattern derivation policy (derivePageArchetype) is NOT
+    // design-v2 runtime authority; it remains only as the legacy design-v1
+    // compatibility classification path below.
+    const designData = bundle.design.data as { archetypes?: Array<{ kind?: string }> };
+    const supportedKinds = (designData.archetypes ?? [])
+      .map((entry) => entry.kind)
+      .filter((kind): kind is DesignArchetypeKind =>
+        typeof kind === "string" &&
+        ["homepage", "service", "location", "editorial", "investment_advisory"].includes(kind),
+      );
+    const designSchemaVersion = (bundle.design.data as { schemaVersion?: string }).schemaVersion;
+    let pageType: DesignArchetypeKind;
+    let pageArchetypeAuthorityRef: PageArchetypeAuthorityRef | undefined;
+    try {
+      // design-v2 requires exact durable authority; design-v1 remains
+      // historical compatibility and classifies via the legacy slug-pattern
+      // helper (never inferred for v2/v3).
+      if (designSchemaVersion === "design-v2") {
+        const auth = await new PageArchetypeStore(this.db).requireAuthority(input.projectId, input.pageSlug, supportedKinds);
+        pageType = auth.archetype as DesignArchetypeKind;
+        pageArchetypeAuthorityRef = {
+          id: auth.id,
+          version: auth.version,
+          digest: auth.authorityDigest,
+          pageIdentity: auth.pageIdentity,
+          archetype: auth.archetype as DesignArchetypeKind,
+        };
+      } else {
+        pageType = derivePageArchetype(input.pageSlug, supportedKinds).archetype;
+      }
+    } catch (error) {
+      if (error instanceof PageArchetypeError) {
+        throw productionError(error.code, error.message);
+      }
+      throw error;
+    }
+    if (designSchemaVersion === "design-v2" && !pageArchetypeAuthorityRef) {
       throw productionError(
-        "production_route_conflict",
-        `Accepted design does not bind archetype for page ${input.pageSlug}; cannot derive production input.`,
+        "page_archetype_authority_missing",
+        "design-v2 production derivation requires an exact page archetype authority binding.",
       );
     }
 
@@ -392,6 +425,7 @@ export class ProductionStore {
             version: input.rendererVersion,
             policyVersion: input.rendererPolicyVersion,
           },
+          ...(pageArchetypeAuthorityRef ? { pageArchetypeAuthority: pageArchetypeAuthorityRef } : {}),
         }
       : {
           schemaVersion: "production-v1",
@@ -420,6 +454,7 @@ export class ProductionStore {
             version: input.rendererVersion,
             policyVersion: input.rendererPolicyVersion,
           },
+          ...(pageArchetypeAuthorityRef ? { pageArchetypeAuthority: pageArchetypeAuthorityRef } : {}),
         };
     if (hasDerivativeSet) {
       parseProductionPageInputV2Data(data);
@@ -595,10 +630,49 @@ export class ProductionStore {
       }
     }
 
+    // Page archetype authority: verify exact binding against current durable authority in PageArchetypeStore.
+    const inputData = input.data as {
+      schemaVersion?: string;
+      pageArchetypeAuthority?: PageArchetypeAuthorityRef;
+    };
+    const designData = design.data as { schemaVersion?: string };
+    if (designData.schemaVersion === "design-v2" && !inputData.pageArchetypeAuthority) {
+      return {
+        stale: true,
+        reason: "design-v2 ProductionPageInput is missing exact page archetype authority binding.",
+      };
+    }
+    if (inputData.pageArchetypeAuthority) {
+      const boundAuth = inputData.pageArchetypeAuthority;
+      const currentAuth = await new PageArchetypeStore(this.db).getAuthority(input.projectId, input.pageIdentity);
+      if (
+        !currentAuth ||
+        currentAuth.id !== boundAuth.id ||
+        currentAuth.version !== boundAuth.version ||
+        currentAuth.authorityDigest !== boundAuth.digest ||
+        boundAuth.pageIdentity !== input.pageIdentity ||
+        currentAuth.archetype !== boundAuth.archetype
+      ) {
+        return {
+          stale: true,
+          reason: `Page archetype authority changed or was superseded for "${input.pageIdentity}".`,
+        };
+      }
+    } else {
+      if (designData?.schemaVersion === "design-v2") {
+        const currentArch = await new PageArchetypeStore(this.db).getArchetype(input.projectId, input.pageIdentity);
+        if (currentArch && currentArch !== input.pageType) {
+          return {
+            stale: true,
+            reason: `Page archetype changed from ${input.pageType} to ${currentArch} for "${input.pageIdentity}".`,
+          };
+        }
+      }
+    }
+
     // Run 10: a derivative-aware (production-v2) input is stale when its bound
     // AcceptedDerivativeSet is superseded or no longer current. No hidden
     // exceptions: staleness propagates through the existing candidate rules.
-    const inputData = input.data as { schemaVersion?: string };
     if (inputData.schemaVersion === "production-v2") {
       const boundSet = (input.data as { acceptedDerivativeSet?: { id: string; version: number; digest: string } }).acceptedDerivativeSet;
       if (!boundSet) {

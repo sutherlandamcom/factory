@@ -1,0 +1,92 @@
+{
+  "viewport": {
+    "width": 1280,
+    "height": 800
+  },
+  "components": [
+    {
+      "component": "page-hero",
+      "variant": "split",
+      "pattern": null,
+      "box": {
+        "x": 0,
+        "y": 113,
+        "width": 1280,
+        "height": 245.5
+      }
+    },
+    {
+      "component": "content-section",
+      "variant": "plain",
+      "pattern": "service-overview",
+      "box": {
+        "x": 0,
+        "y": 358.5,
+        "width": 1280,
+        "height": 184
+      }
+    },
+    {
+      "component": "content-section",
+      "variant": "structured",
+      "pattern": "process",
+      "box": {
+        "x": 0,
+        "y": 542.5,
+        "width": 1280,
+        "height": 106
+      }
+    },
+    {
+      "component": "page-conclusion",
+      "variant": "surface",
+      "pattern": null,
+      "box": {
+        "x": 256,
+        "y": 648.5,
+        "width": 768,
+        "height": 112.5
+      }
+    },
+    {
+      "component": "page-cta",
+      "variant": "text",
+      "pattern": "cta",
+      "box": {
+        "x": 0,
+        "y": 761,
+        "width": 1280,
+        "height": 93.5
+      }
+    }
+  ],
+  "tokenProjection": {
+    "bg": [
+      "#FFFFFF",
+      "#FFFFFF",
+      "#FFFFFF",
+      "#FFFFFF",
+      "#FFFFFF"
+    ],
+    "text": [
+      "#1A2E35",
+      "#1A2E35",
+      "#1A2E35",
+      "#1A2E35",
+      "#1A2E35"
+    ],
+    "sectionY": [
+      "32px",
+      "32px",
+      "32px",
+      "32px",
+      "32px"
+    ]
+  },
+  "fontFamilies": {
+    "display": "\"Public Sans\", sans-serif",
+    "heading": "\"Public Sans\", sans-serif",
+    "body": "\"Public Sans\", sans-serif"
+  },
+  "documentHeight": 943
+}

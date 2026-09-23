@@ -194,7 +194,7 @@ async function setupLiveAuthority(
   // scoped test-only UPDATE — the accepted design pipeline is provider-
   // neutral; only the recorded provider mode distinguishes live evidence.
   const designStore = new DesignStore(dbInst.db);
-  const snapshot = await designStore.deriveInputSnapshotDraft({ projectId });
+  const snapshot = await designStore.deriveInputSnapshotDraft({ projectId, schemaVersion: "design-v1" });
   const fixtureData = candidateData(pageSlug);
   const liveData = parseDesignCandidateData({
     ...fixtureData,
@@ -360,7 +360,7 @@ async function setupVisualFixtureOnly(
   await acceptFixturePage(dbInst, projectId, pageSlug);
   const root = await mkdtemp(path.join(tmpdir(), "production-fixture-"));
   const designStore = new DesignStore(dbInst.db);
-  const snapshot = await designStore.deriveInputSnapshotDraft({ projectId });
+  const snapshot = await designStore.deriveInputSnapshotDraft({ projectId, schemaVersion: "design-v1" });
   const candidate = await designStore.createCandidate({
     projectId,
     inputSnapshot: snapshot,
@@ -639,7 +639,7 @@ test("PG: a newer accepted design makes retained historical production input sta
   try {
     const input = await env.production.deriveProductionInput({ projectId: env.projectId, pageSlug: "home", siteIdentity: siteIdentity(), rendererVersion: "7.2.9", rendererPolicyVersion: "production-policy-v2" });
     const designStore = new DesignStore(env.dbInst.db);
-    const snapshot = await designStore.deriveInputSnapshotDraft({ projectId: env.projectId });
+    const snapshot = await designStore.deriveInputSnapshotDraft({ projectId: env.projectId, schemaVersion: "design-v1" });
     const candidate = await designStore.createCandidate({ projectId: env.projectId, inputSnapshot: snapshot, data: parseDesignCandidateData({ ...candidateData("home"), providerMode: "live", providerProjectName: "projects/live-new" }) });
     await env.dbInst.db.execute(sql`UPDATE design_candidates SET provider_mode = 'live' WHERE id = ${candidate.id}`);
     await designStore.acceptCandidate({ projectId: env.projectId, candidateId: candidate.id, expectedCandidateDigest: candidate.candidateDigest, reviewNotes: "superseding live design" });
@@ -706,7 +706,7 @@ async function setupLiveVisualService(
   }
 
   const designStore = new DesignStore(dbInst.db);
-  const snapshot = await designStore.deriveInputSnapshotDraft({ projectId });
+  const snapshot = await designStore.deriveInputSnapshotDraft({ projectId, schemaVersion: "design-v1" });
   const fixtureData = candidateData(pageSlug);
   if (preBound) {
     fixtureData.archetypes[0]!.assetSlots[0] = {
@@ -823,6 +823,11 @@ test("PG INTEGRATION: real Run7 accepted visual set roundtrips through productio
     });
     assert.equal(productionInput.acceptedVisualSetId, set.id);
     assert.equal(productionInput.acceptedVisualSetDigest, set.setDigest);
+    assert.equal(
+      (productionInput.data as { pageArchetypeAuthority?: unknown }).pageArchetypeAuthority,
+      undefined,
+      "historical design-v1 production inputs remain valid without page archetype authority",
+    );
 
     const staleness = await env.production.inputStaleness(productionInput);
     assert.equal(staleness.stale, false, "derived production input from real Run 7 service must be fresh");

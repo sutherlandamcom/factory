@@ -1,10 +1,12 @@
 import type { FactoryDb } from "../persistence/db.js";
+import path from "node:path";
 import { FactoryError } from "../executor/errors.js";
 import { ProductionStore } from "./store.js";
 import { computeArtifactDigest, ProductionBuildService } from "./build-service.js";
 import { runSiteWideQa } from "./qa/site-wide.js";
+import { runDesignDriftQa } from "./qa/design-drift.js";
 import { deterministicDigest } from "../intelligence/digest.js";
-import type { ProductionQaCheckResult } from "@factory/contracts";
+import { qaOverallVerdict, type ProductionQaCheckResult } from "@factory/contracts";
 import { loadProductionBuildIdentity } from "./identity.js";
 import { assertCompleteProductionQa } from "./qa/registry.js";
 
@@ -176,6 +178,15 @@ export class ProductionApiFacade {
       repositorySha: candidate.repositorySha,
       trustedChecks,
     });
+    // Pre-Run-12: design-drift QA gates the governed implementation layer
+    // (registry integrity, token governance, composition validity, source
+    // drift scan). Integrated into the same QA pipeline — no parallel QA.
+    qa.checks.push(...(await runDesignDriftQa({
+      manifests,
+      starterSrcDir: path.join(this.repoRoot, "sites", "starter", "src"),
+      manifestSetDigest,
+    })));
+    qa.overall = qaOverallVerdict(qa.checks);
     const pageRoutes = manifests.map((manifest) => manifest.input.route);
     const complete = assertCompleteProductionQa({ checks: qa.checks, pageRoutes, manifestSetDigest, repositorySha: candidate.repositorySha });
     if (!complete.complete) throw new FactoryError("production_qa_failed", `Required QA evidence missing or duplicated: ${complete.missing.join(", ")}`);

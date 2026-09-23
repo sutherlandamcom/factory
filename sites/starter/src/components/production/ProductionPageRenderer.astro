@@ -1,77 +1,133 @@
 ---
 import ProductionLayout from "../../layouts/ProductionLayout.astro";
+import PageHero from "./PageHero.astro";
+import ContentSection from "./ContentSection.astro";
+import PageConclusion from "./PageConclusion.astro";
+import PageCta from "./PageCta.astro";
+import RelatedLinks from "./RelatedLinks.astro";
 import type { ProductionRenderManifest } from "../../lib/production-manifest";
+
+/**
+ * GOVERNED PRODUCTION RENDERER — pure compositor (Pre-Run-12).
+ *
+ * production-v3 manifests carry the derived composition authority; this
+ * component makes NO design decisions for them: layout, variants, patterns
+ * and component selection come exclusively from the manifest composition,
+ * which the trusted compiler derived deterministically from the accepted
+ * design authority (via the DesignImplementationContract). There is:
+ *   - no archetype->hardcoded-class map,
+ *   - no modulo/positional primitive cycling,
+ *   - no generic fallback for unknown primitives,
+ *   - no token fallback defaults.
+ * Unknown componentId/variant or a missing composition entry FAILS the
+ * build (fail closed).
+ *
+ * Historical production-v1/v2 manifests (immutable historical candidates)
+ * render through the preserved legacy projection path — they are never
+ * reinterpreted as governed composition.
+ */
 interface Props { manifest: ProductionRenderManifest }
 const { manifest } = Astro.props;
 const { content, design, assets, links, breadcrumbs } = manifest;
 const derivatives = manifest.derivatives;
-function archetypeClasses(kind: typeof design.archetype.kind): { shell: string; hero: string; content: string } {
-  switch (kind) {
-    case "homepage": return { shell: "max-w-7xl", hero: "md:grid md:grid-cols-2 md:gap-16", content: "max-w-6xl" };
-    case "service": return { shell: "max-w-6xl", hero: "border-l-4 pl-8", content: "max-w-5xl" };
-    case "location": return { shell: "max-w-7xl", hero: "md:grid md:grid-cols-[2fr_3fr] md:gap-12", content: "max-w-6xl" };
-    case "editorial": return { shell: "max-w-4xl", hero: "border-b pb-12", content: "max-w-3xl" };
-    case "investment_advisory": return { shell: "max-w-6xl", hero: "rounded-[var(--radius-md)] border p-8", content: "max-w-4xl" };
+
+const isGoverned = manifest.schemaVersion === "production-v3";
+const composition = design.composition;
+if (isGoverned && (!composition || !design.designImplementation || !design.semanticTokens || !design.fontDelivery)) {
+  throw new Error("Production manifest is missing its governed composition/design-implementation authority (production-v3 required).");
+}
+
+// Registered component lookup: unknown componentId/variant fail closed.
+const registry: Record<string, { variants: ReadonlyArray<string> }> = {
+  "page-hero": { variants: ["split", "stacked"] },
+  "content-section": { variants: ["plain", "evidence", "structured"] },
+  "page-conclusion": { variants: ["surface"] },
+  "page-cta": { variants: ["text"] },
+  "related-links": { variants: ["list"] },
+};
+
+if (isGoverned && composition) {
+  // Validate every composition entry against the registry BEFORE rendering.
+  for (const entry of composition) {
+    const family = registry[entry.componentId];
+    if (!family) throw new Error(`Unknown production component "${entry.componentId}" in manifest composition.`);
+    if (!family.variants.includes(entry.variant)) {
+      throw new Error(`Unknown variant "${entry.variant}" for production component "${entry.componentId}".`);
+    }
+    if (entry.repetition === "per_section" && (entry.sectionIndex === undefined || entry.sectionIndex >= content.sections.length)) {
+      throw new Error(`Composition entry ${entry.componentId} binds an out-of-range content section.`);
+    }
   }
 }
-function primitiveClass(primitive: string): string {
-  switch (primitive) {
-    case "article-body": return "bg-[var(--design-background)] text-lg";
-    case "evidence": return "bg-[var(--design-surface)] border-y border-[var(--design-secondary)]";
-    case "trust": return "bg-[var(--design-surface)] border-l-4 border-[var(--design-accent)]";
-    case "structured": return "bg-[var(--design-background)] md:grid md:grid-cols-[1fr_2fr] md:gap-10";
-    default: return "bg-[var(--design-background)]";
-  }
+
+const bySlot = new Map(assets.map((asset) => [asset.slot, asset]));
+const heroEntry = isGoverned && composition ? composition.find((entry) => entry.componentId === "page-hero") : undefined;
+if (isGoverned && !heroEntry) throw new Error("Manifest composition has no page-hero binding; the page cannot render.");
+const heroAsset = heroEntry?.assetSlot ? bySlot.get(heroEntry.assetSlot) ?? null : null;
+if (heroEntry?.assetSlot && !heroAsset) {
+  throw new Error(`Composition binds hero asset slot "${heroEntry.assetSlot}" which has no accepted asset authority.`);
 }
-const classes = archetypeClasses(design.archetype.kind);
-const bodyPrimitives = design.archetype.rendererPrimitives.filter((entry) => !["hero", "page-header", "article-header", "cta"].includes(entry));
-if (content.sections.length > 0 && bodyPrimitives.length === 0) throw new Error("Accepted design has no body primitive for accepted sections.");
-const renderedSections = content.sections.map((section, index) => ({
-  ...section,
-  paragraphs: section.body.split(/\n{2,}/),
-  primitive: bodyPrimitives[index % bodyPrimitives.length]!,
-  pattern: design.archetype.sectionPatterns.filter((pattern) => pattern !== "cta")[index + 1],
-}));
+const heroDerivatives = derivatives && "summary" in derivatives && (derivatives.summary.state === "accepted" || derivatives.audio.state === "accepted")
+  ? {
+      summary: derivatives.summary.state === "accepted" ? { acceptedDigest: derivatives.summary.acceptedDigest, summaryText: derivatives.summary.summaryText } : null,
+      audio: derivatives.audio.state === "accepted" ? { binaryDigest: derivatives.audio.binaryDigest, publicPath: derivatives.audio.publicPath } : null,
+    }
+  : null;
 const conclusionParagraphs = content.conclusion.split(/\n{2,}/);
-const probableLcp = assets.find((asset) => asset.isProbableLcp);
-const inlineAssets = assets.filter((asset) => !asset.isProbableLcp);
-const colors = design.tokens.colors;
-const style = [`--design-primary:${colors.primary}`, `--design-secondary:${colors.secondary || colors.neutral || colors.primary}`, `--design-accent:${colors.accent || colors.primary}`, `--design-background:${colors.background || "#fff"}`, `--design-surface:${colors.surface || colors.background || "#fff"}`, `--design-text:${colors.textPrimary || colors.primary}`, `--design-heading-font:'${design.tokens.typography.headingFont.replaceAll("'", "\\'")}'`, `--design-body-font:'${design.tokens.typography.bodyFont.replaceAll("'", "\\'")}'`, `--space-md:${design.tokens.spacing.md || "1rem"}`, `--space-lg:${design.tokens.spacing.lg || "2rem"}`, `--radius-md:${design.tokens.rounded.md || "0"}`].join(";");
+const sectionParagraphs = content.sections.map((section) => section.body.split(/\n{2,}/));
+const ctaText = content.cta.trim();
+const inlineAssets = isGoverned
+  ? assets.filter((asset) => asset !== heroAsset && !composition?.some((entry) => entry.assetSlot === asset.slot))
+  : assets.filter((asset) => asset !== heroAsset && asset.role !== "hero" && asset.role !== "background");
+
 const pageJsonLd = { "@context": "https://schema.org", "@type": "WebPage", name: content.title, description: manifest.seo.description, url: manifest.seo.canonicalUrl };
 const breadcrumbJsonLd = breadcrumbs.length === 0 ? null : { "@context": "https://schema.org", "@type": "BreadcrumbList", itemListElement: breadcrumbs.map((entry, index) => ({ "@type": "ListItem", position: index + 1, name: entry.name, ...(entry.url ? { item: entry.url } : {}) })) };
 const jsonLd = breadcrumbJsonLd ? [pageJsonLd, breadcrumbJsonLd] : [pageJsonLd];
+
+// Legacy (v1/v2) projection: the historical hero variant per archetype.
+const legacyHeroVariant = design.archetype.kind === "editorial" || design.archetype.kind === "investment_advisory" ? "stacked" as const : "split" as const;
+const legacyLcp = assets.find((asset) => asset.isProbableLcp);
 ---
 <ProductionLayout manifest={manifest} jsonLd={jsonLd}>
-  <article style={style} data-design-digest={design.acceptedDigest} data-archetype={design.archetype.kind} class={`mx-auto ${classes.shell}`}>
-    {breadcrumbs.length > 0 && <nav aria-label="Breadcrumb" class="px-6 py-4"><ol class="flex flex-wrap gap-2">{breadcrumbs.map((entry, index) => <li>{entry.url ? <a href={entry.url}>{entry.name}</a> : <span aria-current="page">{entry.name}</span>}{index < breadcrumbs.length - 1 && <span aria-hidden="true"> / </span>}</li>)}</ol></nav>}
-    <section class={`px-6 py-16 md:py-24 ${classes.hero}`} data-pattern={design.archetype.sectionPatterns[0]}>
-      <div><h1 class="font-[var(--design-heading-font)] text-4xl font-semibold text-[var(--design-primary)] md:text-6xl">{content.title}</h1><p class="mt-8 text-lg leading-relaxed">{content.introduction}</p></div>
-      {probableLcp && <img src={probableLcp.publicPath} alt={probableLcp.alt} width={probableLcp.width} height={probableLcp.height} loading="eager" decoding="async" data-version-id={probableLcp.versionId} data-binary-digest={probableLcp.binaryDigest} data-governance-digest={probableLcp.governanceDigest} data-truth-class={probableLcp.truthClass} class="mt-10 h-auto w-full rounded-[var(--radius-md)] object-cover" />}
-      {derivatives?.summary.state === "accepted" && (
-        <details class="mt-10 rounded-[var(--radius-md)] border border-[var(--design-secondary)] bg-[var(--design-surface)] p-4" data-derivative="summary" data-summary-digest={derivatives.summary.acceptedDigest}>
-          <summary class="cursor-pointer font-medium text-[var(--design-primary)]">AI-generated summary</summary>
-          <p class="mt-4 leading-relaxed">{derivatives.summary.summaryText}</p>
-        </details>
-      )}
-      {derivatives?.audio.state === "accepted" && (
-        <div class="mt-6 flex flex-col gap-2" data-derivative="audio" data-audio-digest={derivatives.audio.binaryDigest}>
-          <span class="font-medium text-[var(--design-primary)]">Listen to article</span>
-          <span class="text-sm opacity-75">Generated narration of this article.</span>
-          <audio controls preload="none" src={derivatives.audio.publicPath} class="w-full max-w-md"></audio>
-        </div>
-      )}
-    </section>
-    {renderedSections.map((section) => (
-      <section class={`mx-auto px-6 py-[var(--space-lg)] ${classes.content} ${primitiveClass(section.primitive)}`} data-pattern={section.pattern}>
-        <h2 class="font-[var(--design-heading-font)] text-3xl font-semibold text-[var(--design-primary)]">{section.heading}</h2>
-        {section.paragraphs.map((paragraph) => <p class="mt-6 leading-relaxed">{paragraph}</p>)}
-      </section>
-    ))}
-    {inlineAssets.map((asset) => <figure class="mx-auto max-w-4xl px-6 py-8" data-slot={asset.slot}><img src={asset.publicPath} alt={asset.alt} width={asset.width} height={asset.height} loading="lazy" decoding="async" data-version-id={asset.versionId} data-binary-digest={asset.binaryDigest} data-governance-digest={asset.governanceDigest} data-truth-class={asset.truthClass} class="h-auto w-full rounded-[var(--radius-md)]" /></figure>)}
-    <section class="mx-auto max-w-3xl bg-[var(--design-surface)] px-6 py-16">
-      {conclusionParagraphs.map((paragraph) => <p class="mt-6 text-xl leading-relaxed">{paragraph}</p>)}
-    </section>
-    {links.length > 0 && <nav aria-label="Related pages" class="mx-auto max-w-3xl px-6 py-10"><ul>{links.map((link) => <li><a href={link.href} class="text-[var(--design-accent)] underline">{link.title}</a></li>)}</ul></nav>}
-    {content.cta.trim() !== "" && <section class="px-6 py-12 text-center" data-pattern="cta"><p class="text-lg leading-relaxed">{content.cta}</p></section>}
+  <article data-design-digest={design.acceptedDigest} data-archetype={design.archetype.kind} data-implementation-digest={design.designImplementation?.implementationContractDigest}>
+    {breadcrumbs.length > 0 && <nav aria-label="Breadcrumb" class="px-[var(--spacing-page-x)] py-[var(--spacing-stack-md)]"><ol class="flex flex-wrap gap-2">{breadcrumbs.map((entry, index) => <li>{entry.url ? <a href={entry.url}>{entry.name}</a> : <span aria-current="page">{entry.name}</span>}{index < breadcrumbs.length - 1 && <span aria-hidden="true"> / </span>}</li>)}</ol></nav>}
+    {isGoverned && composition ? composition.map((entry) => {
+      if (entry.componentId === "page-hero") {
+        return <PageHero variant={entry.variant as "split" | "stacked"} title={content.title} introduction={content.introduction} asset={heroAsset ? { publicPath: heroAsset.publicPath, alt: heroAsset.alt, width: heroAsset.width, height: heroAsset.height, versionId: heroAsset.versionId, binaryDigest: heroAsset.binaryDigest, governanceDigest: heroAsset.governanceDigest, truthClass: heroAsset.truthClass } : null} derivatives={heroDerivatives} />;
+      }
+      if (entry.componentId === "content-section") {
+        const sectionIndex = entry.sectionIndex ?? 0;
+        const section = content.sections[sectionIndex];
+        if (!section) throw new Error(`Composition binds missing content section ${sectionIndex}.`);
+        return <ContentSection variant={entry.variant as "plain" | "evidence" | "structured"} heading={section.heading} paragraphs={sectionParagraphs[sectionIndex]!} pattern={entry.pattern} />;
+      }
+      if (entry.componentId === "page-conclusion") {
+        return <PageConclusion variant={entry.variant as "surface"} paragraphs={conclusionParagraphs} />;
+      }
+      if (entry.componentId === "page-cta") {
+        if (ctaText === "") return null;
+        return <PageCta variant={entry.variant as "text"} ctaText={ctaText} />;
+      }
+      if (entry.componentId === "related-links") {
+        if (links.length === 0) return null;
+        return <RelatedLinks variant={entry.variant as "list"} links={links} />;
+      }
+      throw new Error(`Unknown production component "${entry.componentId}".`);
+    }) : (
+      <>
+        <PageHero variant={legacyHeroVariant} title={content.title} introduction={content.introduction} asset={legacyLcp ? { publicPath: legacyLcp.publicPath, alt: legacyLcp.alt, width: legacyLcp.width, height: legacyLcp.height, versionId: legacyLcp.versionId, binaryDigest: legacyLcp.binaryDigest, governanceDigest: legacyLcp.governanceDigest, truthClass: legacyLcp.truthClass } : null} derivatives={heroDerivatives} />
+        {content.sections.map((section, index) => (
+          <ContentSection variant="plain" heading={section.heading} paragraphs={sectionParagraphs[index]!} pattern={design.archetype.sectionPatterns.filter((pattern) => pattern !== "cta")[index + 1] ?? "article-body"} />
+        ))}
+        {inlineAssets.map((asset) => (
+          <figure class="mx-auto max-w-4xl px-[var(--spacing-page-x)] py-[var(--spacing-stack-lg)]" data-slot={asset.slot}>
+            <img src={asset.publicPath} alt={asset.alt} width={asset.width} height={asset.height} loading="lazy" decoding="async" data-version-id={asset.versionId} data-binary-digest={asset.binaryDigest} data-governance-digest={asset.governanceDigest} data-truth-class={asset.truthClass} class="h-auto w-full rounded-[var(--radius-surface)]" />
+          </figure>
+        ))}
+        <PageConclusion variant="surface" paragraphs={conclusionParagraphs} />
+        {links.length > 0 && <RelatedLinks variant="list" links={links} />}
+        {ctaText !== "" && <PageCta variant="text" ctaText={ctaText} />}
+      </>
+    )}
   </article>
 </ProductionLayout>

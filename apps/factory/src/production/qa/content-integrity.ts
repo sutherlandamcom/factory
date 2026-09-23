@@ -128,7 +128,7 @@ export function validateContentIntegrity(input: ContentIntegrityInput): ContentI
     ),
     normalizeText(content.conclusion),
     normalizeText(content.cta),
-    ...(input.manifest.derivatives?.summary?.state === "accepted"
+    ...(input.manifest.derivatives && "summary" in input.manifest.derivatives && input.manifest.derivatives.summary?.state === "accepted"
       ? [normalizeText(input.manifest.derivatives.summary.summaryText)]
       : []),
   ].filter((body) => body !== "");

@@ -1,0 +1,19 @@
+---
+/**
+ * GOVERNED PRODUCTION COMPONENT — page-cta (variant: text).
+ *
+ * Registry: production-component-registry-v1 (`page-cta`).
+ * Renders the accepted CTA text VERBATIM. CTA hierarchy styling comes from
+ * the accepted design's ctaHierarchy token semantics; no invented button
+ * treatment.
+ */
+interface Props {
+  variant: "text";
+  /** Accepted CTA text (verbatim; empty means no CTA section renders). */
+  ctaText: string;
+}
+const { variant, ctaText } = Astro.props;
+---
+<section class="px-[var(--spacing-page-x)] py-[var(--spacing-section-y)] text-center" data-component="page-cta" data-variant={variant} data-pattern="cta">
+  <p class="text-lg leading-relaxed text-[var(--color-action-primary)]">{ctaText}</p>
+</section>

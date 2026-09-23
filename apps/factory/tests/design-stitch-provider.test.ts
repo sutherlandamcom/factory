@@ -1,3 +1,4 @@
+import { EvidenceStitchProvider } from "./fixtures/stitch-evidence.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { DesignGenerationRequest } from "@factory/contracts";
@@ -9,7 +10,16 @@ import {
   type StitchMcpClientLike,
   type McpToolCallResult,
 } from "../src/design/stitch-provider.js";
-import { parseDesignInputSnapshotData, type DesignInputSnapshotData } from "@factory/contracts";
+import {
+  parseDesignInputSnapshotData,
+  parseDesignInputSnapshotAnyVersion,
+  isDesignCandidateV2,
+  isDesignInputSnapshotV2,
+  type DesignInputSnapshotData,
+  type DesignInputSnapshotDataV2,
+} from "@factory/contracts";
+import { normalizeArchetypeGrammar } from "../src/design/archetype-grammar.js";
+import { designSnapshotSchemaVersion } from "../src/design/design-store.js";
 
 /**
  * Stitch provider adapter tests — deterministic MCP mocks/fixtures only.
@@ -45,6 +55,56 @@ function validInputSnapshot(): DesignInputSnapshotData {
     archetypes: ["homepage", "service"],
   });
 }
+
+function validInputSnapshotV2(): DesignInputSnapshotDataV2 {
+  return parseDesignInputSnapshotAnyVersion({
+    schemaVersion: "design-v2",
+    acceptedInputSnapshotId: "pis-test-v2",
+    acceptedInputSnapshotVersion: 1,
+    acceptedInputDigest: "a".repeat(64),
+    brand: {
+      facts: ["Family-owned roofing firm"],
+      positioning: "High-altitude roofing expertise",
+      tone: "Plain-spoken expert",
+      visualIdentityNotes: "",
+    },
+    audience: { segments: ["Property owners"], needs: ["Durable roofs"], decisionContext: "" },
+    references: {
+      referenceUrls: [],
+      antiReferenceUrls: [],
+      learn: [],
+      avoid: ["Generic template look"],
+      preferredPerception: "",
+    },
+    uxRequirements: ["Mobile-first responsive layout"],
+    contentRefs: [
+      { id: "apc-1", version: 1, slug: "home", contentDigest: "b".repeat(64) },
+      { id: "apc-2", version: 1, slug: "services/roof-repair", contentDigest: "c".repeat(64) },
+    ],
+    assetRefs: [],
+    representativePages: [
+      { archetype: "homepage", slug: "home", contentDigest: "b".repeat(64) },
+      { archetype: "service", slug: "services/roof-repair", contentDigest: "c".repeat(64) },
+    ],
+    archetypes: ["homepage", "service"],
+    pageArchetypeBindings: [
+      { slug: "home", archetype: "homepage", contentDigest: "b".repeat(64), pageArchetypeAuthority: { id: "paa-00000000-0000-4000-8000-000000000001", version: 1, digest: "b".repeat(64), pageIdentity: "home", archetype: "homepage" } },
+      { slug: "services/roof-repair", archetype: "service", contentDigest: "c".repeat(64), pageArchetypeAuthority: { id: "paa-00000000-0000-4000-8000-000000000002", version: 1, digest: "c".repeat(64), pageIdentity: "services/roof-repair", archetype: "service" } },
+      { slug: "services/inspection", archetype: "service", contentDigest: "d".repeat(64), pageArchetypeAuthority: { id: "paa-00000000-0000-4000-8000-000000000003", version: 1, digest: "d".repeat(64), pageIdentity: "services/inspection", archetype: "service" } },
+    ],
+    pageArchetypeBindingPolicy: "page-archetype-policy-v1",
+  }) as DesignInputSnapshotDataV2;
+}
+
+test("design-v2 snapshot bindings require exact page archetype authority", () => {
+  const input = validInputSnapshotV2();
+  const missingAuthority = structuredClone(input);
+  delete (missingAuthority.pageArchetypeBindings[0] as { pageArchetypeAuthority?: unknown }).pageArchetypeAuthority;
+  assert.throws(
+    () => parseDesignInputSnapshotAnyVersion(missingAuthority),
+    /pageArchetypeAuthority/,
+  );
+});
 
 class MockStitchClient implements StitchMcpClientLike {
   calls: Array<{ name: string; args: Record<string, unknown> }> = [];
@@ -88,12 +148,12 @@ class MockStitchClient implements StitchMcpClientLike {
   }
 }
 
-function screenResult(screenName: string): Record<string, unknown> {
+function screenResult(screenName: string, evidence = false): Record<string, unknown> {
   return {
     name: screenName,
     title: "Fixture Screen",
     deviceType: "DESKTOP",
-    htmlCode: { name: `${screenName}/html`, mimeType: "text/html", downloadUrl: null },
+    htmlCode: { name: `${screenName}/html`, mimeType: "text/html", downloadUrl: evidence ? `https://example.com/${screenName}` : null },
     screenshot: { name: `${screenName}/shot`, mimeType: "image/png", downloadUrl: null },
   };
 }
@@ -336,5 +396,128 @@ test("token resolution: prefers STITCH_ACCESS_TOKEN over alternate env", () => {
   assert.equal(resolveStitchToken({ STITCH_API_KEY: " key " }), "key");
   assert.equal(resolveStitchToken({ GOOGLE_OAUTH_ACCESS_TOKEN: " alt " }), "alt");
   assert.equal(resolveStitchToken({}), null);
+});
+
+test("generation: v2 snapshot produces valid design-v2 candidate with normalized grammar and visual roles", async () => {
+  const mock = new MockStitchClient();
+  mock.queue({ name: "projects/456", title: "factory-proj-tes-design" }); // create_project
+  mock.queue({ name: "assets/789" }); // create_design_system
+  mock.queue({
+    outputComponents: [
+      { design: { screens: [{ name: "projects/456/screens/home", title: "Home", deviceType: "DESKTOP" }] } },
+    ],
+    sessionId: "sess-v2-1",
+  }); // generate homepage desktop
+  mock.queue(screenResult("projects/456/screens/home", true)); // get_screen
+  mock.queue({
+    outputComponents: [
+      { design: { screens: [{ name: "projects/456/screens/home-mobile", title: "Home mobile", deviceType: "MOBILE" }] } },
+    ],
+    sessionId: "sess-v2-1m",
+  }); // generate homepage mobile
+  mock.queue(screenResult("projects/456/screens/home-mobile", true)); // get_screen
+  mock.queue({
+    outputComponents: [
+      { design: { screens: [{ name: "projects/456/screens/service", title: "Service", deviceType: "DESKTOP" }] } },
+    ],
+    sessionId: "sess-v2-2",
+  }); // generate service
+  mock.queue(screenResult("projects/456/screens/service", true)); // get_screen
+
+  const provider = new EvidenceStitchProvider({
+    env: { STITCH_ACCESS_TOKEN: "test-token" },
+    createClient: () => mock,
+  });
+  const req = {
+    ...generationRequest(),
+    inputSnapshot: validInputSnapshotV2(),
+  };
+  const result = await provider.generateDesignSystem(req);
+
+  assert.equal(result.candidate.schemaVersion, "design-v2");
+  assert.ok(isDesignCandidateV2(result.candidate));
+  if (isDesignCandidateV2(result.candidate)) {
+    // Check archetypeGrammar
+    assert.equal(result.candidate.archetypeGrammar.length, 2);
+    const homeGrammar = result.candidate.archetypeGrammar.find((g) => g.archetype === "homepage");
+    assert.ok(homeGrammar);
+    assert.ok(homeGrammar.bindings.some((b) => b.componentId === "page-hero" && b.pattern === "hero"));
+    assert.ok(homeGrammar.bindings.some((b) => b.componentId === "page-conclusion" && b.pattern === "conclusion"));
+
+    const serviceGrammar = result.candidate.archetypeGrammar.find((g) => g.archetype === "service");
+    assert.ok(serviceGrammar);
+    assert.ok(serviceGrammar.bindings.some((b) => b.componentId === "page-hero" && b.pattern === "page-header"));
+
+    // Check visualRoleRequirements
+    assert.equal(result.candidate.visualRoleRequirements.length, 2);
+    const homeRoles = result.candidate.visualRoleRequirements.find((r) => r.archetype === "homepage");
+    assert.ok(homeRoles);
+    assert.ok(homeRoles.roles.some((r) => r.role === "hero-primary" && r.requiredRole === "hero" && r.required === true));
+
+    const serviceRoles = result.candidate.visualRoleRequirements.find((r) => r.archetype === "service");
+    assert.ok(serviceRoles);
+    assert.ok(serviceRoles.roles.some((r) => r.role === "hero-primary" && r.required === true));
+    assert.ok(serviceRoles.roles.some((r) => r.role === "supporting" && r.requiredRole === "supporting" && r.required === false));
+
+    // Check normalization provenance
+    assert.deepEqual(result.candidate.normalization.factoryAuthorityGroups, [
+      "tokens",
+      "typography",
+      "spacing",
+      "rounded",
+      "ctaHierarchy",
+      "navigationLanguage",
+      "imageryTreatment",
+      "sectionRhythm",
+    ]);
+    assert.deepEqual(result.candidate.normalization.providerDerivedGroups, ["archetypeStructure"]);
+  }
+});
+
+test("grammar normalization: unsupported section pattern fails closed with design_provider_output_invalid", () => {
+  assert.throws(
+    () =>
+      normalizeArchetypeGrammar([
+        {
+          kind: "homepage",
+          sectionPatterns: ["hero", "unsupported-carousel-banner", "conclusion"],
+        },
+      ]),
+    (err: unknown) => {
+      const e = err as { code?: string; message?: string };
+      return e.code === "design_provider_output_invalid" && /unsupported section pattern 'unsupported-carousel-banner'/.test(e.message ?? "");
+    },
+  );
+});
+
+test("durable policy activation: design-v2 repository-owned policy for fresh projects, preserves established authority over explicit and env overrides", () => {
+  const origEnv = process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA;
+  try {
+    delete process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA;
+    // Fresh project without prior authority defaults to design-v2 by repository-owned production policy
+    assert.equal(designSnapshotSchemaVersion("proj-brand-new"), "design-v2");
+    // Explicit caller version is respected for fresh projects only
+    assert.equal(designSnapshotSchemaVersion("proj-new", { explicitVersion: "design-v2" }), "design-v2");
+    assert.equal(designSnapshotSchemaVersion("proj-new", { explicitVersion: "design-v1" }), "design-v1");
+    // Existing project snapshot version is preserved (v1 remains v1 without silent migration)
+    assert.equal(designSnapshotSchemaVersion("proj-existing-v1", { existingVersion: "design-v1" }), "design-v1");
+    assert.equal(designSnapshotSchemaVersion("proj-existing-v2", { existingVersion: "design-v2" }), "design-v2");
+
+    // Environment overrides apply only to fresh projects; neither override migrates authority
+    process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA = "design-v1";
+    assert.equal(designSnapshotSchemaVersion("proj-brand-new"), "design-v1");
+    assert.equal(designSnapshotSchemaVersion("proj-existing-v2", { existingVersion: "design-v2" }), "design-v2");
+    assert.equal(designSnapshotSchemaVersion("proj-existing-v2", { existingVersion: "design-v2", explicitVersion: "design-v1" }), "design-v2");
+    process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA = "design-v2";
+    assert.equal(designSnapshotSchemaVersion("proj-existing-v1", { existingVersion: "design-v1" }), "design-v1");
+    assert.equal(designSnapshotSchemaVersion("proj-existing-v1", { existingVersion: "design-v1", explicitVersion: "design-v2" }), "design-v1");
+    assert.equal(designSnapshotSchemaVersion("proj-brand-new"), "design-v2");
+  } finally {
+    if (origEnv !== undefined) {
+      process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA = origEnv;
+    } else {
+      delete process.env.FACTORY_DESIGN_SNAPSHOT_SCHEMA;
+    }
+  }
 });
 

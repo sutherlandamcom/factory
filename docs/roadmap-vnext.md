@@ -34,7 +34,7 @@ Verified main: `5eeffadbbd928f4a03644d6e8ff267a6d5795316` (PR #43 merged; Run 11
 | Macro Run 9 — Production + SEO + Performance Engine | Implemented, independently QA'd and merged | [PR #39](https://github.com/sutherlandamcom/factory/pull/39), merge `637bcb4fcb9fcc20d15dba5fb4fc9d94e6584f0f`; post-merge CI green |
 | Macro Run 10 — Page Derivatives: Summary + Audio | Implemented, remediated and merged | [PR #40](https://github.com/sutherlandamcom/factory/pull/40), merge `93d8d33cb26476b6d9b245ed2b312d83ca5e872e`; multi-page uniqueness remediation [PR #41](https://github.com/sutherlandamcom/factory/pull/41), merge `f11fd0f6b1b60e2f56b9aba98cc219ca092056b8`; closure-evidence correction [PR #42](https://github.com/sutherlandamcom/factory/pull/42), merge `c4ef30eda6eff25251ec4cb65ddc0f5243433586` |
 | Macro Run 11 — Full Operator Workflow | Implemented, independently QA'd, merged and post-merge verified | [PR #43](https://github.com/sutherlandamcom/factory/pull/43), approved candidate `0c77e5dfba5c51fc99e47a762729ba01a3726e96`, merge `5eeffadbbd928f4a03644d6e8ff267a6d5795316`, post-merge [CI run 35448825801](https://github.com/sutherlandamcom/factory/actions/runs/35448825801) SUCCESS |
-| Pre-Run-12 — Design System Implementation Hardening | Planned; Run 11 prerequisite satisfied. Blocked on PR #44 governance acceptance/merge/post-merge verification | Governed by `docs/design-system-implementation-policy.md`; [PR #44](https://github.com/sutherlandamcom/factory/pull/44) must pass independent exact-SHA QA, merge and pass post-merge verification on main before hardening implementation begins |
+| Pre-Run-12 — Design System Implementation Hardening | In implementation (PR open, pending independent exact-SHA QA) | Governed by `docs/design-system-implementation-policy.md` (merged via PR #44); implementation branch from post-PR44 verified `main` |
 | Macro Run 12 — High-quality Multi-page Proof | Planned | Requires accepted Design System Implementation Hardening first |
 | Macro Run 13 — Production Delivery vNext | Planned | Follows Run 12 proof |
 
@@ -259,9 +259,7 @@ Implemented, independently QA'd, merged and post-merge verified via [PR #43](htt
 
 ### Pre-Run-12 — Design System Implementation Hardening
 
-Status: Planned; Run 11 prerequisite satisfied. Blocked on independent exact-SHA QA, merge and post-merge verification of this governance policy ([PR #44](https://github.com/sutherlandamcom/factory/pull/44)).
-
-After PR #44 has passed independent exact-SHA QA, merged, and passed post-merge verification, the Pre-Run-12 hardening work MUST fetch the live repository state, record the then-current verified `main` SHA (the post-PR44 `main` SHA), and perform the mandatory Phase 0 repository inventory/gap matrix defined in `docs/design-system-implementation-policy.md` against that exact SHA before choosing implementation changes. The Run 11 merge SHA (`5eeffadbbd928f4a03644d6e8ff267a6d5795316`) is historical Run 11 closure evidence, not the future hardening implementation base.
+Status: In implementation (branch `feat/pre-run12-design-system-hardening`); Run 11 and PR #44 are merged and post-merge verified. The hardening implementation base is the post-PR44 verified `main` SHA (`303066df27ceb0fff55e541018ba93a07e119af3` at branch creation); the Phase 0 inventory/gap matrix from `docs/design-system-implementation-policy.md` was performed against that exact state. The resulting PR remains OPEN and UNMERGED pending independent exact-SHA QA.
 
 The governing policy is `docs/design-system-implementation-policy.md`.
 

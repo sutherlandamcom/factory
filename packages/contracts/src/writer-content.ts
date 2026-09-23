@@ -65,6 +65,11 @@ export type WriterPolicyData = z.infer<typeof writerPolicyDataSchema>;
 
 export const pageTargetSchema = z
   .object({
+    /** Versioned approved planning authority; absent only for historical briefs. */
+    designBinding: z.object({
+      schemaVersion: z.literal("page-design-binding-v1"),
+      archetype: z.enum(["homepage", "service", "location", "editorial", "investment_advisory"]),
+    }).strict().optional(),
     slug: z
       .string()
       .trim()

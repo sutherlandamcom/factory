@@ -517,6 +517,8 @@ export type {
 } from "./assets.js";
 export {
   DESIGN_SCHEMA_VERSION,
+  DESIGN_SCHEMA_VERSION_V2,
+  PAGE_ARCHETYPE_BINDING_POLICY_V1,
   designIdSchema,
   designInputSnapshotIdSchema,
   designDigestSchema,
@@ -526,6 +528,11 @@ export {
   designUpstreamContentRefSchema,
   designUpstreamAssetRefSchema,
   designInputSnapshotDataSchema,
+  designPageArchetypeBindingSchema,
+  designVisualRoleRequirementSchema,
+  designNormalizationProvenanceSchema,
+  designInputSnapshotDataV2Schema,
+  designCandidateDataV2Schema,
   designTokenColorsSchema,
   designTokenTypographySchema,
   designSystemTokensSchema,
@@ -534,7 +541,12 @@ export {
   DESIGN_ERROR_CODES,
   parseDesignInputSnapshotData,
   parseDesignCandidateData,
+  parseDesignInputSnapshotAnyVersion,
+  parseDesignCandidateAnyVersion,
+  isDesignInputSnapshotV2,
+  isDesignCandidateV2,
   designStalenessCodeSchema,
+  pageArchetypeAuthorityRefSchema,
 } from "./design.js";
 export type {
   DesignArchetypeKind,
@@ -543,6 +555,14 @@ export type {
   DesignUpstreamContentRef,
   DesignUpstreamAssetRef,
   DesignInputSnapshotData,
+  DesignInputSnapshotDataV2,
+  DesignInputSnapshotAnyVersion,
+  DesignCandidateDataV2,
+  DesignCandidateAnyVersion,
+  DesignPageArchetypeBinding,
+  PageArchetypeAuthorityRef,
+  DesignVisualRoleRequirement,
+  DesignNormalizationProvenance,
   DesignTokenColors,
   DesignTokenTypography,
   DesignSystemTokens,
@@ -556,6 +576,29 @@ export type {
   DesignStalenessCode,
   DesignStaleness,
 } from "./design.js";
+
+export {
+  DESIGN_IMPLEMENTATION_SCHEMA_VERSION,
+  semanticTokensSchema,
+  fontDeliverySchema,
+  componentVariantSchema,
+  componentFamilySchema,
+  archetypeComponentBindingSchema,
+  archetypeGrammarSchema,
+  designImplementationContractSchema,
+  DESIGN_IMPLEMENTATION_ERROR_CODES,
+  parseDesignImplementationContract,
+} from "./design-implementation.js";
+export type {
+  SemanticTokens,
+  FontDelivery,
+  ComponentVariant,
+  ComponentFamily,
+  ArchetypeComponentBinding,
+  ArchetypeGrammar,
+  DesignImplementationContract,
+  DesignImplementationErrorCode,
+} from "./design-implementation.js";
 
 export {
   VISUAL_ASSETS_SCHEMA_VERSION,
@@ -603,6 +646,7 @@ export type { AssetDerivation } from "./assets.js";
 export {
   PRODUCTION_SCHEMA_VERSION,
   PRODUCTION_SCHEMA_VERSION_V2,
+  PRODUCTION_SCHEMA_VERSION_V3,
   productionDigestSchema,
   productionIdSchema,
   productionRouteSchema,
@@ -615,6 +659,13 @@ export {
   parseProductionPageInputData,
   parseProductionPageInputV2Data,
   parseProductionPageInputAnyVersion,
+  manifestSemanticTokenSchema,
+  manifestCompositionEntrySchema,
+  manifestDesignImplementationSchema,
+  manifestFontDeliverySchema,
+  manifestDerivativesSchema,
+  renderManifestBodySchema,
+  parseRenderManifestAnyVersion,
   canonicalProductionJson,
   PRODUCTION_ERROR_CODES,
   qaGateGroupSchema,
@@ -630,6 +681,7 @@ export {
   cachePolicyEntrySchema,
   cachePolicyDataSchema,
   parseCachePolicyData,
+  pageArchetypeAuthoritySchema,
 } from "./production.js";
 export type {
   ProductionAuthorityRef,
@@ -637,6 +689,11 @@ export type {
   ProductionRendererIdentity,
   ProductionPageInputData,
   ProductionPageInputV2Data,
+  ManifestSemanticToken,
+  ManifestCompositionEntry,
+  ManifestDesignImplementation,
+  ManifestFontDelivery,
+  ManifestDerivatives,
   ProductionErrorCode,
   QaGateGroup,
   ProductionQaCheckId,
@@ -647,6 +704,7 @@ export type {
   RedirectAuthorityData,
   CachePolicyEntry,
   CachePolicyData,
+  PageArchetypeAuthority,
 } from "./production.js";
 export {
   DERIVATIVES_SCHEMA_VERSION,

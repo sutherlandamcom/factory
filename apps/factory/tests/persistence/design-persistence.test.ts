@@ -159,7 +159,7 @@ test("PG: candidate persists immutably and acceptance binds exact digest", async
   const designStore = new DesignStore(dbInst.db);
   try {
     const seed = await seedProject(dbInst, "dsn3");
-    const snapshot = await designStore.deriveInputSnapshotDraft({ projectId: seed.projectId });
+    const snapshot = await designStore.deriveInputSnapshotDraft({ projectId: seed.projectId, schemaVersion: "design-v1" });
     const data = candidateData();
     const candidate = await designStore.createCandidate({
       projectId: seed.projectId,
@@ -221,7 +221,7 @@ test("PG: rejected candidate can never become accepted; cross-project access fai
   try {
     const seedA = await seedProject(dbInst, "dsn4a");
     const seedB = await seedProject(dbInst, "dsn4b");
-    const snapshotA = await designStore.deriveInputSnapshotDraft({ projectId: seedA.projectId });
+    const snapshotA = await designStore.deriveInputSnapshotDraft({ projectId: seedA.projectId, schemaVersion: "design-v1" });
     const candidate = await designStore.createCandidate({
       projectId: seedA.projectId,
       inputSnapshot: snapshotA,
@@ -265,7 +265,7 @@ test("PG: stale candidate acceptance is rejected when upstream inputs moved", as
   const intake = new ProjectIntakeStore(dbInst.db);
   try {
     const seed = await seedProject(dbInst, "dsn5");
-    const snapshot = await designStore.deriveInputSnapshotDraft({ projectId: seed.projectId });
+    const snapshot = await designStore.deriveInputSnapshotDraft({ projectId: seed.projectId, schemaVersion: "design-v1" });
     const candidate = await designStore.createCandidate({
       projectId: seed.projectId,
       inputSnapshot: snapshot,
@@ -303,7 +303,7 @@ test("PG: accepted design staleness tracks upstream content mutation; restart du
   try {
     const seed = await seedProject(dbInst, "dsn6");
     let designStore = new DesignStore(dbInst.db);
-    const snapshot = await designStore.deriveInputSnapshotDraft({ projectId: seed.projectId });
+    const snapshot = await designStore.deriveInputSnapshotDraft({ projectId: seed.projectId, schemaVersion: "design-v1" });
     const candidate = await designStore.createCandidate({
       projectId: seed.projectId,
       inputSnapshot: snapshot,
@@ -348,7 +348,7 @@ test("PG: accepted design version allocation increments per project", async () =
   const designStore = new DesignStore(dbInst.db);
   try {
     const seed = await seedProject(dbInst, "dsn7");
-    const snapshot = await designStore.deriveInputSnapshotDraft({ projectId: seed.projectId });
+    const snapshot = await designStore.deriveInputSnapshotDraft({ projectId: seed.projectId, schemaVersion: "design-v1" });
     const c1 = await designStore.createCandidate({
       projectId: seed.projectId,
       inputSnapshot: snapshot,
@@ -362,7 +362,7 @@ test("PG: accepted design version allocation increments per project", async () =
     });
     assert.equal(a1.version, 1);
     // New candidate (different rationale) after a NEW input snapshot version.
-    const snapshot2 = await designStore.deriveInputSnapshotDraft({ projectId: seed.projectId });
+    const snapshot2 = await designStore.deriveInputSnapshotDraft({ projectId: seed.projectId, schemaVersion: "design-v1" });
     assert.equal(snapshot2.version, 1); // idempotent — unchanged upstream
     const data2 = parseDesignCandidateData({
       ...JSON.parse(JSON.stringify(candidateData())),
@@ -420,7 +420,7 @@ test("PG: Run 5 governance lineage survives candidate/acceptance, rejects forger
       assetId: first.asset.id, versionId: first.version.id, pageSlug: "services/foo", role: "supporting", expectedBinaryDigest: first.version.binaryDigest,
     });
     const store = new DesignStore(dbInst.db);
-    const snapshot = await store.deriveInputSnapshotDraft({ projectId });
+    const snapshot = await store.deriveInputSnapshotDraft({ projectId, schemaVersion: "design-v1" });
     const snapshotData = snapshot.data as import("@factory/contracts").DesignInputSnapshotData;
     assert.equal(snapshotData.assetRefs[0]!.governanceDigest, first.approved.governanceDigest);
     assert.equal(snapshotData.assetRefs[0]!.governanceDigest, assignment.versionDigest);
@@ -459,7 +459,7 @@ test("PG: Run 5 governance lineage survives candidate/acceptance, rejects forger
     // Forged assignment governance cannot be accepted as current upstream.
     await dbInst.db.update(assetPageAssignments).set({ versionDigest: "f".repeat(64) }).where(eq(assetPageAssignments.id, assignment.id));
     assert.equal((await restarted.inputSnapshotStaleness(projectId, snapshot)).stale, true);
-    await assert.rejects(restarted.deriveInputSnapshotDraft({ projectId }), (e) => isCode(e, "design_input_stale"));
+    await assert.rejects(restarted.deriveInputSnapshotDraft({ projectId, schemaVersion: "design-v1" }), (e) => isCode(e, "design_input_stale"));
     await dbInst.db.update(assetPageAssignments).set({ versionDigest: assignment.versionDigest }).where(eq(assetPageAssignments.id, assignment.id));
     assert.equal((await restarted.inputSnapshotStaleness(projectId, snapshot)).stale, false);
     const second = await upload(50);
@@ -476,7 +476,7 @@ test("PG: exact production authority gate rejects fixtures, wrong project/digest
   try {
     const { projectId } = await seedProject(dbInst, "design-production-gate");
     const store = new DesignStore(dbInst.db);
-    const snapshot = await store.deriveInputSnapshotDraft({ projectId });
+    const snapshot = await store.deriveInputSnapshotDraft({ projectId, schemaVersion: "design-v1" });
     // Synthetic record tests the gate only; NOT live provider/human evidence.
     const data = { ...candidateData(), providerMode: "live" as const };
     const candidate = await store.createCandidate({ projectId, inputSnapshot: snapshot, data });

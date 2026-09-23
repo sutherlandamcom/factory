@@ -123,7 +123,7 @@ async function seedPreBoundProject(h: Awaited<ReturnType<typeof createHarness>>,
     role: "hero",
     expectedBinaryDigest: approved.binaryDigest,
   });
-  await h.design.deriveInputSnapshotDraft(projectId);
+  await h.design.deriveInputSnapshotDraft(projectId, { schemaVersion: "design-v1" });
   const cand = await h.design.generateCandidate({ projectId });
   await h.design.acceptCandidate({
     projectId,
@@ -192,7 +192,7 @@ test("ZERO-RESOLUTION 2: acceptSet fails closed if any slot has no durable resol
   const h = await createHarness();
   const { projectId } = await seedProjectWithAcceptedInputs(h.dbHandle, `zero-res-2-${randomUUID().slice(0, 8)}`);
   await acceptFixturePage(h.dbHandle, projectId, "home");
-  await h.design.deriveInputSnapshotDraft(projectId);
+  await h.design.deriveInputSnapshotDraft(projectId, { schemaVersion: "design-v1" });
   const cand = await h.design.generateCandidate({ projectId });
   await h.design.acceptCandidate({
     projectId,
@@ -330,7 +330,7 @@ test("PLAN-PROVENANCE: Cross-plan candidate isolation prevents candidate from Pl
 async function seedAndResolveProject(h: Awaited<ReturnType<typeof createHarness>>, key: string): Promise<{ projectId: string; planId: string }> {
   const { projectId } = await seedProjectWithAcceptedInputs(h.dbHandle, key);
   await acceptFixturePage(h.dbHandle, projectId, "home");
-  await h.design.deriveInputSnapshotDraft(projectId);
+  await h.design.deriveInputSnapshotDraft(projectId, { schemaVersion: "design-v1" });
   const cand = await h.design.generateCandidate({ projectId });
   await h.design.acceptCandidate({
     projectId,

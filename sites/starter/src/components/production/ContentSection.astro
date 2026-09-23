@@ -1,0 +1,30 @@
+---
+/**
+ * GOVERNED PRODUCTION COMPONENT — content-section (variant: plain |
+ * evidence | structured).
+ *
+ * Registry: production-component-registry-v1 (`content-section`).
+ * Renders one accepted content section VERBATIM (heading + body paragraphs)
+ * with governed typography and semantic-token-only styling. The variant
+ * comes from the manifest composition (never chosen locally).
+ */
+interface Props {
+  variant: "plain" | "evidence" | "structured";
+  /** Accepted section heading (verbatim). */
+  heading: string;
+  /** Accepted section body paragraphs (verbatim, split on blank lines). */
+  paragraphs: string[];
+  /** The accepted design section pattern this instance realizes. */
+  pattern: string;
+}
+const { variant, heading, paragraphs, pattern } = Astro.props;
+const shell = variant === "evidence"
+  ? "bg-[var(--color-background-surface)] border-y border-[var(--color-border-subtle)]"
+  : variant === "structured"
+    ? "md:grid md:grid-cols-[1fr_2fr] md:gap-10"
+    : "bg-[var(--color-background-primary)]";
+---
+<section class:list={["px-[var(--spacing-page-x)] py-[var(--spacing-section-y)]", shell]} data-component="content-section" data-variant={variant} data-pattern={pattern}>
+  <h2 class="font-[var(--typography-heading)] text-3xl font-semibold text-[var(--color-text-primary)]">{heading}</h2>
+  {paragraphs.map((paragraph) => <p class="mt-[var(--spacing-stack-md)] leading-relaxed text-[var(--color-text-primary)]">{paragraph}</p>)}
+</section>

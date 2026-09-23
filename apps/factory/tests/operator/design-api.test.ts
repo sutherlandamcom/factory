@@ -210,6 +210,7 @@ test("design API: generation fails closed when provider is not configured", asyn
     const deriveRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/design/input-snapshot`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ schemaVersion: "design-v1" }),
     });
     assert.equal(deriveRes.status, 201);
     const genRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/design/generate`, {
@@ -230,7 +231,11 @@ test("design API: generate -> accept happy path binds candidate digest; forged d
   const server = await startTestServer(provider);
   try {
     const projectId = await createProjectWithAcceptedInputs(server.baseUrl, "dap3");
-    await fetch(`${server.baseUrl}/api/projects/${projectId}/design/input-snapshot`, { method: "POST", headers: { "Content-Type": "application/json" } });
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/design/input-snapshot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ schemaVersion: "design-v1" }),
+    });
     const genRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/design/generate`, { method: "POST", headers: { "Content-Type": "application/json" } });
     assert.equal(genRes.status, 201);
     const gen = (await genRes.json()) as { id: string; candidateDigest: string };
@@ -276,7 +281,11 @@ test("design API: rejected candidate can never be accepted through direct API", 
   const server = await startTestServer(provider);
   try {
     const projectId = await createProjectWithAcceptedInputs(server.baseUrl, "dap4");
-    await fetch(`${server.baseUrl}/api/projects/${projectId}/design/input-snapshot`, { method: "POST", headers: { "Content-Type": "application/json" } });
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/design/input-snapshot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ schemaVersion: "design-v1" }),
+    });
     const genRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/design/generate`, { method: "POST", headers: { "Content-Type": "application/json" } });
     const gen = (await genRes.json()) as { id: string; candidateDigest: string };
 
@@ -314,7 +323,11 @@ test("design API: cross-project candidate access fails closed", async () => {
   try {
     const projectA = await createProjectWithAcceptedInputs(server.baseUrl, "dap5a");
     const projectB = await createProjectWithAcceptedInputs(server.baseUrl, "dap5b");
-    await fetch(`${server.baseUrl}/api/projects/${projectA}/design/input-snapshot`, { method: "POST", headers: { "Content-Type": "application/json" } });
+    await fetch(`${server.baseUrl}/api/projects/${projectA}/design/input-snapshot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ schemaVersion: "design-v1" }),
+    });
     const genRes = await fetch(`${server.baseUrl}/api/projects/${projectA}/design/generate`, { method: "POST", headers: { "Content-Type": "application/json" } });
     const gen = (await genRes.json()) as { id: string; candidateDigest: string };
 
@@ -351,7 +364,11 @@ test("design API: fixture candidate CANNOT be accepted as production design auth
   const server = await startTestServer(provider);
   try {
     const projectId = await createProjectWithAcceptedInputs(server.baseUrl, "dap7");
-    await fetch(`${server.baseUrl}/api/projects/${projectId}/design/input-snapshot`, { method: "POST", headers: { "Content-Type": "application/json" } });
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/design/input-snapshot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ schemaVersion: "design-v1" }),
+    });
     const genRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/design/generate`, { method: "POST", headers: { "Content-Type": "application/json" } });
     assert.equal(genRes.status, 201);
     const gen = (await genRes.json()) as { id: string; candidateDigest: string };
@@ -394,7 +411,11 @@ test("design API: providerMode survives persistence and restart; artifact reads 
   const server = await startTestServer(provider);
   try {
     const projectId = await createProjectWithAcceptedInputs(server.baseUrl, "dap8");
-    await fetch(`${server.baseUrl}/api/projects/${projectId}/design/input-snapshot`, { method: "POST", headers: { "Content-Type": "application/json" } });
+    await fetch(`${server.baseUrl}/api/projects/${projectId}/design/input-snapshot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ schemaVersion: "design-v1" }),
+    });
     const genRes = await fetch(`${server.baseUrl}/api/projects/${projectId}/design/generate`, { method: "POST", headers: { "Content-Type": "application/json" } });
     assert.equal(genRes.status, 201);
     const gen = (await genRes.json()) as { id: string; candidateDigest: string };
@@ -430,7 +451,11 @@ test("design API: cross-project artifact digest read fails closed (project-scope
   try {
     const projectA = await createProjectWithAcceptedInputs(server.baseUrl, "dap9a");
     const projectB = await createProjectWithAcceptedInputs(server.baseUrl, "dap9b");
-    await fetch(`${server.baseUrl}/api/projects/${projectA}/design/input-snapshot`, { method: "POST", headers: { "Content-Type": "application/json" } });
+    await fetch(`${server.baseUrl}/api/projects/${projectA}/design/input-snapshot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ schemaVersion: "design-v1" }),
+    });
     const genRes = await fetch(`${server.baseUrl}/api/projects/${projectA}/design/generate`, { method: "POST", headers: { "Content-Type": "application/json" } });
     assert.equal(genRes.status, 201);
     const gen = (await genRes.json()) as { id: string; candidateDigest: string };

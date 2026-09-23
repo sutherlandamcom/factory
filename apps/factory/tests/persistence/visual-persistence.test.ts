@@ -122,7 +122,7 @@ async function setupVisualFixture(dbInst: Awaited<ReturnType<typeof setupMigrate
   const provider = new FixtureVisualAssetProvider();
 
   // Accept a fixture design candidate (fixture declaration in review notes).
-  const snapshot = await designStore.deriveInputSnapshotDraft({ projectId });
+  const snapshot = await designStore.deriveInputSnapshotDraft({ projectId, schemaVersion: "design-v1" });
   const candidate = await designStore.createCandidate({
     projectId,
     inputSnapshot: snapshot,

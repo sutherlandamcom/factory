@@ -51,6 +51,7 @@ export function ContentPage({ projectId }: { projectId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [form, setForm] = useState({
+    archetype: "",
     slug: "",
     title: "",
     objective: "",
@@ -69,6 +70,7 @@ export function ContentPage({ projectId }: { projectId: string }) {
       if (data.brief.latest) {
         const pt = data.brief.latest.pageTarget;
         setForm({
+          archetype: pt.designBinding?.archetype ?? "",
           slug: pt.slug,
           title: pt.title,
           objective: pt.objective,
@@ -215,6 +217,13 @@ export function ContentPage({ projectId }: { projectId: string }) {
             </label>
           </div>
           <label className="block">
+            <span className="text-gray-700">Page archetype</span>
+            <select aria-label="Page archetype" value={form.archetype} onChange={(e) => setForm({ ...form, archetype: e.target.value })} className="mt-1 w-full rounded border border-gray-300 px-2 py-1.5">
+              <option value="">Select before design generation</option>
+              <option value="homepage">Archetype: Homepage</option><option value="service">Archetype: Service</option><option value="location">Archetype: Location</option><option value="editorial">Archetype: Editorial</option><option value="investment_advisory">Archetype: Investment advisory</option>
+            </select>
+          </label>
+          <label className="block">
             <span className="text-gray-700">Objective</span>
             <textarea
               value={form.objective}
@@ -274,8 +283,10 @@ export function ContentPage({ projectId }: { projectId: string }) {
           <button
             onClick={() =>
               run(async () => {
+                const effectiveArchetype = form.archetype || (form.slug === "homepage" || form.slug === "home" || form.slug === "" ? "homepage" : undefined);
                 const result = await writerApi.saveBriefDraft(projectId, {
                   pageTarget: {
+                    ...(effectiveArchetype ? { designBinding: { schemaVersion: "page-design-binding-v1" as const, archetype: effectiveArchetype as "homepage" | "service" | "location" | "editorial" | "investment_advisory" } } : {}),
                     slug: form.slug,
                     title: form.title,
                     objective: form.objective,

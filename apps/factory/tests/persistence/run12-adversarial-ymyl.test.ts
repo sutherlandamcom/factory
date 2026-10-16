@@ -72,7 +72,7 @@ test("ADVERSARIAL YMYL: forecast presented as fact is rejected (must be labelled
   try {
     const { projectId } = await seedSutherlandProject(dbInst, "adv-2");
     const trust = new TrustGovernanceStore(dbInst.db);
-    // "The asset will appreciate 12%." recorded as FACT — rejected.
+    // "The asset will appreciate 12%." recorded as FACT — rejected at claim lineage gate.
     const disguised: ClaimLineage = {
       claimId: "claim-forecast-disguised",
       claimText: "The asset will appreciate 12%.",
@@ -81,12 +81,15 @@ test("ADVERSARIAL YMYL: forecast presented as fact is rejected (must be labelled
       pageIdentity: "advisory/investment-decision-framework",
       limitation: "",
     };
-    // FACT with a model-only source: passes structural lineage (it has a source),
-    // but the source authority gate flags TIER_D for YMYL_DECISION_SUPPORT as REVIEW.
-    const verdictSource = await trust.saveClaimLineage({
-      projectId, pageIdentity: "advisory/investment-decision-framework", contentDigest: "a".repeat(64), claims: [disguised],
-    });
-    assert.ok(verdictSource.length === 1);
+    await assert.rejects(
+      trust.saveClaimLineage({
+        projectId,
+        pageIdentity: "advisory/investment-decision-framework",
+        contentDigest: "a".repeat(64),
+        claims: [disguised],
+      }),
+      (err: { code?: string }) => err.code === "trust_claim_lineage_invalid",
+    );
     // The SAME claim honestly labelled as FORECAST requires a limitation; without one it FAILS.
     const unlabelledForecast: ClaimLineage = { ...disguised, claimType: "FORECAST", limitation: "" };
     await assert.rejects(
@@ -130,11 +133,39 @@ test("ADVERSARIAL YMYL: fabricated qualification is not publishable (credential 
   // publishes zero personal credentials; see evidence report).
 });
 
-test("ADVERSARIAL YMYL: citation decoration — source recorded but entailment verdict FAIL is representable", async () => {
-  // The entailment gate is a recorded per-claim verdict during governed QA:
-  // a citation that does not substantively support the claim must be able to
-  // produce a FAIL verdict. Prove the deterministic surface: a claim whose
-  // only source is Tier E cannot pass the source authority gate on a YMYL page.
+test("ADVERSARIAL YMYL: citation decoration — source that does not support claim fails entailment and Tier E fails authority gate", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  try {
+    const { projectId } = await seedSutherlandProject(dbInst, "adv-entailment");
+    const trust = new TrustGovernanceStore(dbInst.db);
+    const decorativeCitation: ClaimLineage = {
+      claimId: "claim-decorative-citation",
+      claimText: "Chamonix transaction volume doubled in Q3.",
+      claimType: "SOURCE_DERIVED_FACT",
+      sourceRefs: [
+        {
+          ref: "General tourism brochure that mentions Chamonix ski lifts",
+          tier: "TIER_B",
+          sourceDate: "2026-06-01",
+          freshnessBasis: "observation_date",
+          entailment: "UNSUPPORTED",
+        },
+      ],
+      pageIdentity: "locations/chamonix",
+      limitation: "",
+    };
+    await assert.rejects(
+      trust.saveClaimLineage({
+        projectId,
+        pageIdentity: "locations/chamonix",
+        contentDigest: "c".repeat(64),
+        claims: [decorativeCitation],
+      }),
+      (err: { code?: string }) => err.code === "trust_claim_lineage_invalid",
+    );
+  } finally {
+    await dbInst.close();
+  }
   const { sourceAuthorityVerdict } = await import("@factory/contracts");
   const forumOnly = [{ ref: "reddit thread", tier: "TIER_E" as const, sourceDate: "2026-01-01", freshnessBasis: "observation_date" as const }];
   assert.equal(sourceAuthorityVerdict(forumOnly, "YMYL_HIGH_IMPACT"), "FAIL");
@@ -174,10 +205,6 @@ test("ADVERSARIAL YMYL: fake freshness — review staleness binds to content dig
 });
 
 test("ADVERSARIAL YMYL: fake reviewer — review markup without a governed review event fails", async () => {
-  // trust.review_authority semantics: displayed review markup (data-review-authority)
-  // without a stored review event FAILs. Prove the store returns no review for a
-  // page that never recorded one (the QA gate maps null review + markup -> FAIL;
-  // the markup detection is exercised in the integration proof).
   const dbInst = await setupMigratedTestDatabase();
   try {
     const { projectId } = await seedSutherlandProject(dbInst, "adv-5");
@@ -185,8 +212,6 @@ test("ADVERSARIAL YMYL: fake reviewer — review markup without a governed revie
     const current = await trust.currentReview(projectId, "research/never-reviewed", "a".repeat(64));
     assert.equal(current.review, null);
     assert.equal(current.stale, false);
-    // A reviewer identity is NOT itself authority: without a governed review
-    // event, trust.currentReview returns null and the QA gate fails closed.
   } finally {
     await dbInst.close();
   }
@@ -206,12 +231,8 @@ test("ADVERSARIAL YMYL: cannibalization bad case rejected through the intent gat
   }
 });
 
-test("ADVERSARIAL YMYL: topic/expertise mismatch — reviewer expertise is recorded per review", async () => {
-  // ReviewAuthority carries reviewerExpertise; a reviewer without relevant
-  // expertise cannot be represented (the expertise statement is part of the
-  // durable record and is checked against the page's required competence in
-  // the evidence report). Prove the record requires a non-empty expertise.
-  const { parseReviewAuthority } = await import("@factory/contracts");
+test("ADVERSARIAL YMYL: topic/expertise mismatch and undisclosed conflict of interest fail closed", async () => {
+  const { parseReviewAuthority, checkTopicExpertiseMatch, checkConflictDisclosure } = await import("@factory/contracts");
   assert.throws(() => parseReviewAuthority({
     schemaVersion: "trust-governance-v1",
     projectId: "p",
@@ -223,6 +244,31 @@ test("ADVERSARIAL YMYL: topic/expertise mismatch — reviewer expertise is recor
     result: "APPROVED",
     note: "",
   }));
+
+  // Topic <-> expertise mismatch (Block 7 / Block 49)
+  const mismatch = checkTopicExpertiseMatch(
+    ["buyer-side", "alpine property"],
+    "Retail consumer electronics copywriting",
+  );
+  assert.equal(mismatch.verdict, "FAIL");
+  assert.equal(mismatch.missingDomains.length, 2);
+
+  const matched = checkTopicExpertiseMatch(
+    ["buyer-side", "alpine property"],
+    "Independent buyer-side alpine property advisory and decision methodology",
+  );
+  assert.equal(matched.verdict, "PASS");
+
+  // Undisclosed material conflict of interest (Block 8 / Block 49)
+  assert.equal(checkConflictDisclosure({ hasMaterialConflict: true, disclosureText: "" }), "FAIL");
+  assert.equal(checkConflictDisclosure({ hasMaterialConflict: true, disclosureText: null }), "FAIL");
+  assert.equal(
+    checkConflictDisclosure({
+      hasMaterialConflict: true,
+      disclosureText: "Sutherland Private Office acts exclusively for the buyer and accepts no seller or listing commissions.",
+    }),
+    "PASS",
+  );
 });
 
 test("ADVERSARIAL YMYL: generic SEO rewrite — original-value gate requires a recorded element", async () => {

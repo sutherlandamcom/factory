@@ -180,10 +180,13 @@ export class LocalTrustedQaEvidenceExecutor implements TrustedQaEvidenceExecutor
     if (!browserPkgs) {
       throw qaToolUnavailable("@playwright/test, @axe-core/playwright", "Browser QA packages are not installed in the workspace.");
     }
-    checks.push(...(await this.collectBrowserChecks({ ...input, browserPkgs }, versions)));
-    checks.push(...(await this.collectLighthouse({ ...input }, versions)));
-    checks.push(await this.collectGitleaks(input, versions));
-    checks.push(await this.collectOsv(input, versions));
+    const [browserChecks, gitleaksCheck, osvCheck] = await Promise.all([
+      this.collectBrowserChecks({ ...input, browserPkgs }, versions),
+      this.collectGitleaks(input, versions),
+      this.collectOsv(input, versions),
+    ]);
+    const lighthouseChecks = await this.collectLighthouse({ ...input }, versions);
+    checks.push(...browserChecks, ...lighthouseChecks, gitleaksCheck, osvCheck);
     return checks;
   }
 

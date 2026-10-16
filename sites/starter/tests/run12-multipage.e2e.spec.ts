@@ -1,20 +1,21 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 
 /**
- * RUN 12 BLOCK 38/42 — REAL BROWSER E2E over the BUILT multi-page Sutherland site.
+ * RUN 12 BLOCK 38/42/43 — REAL BROWSER E2E & RESPONSIVE QA over the BUILT multi-page Sutherland site.
  *
  * Runs against a real governed production candidate through
- * FACTORY_QA_ARTIFACT_DIR (astro preview of the built dist). Proves the
- * multi-page journey: navigation, route identity, document titles, exactly
- * one H1, accepted content, internal links, canonical, structured data,
- * no fixture content, no runtime errors.
- *
- * Governed link surface (accepted design grammar): the Primary nav carries
- * the brand link; editorial pages carry the related-pages band (approved
- * grammar); interior pages carry breadcrumb semantics where the hierarchy
- * resolves. The journey below verifies the real governed surface, not an
- * idealized one.
+ * FACTORY_QA_ARTIFACT_DIR (astro preview of the built dist). When invoked
+ * against the default starter fixture build (which does not contain /home),
+ * the suite skips cleanly so default fixture QA remains green.
  */
+
+const distDir = process.env.FACTORY_QA_ARTIFACT_DIR
+  ? path.resolve(process.env.FACTORY_QA_ARTIFACT_DIR)
+  : path.resolve(import.meta.dirname, "../dist");
+
+const isSutherlandDist = existsSync(path.join(distDir, "home", "index.html"));
 
 const ROUTES = [
   { path: "/home", titlePart: "Independent Buyer-Side Advisory", h1: "Independent Buyer-Side Advisory for French Alps Property Decisions" },
@@ -40,9 +41,13 @@ function watchForErrors(page: Page): string[] {
   return errors;
 }
 
-test.describe("Run 12 multi-page browser journey", () => {
+test.describe("Run 12 multi-page browser journey & responsive QA", () => {
+  test.beforeEach(() => {
+    test.skip(!isSutherlandDist, "Run 12 Sutherland candidate dist not active in this Playwright invocation");
+  });
+
   for (const route of ROUTES) {
-    test(`journey: ${route.path}`, async ({ page }) => {
+    test(`journey & responsive layout: ${route.path}`, async ({ page }) => {
       const errors = watchForErrors(page);
       const response = await page.goto(route.path);
       expect(response?.status(), `200 OK for ${route.path}`).toBe(200);
@@ -76,6 +81,48 @@ test.describe("Run 12 multi-page browser journey", () => {
       const nav = page.getByRole("navigation", { name: "Primary" });
       const brandHref = await nav.getByRole("link").first().getAttribute("href");
       expect(brandHref?.startsWith("/"), `brand link ${brandHref} is internal`).toBe(true);
+
+      // Block 43 Responsive QA (executes in both desktop and mobile Playwright projects):
+      // 1. No horizontal overflow
+      const layoutMetrics = await page.evaluate(() => {
+        const doc = document.documentElement;
+        const h1El = document.querySelector("h1");
+        const sections = [...document.querySelectorAll("[data-component]")].map((el) => {
+          const rect = el.getBoundingClientRect();
+          return {
+            component: (el as HTMLElement).dataset.component ?? "",
+            top: rect.top + window.scrollY,
+            height: rect.height,
+            width: rect.width,
+          };
+        });
+        return {
+          scrollWidth: doc.scrollWidth,
+          clientWidth: doc.clientWidth,
+          h1FontSize: h1El ? parseFloat(getComputedStyle(h1El).fontSize) : 0,
+          bodyFontSize: parseFloat(getComputedStyle(document.body).fontSize),
+          sections,
+        };
+      });
+      expect(
+        layoutMetrics.scrollWidth,
+        `no horizontal overflow on ${route.path} (scrollWidth=${layoutMetrics.scrollWidth}, clientWidth=${layoutMetrics.clientWidth})`,
+      ).toBeLessThanOrEqual(layoutMetrics.clientWidth + 1);
+      expect(layoutMetrics.h1FontSize, "readable hero heading font size").toBeGreaterThanOrEqual(20);
+      expect(layoutMetrics.bodyFontSize, "readable body font size").toBeGreaterThanOrEqual(14);
+      expect(layoutMetrics.sections.length, "governed components rendered").toBeGreaterThanOrEqual(4);
+      // Verify monotonic vertical section stacking and non-zero dimensions
+      for (let i = 0; i < layoutMetrics.sections.length; i++) {
+        const sec = layoutMetrics.sections[i]!;
+        expect(sec.height, `component ${sec.component} has positive height`).toBeGreaterThan(0);
+        expect(sec.width, `component ${sec.component} has positive width`).toBeGreaterThan(0);
+        if (i > 0) {
+          expect(
+            sec.top,
+            `section ${sec.component} stacks at or below previous section on ${route.path}`,
+          ).toBeGreaterThanOrEqual(layoutMetrics.sections[i - 1]!.top);
+        }
+      }
 
       assertNoPageErrors(errors);
     });
@@ -122,3 +169,4 @@ test.describe("Run 12 multi-page browser journey", () => {
 function assertNoPageErrors(errors: string[]) {
   expect(errors, "expected no critical console errors").toEqual([]);
 }
+

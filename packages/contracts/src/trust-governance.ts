@@ -219,6 +219,8 @@ export const sourceRefSchema = z
       "model_as_of_date",
       "historical_date",
     ]),
+    /** Optional explicit citation entailment status (Block 11). Defaults to SUPPORTED when omitted. */
+    entailment: z.enum(["SUPPORTED", "UNSUPPORTED"]).optional(),
   })
   .strict();
 export type SourceRef = z.infer<typeof sourceRefSchema>;
@@ -288,12 +290,21 @@ export function parseClaimLineage(input: unknown): ClaimLineage {
   return claimLineageSchema.parse(input);
 }
 
+const OBSERVED_FACT_CLAIM_TYPES: ReadonlySet<ClaimType> = new Set([
+  "FACT",
+  "FIRST_PARTY_FACT",
+  "SOURCE_DERIVED_FACT",
+]);
+
+const FORECAST_AS_FACT_PATTERN = /\bwill\s+(?:appreciate|return|yield|earn|grow|gain)\b/i;
+
 /**
  * Citation entailment gate (Block 11): a citation passes ONLY when the
  * source actually supports the claim. The per-claim verdict is recorded
  * during governed content QA; this deterministic helper enforces the
  * structural rules (uncertain types need limitation + non-fact labelling;
- * calculations need full provenance; high-impact needs sources).
+ * calculations need full provenance; high-impact needs sources; forecasts
+ * cannot be disguised as observed facts; unsupported citations fail).
  */
 export function claimLineageVerdict(lineage: ClaimLineage): "PASS" | "REVIEW" | "FAIL" {
   const problems: string[] = [];
@@ -308,6 +319,17 @@ export function claimLineageVerdict(lineage: ClaimLineage): "PASS" | "REVIEW" | 
   }
   if (lineage.claimType !== "EXPERT_INTERPRETATION" && lineage.claimType !== "OPINION" && lineage.sourceRefs.length === 0 && lineage.claimType !== "ASSUMPTION") {
     problems.push("Material claim has no supporting source ref.");
+  }
+  if (lineage.sourceRefs.some((ref) => ref.entailment === "UNSUPPORTED")) {
+    problems.push("Cited source does not substantively support the claim (entailment: UNSUPPORTED).");
+  }
+  if (OBSERVED_FACT_CLAIM_TYPES.has(lineage.claimType)) {
+    if (lineage.sourceRefs.some((ref) => ref.freshnessBasis === "model_as_of_date")) {
+      problems.push("Observed fact claim cannot rely on a model_as_of_date source (must be labelled FORECAST, SCENARIO, ESTIMATE, or CALCULATION).");
+    }
+    if (FORECAST_AS_FACT_PATTERN.test(lineage.claimText)) {
+      problems.push("Future financial outcome statement cannot be classified as an observed FACT.");
+    }
   }
   if (problems.length > 0) return "FAIL";
   return "PASS";
@@ -374,6 +396,44 @@ export type CredentialEvidence = z.infer<typeof credentialEvidenceSchema>;
  */
 export function credentialPublishable(credential: CredentialEvidence): boolean {
   return credential.evidenceRef.trim().length > 0;
+}
+
+/**
+ * Topic <-> expertise alignment (Block 7): verifies that the responsible
+ * creator/reviewer expertise covers the required competence domains for a
+ * substantive YMYL page.
+ */
+export function checkTopicExpertiseMatch(
+  requiredDomains: ReadonlyArray<string>,
+  expertiseStatement: string,
+): { verdict: "PASS" | "FAIL"; missingDomains: string[] } {
+  const normalizedExpertise = normKey(expertiseStatement);
+  if (!normalizedExpertise) {
+    return { verdict: "FAIL", missingDomains: [...requiredDomains] };
+  }
+  const missingDomains = requiredDomains.filter(
+    (domain) => !normalizedExpertise.includes(normKey(domain)),
+  );
+  return {
+    verdict: missingDomains.length === 0 ? "PASS" : "FAIL",
+    missingDomains,
+  };
+}
+
+/**
+ * Conflict-of-interest / commercial relationship disclosure gate (Block 8):
+ * when a material commercial relationship or conflict exists, an explicit
+ * visible disclosure is mandatory.
+ */
+export function checkConflictDisclosure(input: {
+  hasMaterialConflict: boolean;
+  disclosureText?: string | null;
+}): "PASS" | "FAIL" {
+  if (!input.hasMaterialConflict) return "PASS";
+  if (!input.disclosureText || input.disclosureText.trim().length === 0) {
+    return "FAIL";
+  }
+  return "PASS";
 }
 
 // ---------------------------------------------------------------------------

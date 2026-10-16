@@ -838,6 +838,28 @@ test("RUN 12: Sutherland five-page governed production proof (writer -> design -
       assert.ok(!/fixture|Summit Roofing|roof repair/i.test(html), `route ${page.slug} has no fixture leakage`);
     }
 
+    // ---- Review authority for substantive YMYL decision-support pages (Block 9) ----
+    for (const ymylSlug of ["advisory/investment-decision-framework", "research/alpine-decision-framework"] as const) {
+      const ymylPage = acceptedPages.get(ymylSlug)!;
+      await trust.recordReview({
+        projectId: seeded.projectId,
+        review: {
+          schemaVersion: "trust-governance-v1",
+          projectId: seeded.projectId,
+          pageIdentity: ymylSlug,
+          reviewerRef: "org-sutherland-private-office",
+          reviewerExpertise: "Independent buyer-side alpine property advisory and evidence-led decision methodology",
+          reviewedContentDigest: ymylPage.contentDigest,
+          reviewedAt: "2026-09-04",
+          result: "APPROVED",
+          note: "Governed review of YMYL decision-support methodology and claim classification.",
+        },
+      });
+      const revCheck = await trust.currentReview(seeded.projectId, ymylSlug, ymylPage.contentDigest);
+      assert.ok(revCheck.review, `review recorded for ${ymylSlug}`);
+      assert.equal(revCheck.stale, false, `review for ${ymylSlug} is current`);
+    }
+
     // Trust QA on the five-page site.
     const manifestSetDigest5 = deterministicDigest(manifests.map((manifest) => ({ inputId: manifest.input.id, route: manifest.input.route, manifestDigest: manifest.manifestDigest })));
     const trustQa5 = await runTrustQa({
@@ -852,6 +874,21 @@ test("RUN 12: Sutherland five-page governed production proof (writer -> design -
       console.error("TRUST QA FAILING:", trustQa5.checks.filter((c) => c.verdict !== "PASS").map((c) => `${c.checkId}: ${c.detail}`));
     }
     assert.equal(trustQa5.overall, "PASS", "trust governance QA must pass");
+
+    // Site-wide Production QA on the five-page site (Blocks 35-41).
+    const siteQa5 = await runSiteWideQa({
+      distDir,
+      manifests,
+      redirectRules: [],
+      siteName: "Sutherland Private Office",
+      manifestSetDigest: manifestSetDigest5,
+      repositorySha: REPOSITORY_SHA,
+      trustedChecks: trustQa5.checks,
+    });
+    if (siteQa5.overall !== "PASS") {
+      console.error("SITE QA 5 FAILING:", siteQa5.checks.filter((c) => c.verdict !== "PASS").map((c) => `${c.checkId}: ${c.detail}`));
+    }
+    assert.equal(siteQa5.overall, "PASS", "site-wide production QA on 5-page Sutherland build must pass");
 
     // ---- FIFTH-PAGE REUSE PROOF (Block 33): add a 6th ordinary page ----
     // under an ALREADY-SUPPORTED archetype (editorial) and prove zero new
@@ -965,6 +1002,20 @@ test("RUN 12: Sutherland five-page governed production proof (writer -> design -
         description: "Supply-side observations add location-specific analytical texture to the accepted framework.",
       },
     });
+    await trust.recordReview({
+      projectId: seeded.projectId,
+      review: {
+        schemaVersion: "trust-governance-v1",
+        projectId: seeded.projectId,
+        pageIdentity: extraPage.slug,
+        reviewerRef: "org-sutherland-private-office",
+        reviewerExpertise: "Independent buyer-side alpine property advisory and evidence-led decision methodology",
+        reviewedContentDigest: row6Lineage!.contentDigest,
+        reviewedAt: "2026-09-04",
+        result: "APPROVED",
+        note: "Governed review of Chamonix supply-side notes under the accepted decision framework.",
+      },
+    });
 
     // New PPI + candidate via the REAL service; the build now covers all six pages.
     const prepared6 = await buildService.prepareCandidate({ projectId: seeded.projectId, pageSlug: extraPage.slug });
@@ -1005,6 +1056,52 @@ test("RUN 12: Sutherland five-page governed production proof (writer -> design -
       console.error("TRUST QA 2 FAILING:", trustQa2.checks.filter((c) => c.verdict !== "PASS").map((c) => `${c.checkId}: ${c.detail}`));
     }
     assert.equal(trustQa2.overall, "PASS", "trust QA after sixth page must pass");
+
+    // Site-wide Production QA on the six-page site.
+    const siteQa2 = await runSiteWideQa({
+      distDir: distDir2,
+      manifests: manifests2,
+      redirectRules: [],
+      siteName: "Sutherland Private Office",
+      manifestSetDigest: result6.manifestSetDigest,
+      repositorySha: REPOSITORY_SHA,
+      trustedChecks: trustQa2.checks,
+    });
+    if (siteQa2.overall !== "PASS") {
+      console.error("SITE QA 2 FAILING:", siteQa2.checks.filter((c) => c.verdict !== "PASS").map((c) => `${c.checkId}: ${c.detail}`));
+    }
+    assert.equal(siteQa2.overall, "PASS", "site-wide production QA after sixth page must pass");
+
+    // ---- Real-browser Playwright E2E, Responsive, Axe & Keyboard QA against the built 6-page Sutherland site (Blocks 42-44) ----
+    const starterDir = path.join(repoRoot, "sites", "starter");
+    const pwRun = await runProcess(
+      "pnpm",
+      [
+        "exec",
+        "playwright",
+        "test",
+        "tests/run12-multipage.e2e.spec.ts",
+        "tests/axe.production.spec.ts",
+        "tests/keyboard.production.spec.ts",
+      ],
+      {
+        cwd: starterDir,
+        env: {
+          ...process.env,
+          FACTORY_QA_ARTIFACT_DIR: distDir2,
+          FACTORY_QA_PORT: "4392",
+        },
+        timeoutMs: 240_000,
+      },
+    );
+    if (pwRun.exitCode !== 0) {
+      console.error("PLAYWRIGHT SUTHERLAND E2E/AXE/KEYBOARD FAILED:\n", pwRun.stdout, "\n", pwRun.stderr);
+    }
+    assert.equal(pwRun.exitCode, 0, "Playwright multi-page E2E, responsive, axe, and keyboard checks must pass on built Sutherland candidate");
+
+    // Clean up project production/asset runtime directories created during this test.
+    await rm(path.join(repoRoot, ".factory", "production", "projects", safeSegmentLocal(seeded.projectId)), { recursive: true, force: true }).catch(() => undefined);
+    await rm(path.join(repoRoot, ".factory", "assets", "projects", safeSegmentLocal(seeded.projectId)), { recursive: true, force: true }).catch(() => undefined);
   } finally {
     if (root) await rm(root, { recursive: true, force: true }).catch(() => undefined);
     await dbInst.close();

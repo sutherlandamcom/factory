@@ -21,6 +21,15 @@ function collectRoutes(): string[] {
 
 for (const route of collectRoutes()) {
   test(`keyboard: ${route} exposes every interactive element in DOM order`, async ({ page }) => {
+    let isRedirectStub = false;
+    try {
+      const response = await page.request.get(route === "/" ? "/index.html" : route);
+      const body = await response.text();
+      isRedirectStub = /http-equiv="refresh"/i.test(body) && /name="robots" content="noindex"/i.test(body);
+    } catch {
+      isRedirectStub = false;
+    }
+    test.skip(isRedirectStub, `${route} is a governed noindex redirect stub, not a content page`);
     await page.goto(route);
     const expected = await page.locator('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])').count();
     const visited = new Set<string>();

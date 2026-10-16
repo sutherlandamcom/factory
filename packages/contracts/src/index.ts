@@ -492,6 +492,8 @@ export {
   claimLineageVerdict,
   reviewStaleness,
   credentialPublishable,
+  checkTopicExpertiseMatch,
+  checkConflictDisclosure,
   UNCERTAIN_CLAIM_TYPES,
 } from "./trust-governance.js";
 export type {

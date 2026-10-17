@@ -169,4 +169,3 @@ test.describe("Run 12 multi-page browser journey & responsive QA", () => {
 function assertNoPageErrors(errors: string[]) {
   expect(errors, "expected no critical console errors").toEqual([]);
 }
-

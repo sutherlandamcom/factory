@@ -276,4 +276,3 @@ test("ADVERSARIAL DESIGN: tampered manifest digest and unknown component/variant
   const checksVar = await runDesignDriftQa({ manifests: [badVar as never], starterSrcDir, manifestSetDigest: digest });
   assert.equal(checksVar.find((c) => c.checkId === "design.composition_valid")?.verdict, "FAIL");
 });
-

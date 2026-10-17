@@ -55,6 +55,8 @@ export class ProductionApiFacade {
   constructor(
     private readonly db: FactoryDb,
     private readonly repoRoot: string,
+    /** Trusted backend policy only (see TrustQaInput.syntheticFixtureContent). */
+    private readonly trustPolicy: { syntheticFixtureContent?: boolean } = {},
   ) {
     this.store = new ProductionStore(db);
     this.build = new ProductionBuildService(db, repoRoot);
@@ -204,6 +206,7 @@ export class ProductionApiFacade {
       trust,
       contentDigests,
       manifestSetDigest,
+      syntheticFixtureContent: this.trustPolicy.syntheticFixtureContent === true,
     });
     qa.checks.push(...trustQa.checks);
     const pageRoutes = manifests.map((manifest) => manifest.input.route);

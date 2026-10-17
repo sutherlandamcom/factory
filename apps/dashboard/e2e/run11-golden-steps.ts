@@ -17,7 +17,37 @@ export async function runGoldenJourneyToReady(page: Page, pageSlug: string = PAG
   await acceptContent(page, pageSlug);
   await seedAndViewSyntheticAuthority(page, pageSlug);
   await acceptDerivatives(page, pageSlug);
+  await declarePageIntent(page, pageSlug);
   await buildAndQa(page, pageSlug);
+}
+
+/**
+ * Run 12 trust governance: every production page needs a durable
+ * PageIntentAuthority (the mandatory trust gate stays strict). The Run 11
+ * journey declares the truthful NON_YMYL classification of its non-financial
+ * roofing page through the real Operator API. This records strategy only; it
+ * grants no review, source or claim authority.
+ */
+async function declarePageIntent(page: Page, pageSlug: string): Promise<void> {
+  const projectId = await currentProjectId(page);
+  const res = await page.request.put(`/api/projects/${encodeURIComponent(projectId)}/trust/page-intents`, {
+    data: {
+      pageIdentity: pageSlug,
+      primaryIntent: "Convert homeowners researching roof repair into inspection requests",
+      secondaryIntents: [],
+      primaryQueryCluster: "roof repair austin",
+      secondaryQueryClusters: [],
+      contentGapPurpose: "Local roof repair service explanation",
+      siteRole: "Primary service page",
+      targetAudience: "Austin homeowners comparing local roofers",
+      mainUserTask: "Decide whether to request a roof inspection",
+      primaryConversionAction: "Book a free roof inspection",
+      ymylClassification: "NON_YMYL",
+      decisionRole: "COMMERCIAL_SERVICE_EVALUATION",
+      internalLinksOut: [],
+    },
+  });
+  if (!res.ok()) throw new Error(`page intent declaration failed: ${res.status()} ${await res.text()}`);
 }
 
 /**

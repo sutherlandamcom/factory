@@ -427,7 +427,11 @@ export async function startOperatorServer(): Promise<http.Server> {
   }
   const deps: OperatorApiDeps = {
     store, intake, search, competitors, writer, assets, design, visual,
-    production: new ProductionApiFacade(dbInstance.db, repoRoot),
+    production: new ProductionApiFacade(dbInstance.db, repoRoot, {
+      // Trusted backend config only: synthetic fixture content is tolerated
+      // solely when the deterministic fixture writer is wired.
+      syntheticFixtureContent: writerMode === "fixture",
+    }),
     derivatives: new DerivativesApiFacade(dbInstance.db, repoRoot, summaryMode === "fixture" ? { summaryInvoke: fixtureSummaryInvoke } : {}),
     qaCollector,
   };

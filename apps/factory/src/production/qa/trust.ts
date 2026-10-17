@@ -3,6 +3,7 @@ import path from "node:path";
 import type { ProductionQaCheckResult } from "./types.js";
 import type { ProductionRenderManifest } from "../render-manifest.js";
 import { TrustGovernanceStore } from "../../trust/store.js";
+import { normalizePageIdentity } from "../../page-authority/store.js";
 import {
   UNCERTAIN_CLAIM_TYPES,
   claimLineageProblems,
@@ -57,7 +58,22 @@ export interface TrustQaInput {
   /** Current accepted content digest per page identity (staleness anchor). */
   contentDigests: Map<string, string>;
   manifestSetDigest: string;
+  /**
+   * TRUSTED BACKEND POLICY (never request-derived). True only when the
+   * operator service is wired with the deterministic fixture writer
+   * (FACTORY_WRITER_MODE=fixture), i.e. accepted content is synthetic by
+   * construction. In that mode ONLY fixture-origin leak labels are tolerated,
+   * the check is stamped SYNTHETIC_FIXTURE_MODE, and the result must never be
+   * treated as publication-eligible. Default is the strict production policy.
+   */
+  syntheticFixtureContent?: boolean;
 }
+
+/** Leak labels inherent to deterministic fixture-writer output. */
+const SYNTHETIC_FIXTURE_TOLERATED_LABELS = new Set<string>([
+  "fixture",
+  "starter fixture business (roof repair)",
+]);
 
 export interface TrustQaResult {
   checks: ProductionQaCheckResult[];
@@ -174,7 +190,7 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
   const checks: ProductionQaCheckResult[] = [];
   const intentsByPage = new Map<string, PageIntentAuthority>();
   for (const intent of await input.trust.listCurrentIntentAuthorities(input.projectId)) {
-    intentsByPage.set(intent.pageIdentity, intent);
+    intentsByPage.set(normalizePageIdentity(intent.pageIdentity), intent);
   }
 
   // 1. Site-wide anti-cannibalization check.
@@ -196,7 +212,7 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
     const identity = manifest.input.pageIdentity;
     const route = manifest.input.route;
     const digest = input.contentDigests.get(identity);
-    const intent = intentsByPage.get(identity);
+    const intent = intentsByPage.get(normalizePageIdentity(identity));
     const html = await readBuiltHtml(input.distDir, route);
 
     // 2a. trust.page_intent_present
@@ -542,17 +558,23 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
       if (pattern.test(html)) leakHits.push({ route: manifest.input.route, label });
     }
   }
+  const tolerated = input.syntheticFixtureContent === true;
+  const blockingHits = leakHits.filter((hit) => !(tolerated && SYNTHETIC_FIXTURE_TOLERATED_LABELS.has(hit.label)));
+  const toleratedHits = leakHits.filter((hit) => tolerated && SYNTHETIC_FIXTURE_TOLERATED_LABELS.has(hit.label));
   checks.push(
     siteCheck(
       input.manifestSetDigest,
       "trust.fixture_leakage",
-      leakHits.length === 0 ? "PASS" : "FAIL",
-      leakHits.length === 0
-        ? `No fixture/demo/test identities in ${input.manifests.length} built production pages.`
-        : `Fixture leakage detected: ${leakHits.map((hit) => `${hit.route}: ${hit.label}`).join("; ").slice(0, 1800)}`,
-      leakHits.slice(0, 20).map((hit) => ({ kind: "route" as const, ref: hit.route })),
+      blockingHits.length === 0 ? "PASS" : "FAIL",
+      blockingHits.length > 0
+        ? `Fixture leakage detected: ${blockingHits.map((hit) => `${hit.route}: ${hit.label}`).join("; ").slice(0, 1800)}`
+        : toleratedHits.length > 0
+          ? `SYNTHETIC_FIXTURE_MODE: deterministic fixture-writer content present on ${new Set(toleratedHits.map((h) => h.route)).size} page(s); NOT publication-eligible.`
+          : `No fixture/demo/test identities in ${input.manifests.length} built production pages.`,
+      (blockingHits.length > 0 ? blockingHits : toleratedHits).slice(0, 20).map((hit) => ({ kind: "route" as const, ref: hit.route })),
     ),
   );
+
 
   const overall = checks.some((c) => c.verdict === "FAIL")
     ? "FAIL"

@@ -219,18 +219,71 @@ export const sourceRefSchema = z
       "model_as_of_date",
       "historical_date",
     ]),
-    /** Optional explicit citation entailment status (Block 11). Defaults to SUPPORTED when omitted. */
+    /**
+     * Explicit citation entailment status (Block 11).
+     * Omission does NOT default to SUPPORTED; verified claims require explicit
+     * entailment: "SUPPORTED" and a non-empty supportingExcerpt.
+     */
     entailment: z.enum(["SUPPORTED", "UNSUPPORTED"]).optional(),
+    /** Optional authoritative URI / registry reference for provenance verification. */
+    sourceUrl: boundedText(500).optional(),
+    /** Verbatim or near-verbatim excerpt from the cited document/intake record that entails the claim. */
+    supportingExcerpt: boundedText(2000).optional(),
   })
   .strict();
 export type SourceRef = z.infer<typeof sourceRefSchema>;
 
-/** Tier D/E must not be the sole support for high-impact financial claims. */
+const RECOGNIZED_TIER_A_AUTHORITY_PATTERN =
+  /\b(?:INSEE|DGFiP|DVF|Etalab|Notaires de France|Chambre des Notaires|Service-Public|Légifrance|Legifrance|Loi Hoguet|Loi Climat|Code de la construction|Code général des impôts|Géorisques|Georisques|BRGM|Cour des comptes|DGCCRF|Ville de Chamonix|Commune de Chamonix|Mairie de Chamonix|PLU|PPRN|Megève|Megeve|Haute-Savoie|impots\.gouv\.fr|insee\.fr|notaires\.fr|georisques\.gouv\.fr|ccomptes\.fr|legifrance\.gouv\.fr|service-public\.fr|chamonix\.fr)\b/i;
+
+/**
+ * Verifies that a single SourceRef is substantively verified rather than
+ * self-certified or unverified.
+ */
+export function verifySourceRef(ref: SourceRef): { valid: boolean; reason: string | null } {
+  if (ref.entailment === "UNSUPPORTED") {
+    return { valid: false, reason: "Cited source does not substantively support the claim (entailment: UNSUPPORTED)." };
+  }
+  if (ref.entailment !== "SUPPORTED") {
+    return {
+      valid: false,
+      reason: "Source ref is missing explicit entailment: \"SUPPORTED\" verification (omitted entailment fails closed).",
+    };
+  }
+  if (!ref.supportingExcerpt || ref.supportingExcerpt.trim().length < 10) {
+    return {
+      valid: false,
+      reason: "Source ref lacks a verifiable supportingExcerpt from the cited document or accepted intake authority.",
+    };
+  }
+  if (ref.tier === "TIER_A") {
+    const isFirstPartyIntake = /^intake:/i.test(ref.ref.trim()) || (ref.sourceUrl ? /^intake:/i.test(ref.sourceUrl.trim()) : false);
+    const isRecognizedAuthority =
+      RECOGNIZED_TIER_A_AUTHORITY_PATTERN.test(ref.ref) ||
+      (ref.sourceUrl ? RECOGNIZED_TIER_A_AUTHORITY_PATTERN.test(ref.sourceUrl) : false);
+    const hasVerifiedEndpoint =
+      isFirstPartyIntake || (typeof ref.sourceUrl === "string" && /^https:\/\//i.test(ref.sourceUrl.trim()));
+    if ((!isFirstPartyIntake && !isRecognizedAuthority) || !hasVerifiedEndpoint) {
+      return {
+        valid: false,
+        reason:
+          "Self-declared TIER_A source is not backed by a recognized primary statutory/statistical/institutional authority with sourceUrl or accepted first-party intake record.",
+      };
+    }
+  }
+  return { valid: true, reason: null };
+}
+
+/** Tier D/E must not be the sole support for high-impact financial claims; unverified sources fail closed. */
 export function sourceAuthorityVerdict(
   refs: ReadonlyArray<SourceRef>,
   ymyl: YmylClassification,
 ): "PASS" | "REVIEW" | "FAIL" {
   if (refs.length === 0) return ymyl === "NON_YMYL" ? "PASS" : "FAIL";
+  for (const ref of refs) {
+    const verification = verifySourceRef(ref);
+    if (!verification.valid) return "FAIL";
+  }
   const strongest = refs.reduce(
     (best, ref) => Math.min(best, tierRank(ref.tier)),
     5,
@@ -298,15 +351,23 @@ const OBSERVED_FACT_CLAIM_TYPES: ReadonlySet<ClaimType> = new Set([
 
 const FORECAST_AS_FACT_PATTERN = /\bwill\s+(?:appreciate|return|yield|earn|grow|gain)\b/i;
 
+function extractNormalizedNumbers(text: string): string[] {
+  const matches = text.match(/\b\d[\d,._]*\b/g) ?? [];
+  return matches
+    .map((m) => m.replace(/[,_]/g, ""))
+    .filter((m) => /^\d+(?:\.\d+)?$/.test(m));
+}
+
+function extractSubstantiveTokens(text: string): string[] {
+  return normKey(text)
+    .split(" ")
+    .filter((t) => t.length >= 4);
+}
+
 /**
- * Citation entailment gate (Block 11): a citation passes ONLY when the
- * source actually supports the claim. The per-claim verdict is recorded
- * during governed content QA; this deterministic helper enforces the
- * structural rules (uncertain types need limitation + non-fact labelling;
- * calculations need full provenance; high-impact needs sources; forecasts
- * cannot be disguised as observed facts; unsupported citations fail).
+ * Detailed deterministic problem list for a ClaimLineage record (Block 11).
  */
-export function claimLineageVerdict(lineage: ClaimLineage): "PASS" | "REVIEW" | "FAIL" {
+export function claimLineageProblems(lineage: ClaimLineage): string[] {
   const problems: string[] = [];
   if (lineage.claimType === "CALCULATION" && !lineage.calculationRef) {
     problems.push("CALCULATION claim lacks calculation provenance.");
@@ -317,20 +378,64 @@ export function claimLineageVerdict(lineage: ClaimLineage): "PASS" | "REVIEW" | 
   if (UNCERTAIN_CLAIM_TYPES.has(lineage.claimType) && lineage.limitation.trim() === "") {
     problems.push(`Uncertain claim type ${lineage.claimType} requires an explicit limitation/status.`);
   }
-  if (lineage.claimType !== "EXPERT_INTERPRETATION" && lineage.claimType !== "OPINION" && lineage.sourceRefs.length === 0 && lineage.claimType !== "ASSUMPTION") {
+  if (
+    lineage.claimType !== "EXPERT_INTERPRETATION" &&
+    lineage.claimType !== "OPINION" &&
+    lineage.claimType !== "ASSUMPTION" &&
+    lineage.sourceRefs.length === 0
+  ) {
     problems.push("Material claim has no supporting source ref.");
   }
-  if (lineage.sourceRefs.some((ref) => ref.entailment === "UNSUPPORTED")) {
-    problems.push("Cited source does not substantively support the claim (entailment: UNSUPPORTED).");
+  for (const ref of lineage.sourceRefs) {
+    const check = verifySourceRef(ref);
+    if (!check.valid && check.reason) {
+      problems.push(check.reason);
+    }
+  }
+  if (lineage.sourceRefs.length > 0) {
+    const combinedEvidence = [
+      ...lineage.sourceRefs.map((r) => `${r.ref} ${r.supportingExcerpt ?? ""}`),
+      lineage.calculationRef
+        ? `${lineage.calculationRef.modelId} ${lineage.calculationRef.output.value} ${lineage.calculationRef.inputs.map((i) => `${i.name} ${i.value}`).join(" ")}`
+        : "",
+    ].join(" ");
+    const evidenceNumbers = new Set(extractNormalizedNumbers(combinedEvidence));
+    const claimNumbers = extractNormalizedNumbers(lineage.claimText);
+    for (const num of claimNumbers) {
+      if (!evidenceNumbers.has(num)) {
+        problems.push(
+          `Numeric figure "${num}" in claimText is not substantiated by any sourceRef supportingExcerpt or calculationRef.`,
+        );
+      }
+    }
+    const evidenceTokens = new Set(extractSubstantiveTokens(combinedEvidence));
+    const claimTokens = extractSubstantiveTokens(lineage.claimText);
+    const hasLexicalOverlap =
+      claimTokens.length === 0 || claimTokens.some((tok) => evidenceTokens.has(tok));
+    if (!hasLexicalOverlap) {
+      problems.push("Claim text has no lexical overlap with cited supportingExcerpt evidence.");
+    }
   }
   if (OBSERVED_FACT_CLAIM_TYPES.has(lineage.claimType)) {
     if (lineage.sourceRefs.some((ref) => ref.freshnessBasis === "model_as_of_date")) {
-      problems.push("Observed fact claim cannot rely on a model_as_of_date source (must be labelled FORECAST, SCENARIO, ESTIMATE, or CALCULATION).");
+      problems.push(
+        "Observed fact claim cannot rely on a model_as_of_date source (must be labelled FORECAST, SCENARIO, ESTIMATE, or CALCULATION).",
+      );
     }
     if (FORECAST_AS_FACT_PATTERN.test(lineage.claimText)) {
       problems.push("Future financial outcome statement cannot be classified as an observed FACT.");
     }
   }
+  return problems;
+}
+
+/**
+ * Citation entailment gate (Block 11): a citation passes ONLY when the
+ * source actually supports the claim with explicit SUPPORTED entailment,
+ * verified source tier provenance, and excerpt/numeric alignment.
+ */
+export function claimLineageVerdict(lineage: ClaimLineage): "PASS" | "REVIEW" | "FAIL" {
+  const problems = claimLineageProblems(lineage);
   if (problems.length > 0) return "FAIL";
   return "PASS";
 }
@@ -356,6 +461,8 @@ export const reviewAuthoritySchema = z
     result: z.enum(["APPROVED", "CHANGES_REQUESTED"]),
     /** Bounded review note. */
     note: z.string().trim().max(1000).default(""),
+    /** Optional explicit list of claim IDs verified during this review. */
+    verifiedClaimIds: z.array(idSchema).max(100).optional(),
   })
   .strict();
 export type ReviewAuthority = z.infer<typeof reviewAuthoritySchema>;
@@ -459,9 +566,15 @@ export const originalValueRecordSchema = z
     description: boundedText(1000),
     /** Lineage binding: the claim/calculation id realizing this value. */
     lineageClaimId: idSchema.optional(),
+    /** Verifiable textual/quantitative anchors that MUST appear in rendered page HTML for YMYL pages. */
+    verifiableAnchors: z.array(boundedText(300)).min(2).max(20).optional(),
   })
   .strict();
 export type OriginalValueRecord = z.infer<typeof originalValueRecordSchema>;
+
+export function parseOriginalValueRecord(input: unknown): OriginalValueRecord {
+  return originalValueRecordSchema.parse(input);
+}
 
 // ---------------------------------------------------------------------------
 // QA verdict reuse: the trust gates return the shared triad

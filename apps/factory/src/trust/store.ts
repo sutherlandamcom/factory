@@ -16,6 +16,8 @@ import {
   parsePageIntentAuthority,
   parseClaimLineage,
   parseReviewAuthority,
+  originalValueRecordSchema,
+  claimLineageProblems,
   claimLineageVerdict,
   reviewStaleness,
   checkCannibalization,
@@ -306,12 +308,13 @@ export class TrustGovernanceStore {
   // ---- OriginalValueRecord ------------------------------------------------------
 
   async saveOriginalValue(input: { projectId: string; record: OriginalValueRecord }): Promise<void> {
-    const pageIdentity = normalizePageIdentity(input.record.pageIdentity);
+    const parsed = originalValueRecordSchema.parse(input.record);
+    const pageIdentity = normalizePageIdentity(parsed.pageIdentity);
     await this.db.insert(originalValueRecords).values({
       id: `ovr-${randomUUID()}`,
       projectId: input.projectId,
       pageIdentity,
-      data: { ...input.record, pageIdentity },
+      data: { ...parsed, pageIdentity },
     });
   }
 
@@ -328,30 +331,4 @@ export class TrustGovernanceStore {
       );
     return rows.map((row) => row.data as OriginalValueRecord);
   }
-}
-
-/** Human-readable lineage problems (shared by verdict + error message). */
-function claimLineageProblems(lineage: ClaimLineage): string[] {
-  const problems: string[] = [];
-  if (lineage.claimType === "CALCULATION" && !lineage.calculationRef) {
-    problems.push("CALCULATION claim lacks calculation provenance.");
-  }
-  if (lineage.calculationRef && lineage.calculationRef.inputs.length === 0) {
-    problems.push("Calculation provenance has no inputs.");
-  }
-  if (
-    ["ASSUMPTION", "ESTIMATE", "FORECAST", "SCENARIO", "EXPERT_INTERPRETATION", "OPINION"].includes(lineage.claimType) &&
-    lineage.limitation.trim() === ""
-  ) {
-    problems.push(`Uncertain claim type ${lineage.claimType} requires an explicit limitation/status.`);
-  }
-  if (
-    lineage.claimType !== "EXPERT_INTERPRETATION" &&
-    lineage.claimType !== "OPINION" &&
-    lineage.claimType !== "ASSUMPTION" &&
-    lineage.sourceRefs.length === 0
-  ) {
-    problems.push("Material claim has no supporting source ref.");
-  }
-  return problems;
 }

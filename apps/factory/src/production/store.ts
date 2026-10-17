@@ -8,6 +8,7 @@ import {
   acceptedVisualAssetSlots,
   assetPageAssignments,
   designInputSnapshots,
+  pageIntentAuthorities,
   productionCandidateInputs,
   productionCandidateRedirects,
   productionCandidates,
@@ -43,7 +44,7 @@ import { DerivativesStore } from "../derivatives/store.js";
 import { resolveEffectiveDerivativeSettings } from "../derivatives/core.js";
 import { requireProductionDerivativeSet } from "../derivatives/production-verifier.js";
 import type { ProjectDerivativePolicyData, PageDerivativeOverrideData } from "@factory/contracts";
-import { assertCompleteProductionQa, hasValidQaExecutionDigest, TRUSTED_PRODUCTION_QA_GATES } from "./qa/registry.js";
+import { assertCompleteProductionQa, assertCompleteTrustQa, hasValidQaExecutionDigest, TRUSTED_PRODUCTION_QA_GATES } from "./qa/registry.js";
 import { PageAuthorityReader } from "../writer/page-authority.js";
 import { PageArchetypeStore } from "../page-authority/store.js";
 import { DesignStore } from "../design/design-store.js";
@@ -1049,7 +1050,9 @@ export class ProductionStore {
   }): Promise<ProductionQaRunRecord> {
     const completeness = assertCompleteProductionQa({ checks: input.checks, pageRoutes: input.pageRoutes, manifestSetDigest: input.manifestSetDigest, repositorySha: input.repositorySha });
     if (!completeness.complete) throw productionError("production_qa_failed", `Required QA evidence missing or duplicated: ${completeness.missing.join(", ")}`);
-    const overall = qaOverallVerdict(input.checks);
+    const rawOverall = qaOverallVerdict(input.checks);
+    const hasUnresolvedTrustGate = input.checks.some((entry) => entry.checkId.startsWith("trust.") && entry.verdict !== "PASS");
+    const overall = rawOverall === "FAIL" || hasUnresolvedTrustGate ? ("FAIL" as const) : rawOverall;
     const data = {
       schemaVersion: "production-v1" as const,
       candidateId: input.candidateId,
@@ -1068,6 +1071,28 @@ export class ProductionStore {
       const bindings = await tx.select().from(productionCandidateInputs).where(and(eq(productionCandidateInputs.projectId, input.projectId), eq(productionCandidateInputs.candidateId, candidate.id)));
       if (bindings.length === 0 || bindings.length !== input.pageRoutes.length || [...bindings.map((entry) => entry.route)].sort().join("\0") !== [...input.pageRoutes].sort().join("\0")) {
         throw productionError("production_qa_failed", "Candidate input snapshot is incomplete for the evaluated route set.");
+      }
+      const [existingIntent] = await tx
+        .select({ id: pageIntentAuthorities.id })
+        .from(pageIntentAuthorities)
+        .where(eq(pageIntentAuthorities.projectId, input.projectId))
+        .limit(1);
+      const trustGoverned =
+        Boolean(existingIntent) ||
+        input.pageRoutes.length > 1 ||
+        input.checks.some((entry) => entry.checkId.startsWith("trust."));
+      if (trustGoverned) {
+        const trustCompleteness = assertCompleteTrustQa({
+          checks: input.checks,
+          pageRoutes: input.pageRoutes,
+          manifestSetDigest: input.manifestSetDigest,
+        });
+        if (!trustCompleteness.complete) {
+          throw productionError(
+            "production_qa_failed",
+            `Required YMYL Trust QA evidence missing or duplicated: ${trustCompleteness.missing.join(", ")}`,
+          );
+        }
       }
       for (const binding of bindings) {
         const [boundInput] = await tx.select().from(productionPageInputs).where(and(eq(productionPageInputs.projectId, input.projectId), eq(productionPageInputs.id, binding.productionInputId)));

@@ -634,6 +634,17 @@ export const renderManifestBodySchema = z
       .max(100),
     /** Run 10 derivative authority (production-v2/v3 manifests only). */
     derivatives: manifestDerivativesSchema.optional(),
+    /** Run 12 YMYL review authority (present when a current APPROVED ReviewAuthority binds the accepted content digest). */
+    reviewAuthority: z
+      .object({
+        reviewerRef: productionIdSchema,
+        reviewerExpertise: boundedText(500),
+        reviewedContentDigest: productionDigestSchema,
+        reviewedAt: boundedText(40),
+        result: z.literal("APPROVED"),
+      })
+      .strict()
+      .optional(),
     manifestDigest: productionDigestSchema,
   })
   .strict();

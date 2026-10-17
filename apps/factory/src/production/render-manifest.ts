@@ -26,6 +26,7 @@ import { deterministicDigest } from "../intelligence/digest.js";
 import { createAssetStorage, type AssetStorage } from "../assets/storage.js";
 import { requireProductionDerivativeSet } from "../derivatives/production-verifier.js";
 import { ProductionStore } from "./store.js";
+import { TrustGovernanceStore } from "../trust/store.js";
 import { deriveDesignImplementationContract } from "./design-implementation.js";
 import type { DesignImplementationContract } from "@factory/contracts";
 
@@ -147,6 +148,17 @@ export interface ProductionRenderManifest {
    * Disabled state is explicitly represented ({ state: "disabled" }).
    */
   derivatives?: ManifestDerivatives;
+  /**
+   * Run 12 YMYL review authority projection when a non-stale APPROVED
+   * ReviewAuthority binds the exact accepted content digest.
+   */
+  reviewAuthority?: {
+    reviewerRef: string;
+    reviewerExpertise: string;
+    reviewedContentDigest: string;
+    reviewedAt: string;
+    result: "APPROVED";
+  };
   /** Deterministic manifest digest (binds the whole render surface). */
   manifestDigest: string;
 }
@@ -411,9 +423,28 @@ export class ProductionRenderCompiler {
       };
       semanticTokens = Object.entries(dic.semanticTokens).map(([role, value]) => ({ role, value: String(value) }));
       fontDelivery = dic.fontDelivery.map((entry) => ({ mode: entry.mode, family: entry.family, sourceToken: entry.sourceToken }));
-      composition = deriveManifestComposition(dic, content, requiredSlots, productionInput.pageType);
+      const activeDeclaredSlots = declaredSlotsList.filter((s) => s.required || actualSlots.has(s.slot));
+      composition = deriveManifestComposition(dic, content, activeDeclaredSlots, productionInput.pageType);
       manifestVersion = "production-v3";
     }
+    const trustStore = new TrustGovernanceStore(this.db);
+    const currentReview = await trustStore.currentReview(
+      input.projectId,
+      productionInput.pageIdentity,
+      contentRow.contentDigest,
+    );
+    const reviewAuthority: ProductionRenderManifest["reviewAuthority"] =
+      currentReview.review &&
+      !currentReview.stale &&
+      currentReview.review.result === "APPROVED"
+        ? {
+            reviewerRef: currentReview.review.reviewerRef,
+            reviewerExpertise: currentReview.review.reviewerExpertise,
+            reviewedContentDigest: currentReview.review.reviewedContentDigest,
+            reviewedAt: currentReview.review.reviewedAt,
+            result: "APPROVED",
+          }
+        : undefined;
     const manifest: ProductionRenderManifest = {
       schemaVersion: manifestVersion,
       input: {
@@ -461,6 +492,7 @@ export class ProductionRenderCompiler {
       // production-v3 requires the derivatives block explicitly (disabled
       // state when absent; accepted when present).
       ...(manifestVersion === "production-v3" ? { derivatives: derivatives ?? { state: "disabled" as const } } : { ...(derivatives ? { derivatives } : {}) }),
+      ...(reviewAuthority ? { reviewAuthority } : {}),
       manifestDigest: "",
     };
     manifest.manifestDigest = computeRenderManifestDigest(manifest);
@@ -692,6 +724,7 @@ export function computeRenderManifestDigest(manifest: ProductionRenderManifest):
       isProbableLcp: asset.isProbableLcp,
     })),
     ...(manifest.derivatives ? { derivatives: manifest.derivatives } : {}),
+    ...(manifest.reviewAuthority ? { reviewAuthority: manifest.reviewAuthority } : {}),
   });
 }
 

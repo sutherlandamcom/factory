@@ -11,6 +11,19 @@ const PAGE_GATES: ProductionQaCheckId[] = [
 const SITE_GATES: ProductionQaCheckId[] = ["content.no_duplicate_pages", "seo.title_unique", "seo.description_unique", "seo.robots", "seo.sitemap", "links.canonical_destination", "performance.lighthouse", "security.public_output", "design.registry_integrity", "design.token_governance", "design.composition_valid", "design.drift_source_scan"];
 const REPOSITORY_GATES: ProductionQaCheckId[] = ["security.gitleaks", "security.osv"];
 
+const TRUST_PAGE_GATES: ProductionQaCheckId[] = [
+  "trust.page_intent_present",
+  "trust.ymll_classification",
+  "trust.claim_lineage",
+  "trust.source_authority",
+  "trust.review_authority",
+  "trust.original_value",
+];
+const TRUST_SITE_GATES: ProductionQaCheckId[] = [
+  "trust.cannibalization",
+  "trust.fixture_leakage",
+];
+
 export const TRUSTED_PRODUCTION_QA_GATES = Object.freeze([
   { checkId: "accessibility.axe" as const, scope: "page" as const },
   { checkId: "accessibility.keyboard" as const, scope: "page" as const },
@@ -23,6 +36,11 @@ export const REQUIRED_PRODUCTION_QA_GATES = Object.freeze([
   ...PAGE_GATES.map((checkId) => ({ checkId, scope: "page" as const, blocking: true as const })),
   ...SITE_GATES.map((checkId) => ({ checkId, scope: "site" as const, blocking: true as const })),
   ...REPOSITORY_GATES.map((checkId) => ({ checkId, scope: "repository" as const, blocking: true as const })),
+]);
+
+export const REQUIRED_TRUST_QA_GATES = Object.freeze([
+  ...TRUST_PAGE_GATES.map((checkId) => ({ checkId, scope: "page" as const, blocking: true as const })),
+  ...TRUST_SITE_GATES.map((checkId) => ({ checkId, scope: "site" as const, blocking: true as const })),
 ]);
 
 export function bindQaCheck(result: ProductionQaCheckResult, input: { scope: ProductionQaScope; subject: string; tool: string; toolVersion: string }): ProductionQaCheckResult {
@@ -43,6 +61,20 @@ export function assertCompleteProductionQa(input: { checks: ProductionQaCheckRes
     for (const subject of subjects) {
       const matches = input.checks.filter((check) => check.checkId === gate.checkId && check.scope === gate.scope && check.subject === subject);
       if (matches.length !== 1 || !matches[0]?.executionDigest || !matches[0]?.tool || !matches[0]?.toolVersion) missing.push(`${gate.checkId}@${subject}`);
+    }
+  }
+  return { complete: missing.length === 0, missing };
+}
+
+export function assertCompleteTrustQa(input: { checks: ProductionQaCheckResult[]; pageRoutes: string[]; manifestSetDigest: string }) {
+  const missing: string[] = [];
+  for (const gate of REQUIRED_TRUST_QA_GATES) {
+    const subjects = gate.scope === "page" ? input.pageRoutes : [input.manifestSetDigest];
+    for (const subject of subjects) {
+      const matches = input.checks.filter((check) => check.checkId === gate.checkId && check.scope === gate.scope && check.subject === subject);
+      if (matches.length !== 1 || !matches[0]?.executionDigest || !matches[0]?.tool || !matches[0]?.toolVersion) {
+        missing.push(`${gate.checkId}@${subject}`);
+      }
     }
   }
   return { complete: missing.length === 0, missing };

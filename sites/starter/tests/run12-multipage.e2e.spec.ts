@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 
@@ -15,15 +15,19 @@ const distDir = process.env.FACTORY_QA_ARTIFACT_DIR
   ? path.resolve(process.env.FACTORY_QA_ARTIFACT_DIR)
   : path.resolve(import.meta.dirname, "../dist");
 
+const screenshotDir = process.env.FACTORY_QA_SCREENSHOT_DIR
+  ? path.resolve(process.env.FACTORY_QA_SCREENSHOT_DIR)
+  : undefined;
+
 const isSutherlandDist = existsSync(path.join(distDir, "home", "index.html"));
 
 const ROUTES = [
-  { path: "/home", titlePart: "Independent Buyer-Side Advisory", h1: "Independent Buyer-Side Advisory for French Alps Property Decisions" },
-  { path: "/services/buyer-side-advisory", titlePart: "Buyer-Side Property Advisory", h1: "Buyer-Side Property Advisory: Scope and Engagement" },
-  { path: "/locations/chamonix", titlePart: "Property Decision Support in Chamonix", h1: "Property Decision Support in Chamonix" },
-  { path: "/advisory/investment-decision-framework", titlePart: "Investment Decision Framework", h1: "Investment Decision Framework for Alpine Property" },
-  { path: "/research/alpine-decision-framework", titlePart: "An Evidence-Led Decision Framework", h1: "An Evidence-Led Decision Framework for Alpine Property" },
-  { path: "/research/chamonix-supply-notes", titlePart: "Supply-Side Notes", h1: "Supply-Side Notes for the Chamonix Decision Framework" },
+  { path: "/home", titlePart: "Independent Buyer-Side Advisory", h1: "Independent Buyer-Side Advisory for French Alps Property Decisions", ymyl: false },
+  { path: "/services/buyer-side-advisory", titlePart: "Buyer-Side Property Advisory", h1: "Buyer-Side Property Advisory: Scope and Engagement", ymyl: false },
+  { path: "/locations/chamonix", titlePart: "Property Decision Support in Chamonix", h1: "Property Decision Support in Chamonix", ymyl: false },
+  { path: "/advisory/investment-decision-framework", titlePart: "Investment Decision Framework", h1: "Investment Decision Framework for Alpine Property", ymyl: true },
+  { path: "/research/alpine-decision-framework", titlePart: "An Evidence-Led Decision Framework", h1: "An Evidence-Led Decision Framework for Alpine Property", ymyl: true },
+  { path: "/research/chamonix-supply-notes", titlePart: "Supply-Side Notes", h1: "Supply-Side Notes for the Chamonix Decision Framework", ymyl: true },
 ];
 
 const IGNORED_ERRORS: RegExp[] = [
@@ -47,7 +51,7 @@ test.describe("Run 12 multi-page browser journey & responsive QA", () => {
   });
 
   for (const route of ROUTES) {
-    test(`journey & responsive layout: ${route.path}`, async ({ page }) => {
+    test(`journey & responsive layout: ${route.path}`, async ({ page }, testInfo) => {
       const errors = watchForErrors(page);
       const response = await page.goto(route.path);
       expect(response?.status(), `200 OK for ${route.path}`).toBe(200);
@@ -66,6 +70,17 @@ test.describe("Run 12 multi-page browser journey & responsive QA", () => {
       expect(body.toLowerCase()).not.toContain("summit roofing");
       expect(body.toLowerCase()).not.toContain("roof repair");
       expect(body.toLowerCase()).not.toContain("fixture");
+
+      // P1-4: YMYL decision-support pages must visibly render governed review attribution.
+      if (route.ymyl) {
+        const reviewAuthority = page.locator("[data-review-authority]");
+        await expect(reviewAuthority).toHaveCount(1);
+        await expect(reviewAuthority).toBeVisible();
+        const reviewerName = await reviewAuthority.getAttribute("data-review-authority");
+        const reviewedDigest = await reviewAuthority.getAttribute("data-reviewed-digest");
+        expect(reviewerName, `reviewer ref present on ${route.path}`).toBe("org-sutherland-private-office-research-committee");
+        expect(reviewedDigest, `reviewed digest present on ${route.path}`).toMatch(/^[a-f0-9]{64}$/);
+      }
 
       // Canonical URL is present and coherent with the route.
       const canonical = page.locator('link[rel="canonical"]');
@@ -122,6 +137,17 @@ test.describe("Run 12 multi-page browser journey & responsive QA", () => {
             `section ${sec.component} stacks at or below previous section on ${route.path}`,
           ).toBeGreaterThanOrEqual(layoutMetrics.sections[i - 1]!.top);
         }
+      }
+
+      // P2-5: Persist full-page screenshots for independent visual inspection when configured.
+      if (screenshotDir) {
+        mkdirSync(screenshotDir, { recursive: true });
+        const slugFile = route.path.replace(/^\//, "").replace(/\//g, "__") || "root";
+        const projectTag = testInfo.project.name.replace(/[^a-z0-9_-]/gi, "-");
+        await page.screenshot({
+          path: path.join(screenshotDir, `${slugFile}--${projectTag}.png`),
+          fullPage: true,
+        });
       }
 
       assertNoPageErrors(errors);

@@ -4,14 +4,18 @@ import {
   parsePageIntentAuthority,
   parseClaimLineage,
   parseReviewAuthority,
+  parseOriginalValueRecord,
   checkCannibalization,
   sourceAuthorityVerdict,
+  verifySourceRef,
   claimLineageVerdict,
+  claimLineageProblems,
   reviewStaleness,
   credentialPublishable,
   UNCERTAIN_CLAIM_TYPES,
   type PageIntentAuthority,
   type ClaimLineage,
+  type SourceRef,
 } from "@factory/contracts";
 
 /**
@@ -20,8 +24,9 @@ import {
  * Proves the fail-closed semantics of the trust contracts:
  *   - page intent authority schema (YMYL, decision roles, lineage)
  *   - cannibalization pair detection (FAIL/REVIEW/PASS, no numeric score)
- *   - claim lineage verdicts (calculation provenance, uncertainty labelling)
- *   - source authority floors per YMYL level (tier hierarchy)
+ *   - claim lineage verdicts (calculation provenance, uncertainty labelling,
+ *     mandatory entailment, excerpt verification, numeric entailment)
+ *   - source authority floors per YMYL level (verified Tier-A provenance)
  *   - review staleness (content digest binding)
  *   - credential evidence gate (no evidence -> not publishable)
  */
@@ -43,6 +48,26 @@ function intent(overrides: Partial<PageIntentAuthority>): PageIntentAuthority {
   return parsePageIntentAuthority({ ...BASE_INTENT, pageIdentity: "p1", primaryIntent: "i", primaryQueryCluster: "c", decisionRole: "INFORMATIONAL_RESEARCH", ymylClassification: "NON_YMYL", ...overrides });
 }
 
+const VALID_TIER_A_SOURCE: SourceRef = {
+  ref: "INSEE Dossier complet Commune de Chamonix-Mont-Blanc (74056)",
+  sourceUrl: "https://www.insee.fr/fr/statistiques/2011101?geo=COM-74056",
+  supportingExcerpt: "INSEE Chamonix-Mont-Blanc (COM-74056) records 13,864 total dwellings and 72.6% secondary residences.",
+  tier: "TIER_A",
+  sourceDate: "2026-01-01",
+  freshnessBasis: "observation_date",
+  entailment: "SUPPORTED",
+};
+
+const VALID_TIER_B_SOURCE: SourceRef = {
+  ref: "Notaires de France Immobilier Alpine Schedule",
+  sourceUrl: "https://www.immobilier.notaires.fr/en/property-market-statistics",
+  supportingExcerpt: "Model forecast assumptions and acquisition fee schedule for alpine residential property.",
+  tier: "TIER_B",
+  sourceDate: "2026-01-01",
+  freshnessBasis: "model_as_of_date",
+  entailment: "SUPPORTED",
+};
+
 const BASE_CLAIM: Omit<ClaimLineage, "claimId" | "claimText" | "claimType" | "sourceRefs" | "pageIdentity"> = {
   limitation: "",
 };
@@ -51,7 +76,7 @@ function claim(overrides: Partial<ClaimLineage>): ClaimLineage {
   return parseClaimLineage({
     ...BASE_CLAIM,
     claimId: "claim-1",
-    claimText: "text",
+    claimText: "INSEE Chamonix-Mont-Blanc records 13,864 total dwellings.",
     claimType: "FACT",
     sourceRefs: [],
     pageIdentity: "p1",
@@ -92,17 +117,27 @@ test("cannibalization: differentiated pages PASS (keyword overlap with different
 });
 
 test("claim lineage: CALCULATION without provenance FAILS", () => {
-  const c = claim({ claimType: "CALCULATION", sourceRefs: [{ ref: "s", tier: "TIER_A", sourceDate: "2026-01-01", freshnessBasis: "observation_date" }] });
+  const c = claim({
+    claimText: "Illustrative gross yield of 7.2% under stated assumptions.",
+    claimType: "CALCULATION",
+    sourceRefs: [VALID_TIER_A_SOURCE],
+  });
   assert.equal(claimLineageVerdict(c), "FAIL");
 });
 
 test("claim lineage: CALCULATION with full provenance PASSES", () => {
   const c = claim({
+    claimText: "Illustrative gross yield of 7.2% under stated assumptions.",
     claimType: "CALCULATION",
-    sourceRefs: [{ ref: "s", tier: "TIER_A", sourceDate: "2026-01-01", freshnessBasis: "observation_date" }],
+    sourceRefs: [
+      {
+        ...VALID_TIER_A_SOURCE,
+        supportingExcerpt: "Illustrative gross yield of 7.2% computed from annual rent 26,400 EUR and purchase price 366,000 EUR.",
+      },
+    ],
     calculationRef: {
       modelId: "yield-model-v1",
-      inputs: [{ name: "price", value: "100", unit: "EUR" }],
+      inputs: [{ name: "price", value: "366000", unit: "EUR" }],
       assumptionRefs: [],
       output: { value: "7.2", unit: "%" },
       calculatedAt: "2026-09-01",
@@ -112,15 +147,86 @@ test("claim lineage: CALCULATION with full provenance PASSES", () => {
 });
 
 test("claim lineage: FORECAST without limitation FAILS; with limitation PASSES", () => {
-  const noLimit = claim({ claimType: "FORECAST", sourceRefs: [{ ref: "s", tier: "TIER_B", sourceDate: "2026-01-01", freshnessBasis: "model_as_of_date" }] });
+  const noLimit = claim({
+    claimText: "Model forecast assumptions for alpine residential property.",
+    claimType: "FORECAST",
+    sourceRefs: [VALID_TIER_B_SOURCE],
+  });
   assert.equal(claimLineageVerdict(noLimit), "FAIL");
-  const withLimit = claim({ claimType: "FORECAST", limitation: "Model forecast, not a guaranteed outcome.", sourceRefs: [{ ref: "s", tier: "TIER_B", sourceDate: "2026-01-01", freshnessBasis: "model_as_of_date" }] });
+  const withLimit = claim({
+    claimText: "Model forecast assumptions for alpine residential property.",
+    claimType: "FORECAST",
+    limitation: "Model forecast, not a guaranteed outcome.",
+    sourceRefs: [VALID_TIER_B_SOURCE],
+  });
   assert.equal(claimLineageVerdict(withLimit), "PASS");
 });
 
 test("claim lineage: material FACT without any source FAILS", () => {
   const c = claim({ claimType: "SOURCE_DERIVED_FACT" });
   assert.equal(claimLineageVerdict(c), "FAIL");
+});
+
+test("P1-3: omitted entailment, missing excerpt, self-certified TIER_A, or numeric mismatch FAILS closed", () => {
+  // 1. Omitted entailment must NOT pass.
+  const omittedEntailment = claim({
+    claimType: "SOURCE_DERIVED_FACT",
+    sourceRefs: [
+      {
+        ref: VALID_TIER_A_SOURCE.ref,
+        sourceUrl: VALID_TIER_A_SOURCE.sourceUrl,
+        supportingExcerpt: VALID_TIER_A_SOURCE.supportingExcerpt,
+        tier: "TIER_A",
+        sourceDate: "2026-01-01",
+        freshnessBasis: "observation_date",
+      },
+    ],
+  });
+  assert.equal(claimLineageVerdict(omittedEntailment), "FAIL");
+  assert.ok(claimLineageProblems(omittedEntailment).some((p) => /entailment/i.test(p)));
+
+  // 2. Self-certified TIER_A without recognized authority/URL must FAIL.
+  const selfCertifiedTierA: SourceRef = {
+    ref: "My random blog post",
+    sourceUrl: "https://random-blog.example.com/post",
+    supportingExcerpt: "INSEE Chamonix-Mont-Blanc records 13,864 total dwellings.",
+    tier: "TIER_A",
+    sourceDate: "2026-01-01",
+    freshnessBasis: "observation_date",
+    entailment: "SUPPORTED",
+  };
+  assert.equal(verifySourceRef(selfCertifiedTierA).valid, false);
+  assert.equal(sourceAuthorityVerdict([selfCertifiedTierA], "YMYL_DECISION_SUPPORT"), "FAIL");
+
+  // 3. Numeric mismatch between claimText and supportingExcerpt must FAIL.
+  const numericMismatch = claim({
+    claimText: "INSEE Chamonix-Mont-Blanc records 99,999 total dwellings.",
+    claimType: "SOURCE_DERIVED_FACT",
+    sourceRefs: [VALID_TIER_A_SOURCE],
+  });
+  assert.equal(claimLineageVerdict(numericMismatch), "FAIL");
+  assert.ok(claimLineageProblems(numericMismatch).some((p) => /99999/.test(p)));
+});
+
+test("P1-5: OriginalValueRecord requires at least two verifiableAnchors", () => {
+  assert.throws(() =>
+    parseOriginalValueRecord({
+      schemaVersion: "trust-governance-v1",
+      pageIdentity: "locations/chamonix",
+      kind: "first_party_observation",
+      description: "Declarative description without verifiable anchors.",
+      verifiableAnchors: ["only-one"],
+    }),
+  );
+  const valid = parseOriginalValueRecord({
+    schemaVersion: "trust-governance-v1",
+    pageIdentity: "locations/chamonix",
+    kind: "first_party_observation",
+    description: "Comparative commune analysis with verifiable anchors.",
+    lineageClaimId: "claim-chamonix-insee",
+    verifiableAnchors: ["13,864 total dwellings", "72.6% secondary residences"],
+  });
+  assert.equal(valid.verifiableAnchors?.length, 2);
 });
 
 test("uncertain claim types set matches Block 10 hard rule", () => {
@@ -131,11 +237,20 @@ test("uncertain claim types set matches Block 10 hard rule", () => {
   assert.ok(!UNCERTAIN_CLAIM_TYPES.has("CALCULATION"));
 });
 
-test("source authority: HIGH_IMPACT with only Tier D FAILS; Tier A/B PASSES", () => {
-  const tierD = [{ ref: "blog", tier: "TIER_D" as const, sourceDate: "2026-01-01", freshnessBasis: "observation_date" as const }];
+test("source authority: HIGH_IMPACT with only Tier D FAILS; verified Tier A/B PASSES", () => {
+  const tierD: SourceRef[] = [
+    {
+      ref: "Industry commentary blog",
+      sourceUrl: "https://example.com/blog",
+      supportingExcerpt: "Commentary on alpine property market conditions and buyer considerations.",
+      tier: "TIER_D",
+      sourceDate: "2026-01-01",
+      freshnessBasis: "observation_date",
+      entailment: "SUPPORTED",
+    },
+  ];
   assert.equal(sourceAuthorityVerdict(tierD, "YMYL_HIGH_IMPACT"), "FAIL");
-  const tierA = [{ ref: "regulator", tier: "TIER_A" as const, sourceDate: "2026-01-01", freshnessBasis: "observation_date" as const }];
-  assert.equal(sourceAuthorityVerdict(tierA, "YMYL_HIGH_IMPACT"), "PASS");
+  assert.equal(sourceAuthorityVerdict([VALID_TIER_A_SOURCE], "YMYL_HIGH_IMPACT"), "PASS");
 });
 
 test("source authority: empty sources on YMYL page FAIL", () => {

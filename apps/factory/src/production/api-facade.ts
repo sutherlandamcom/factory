@@ -5,10 +5,12 @@ import { ProductionStore } from "./store.js";
 import { computeArtifactDigest, ProductionBuildService } from "./build-service.js";
 import { runSiteWideQa } from "./qa/site-wide.js";
 import { runDesignDriftQa } from "./qa/design-drift.js";
+import { runTrustQa } from "./qa/trust.js";
+import { TrustGovernanceStore } from "../trust/store.js";
 import { deterministicDigest } from "../intelligence/digest.js";
 import { qaOverallVerdict, type ProductionQaCheckResult } from "@factory/contracts";
 import { loadProductionBuildIdentity } from "./identity.js";
-import { assertCompleteProductionQa } from "./qa/registry.js";
+import { assertCompleteProductionQa, assertCompleteTrustQa } from "./qa/registry.js";
 
 /**
  * PRODUCTION API FACADE — Macro Run 9 operator surface.
@@ -186,10 +188,31 @@ export class ProductionApiFacade {
       starterSrcDir: path.join(this.repoRoot, "sites", "starter", "src"),
       manifestSetDigest,
     })));
-    qa.overall = qaOverallVerdict(qa.checks);
+    const trust = new TrustGovernanceStore(this.db);
+    const contentDigests = new Map<string, string>();
+    for (const m of manifests) {
+      const bundle = await this.store.deriveAuthorityBundle({
+        projectId: input.projectId,
+        pageSlug: m.input.pageIdentity,
+      });
+      contentDigests.set(m.input.pageIdentity, bundle.content.digest);
+    }
+    const trustQa = await runTrustQa({
+      manifests,
+      distDir: candidate.artifactRef,
+      projectId: input.projectId,
+      trust,
+      contentDigests,
+      manifestSetDigest,
+    });
+    qa.checks.push(...trustQa.checks);
     const pageRoutes = manifests.map((manifest) => manifest.input.route);
     const complete = assertCompleteProductionQa({ checks: qa.checks, pageRoutes, manifestSetDigest, repositorySha: candidate.repositorySha });
     if (!complete.complete) throw new FactoryError("production_qa_failed", `Required QA evidence missing or duplicated: ${complete.missing.join(", ")}`);
+    const trustComplete = assertCompleteTrustQa({ checks: qa.checks, pageRoutes, manifestSetDigest });
+    if (!trustComplete.complete) {
+      throw new FactoryError("production_qa_failed", `Required YMYL Trust QA evidence missing or duplicated: ${trustComplete.missing.join(", ")}`);
+    }
     const run = await this.store.recordQaRun({
       projectId: input.projectId,
       candidateId: candidate.id,
@@ -203,9 +226,9 @@ export class ProductionApiFacade {
     });
     return {
       qaRunId: run.id,
-      overall: qa.overall,
+      overall: run.overall,
       checks: qa.checks,
-      digest: deterministicDigest({ overall: qa.overall, checks: qa.checks.map((check) => ({ checkId: check.checkId, verdict: check.verdict })) }),
+      digest: deterministicDigest({ overall: run.overall, checks: qa.checks.map((check) => ({ checkId: check.checkId, verdict: check.verdict })) }),
     };
   }
 

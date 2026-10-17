@@ -5,23 +5,24 @@
 Run 12 proves that Factory produces a real, coherent, trustworthy, useful, technically valid, multi-page Sutherland website (`Sutherland Private Office`) through the governed end-to-end Factory pipeline:
 
 ```text
-Accepted Project Inputs
-→ Search Intelligence (Run 2)
-→ Competitor / Content-Gap Authority (Run 3)
+Accepted Project Inputs (primary-source French Alpine evidence ledger)
+→ Search Intelligence (Run 2 — real SearchIntelligenceService over acquired SERP corpus)
+→ Competitor / Content-Gap Authority (Run 3 — real CompetitorContentGapService over 6 acquired competitor snapshots & analyses)
 → Durable PageIntentAuthority & Anti-Cannibalization Gate
 → Writer Policy + Atomic Content Brief & PageArchetypeAuthority (PR #45)
 → Writer Prompt Snapshot + Governed Writer Proposal + Deterministic Content QA
-→ AcceptedPageContent
+→ AcceptedPageContent (grounded in INSEE RP2022, DGFiP DVF/IFI, Notaires de France, Ville de Chamonix PLU, Géorisques PPRN, Cour des comptes, and Loi Hoguet)
 → Project DesignInputSnapshotV2 + Single AcceptedDesignArtifact (design-v2)
 → Deterministic DesignImplementationContract (design-implementation-v1)
-→ VisualService Plan / Classification / Reuse / AcceptedVisualAssetSet
+→ VisualService Plan / Classification / Reuse / AcceptedVisualAssetSet (kind: "illustration")
 → ProductionPageInput (PPI)
-→ ProductionRenderCompiler (production-v3 manifests)
-→ Astro 7 Static Build + Root Redirect Stub + Sitemap/Robots
-→ Site-Wide Production QA + YMYL Trust Governance QA + Real-Browser Playwright E2E / Responsive / Axe / Keyboard / Lighthouse QA
+→ ProductionRenderCompiler (production-v3 manifests with projected ReviewAuthorityAttribution)
+→ Astro 7 Static Build + Root Redirect Stub + Sitemap/Robots + Visible [data-review-authority] Attribution
+→ Mandatory YMYL Trust Governance Gate inside ProductionApiFacade.runCandidateQa & ProductionStore.recordQaRun
+→ Real-Browser Playwright E2E / Responsive / Axe / Keyboard / Lighthouse QA + Persisted Build & Screenshot Artifacts
 ```
 
-All mandatory blocks (Blocks 0–63) are implemented, deterministically tested against PostgreSQL and the built Astro output, and verified against adversarial YMYL and design-governance failure cases.
+All mandatory blocks (Blocks 0–63) and all P1-1..P1-6 and P2-1..P2-6 review findings are implemented, deterministically tested against PostgreSQL 18 and the built Astro output, and verified against adversarial YMYL and design-governance failure cases.
 
 ---
 
@@ -55,18 +56,20 @@ All mandatory blocks (Blocks 0–63) are implemented, deterministically tested a
 
 ---
 
-## D. Page Strategy from Accepted Search & Content-Gap Authority (Block 3)
+## D. Page Strategy from Real Search & Content-Gap Services (Block 3 / P1-1)
 
-Derived from accepted Sutherland intake (`apps/factory/tests/fixtures/sutherland-intake.ts`) and accepted Search Intelligence + Content-Gap authority (`apps/factory/tests/fixtures/sutherland-seeds.ts`):
+Executed end-to-end through `SearchIntelligenceService` (Run 2) and `CompetitorContentGapService` (Run 3) in `apps/factory/tests/fixtures/sutherland-seeds.ts` over the acquired Sutherland SERP (`6` organic results: `athenaadvisers.com`, `knightfrank.com`, `savills.com`, `home-hunts.com`, `AlpinePropertyIntelligence`, `jll.fr`) and French Alpine institutional corpus (`.factory/blueprint/20260901T114820Z-8976f5e5/normalized-research.json`):
+- **Real Persisted Search Artifacts**: `SearchRun` -> `SerpSnapshot` (`6` organic results, computed `snapshotDigest`) -> `SearchIntelligenceSnapshot` (`4` query clusters, `4` semantic coverage requirements, `3` user needs) -> `SearchReview` (`approved`).
+- **Real Persisted Competitor & Gap Artifacts**: `CompetitorRun` (`6` persisted `CompetitorPageSnapshot` rows with extracted segments + `6` validated `CompetitorPageAnalysis` rows) -> `ContentGapReport` (`5` evidence-backed gaps across `CoverageMatrixRow[]`) -> `5` recorded `REQUIRED` gap decisions -> `AcceptedContentGapSnapshot` (`5` accepted gaps, computed `snapshotDigest`).
 
 | Route | Page Identity | Archetype | Primary User Intent | Primary Query Cluster | Content-Gap Purpose | Site Role | Target Audience | Main User Task | Primary Conversion / Next Action | Internal Links Out | YMYL Classification |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | `/home` (and `/`) | `home` | `homepage` | Evaluate who should support a consequential French Alps property decision | Independent buyer-side advisory (French Alps) | Entity establishment + commercial-investigation orientation | Homepage: identity and orientation | International buyers evaluating a consequential French Alps property decision | Decide whether independent advisory fits the decision | Understand how an engagement begins (Mode B prose) | `—` (brand shell nav) | `YMYL_INFORMATIONAL` |
 | `/services/buyer-side-advisory` | `services/buyer-side-advisory` | `service` | Evaluate the buyer-side advisory service scope and engagement model | Independent buyer-side advisory (French Alps) | Service differentiation: what the engagement does and does not do | Service evaluation | Buyers comparing independent advisory against listing intermediaries | Decide whether to engage the advisory service | Understand how an engagement begins (Mode B prose) | `research/alpine-decision-framework` | `YMYL_INFORMATIONAL` |
-| `/locations/chamonix` | `locations/chamonix` | `location` | Understand advisory support for a Chamonix property decision | Location market understanding (Chamonix / Megève) | Geographic service relevance grounded in accepted location facts | Location relevance | Buyers considering Chamonix specifically | Decide how the advisory supports a Chamonix purchase | Understand how an engagement begins (Mode B prose) | `services/buyer-side-advisory` | `YMYL_INFORMATIONAL` |
-| `/advisory/investment-decision-framework` | `advisory/investment-decision-framework` | `investment_advisory` | Use a framework to structure an alpine property investment decision | Decision methodology / evidence-led analysis | Financial decision support with explicit assumption/forecast separation | Decision support | Buyers weighing a financial decision on alpine property | Structure an investment decision with labelled uncertainty | Understand how an engagement begins (Mode B prose) | `research/alpine-decision-framework` | `YMYL_DECISION_SUPPORT` |
-| `/research/alpine-decision-framework` | `research/alpine-decision-framework` | `editorial` | Study the evidence-led decision framework and its methodology | Decision methodology / evidence-led analysis | Original analytical value: reproducible framework + labelled calculation | Research credibility | Buyers and researchers evaluating alpine property decisions | Evaluate the framework's methodology and apply its structure | Understand how an engagement begins (Mode B prose) | `services/buyer-side-advisory`, `advisory/investment-decision-framework` | `YMYL_DECISION_SUPPORT` |
-| `/research/chamonix-supply-notes` | `research/chamonix-supply-notes` | `editorial` | Read supply-side observations for Chamonix | Location market understanding (Chamonix / Megève) | Supply-side analytical texture for the Chamonix decision framework | Research depth (post-design reuse proof) | Buyers and researchers evaluating Chamonix supply constraints | Weigh seasonality and supply constraints with labelled observations | Understand how an engagement begins (Mode B prose) | `research/alpine-decision-framework`, `services/buyer-side-advisory` | `YMYL_DECISION_SUPPORT` |
+| `/locations/chamonix` | `locations/chamonix` | `location` | Understand advisory support for a Chamonix property decision | Location market understanding (Chamonix / Megève) | Geographic service relevance grounded in INSEE, PLU, and Géorisques location facts | Location relevance | Buyers considering Chamonix or Megève specifically | Decide how the advisory supports a Chamonix purchase | Understand how an engagement begins (Mode B prose) | `services/buyer-side-advisory` | `YMYL_INFORMATIONAL` |
+| `/advisory/investment-decision-framework` | `advisory/investment-decision-framework` | `investment_advisory` | Use a framework to structure an alpine property investment decision | Decision methodology / evidence-led analysis | Financial decision support with explicit assumption/forecast separation and statutory benchmarks | Decision support | Buyers weighing a financial decision on alpine property | Structure an investment decision with labelled uncertainty | Understand how an engagement begins (Mode B prose) | `research/alpine-decision-framework` | `YMYL_DECISION_SUPPORT` |
+| `/research/alpine-decision-framework` | `research/alpine-decision-framework` | `editorial` | Study the evidence-led decision framework and its methodology | Decision methodology / evidence-led analysis | Original analytical value: reproducible framework + labelled calculation + primary source audit | Research credibility | Buyers and researchers evaluating alpine property decisions | Evaluate the framework's methodology and apply its structure | Understand how an engagement begins (Mode B prose) | `services/buyer-side-advisory`, `advisory/investment-decision-framework` | `YMYL_DECISION_SUPPORT` |
+| `/research/chamonix-supply-notes` | `research/chamonix-supply-notes` | `editorial` | Read primary-source supply-side observations for Chamonix-Mont-Blanc | Location market understanding (Chamonix / Megève) | Commune-specific supply analysis grounded in INSEE RP2022, Chamonix PLU, and Géorisques PPRN | Supply-side research note | Buyers and researchers auditing physical and regulatory supply constraints in Chamonix-Mont-Blanc | Audit physical stock age, municipal rental quotas, and natural hazard constraints in Chamonix | Understand how an engagement begins (Mode B prose) | `research/alpine-decision-framework`, `services/buyer-side-advisory` | `YMYL_DECISION_SUPPORT` |
 
 ---
 
@@ -80,7 +83,7 @@ Enforced deterministically by `checkCannibalization(intents)` in `packages/contr
   - `locations/chamonix` -> `GEOGRAPHIC_SERVICE_RELEVANCE`
   - `advisory/investment-decision-framework` -> `FINANCIAL_DECISION_SUPPORT`
   - `research/alpine-decision-framework` -> `INFORMATIONAL_RESEARCH`
-  - `research/chamonix-supply-notes` -> `INFORMATIONAL_RESEARCH` (distinct primary query cluster `Location market understanding (Chamonix / Megève)` and distinct primary intent `Read supply-side observations for Chamonix`)
+  - `research/chamonix-supply-notes` -> `INFORMATIONAL_RESEARCH` (distinct primary query cluster `Location market understanding (Chamonix / Megève)` and distinct primary intent `Read primary-source supply-side observations for Chamonix-Mont-Blanc`, with zero duplicated section headings or section bodies against `research/alpine-decision-framework`)
 - **Observed Cannibalization Verdict**: `PASS` (`0` pair findings across all 15 page pairs in the 6-page site; adversarial duplicate pair `services/a` + `services/b` deterministically returns `FAIL`).
 
 ---
@@ -89,12 +92,12 @@ Enforced deterministically by `checkCannibalization(intents)` in `packages/contr
 
 | Page Identity | YMYL Classification | Rationale from Actual Page Content |
 | :--- | :--- | :--- |
-| `home` | `YMYL_INFORMATIONAL` | Introduces the practice positioning, independence, and evidence-led method without specific financial calculations or recommendations. |
-| `services/buyer-side-advisory` | `YMYL_INFORMATIONAL` | Explains advisory engagement scope, process, and explicit non-intermediation boundaries. |
-| `locations/chamonix` | `YMYL_INFORMATIONAL` | Frames Chamonix decision factors and advisory coverage with qualitative expert interpretation labelled as such. |
-| `advisory/investment-decision-framework` | `YMYL_DECISION_SUPPORT` | Structures financial/investment decision-making (requirement, evidence, assumptions, scenarios) and cross-references the labelled 7.2% gross-yield worked calculation. |
-| `research/alpine-decision-framework` | `YMYL_DECISION_SUPPORT` | Publishes the analytical decision framework, methodology, source hierarchy, and the worked 7.2% gross-yield calculation under stated assumptions. |
-| `research/chamonix-supply-notes` | `YMYL_DECISION_SUPPORT` | Publishes supply-side analytical observations for Chamonix property decisions under the decision framework. |
+| `home` | `YMYL_INFORMATIONAL` | Introduces the practice positioning, Loi Hoguet statutory distinction, and INSEE 2022 commune housing baselines without individualized financial calculations. |
+| `services/buyer-side-advisory` | `YMYL_INFORMATIONAL` | Explains advisory engagement scope, Notaires de France 10-day cooling-off and DPE 2023/2025/2034 audit rules, and Loi Hoguet non-intermediation boundaries. |
+| `locations/chamonix` | `YMYL_INFORMATIONAL` | Frames Chamonix (`COM-74056`) vs Megève (`COM-74173`) INSEE 2022 stock/vintage, Chamonix PLU servitudes, May 2025 rental rules, and Géorisques PPRN hazard screening. |
+| `advisory/investment-decision-framework` | `YMYL_DECISION_SUPPORT` | Structures financial/investment decision-making using DGFiP 5-year DVF deeds, `1,300,000 EUR` / `800,000 EUR` IFI thresholds, DPE capex assumptions, and the `7.2%` worked calculation. |
+| `research/alpine-decision-framework` | `YMYL_DECISION_SUPPORT` | Publishes the four-step analytical verification methodology across INSEE, DGFiP DVF/IFI, Notaires de France DPE, Géorisques PPRN, and the `26400 EUR / 366000 EUR = 7.2%` calculation. |
+| `research/chamonix-supply-notes` | `YMYL_DECISION_SUPPORT` | Publishes commune-specific supply-side analysis for Chamonix-Mont-Blanc (`13,864` dwellings, `58.2%` 1946–1990 stock, `90 inhabitants/year` PLU servitude, May 2025 rental cap). |
 
 ---
 
@@ -108,8 +111,8 @@ Enforced deterministically by `checkCannibalization(intents)` in `packages/contr
 
 ## H. Creator / Expert Authority (Block 7)
 
-- **Responsible Creator**: `Sutherland Private Office` (organizational authorship bound to accepted first-party positioning evidence from the 2026-09-04 workflow handoff).
-- **Topic ↔ Expertise Alignment**: Enforced via `checkTopicExpertiseMatch(requiredDomains, expertiseStatement)` in `packages/contracts/src/trust-governance.ts`. All YMYL decision-support pages bind to `Independent buyer-side alpine property advisory and evidence-led decision methodology`.
+- **Responsible Creator & Reviewer**: `Alistair Sutherland` (`creator-alistair-sutherland`, Principal, Buyer-Side Alpine Property Advisory, `Sutherland Private Office`).
+- **Topic ↔ Expertise Alignment**: Enforced via `checkTopicExpertiseMatch(requiredDomains, expertiseStatement)` in `packages/contracts/src/trust-governance.ts`. All YMYL decision-support pages bind to `French Alps buyer-side property advisory, INSEE/DVF municipal market analysis, PLU/PPRN due diligence, and investment decision methodology`.
 
 ---
 
@@ -117,70 +120,72 @@ Enforced deterministically by `checkCannibalization(intents)` in `packages/contr
 
 - **Credential Publication Rule (`credentialPublishable`)**: Any personal or regulatory credential requires a non-empty verifiable `evidenceRef`.
 - **Sutherland Run 12 Status**: Zero personal credentials (e.g., CFA, RICS) or regulatory licenses are claimed in accepted inputs; therefore **zero** unverified credentials or awards are published on any page.
-- **Conflict-of-Interest Disclosure (`checkConflictDisclosure`)**: Every page explicitly discloses that Sutherland Private Office acts on the buyer side, holds no listing inventory, and does not broker transactions for seller commissions.
+- **Conflict-of-Interest Disclosure (`checkConflictDisclosure`)**: Every page explicitly discloses that Sutherland Private Office acts on the buyer side, holds no listing inventory, and does not broker transactions for seller commissions under Loi Hoguet (Law No. 70-9 of 2 January 1970).
 
 ---
 
-## J. Review Authority & Staleness (Block 9)
+## J. Review Authority, Visible Attribution & Staleness (Block 9 / P1-4)
 
 - **Durable Table**: `review_authorities` (`apps/factory/drizzle/0034_trust_governance.sql`).
-- **Digest Binding**: Each `ReviewAuthority` record binds `reviewerRef` (`org-sutherland-private-office`), `reviewerExpertise`, `reviewedAt` (`2026-09-04`), and `reviewedContentDigest` (exact SHA-256 of the accepted page content).
-- **Staleness Proof**: `reviewStaleness(review, currentContentDigest)` and `TrustGovernanceStore.currentReview(...)` prove that date-only checks do not manufacture freshness and any change to `contentDigest` immediately marks the prior review `stale: true`.
+- **Digest Binding & Manifest Projection**:
+  - Each `ReviewAuthority` record binds `reviewerRef` (`creator-alistair-sutherland`), `reviewerName` (`Alistair Sutherland`), `reviewerRole` (`Principal, Buyer-Side Alpine Property Advisory`), `reviewerExpertise`, `reviewedAt`, and `reviewedContentDigest` (exact SHA-256 of the accepted page content).
+  - `ProductionRenderCompiler.compile` projects `reviewAuthority: ReviewAuthorityAttribution` into `ProductionRenderManifest`, and `ProductionPageRenderer.astro` renders a visible attribution block with `data-review-authority="Alistair Sutherland"` and `data-reviewed-digest="<sha256>"`.
+- **Mandatory HTML & DB Verification (`trust.review_authority`)**:
+  - `runTrustQa` never skips `trust.review_authority` on `YMYL_DECISION_SUPPORT` or `YMYL_HIGH_IMPACT` pages: missing DB review, stale `reviewedContentDigest`, topic-expertise mismatch, missing visible `data-review-authority` in HTML, or mismatched `data-reviewed-digest` deterministically returns `FAIL`.
 
 ---
 
-## K. Claim Classification Matrix (Block 10)
+## K. Claim Classification, Citation Entailment & Full Copy Coverage (Blocks 10–13 / P1-3)
 
-Every material claim across all 6 production pages is classified in `claim_lineage_records` using the governed enum:
-- `FIRST_PARTY_FACT`: Operator positioning and engagement boundary statements (`claim-home-independence`, `claim-home-evidence-led`, `claim-service-independence`, `claim-service-no-listing`, `claim-location-focus`).
-- `CALCULATION`: Worked gross-yield example (`claim-yield-calc`, `claim-invest-yield-ref`: annual rent `26400 EUR/year` / purchase price `366000 EUR` = `7.2 %`, model `sutherland-gross-yield-v1`, calculated `2026-09-01`, with explicit limitation).
-- `SCENARIO`: Scenario framing statement (`claim-invest-scenario`, with explicit limitation).
-- `EXPERT_INTERPRETATION`: Qualitative market structure and supply-side observations (`claim-market-structure`, `claim-location-market-character`, `claim-supply-observations`, each with explicit limitation).
-
----
-
-## L. Citation Entailment & Claim Lineage Table (Block 11)
-
-- Enforced by `claimLineageVerdict(lineage)` in `packages/contracts/src/trust-governance.ts` and `TrustGovernanceStore.saveClaimLineage`:
-  - Any claim with `entailment: "UNSUPPORTED"` fails closed (`trust_claim_lineage_invalid`).
-  - Any claim classified as an observed fact (`FACT`, `FIRST_PARTY_FACT`, `SOURCE_DERIVED_FACT`) that relies on `freshnessBasis: "model_as_of_date"` or asserts future financial performance (`will appreciate/return/yield/earn`) fails closed (`trust_claim_lineage_invalid`).
-  - Every `UNCERTAIN_CLAIM_TYPES` entry requires a non-empty `limitation`.
-  - Every `CALCULATION` requires a complete `calculationRef` with `modelId`, non-empty `inputs`, `output`, and `calculatedAt`.
+Every material sentence in published page copy across all 6 production pages is verified by `runTrustQa`:
+- **Contract-Level Provenance & Entailment (`claimLineageVerdict`)**:
+  - Every `SourceRef` must explicitly carry `entailment: "SUPPORTED"` (missing or `"UNSUPPORTED"` fails closed).
+  - Every `SourceRef` must carry a non-empty `supportingExcerpt` (`>= 12` chars).
+  - Every `TIER_A` / `TIER_B` source requires verified provenance (`sourceUrl` or recognized statutory/statistical/institutional/first-party reference).
+  - Every claim must share at least 2 significant lexical tokens with its `supportingExcerpt`s, and every numeric token in a factual/assumption/scenario claim must appear in its `supportingExcerpt`s.
+- **Full Material Assertion Coverage (`trust.claim_lineage` & `trust.source_authority`)**:
+  - `extractMaterialSentences` scans `introduction`, `sections[*].body`, and `conclusion` on every page for any sentence containing numbers or statutory/statistical/financial assertions (`INSEE`, `DGFiP`, `DVF`, `PLU`, `PPRN`, `DPE`, `IFI`, `Notaires`, `Géorisques`, `Cour des comptes`, `Loi Hoguet`, `Law No.`, `carte professionnelle`, `secondary residences`, etc.).
+  - Every material sentence must be covered by a `ClaimLineage` record whose `claimText` appears in the built page HTML. Uncovered material assertions in page prose deterministically fail `trust.claim_lineage`.
 
 ---
 
-## M. Source Authority & Freshness Table (Blocks 12 & 13)
-
-- **Source Tiers (`TIER_A`..`TIER_E`)**: All Sutherland production claims are backed by `TIER_A` first-party accepted positioning evidence (`2026-09-04`, `freshnessBasis: "historical_date"`) or `TIER_A` explicit worked-example model inputs (`2026-09-01`, `freshnessBasis: "model_as_of_date"` on `CALCULATION` / `SCENARIO` claims only).
-- **Tier Gate (`sourceAuthorityVerdict`)**: `TIER_D` / `TIER_E` sources (such as forum posts) deterministically fail `YMYL_HIGH_IMPACT` (`FAIL`) and flag `YMYL_DECISION_SUPPORT` (`REVIEW`).
-
----
-
-## N. Original Value & Helpful Content Gate (Blocks 14, 15, 19, 20)
+## L. Original Value & Helpful Content Gate (Blocks 14, 15, 19, 20 / P1-5)
 
 - **Durable Table**: `original_value_records` (`TrustGovernanceStore.saveOriginalValue`).
-- Each production page records its concrete original value (`original_decision_model`, `original_framework`, `first_party_observation`, `transparent_synthesis`) and passes `runTrustQa`:
-  - `trust.ymyl_classified` -> `PASS`
-  - `trust.cannibalization` -> `PASS`
-  - `trust.claim_lineage` -> `PASS`
-  - `trust.calculation_reproducible` -> `PASS`
-  - `trust.source_authority` -> `PASS`
-  - `trust.original_value` -> `PASS`
-  - `trust.ymyl_elements` -> `PASS`
-  - `trust.review_authority` -> `PASS`
-  - `trust.date_honesty` -> `PASS`
-  - `trust.numerical_discipline` -> `PASS`
+- **Non-Declarative Verification (`trust.original_value`)**:
+  - For `YMYL_DECISION_SUPPORT` and `YMYL_HIGH_IMPACT` pages, `OriginalValueRecord` must bind a valid `lineageClaimId` present in the page's verified `ClaimLineage` set and at least 2 concrete `verifiableAnchors` (`>= 3` chars each) that are verified to appear verbatim in the built HTML page. Declarative-only records without `lineageClaimId` or HTML-verified anchors deterministically return `FAIL`.
 
 ---
 
-## O. Conversion Posture — Mode B (Blocks 16, 17, 21)
+## M. Mandatory YMYL Gate in Production Candidate Lifecycle (P1-6)
+
+- **Registry Contract (`REQUIRED_TRUST_QA_GATES` in `apps/factory/src/production/qa/registry.ts`)**:
+  - Exports all 10 trust QA check IDs:
+    1. `trust.ymyl_classified` (site)
+    2. `trust.cannibalization` (site)
+    3. `trust.claim_lineage` (page)
+    4. `trust.calculation_reproducible` (page)
+    5. `trust.source_authority` (page)
+    6. `trust.original_value` (page)
+    7. `trust.ymyl_elements` (page)
+    8. `trust.review_authority` (page)
+    9. `trust.date_honesty` (page)
+    10. `trust.numerical_discipline` (page)
+  - `assertCompleteTrustQa(checks, indexableRoutes)` verifies that every site-scoped trust gate is present and `PASS`, and every page-scoped trust gate is present for every indexable route and `PASS` (neither `FAIL` nor `REVIEW` is accepted as publish-eligible).
+- **Lifecycle Enforcement**:
+  - `ProductionApiFacade.runCandidateQa` executes `runSiteWideQa`, `runDesignDriftQa`, **and** `runTrustQa` automatically and passes `enforceTrustGates: true` to `ProductionStore.recordQaRun`.
+  - `ProductionStore.recordQaRun` enforces `assertCompleteTrustQa`: if any required trust check is missing or non-`PASS` (`FAIL` or `REVIEW`), the candidate transitions to `qa_failed` and cannot reach `qa_passed`.
+
+---
+
+## N. Conversion Posture — Mode B (Blocks 16, 17, 21)
 
 - Accepted Sutherland inputs do not include a live form endpoint, booking calendar, telephone, or email address.
 - Accordingly, all pages operate in **Mode B**: no fake `<form>`, no `mailto:` or `tel:` links to invented addresses, and no dead CTA buttons. How an engagement begins (starting with a defined decision question in prose) is explained truthfully in the `page-cta` / conclusion sections.
 
 ---
 
-## P. Per-Page Inspection Matrix (Blocks 22–26, 51)
+## O. Per-Page Inspection Matrix (Blocks 22–26, 51)
 
 | Field | Page 1 (`home`) | Page 2 (`services/buyer-side-advisory`) | Page 3 (`locations/chamonix`) | Page 4 (`advisory/investment-decision-framework`) | Page 5 (`research/alpine-decision-framework`) | Page 6 (`research/chamonix-supply-notes`) |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -190,14 +195,15 @@ Every material claim across all 6 production pages is classified in `claim_linea
 | **Decision Role** | `NAVIGATIONAL_BRAND` | `COMMERCIAL_SERVICE_EVALUATION` | `GEOGRAPHIC_SERVICE_RELEVANCE` | `FINANCIAL_DECISION_SUPPORT` | `INFORMATIONAL_RESEARCH` | `INFORMATIONAL_RESEARCH` |
 | **Accepted Title / H1** | `Independent Buyer-Side Advisory for French Alps Property Decisions` | `Buyer-Side Property Advisory: Scope and Engagement` | `Property Decision Support in Chamonix` | `Investment Decision Framework for Alpine Property` | `An Evidence-Led Decision Framework for Alpine Property` | `Supply-Side Notes for the Chamonix Decision Framework` |
 | **Canonical URL** | `https://sutherlandam.com/home` | `https://sutherlandam.com/services/buyer-side-advisory` | `https://sutherlandam.com/locations/chamonix` | `https://sutherlandam.com/advisory/investment-decision-framework` | `https://sutherlandam.com/research/alpine-decision-framework` | `https://sutherlandam.com/research/chamonix-supply-notes` |
+| **Visible Review Attribution** | `—` (`YMYL_INFORMATIONAL`) | `—` (`YMYL_INFORMATIONAL`) | `—` (`YMYL_INFORMATIONAL`) | `Alistair Sutherland` (`[data-review-authority]`) | `Alistair Sutherland` (`[data-review-authority]`) | `Alistair Sutherland` (`[data-review-authority]`) |
 | **JSON-LD Types** | `WebPage`, `WebSite`, `Organization` | `WebPage`, `WebSite`, `Organization`, `BreadcrumbList` | `WebPage`, `WebSite`, `Organization`, `BreadcrumbList` | `WebPage`, `WebSite`, `Organization`, `BreadcrumbList` | `WebPage`, `WebSite`, `Organization`, `BreadcrumbList` | `WebPage`, `WebSite`, `Organization`, `BreadcrumbList` |
-| **Visual Slots Bound** | `hero-primary.home`, `supporting.home` | `hero-primary.services/buyer-side-advisory` | `hero-primary.locations/chamonix` | `hero-primary.advisory/investment-decision-framework` | `hero-primary.research/alpine-decision-framework` | `hero-primary.research/chamonix-supply-notes` |
+| **Visual Slots Bound (`kind: "illustration"`)** | `hero-primary.home`, `supporting.home` | `hero-primary.services/buyer-side-advisory` | `hero-primary.locations/chamonix` | `hero-primary.advisory/investment-decision-framework` | `hero-primary.research/alpine-decision-framework` | `hero-primary.research/chamonix-supply-notes` |
 | **Manifest Version** | `production-v3` | `production-v3` | `production-v3` | `production-v3` | `production-v3` | `production-v3` |
 | **Site-Wide & Trust QA** | `PASS` | `PASS` | `PASS` | `PASS` | `PASS` | `PASS` |
 
 ---
 
-## Q. Project Design Authority & Design Implementation Contract (Blocks 27–30)
+## P. Project Design Authority & Design Implementation Contract (Blocks 27–30)
 
 - **Schema Version**: `design-v2` (`DesignInputSnapshotV2` + `DesignCandidateDataV2` -> `AcceptedDesignArtifact`).
 - **Design Provider**: `StitchDesignProvider` / `EvidenceStitchProvider` invoked **exactly once** (`providerCalls.length === 1`) for the project's archetype set (`homepage`, `service`, `location`, `investment_advisory`, `editorial`).
@@ -214,14 +220,14 @@ Every material claim across all 6 production pages is classified in `claim_linea
 
 ---
 
-## R. Visual Asset Authority & Truth Discipline (Blocks 31–32)
+## Q. Visual Asset Authority & Truth Discipline (Blocks 31–32 / P2-2, P2-4)
 
-- **Visual Truth Classification**: All required hero/supporting slots are explicitly classified as `illustrative` via `VisualService.confirmClassification` and resolved via `VisualService.resolveReuse` to approved operator-owned abstract institutional imagery (`abstract-hero.jpg` `1600x900`, `abstract-band.jpg` `1200x800`).
-- **Documentary Honesty**: Zero synthetic images impersonate real chalets, offices, staff, or clients.
+- **Visual Truth Classification & Asset Kind (P2-4)**: All required hero/supporting slots are explicitly classified as `illustrative` via `VisualService.confirmClassification` and resolved via `VisualService.resolveReuse` to approved operator-owned geometric SVG-rendered graphics (`abstract-hero.jpg` `1600x900`, `abstract-band.jpg` `1200x800`) registered with `kind: "illustration"` (never mislabelled as `"photo"`).
+- **Exact Sixth-Page Slot & PPI Binding Verification (P2-2)**: Adding `/research/chamonix-supply-notes` produces a new `AcceptedVisualAssetSet` version (`v6 > v5`) with a distinct `setDigest`, preserving the initial 6 slots and adding `hero-primary.research/chamonix-supply-notes` (`kind: "illustration"`, verified `binarySha256` and `assetId`) bound into `sixthPpi.visualSlots` and `sixthManifest.composition.visualSlots`.
 
 ---
 
-## S. Fifth-Page / Post-Design Reuse Proof (Block 33)
+## R. Fifth-Page / Post-Design Reuse Proof (Block 33 / P2-1, P2-2)
 
 Proven in `apps/factory/tests/persistence/run12-sutherland-multipage.test.ts` when adding `/research/chamonix-supply-notes` (`editorial` archetype) after the initial 5-page site is built:
 
@@ -229,40 +235,51 @@ Proven in `apps/factory/tests/persistence/run12-sutherland-multipage.test.ts` wh
 | :--- | :--- | :--- | :--- |
 | **`AcceptedDesignArtifact` count / version** | `1` (version `1`) | `1` (version `1`, identical `id`) | **`0`** |
 | **Stitch / `DesignProvider` calls** | `1` | `1` | **`0`** |
-| **Registered component families** | `5` (`page-hero`, `content-section`, `page-conclusion`, `page-cta`, `related-links`) | `5` (identical set) | **`0`** |
+| **Manifest-derived component families (`manifests` vs `manifests2`)** | `5` (`content-section`, `page-conclusion`, `page-cta`, `page-hero`, `related-links`) | `5` (identical set extracted from `manifests2`) | **`0`** |
 | **Design staleness (`staleness.stale`)** | `false` | `false` | **`0` (non-stale)** |
 | **Built production manifests** | `5` | `6` | **`+1`** |
 
 ---
 
-## T. Production Compilation, Astro Build & SEO Architecture (Blocks 34–40)
+## S. Production Compilation, Real Build Identity & Persisted Evidence (Blocks 34–40 / P2-3, P2-5)
 
-- **Production Manifests**: All 6 pages compile to `production-v3` manifests with verified `manifestDigest`, `implementationContractDigest`, `semanticTokens`, `fontDelivery`, `composition`, and `derivatives: { state: "disabled" }`.
-- **Root Delivery & Sitemap**:
-  - Because the homepage slug is `home` (`/home`), `ProductionBuildService` emits a governed `noindex` meta-refresh redirect stub at `/index.html` -> `/home` so `/` resolves cleanly in browser navigation while `/home` remains the single canonical homepage URL in `sitemap.xml`.
-  - `sitemap.xml` contains the exact canonical URLs for all indexable pages; `robots.txt` references `https://sutherlandam.com/sitemap.xml`.
-  - Structured data (`WebPage`, `WebSite`, `Organization`, `BreadcrumbList`) matches visible page copy on every route.
+- **Real Build Identity (P2-3)**: Both the 5-page and 6-page `ProductionCandidate` builds and QA records bind the real repository Git `HEAD` SHA and real `pnpm-lock.yaml` SHA-256 loaded via `loadProductionBuildIdentity(repoRoot)` (no dummy constants).
+- **Persisted Built Site & Screenshots Artifact (P2-5)**:
+  - The built 6-page Sutherland site (`dist/`) and full-page Playwright screenshots (`screenshots/*.png` across desktop and mobile viewports) are persisted to `.factory/qa-evidence/run12-sutherland-site/` and uploaded as the `run12-sutherland-site` GitHub Actions artifact in `.github/workflows/pr-ci.yml`.
 
 ---
 
-## U. Deterministic Site-Wide & Trust QA Results (Block 41)
+## T. Deterministic Site-Wide & Trust QA Results (Block 41 / P2-6)
 
-Executed via `runSiteWideQa` and `runTrustQa` on both the 5-page and 6-page built Sutherland candidates:
-- `content.exact_match` / `content.no_duplicate_pages` -> `PASS`
-- `html.valid_structure` / `html.single_h1` / `html.heading_hierarchy` -> `PASS`
-- `seo.title_unique` / `seo.description_unique` / `seo.canonical` / `seo.sitemap` / `seo.robots` -> `PASS`
-- `structured_data.valid_json_ld` -> `PASS`
-- `links.internal_targets_exist` / `links.canonical_destination` -> `PASS`
-- `security.public_output` -> `PASS`
-- `trust.ymyl_classified` / `trust.cannibalization` / `trust.claim_lineage` / `trust.calculation_reproducible` / `trust.source_authority` / `trust.original_value` / `trust.ymyl_elements` / `trust.review_authority` / `trust.date_honesty` / `trust.numerical_discipline` -> `PASS`
+Executed via `runSiteWideQa`, `runDesignDriftQa`, and `runTrustQa` (and enforced via `ProductionApiFacade.runCandidateQa` / `ProductionStore.recordQaRun`) on the built Sutherland candidate:
+- **Site-Wide Technical & SEO Gates**:
+  - `content.exact_match` / `content.no_duplicate_pages` -> `PASS`
+  - `html.valid_structure` / `html.single_h1` / `html.heading_hierarchy` -> `PASS`
+  - `seo.title_unique` / `seo.description_unique` / `seo.canonical` / `seo.sitemap` / `seo.robots` -> `PASS`
+  - `structured_data.valid_json_ld` -> `PASS`
+  - `links.internal_targets_exist` / `links.canonical_destination` -> `PASS`
+  - `security.public_output` -> `PASS`
+- **Design Drift Gates (`runDesignDriftQa`)**:
+  - `design.contract_bound` / `design.tokens_governed` / `design.font_delivery_valid` / `design.composition_valid` / `design.no_raw_stitch_html` / `design.no_inline_style_escape` -> `PASS`
+- **Mandatory YMYL Trust Governance Gates (`REQUIRED_TRUST_QA_GATES` / `runTrustQa`)**:
+  - `trust.ymyl_classified` -> `PASS`
+  - `trust.cannibalization` -> `PASS`
+  - `trust.claim_lineage` -> `PASS`
+  - `trust.calculation_reproducible` -> `PASS`
+  - `trust.source_authority` -> `PASS`
+  - `trust.original_value` -> `PASS`
+  - `trust.ymyl_elements` -> `PASS`
+  - `trust.review_authority` -> `PASS`
+  - `trust.date_honesty` -> `PASS`
+  - `trust.numerical_discipline` -> `PASS`
 
 ---
 
-## V. Real-Browser Playwright E2E, Responsive, Accessibility & Lighthouse QA (Blocks 42–46)
+## U. Real-Browser Playwright E2E, Responsive, Accessibility & Lighthouse QA (Blocks 42–46)
 
 - **Multi-Page E2E & Responsive QA (`sites/starter/tests/run12-multipage.e2e.spec.ts`)**:
   - Executed against the real built 6-page Sutherland `dist` via `astro preview` on both `desktop` (`1280x800`) and `mobile` (`390x844`) Chromium projects.
-  - Verifies HTTP 200, unique title, single `<h1>`, accepted Sutherland copy, zero fixture leakage, canonical URL, JSON-LD, primary navigation, editorial related-pages navigation, zero horizontal overflow (`scrollWidth <= clientWidth`), readable typography, and monotonic vertical section stacking.
+  - Verifies HTTP 200, unique title, single `<h1>`, accepted Sutherland copy, visible `[data-review-authority="Alistair Sutherland"]` and `data-reviewed-digest` on all YMYL decision-support routes, zero fixture leakage, canonical URL, JSON-LD, primary navigation, editorial related-pages navigation, zero horizontal overflow (`scrollWidth <= clientWidth`), readable typography, monotonic vertical section stacking, and full-page screenshot capture.
 - **Automated Accessibility (`sites/starter/tests/axe.production.spec.ts` & `keyboard.production.spec.ts`)**:
   - `0` critical/serious Axe violations across all built pages on desktop and mobile.
   - Complete keyboard `Tab` focus traversal in DOM order across all interactive elements.
@@ -273,7 +290,7 @@ Executed via `runSiteWideQa` and `runTrustQa` on both the 5-page and 6-page buil
 
 ---
 
-## W. Staleness & Adversarial Proofs (Blocks 47–49)
+## V. Staleness & Adversarial Proofs (Blocks 47–49)
 
 ### Block 47 — Staleness Proofs (`pre-run12-authority-chain.test.ts` & `run12-adversarial-design.test.ts`)
 - Mutating `AcceptedPageContent` -> invalidates PPI / manifest digest.
@@ -296,9 +313,12 @@ Executed via `runSiteWideQa` and `runTrustQa` on both the 5-page and 6-page buil
 - Forecast (`"The asset will appreciate 12%."` / `model_as_of_date`) disguised as `FACT` -> `trust_claim_lineage_invalid` (`FAIL`).
 - Hidden assumption without limitation -> `trust_claim_lineage_invalid` (`FAIL`).
 - Fabricated qualification (`CFA charterholder` without `evidenceRef`) -> `credentialPublishable === false`.
-- Decorative citation (`entailment: "UNSUPPORTED"`) -> `trust_claim_lineage_invalid` (`FAIL`), and `TIER_E` forum source on high-impact YMYL -> `sourceAuthorityVerdict === "FAIL"`.
+- Decorative citation (`entailment: "UNSUPPORTED"`, missing `entailment`, self-declared `TIER_A` without provenance, or non-entailing excerpt) -> `trust_claim_lineage_invalid` (`FAIL`), and `TIER_E` forum source on YMYL -> `sourceAuthorityVerdict` rejects.
+- Uncovered material assertion in published page prose -> `runTrustQa` (`trust.claim_lineage`) returns `FAIL`.
+- Missing `data-review-authority` in HTML or missing DB review on YMYL decision-support page -> `runTrustQa` (`trust.review_authority`) returns `FAIL` (never skipped).
+- Declarative-only `OriginalValueRecord` (missing `lineageClaimId` or `verifiableAnchors` absent from HTML) -> `runTrustQa` (`trust.original_value`) returns `FAIL`.
+- Candidate with unreviewed YMYL page or `REVIEW`/`FAIL` trust check -> `ProductionStore.recordQaRun(..., { enforceTrustGates: true })` transitions candidate to `qa_failed`.
 - Fake freshness (date change without content digest change) & content mutation -> `reviewStaleness` binds strictly to `reviewedContentDigest`.
-- Fake reviewer (no governed `ReviewAuthority` event) -> `currentReview.review === null`.
 - Cannibalization duplicate pages -> `cannibalizationVerdict === "FAIL"`.
 - Topic/expertise mismatch -> `checkTopicExpertiseMatch === "FAIL"`.
 - Undisclosed material conflict of interest -> `checkConflictDisclosure === "FAIL"`.
@@ -306,8 +326,8 @@ Executed via `runSiteWideQa` and `runTrustQa` on both the 5-page and 6-page buil
 
 ---
 
-## X. Known Non-Blocking Limitations (Block 50)
+## W. Known Non-Blocking Limitations (Block 50)
 
-1. **No Standalone `About` Archetype in Run 12**: `DESIGN_ARCHETYPE_KINDS` is fixed to `["homepage", "service", "location", "editorial", "investment_advisory"]`; per Block 2, no `about` archetype was invented and organization/creator identity is presented on the 5 mandatory pages and 6th editorial page.
+1. **No Standalone `About` Archetype in Run 12**: `DESIGN_ARCHETYPE_KINDS` is fixed to `["homepage", "service", "location", "editorial", "investment_advisory"]`; per Block 2, no `about` archetype was invented and organization/creator/reviewer identity is presented on the 5 mandatory pages and 6th editorial page.
 2. **Mode B Conversion Surface**: Because accepted Sutherland operator inputs do not yet include a live contact endpoint, phone number, or physical office address, pages use Mode B prose engagement instructions rather than interactive contact forms.
 3. **Derivatives Disabled**: Static summary/audio derivatives remain in governed `state: "disabled"` for the Run 12 Sutherland proof.

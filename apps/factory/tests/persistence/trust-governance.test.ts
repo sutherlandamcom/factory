@@ -87,12 +87,45 @@ test("PG run12 trust: claim lineage fails closed on invalid records; valid recor
       (err: { code?: string }) => err.code === "trust_claim_lineage_invalid",
     );
 
-    // Valid: calculation with provenance persists.
+    // Invalid: omitted entailment must be rejected by persistence gate.
+    const omittedEntailmentClaim: ClaimLineage = {
+      claimId: "c-no-entailment",
+      claimText: "INSEE Chamonix-Mont-Blanc records 13,864 total dwellings.",
+      claimType: "SOURCE_DERIVED_FACT",
+      sourceRefs: [
+        {
+          ref: "INSEE Dossier complet Commune de Chamonix-Mont-Blanc (74056)",
+          sourceUrl: "https://www.insee.fr/fr/statistiques/2011101?geo=COM-74056",
+          supportingExcerpt: "INSEE Chamonix-Mont-Blanc (COM-74056) records 13,864 total dwellings.",
+          tier: "TIER_A",
+          sourceDate: "2026-01-15",
+          freshnessBasis: "observation_date",
+        },
+      ],
+      pageIdentity: "research/report",
+      limitation: "",
+    };
+    await assert.rejects(
+      store.saveClaimLineage({ projectId, pageIdentity: "research/report", contentDigest: digest, claims: [omittedEntailmentClaim] }),
+      (err: { code?: string }) => err.code === "trust_claim_lineage_invalid",
+    );
+
+    // Valid: calculation with provenance and verified source excerpt persists.
     const goodClaim: ClaimLineage = {
       claimId: "c-good",
       claimText: "Illustrative gross yield of 7.2% under stated assumptions.",
       claimType: "CALCULATION",
-      sourceRefs: [{ ref: "notaire fee schedule", tier: "TIER_B", sourceDate: "2026-01-15", freshnessBasis: "effective_version" }],
+      sourceRefs: [
+        {
+          ref: "Notaires de France fee schedule and first-party worked example",
+          sourceUrl: "https://www.immobilier.notaires.fr/en/property-market-statistics",
+          supportingExcerpt: "Illustrative gross yield of 7.2% under stated assumptions from annual rent 26,400 EUR and purchase price 366,000 EUR.",
+          tier: "TIER_B",
+          sourceDate: "2026-01-15",
+          freshnessBasis: "effective_version",
+          entailment: "SUPPORTED",
+        },
+      ],
       pageIdentity: "research/report",
       calculationRef: {
         modelId: "gross-yield-v1",

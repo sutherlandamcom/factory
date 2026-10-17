@@ -5,7 +5,10 @@ import type { ProductionRenderManifest } from "../render-manifest.js";
 import { TrustGovernanceStore } from "../../trust/store.js";
 import {
   UNCERTAIN_CLAIM_TYPES,
+  claimLineageProblems,
+  claimLineageVerdict,
   sourceAuthorityVerdict,
+  checkTopicExpertiseMatch,
   type ClaimLineage,
   type PageIntentAuthority,
 } from "@factory/contracts";
@@ -20,10 +23,10 @@ import { bindQaCheck } from "./registry.js";
  *   trust.page_intent_present  — every production page has a durable intent
  *   trust.cannibalization      — no unexplained primary-purpose overlap
  *   trust.ymll_classification  — every page carries exactly one YMYL class
- *   trust.claim_lineage        — material claims carry valid lineage
- *   trust.source_authority     — source tiers satisfy the YMYL level
- *   trust.review_authority     — displayed reviews are real and current
- *   trust.original_value       — substantive YMYL pages carry original value
+ *   trust.claim_lineage        — all material assertions in published copy are covered by verified ClaimLineage records
+ *   trust.source_authority     — source tiers and entailment satisfy the YMYL level
+ *   trust.review_authority     — YMYL decision-support/high-impact pages have non-stale APPROVED ReviewAuthority rendered visibly in HTML
+ *   trust.original_value       — YMYL pages carry original-value records bound to claim lineage and verifiable anchors in built HTML
  *   trust.fixture_leakage      — no fixture/demo/test identities in output
  *
  * All verdicts are the typed PASS/REVIEW/FAIL triad; no numeric scores.
@@ -43,6 +46,9 @@ const FIXTURE_LEAK_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /\bLorem ipsum\b/i, label: "lorem ipsum" },
 ];
 
+const MATERIAL_ASSERTION_TERM_PATTERN =
+  /\b(?:Loi\s+Hoguet|Law\s+No\.|Article\s+\d|INSEE|DGFiP|DVF|PLU|PPRN|DPE|IFI|Notaires|Géorisques|Georisques|Cour\s+des\s+comptes|SRU|mandat\s+de\s+recherche|carte\s+professionnelle|cooling-off|secondary\s+residences|vacant\s+dwellings|price-to-rent)\b/i;
+
 export interface TrustQaInput {
   manifests: ProductionRenderManifest[];
   distDir: string;
@@ -58,13 +64,110 @@ export interface TrustQaResult {
   overall: "PASS" | "REVIEW" | "FAIL";
 }
 
-function check(
+function pageCheck(
+  route: string,
   checkId: ProductionQaCheckResult["checkId"],
   verdict: ProductionQaCheckResult["verdict"],
   detail: string,
   evidence: ProductionQaCheckResult["evidence"] = [],
 ): ProductionQaCheckResult {
-  return { checkId, group: "content", verdict, detail, evidence };
+  return bindQaCheck(
+    { checkId, group: "content", verdict, detail, evidence },
+    {
+      scope: "page",
+      subject: route,
+      tool: "factory-trust-qa",
+      toolVersion: "trust-governance-v1",
+    },
+  );
+}
+
+function siteCheck(
+  manifestSetDigest: string,
+  checkId: ProductionQaCheckResult["checkId"],
+  verdict: ProductionQaCheckResult["verdict"],
+  detail: string,
+  evidence: ProductionQaCheckResult["evidence"] = [],
+): ProductionQaCheckResult {
+  return bindQaCheck(
+    { checkId, group: "content", verdict, detail, evidence },
+    {
+      scope: "site",
+      subject: manifestSetDigest,
+      tool: "factory-trust-qa",
+      toolVersion: "trust-governance-v1",
+    },
+  );
+}
+
+function normalizeWhitespace(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function normalizeAlphaNum(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function extractNumbers(text: string): string[] {
+  const matches = text.match(/\b\d[\d,._]*\b/g) ?? [];
+  return matches
+    .map((m) => m.replace(/[,_]/g, ""))
+    .filter((m) => /^\d+(?:\.\d+)?$/.test(m));
+}
+
+function extractMaterialSentences(content: ProductionRenderManifest["content"]): string[] {
+  const blocks = [
+    content.introduction,
+    ...content.sections.map((s) => s.body),
+    content.conclusion,
+  ];
+  const sentences: string[] = [];
+  for (const block of blocks) {
+    const paragraphs = block.split(/\n+/);
+    for (const para of paragraphs) {
+      const parts = para
+        .split(/(?<=[.!?])\s+/)
+        .map((s) => s.trim())
+        .filter((s) => s.length >= 20);
+      for (const sentence of parts) {
+        if (/\b\d[\d,._]*\b/.test(sentence) || MATERIAL_ASSERTION_TERM_PATTERN.test(sentence)) {
+          sentences.push(sentence);
+        }
+      }
+    }
+  }
+  return sentences;
+}
+
+function isSentenceCoveredByClaims(sentence: string, claims: ReadonlyArray<ClaimLineage>): boolean {
+  const normSentence = normalizeAlphaNum(sentence);
+  const sentenceNumbers = extractNumbers(sentence);
+  const sentenceTokens = new Set(normSentence.split(" ").filter((t) => t.length >= 4));
+
+  for (const claim of claims) {
+    const normClaim = normalizeAlphaNum(claim.claimText);
+    if (!normClaim) continue;
+    if (normSentence.includes(normClaim) || normClaim.includes(normSentence)) {
+      return true;
+    }
+    const claimNumbers = new Set(extractNumbers(claim.claimText));
+    const allNumbersCovered = sentenceNumbers.every((n) => claimNumbers.has(n));
+    if (!allNumbersCovered) continue;
+
+    const claimTokens = normClaim.split(" ").filter((t) => t.length >= 4);
+    if (claimTokens.length === 0) continue;
+    const overlapCount = claimTokens.filter((t) => sentenceTokens.has(t)).length;
+    const ratio = overlapCount / Math.min(claimTokens.length, Math.max(1, sentenceTokens.size));
+    if (ratio >= 0.6) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
@@ -74,36 +177,11 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
     intentsByPage.set(intent.pageIdentity, intent);
   }
 
-  // trust.page_intent_present + trust.ymll_classification per page.
-  for (const manifest of input.manifests) {
-    const identity = manifest.input.pageIdentity;
-    const intent = intentsByPage.get(identity);
-    checks.push(
-      check(
-        "trust.page_intent_present",
-        intent ? "PASS" : "FAIL",
-        intent
-          ? `Page ${identity} carries durable page-intent authority v${intent.ymylClassification ? "" : ""}(strategy bound).`
-          : `Page ${identity} has no durable page-intent authority; page strategy is not governed.`,
-        [{ kind: "route", ref: manifest.input.route }],
-      ),
-    );
-    checks.push(
-      check(
-        "trust.ymll_classification",
-        intent ? "PASS" : "FAIL",
-        intent
-          ? `Page ${identity} YMYL classification: ${intent.ymylClassification}.`
-          : `Page ${identity} has no YMYL classification.`,
-        [{ kind: "route", ref: manifest.input.route }],
-      ),
-    );
-  }
-
-  // trust.cannibalization site-wide.
+  // 1. Site-wide anti-cannibalization check.
   const cann = await input.trust.cannibalizationVerdict(input.projectId);
   checks.push(
-    check(
+    siteCheck(
+      input.manifestSetDigest,
       "trust.cannibalization",
       cann.verdict,
       cann.verdict === "PASS"
@@ -113,109 +191,349 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
     ),
   );
 
-  // trust.claim_lineage + trust.source_authority per page.
+  // 2. Per-page trust governance checks (every page check emitted once per route).
   for (const manifest of input.manifests) {
     const identity = manifest.input.pageIdentity;
+    const route = manifest.input.route;
     const digest = input.contentDigests.get(identity);
     const intent = intentsByPage.get(identity);
+    const html = await readBuiltHtml(input.distDir, route);
+
+    // 2a. trust.page_intent_present
+    checks.push(
+      pageCheck(
+        route,
+        "trust.page_intent_present",
+        intent ? "PASS" : "FAIL",
+        intent
+          ? `Page ${identity} carries durable page-intent authority (strategy bound).`
+          : `Page ${identity} has no durable page-intent authority; page strategy is not governed.`,
+        [{ kind: "route", ref: route }],
+      ),
+    );
+
+    // 2b. trust.ymll_classification
+    checks.push(
+      pageCheck(
+        route,
+        "trust.ymll_classification",
+        intent ? "PASS" : "FAIL",
+        intent
+          ? `Page ${identity} YMYL classification: ${intent.ymylClassification}.`
+          : `Page ${identity} has no YMYL classification.`,
+        [{ kind: "route", ref: route }],
+      ),
+    );
+
+    const claims = digest ? await input.trust.listClaimLineage(input.projectId, identity, digest) : [];
+    const ymylPage = intent ? intent.ymylClassification !== "NON_YMYL" : true;
+    const requiresStrictReview =
+      intent?.ymylClassification === "YMYL_DECISION_SUPPORT" ||
+      intent?.ymylClassification === "YMYL_HIGH_IMPACT";
+
+    // 2c. trust.claim_lineage (single consolidated check per page)
     if (!digest || !intent) {
       checks.push(
-        check("trust.claim_lineage", "FAIL", `Page ${identity} has no accepted content digest binding for claim lineage.`, [
-          { kind: "route", ref: manifest.input.route },
-        ]),
+        pageCheck(
+          route,
+          "trust.claim_lineage",
+          "FAIL",
+          `Page ${identity} has no accepted content digest or intent binding for claim lineage.`,
+          [{ kind: "route", ref: route }],
+        ),
       );
-      continue;
-    }
-    const claims = await input.trust.listClaimLineage(input.projectId, identity, digest);
-    const ymylPages = intent.ymylClassification !== "NON_YMYL";
-    if (ymylPages && claims.length === 0) {
+    } else if (ymylPage && claims.length === 0) {
       checks.push(
-        check(
+        pageCheck(
+          route,
           "trust.claim_lineage",
           "FAIL",
           `YMYL page ${identity} (${intent.ymylClassification}) carries no claim lineage records.`,
-          [{ kind: "route", ref: manifest.input.route }],
+          [{ kind: "route", ref: route }],
         ),
       );
-      continue;
-    }
-    const sourceVerdicts = claims.map((claim) => sourceAuthorityVerdict(claim.sourceRefs, intent.ymylClassification));
-    const worst = sourceVerdicts.includes("FAIL") ? "FAIL" : sourceVerdicts.includes("REVIEW") ? "REVIEW" : "PASS";
-    checks.push(
-      check(
-        "trust.claim_lineage",
-        "PASS",
-        `Page ${identity}: ${claims.length} material claim(s) carry lineage bound to content digest ${digest.slice(0, 12)}….`,
-        claims.slice(0, 10).map((claim) => ({ kind: "artifact" as const, ref: claim.claimId })),
-      ),
-    );
-    checks.push(
-      check(
-        "trust.source_authority",
-        worst,
-        worst === "PASS"
-          ? `Page ${identity}: all claim sources satisfy the ${intent.ymylClassification} authority floor.`
-          : `Page ${identity}: source authority below the ${intent.ymylClassification} floor on ${sourceVerdicts.filter((v) => v !== "PASS").length} claim(s).`,
-        claims.slice(0, 10).map((claim) => ({ kind: "artifact" as const, ref: claim.claimId })),
-      ),
-    );
+    } else {
+      const invalidClaims = claims.filter((c) => claimLineageVerdict(c) !== "PASS");
+      const uncertain = claims.filter((c) => UNCERTAIN_CLAIM_TYPES.has(c.claimType));
+      const missingLabels = uncertain.filter((c) => !html || !visibleLabelPresent(html, c));
+      const materialSentences = ymylPage ? extractMaterialSentences(manifest.content) : [];
+      const uncoveredSentences = materialSentences.filter((s) => !isSentenceCoveredByClaims(s, claims));
 
-    // Uncertain claim types must be visibly labelled in the built HTML.
-    const uncertain = claims.filter((claim) => UNCERTAIN_CLAIM_TYPES.has(claim.claimType));
-    if (uncertain.length > 0) {
-      const html = await readBuiltHtml(input.distDir, manifest.input.route);
-      const missingLabels = uncertain.filter((claim) => !html || !visibleLabelPresent(html, claim));
+      if (invalidClaims.length > 0) {
+        const reasons = invalidClaims
+          .map((c) => `${c.claimId}: ${claimLineageProblems(c).join("; ")}`)
+          .join(" | ")
+          .slice(0, 1800);
+        checks.push(
+          pageCheck(
+            route,
+            "trust.claim_lineage",
+            "FAIL",
+            `Page ${identity}: ${invalidClaims.length} claim(s) failed lineage/entailment verification (${reasons}).`,
+            invalidClaims.slice(0, 10).map((c) => ({ kind: "artifact" as const, ref: c.claimId })),
+          ),
+        );
+      } else if (missingLabels.length > 0) {
+        checks.push(
+          pageCheck(
+            route,
+            "trust.claim_lineage",
+            "FAIL",
+            `Page ${identity}: ${missingLabels.length} uncertain claim(s) not visibly labelled as assumption/forecast/scenario/estimate/opinion in built HTML.`,
+            missingLabels.slice(0, 10).map((c) => ({ kind: "artifact" as const, ref: c.claimId })),
+          ),
+        );
+      } else if (uncoveredSentences.length > 0) {
+        checks.push(
+          pageCheck(
+            route,
+            "trust.claim_lineage",
+            "FAIL",
+            `Page ${identity}: ${uncoveredSentences.length} material assertion(s) in published copy lack ClaimLineage coverage (first uncovered: "${uncoveredSentences[0]!.slice(0, 220)}").`,
+            [{ kind: "route", ref: route }],
+          ),
+        );
+      } else {
+        checks.push(
+          pageCheck(
+            route,
+            "trust.claim_lineage",
+            "PASS",
+            `Page ${identity}: ${claims.length} verified claim(s) cover all ${materialSentences.length} material assertion(s) bound to content digest ${digest.slice(0, 12)}…${uncertain.length > 0 ? ` (${uncertain.length} uncertain claim(s) visibly labelled)` : ""}.`,
+            claims.slice(0, 10).map((c) => ({ kind: "artifact" as const, ref: c.claimId })),
+          ),
+        );
+      }
+    }
+
+    // 2d. trust.source_authority
+    if (!digest || !intent || (ymylPage && claims.length === 0)) {
       checks.push(
-        check(
-          "trust.claim_lineage",
-          missingLabels.length === 0 ? "PASS" : "FAIL",
-          missingLabels.length === 0
-            ? `Page ${identity}: ${uncertain.length} uncertain claim(s) visibly labelled in built output.`
-            : `Page ${identity}: ${missingLabels.length} uncertain claim(s) not visibly labelled as assumption/forecast/scenario/estimate/opinion.`,
-          missingLabels.slice(0, 10).map((claim) => ({ kind: "artifact" as const, ref: claim.claimId })),
+        pageCheck(
+          route,
+          "trust.source_authority",
+          "FAIL",
+          `Page ${identity}: cannot verify source authority without bound intent and claim lineage.`,
+          [{ kind: "route", ref: route }],
         ),
       );
+    } else {
+      const sourcedClaims = claims.filter(
+        (c) =>
+          c.sourceRefs.length > 0 ||
+          (c.claimType !== "EXPERT_INTERPRETATION" &&
+            c.claimType !== "OPINION" &&
+            c.claimType !== "ASSUMPTION"),
+      );
+      if (ymylPage && sourcedClaims.length === 0) {
+        checks.push(
+          pageCheck(
+            route,
+            "trust.source_authority",
+            "FAIL",
+            `YMYL page ${identity} has no source-backed claims.`,
+            [{ kind: "route", ref: route }],
+          ),
+        );
+      } else {
+        const sourceVerdicts = sourcedClaims.map((c) =>
+          sourceAuthorityVerdict(c.sourceRefs, intent.ymylClassification),
+        );
+        const worst = sourceVerdicts.includes("FAIL")
+          ? "FAIL"
+          : sourceVerdicts.includes("REVIEW")
+            ? "REVIEW"
+            : "PASS";
+        checks.push(
+          pageCheck(
+            route,
+            "trust.source_authority",
+            worst,
+            worst === "PASS"
+              ? `Page ${identity}: all ${sourcedClaims.length} sourced claim(s) carry verified SUPPORTED entailment and satisfy the ${intent.ymylClassification} authority floor.`
+              : `Page ${identity}: source authority or entailment verification failed on ${sourceVerdicts.filter((v) => v !== "PASS").length} claim(s) for ${intent.ymylClassification}.`,
+            sourcedClaims.slice(0, 10).map((c) => ({ kind: "artifact" as const, ref: c.claimId })),
+          ),
+        );
+      }
     }
 
-    // trust.original_value: substantive YMYL pages need original-value evidence.
-    if (ymylPages) {
-      const originals = await input.trust.listOriginalValues(input.projectId, identity);
+    // 2e. trust.review_authority (never skipped when data-review-authority is absent)
+    if (!digest || !intent) {
       checks.push(
-        check(
+        pageCheck(
+          route,
+          "trust.review_authority",
+          "FAIL",
+          `Page ${identity}: missing content digest or intent authority for review verification.`,
+          [{ kind: "route", ref: route }],
+        ),
+      );
+    } else {
+      const current = await input.trust.currentReview(input.projectId, identity, digest);
+      const htmlHasReviewAttr = Boolean(html && /data-review-authority="([^"]+)"/i.test(html));
+      const htmlReviewerMatch = html?.match(/data-review-authority="([^"]+)"/i);
+      const htmlDigestMatch = html?.match(/data-reviewed-digest="([^"]+)"/i);
+
+      if (requiresStrictReview || htmlHasReviewAttr) {
+        if (!current.review) {
+          checks.push(
+            pageCheck(
+              route,
+              "trust.review_authority",
+              "FAIL",
+              `Page ${identity} (${intent.ymylClassification}) requires a governed ReviewAuthority bound to digest ${digest.slice(0, 12)}…, but no review record exists.`,
+              [{ kind: "route", ref: route }],
+            ),
+          );
+        } else if (current.stale) {
+          checks.push(
+            pageCheck(
+              route,
+              "trust.review_authority",
+              "FAIL",
+              `Page ${identity}: ReviewAuthority is STALE (${current.reason}).`,
+              [{ kind: "route", ref: route }],
+            ),
+          );
+        } else if (current.review.result !== "APPROVED") {
+          checks.push(
+            pageCheck(
+              route,
+              "trust.review_authority",
+              "FAIL",
+              `Page ${identity}: ReviewAuthority result is ${current.review.result} (APPROVED required).`,
+              [{ kind: "route", ref: route }],
+            ),
+          );
+        } else if (
+          checkTopicExpertiseMatch(["property", "advisory"], current.review.reviewerExpertise).verdict !== "PASS"
+        ) {
+          checks.push(
+            pageCheck(
+              route,
+              "trust.review_authority",
+              "FAIL",
+              `Page ${identity}: reviewer expertise does not cover required property advisory competence domains.`,
+              [{ kind: "route", ref: route }],
+            ),
+          );
+        } else if (
+          !htmlHasReviewAttr ||
+          htmlReviewerMatch?.[1] !== current.review.reviewerRef ||
+          htmlDigestMatch?.[1] !== digest
+        ) {
+          checks.push(
+            pageCheck(
+              route,
+              "trust.review_authority",
+              "FAIL",
+              `Page ${identity} (${intent.ymylClassification}) is missing visible data-review-authority="${current.review.reviewerRef}" and data-reviewed-digest="${digest.slice(0, 12)}…" in built HTML.`,
+              [{ kind: "route", ref: route }],
+            ),
+          );
+        } else {
+          checks.push(
+            pageCheck(
+              route,
+              "trust.review_authority",
+              "PASS",
+              `Page ${identity}: APPROVED ReviewAuthority (${current.review.reviewerRef}) is current for digest ${digest.slice(0, 12)}… and visibly rendered in HTML.`,
+              [{ kind: "route", ref: route }],
+            ),
+          );
+        }
+      } else if (current.review && (current.stale || current.review.result !== "APPROVED")) {
+        checks.push(
+          pageCheck(
+            route,
+            "trust.review_authority",
+            "FAIL",
+            `Page ${identity}: recorded ReviewAuthority is stale or not approved.`,
+            [{ kind: "route", ref: route }],
+          ),
+        );
+      } else {
+        checks.push(
+          pageCheck(
+            route,
+            "trust.review_authority",
+            "PASS",
+            `Page ${identity} (${intent.ymylClassification}): review governance satisfied.`,
+            [{ kind: "route", ref: route }],
+          ),
+        );
+      }
+    }
+
+    // 2f. trust.original_value (verifies lineageClaimId + verifiableAnchors in built HTML)
+    if (!intent || !ymylPage) {
+      checks.push(
+        pageCheck(
+          route,
           "trust.original_value",
-          originals.length > 0 ? "PASS" : "REVIEW",
-          originals.length > 0
-            ? `Page ${identity} records ${originals.length} original-value element(s).`
-            : `Page ${identity} (YMYL) records no original-value element; human review must confirm value or rework.`,
-          originals.slice(0, 5).map((record) => ({ kind: "artifact" as const, ref: record.kind })),
+          intent ? "PASS" : "FAIL",
+          intent
+            ? `Page ${identity} (NON_YMYL): original value check satisfied.`
+            : `Page ${identity}: missing intent authority for original value check.`,
+          [{ kind: "route", ref: route }],
         ),
       );
+    } else {
+      const originals = await input.trust.listOriginalValues(input.projectId, identity);
+      if (originals.length === 0) {
+        checks.push(
+          pageCheck(
+            route,
+            "trust.original_value",
+            "FAIL",
+            `Page ${identity} (${intent.ymylClassification}) records no OriginalValueRecord; YMYL pages require verifiable original analytical/observational value.`,
+            [{ kind: "route", ref: route }],
+          ),
+        );
+      } else {
+        const validClaimIds = new Set(
+          claims.filter((c) => claimLineageVerdict(c) === "PASS").map((c) => c.claimId),
+        );
+        const normHtml = html ? normalizeWhitespace(html) : "";
+        const verifiedOriginals = originals.filter((record) => {
+          if (!record.lineageClaimId || !validClaimIds.has(record.lineageClaimId)) {
+            return false;
+          }
+          if (!record.verifiableAnchors || record.verifiableAnchors.length < 2) {
+            return false;
+          }
+          return record.verifiableAnchors.every((anchor) =>
+            normHtml.includes(normalizeWhitespace(anchor)),
+          );
+        });
+
+        if (verifiedOriginals.length === 0) {
+          checks.push(
+            pageCheck(
+              route,
+              "trust.original_value",
+              "FAIL",
+              `Page ${identity}: OriginalValueRecord is declarative-only (must bind a valid lineageClaimId and >=2 verifiableAnchors present in built HTML).`,
+              originals.slice(0, 5).map((r) => ({ kind: "artifact" as const, ref: r.kind })),
+            ),
+          );
+        } else {
+          checks.push(
+            pageCheck(
+              route,
+              "trust.original_value",
+              "PASS",
+              `Page ${identity}: ${verifiedOriginals.length} original-value record(s) verified against ClaimLineage and concrete HTML anchors.`,
+              verifiedOriginals.slice(0, 5).map((r) => ({ kind: "artifact" as const, ref: r.kind })),
+            ),
+          );
+        }
+      }
     }
   }
 
-  // trust.review_authority: reviews displayed in HTML must be real and current.
-  for (const manifest of input.manifests) {
-    const identity = manifest.input.pageIdentity;
-    const digest = input.contentDigests.get(identity);
-    if (!digest) continue;
-    const html = await readBuiltHtml(input.distDir, manifest.input.route);
-    if (!html || !/data-review-authority/i.test(html)) continue;
-    const current = await input.trust.currentReview(input.projectId, identity, digest);
-    checks.push(
-      check(
-        "trust.review_authority",
-        current.review && !current.stale ? "PASS" : "FAIL",
-        current.review && !current.stale
-          ? `Page ${identity}: displayed review is a real governed review event (current digest).`
-          : current.review
-            ? `Page ${identity}: displayed review is STALE (${current.reason}).`
-            : `Page ${identity} displays review markup without a governed review event.`,
-        [{ kind: "route", ref: manifest.input.route }],
-      ),
-    );
-  }
-
-  // trust.fixture_leakage across built HTML + metadata.
+  // 3. Site-wide fixture leakage across built HTML + metadata.
   const leakHits: Array<{ route: string; label: string }> = [];
   for (const manifest of input.manifests) {
     const html = await readBuiltHtml(input.distDir, manifest.input.route);
@@ -225,7 +543,8 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
     }
   }
   checks.push(
-    check(
+    siteCheck(
+      input.manifestSetDigest,
       "trust.fixture_leakage",
       leakHits.length === 0 ? "PASS" : "FAIL",
       leakHits.length === 0
@@ -235,25 +554,27 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
     ),
   );
 
-  const trustCheckIds = new Set([
-    "trust.cannibalization",
-    "trust.fixture_leakage",
-  ]);
-  const bound = checks.map((entry) =>
-    entry.scope ? entry : bindQaCheck(entry, {
-      scope: trustCheckIds.has(entry.checkId) ? "site" : "page",
-      subject: trustCheckIds.has(entry.checkId) ? input.manifestSetDigest : input.manifests[0]!.input.route,
-      tool: "factory-trust-qa",
-      toolVersion: "trust-governance-v1",
-    }),
-  );
-  const overall = bound.some((c) => c.verdict === "FAIL") ? "FAIL" : bound.some((c) => c.verdict === "REVIEW") ? "REVIEW" : "PASS";
-  return { checks: bound, overall };
+  const overall = checks.some((c) => c.verdict === "FAIL")
+    ? "FAIL"
+    : checks.some((c) => c.verdict === "REVIEW")
+      ? "REVIEW"
+      : "PASS";
+  return { checks, overall };
 }
 
 /** Visible labelling check: uncertain claims need an explicit label nearby. */
 function visibleLabelPresent(html: string, claim: ClaimLineage): boolean {
-  const LABELS = ["assumption", "forecast", "scenario", "estimate", "opinion", "expert interpretation", "illustrative", "modelled", "modeled"];
+  const LABELS = [
+    "assumption",
+    "forecast",
+    "scenario",
+    "estimate",
+    "opinion",
+    "expert interpretation",
+    "illustrative",
+    "modelled",
+    "modeled",
+  ];
   const lower = html.toLowerCase();
   const claimKey = claim.claimId.toLowerCase();
   const idx = lower.indexOf(claimKey);
@@ -261,7 +582,6 @@ function visibleLabelPresent(html: string, claim: ClaimLineage): boolean {
     const context = lower.slice(Math.max(0, idx - 500), idx + claim.claimText.length + 500);
     return LABELS.some((label) => context.includes(label));
   }
-  // Claim text based fallback: label within the same rendered block.
   const textKey = claim.claimText.toLowerCase().slice(0, 60).replace(/\s+/g, " ");
   const textIdx = lower.indexOf(textKey);
   if (textIdx >= 0) {
@@ -272,7 +592,10 @@ function visibleLabelPresent(html: string, claim: ClaimLineage): boolean {
 }
 
 async function readBuiltHtml(distDir: string, route: string): Promise<string | null> {
-  const file = route === "/" ? path.join(distDir, "index.html") : path.join(distDir, route.replace(/^\//, ""), "index.html");
+  const file =
+    route === "/"
+      ? path.join(distDir, "index.html")
+      : path.join(distDir, route.replace(/^\//, ""), "index.html");
   try {
     return await readFile(file, "utf8");
   } catch {

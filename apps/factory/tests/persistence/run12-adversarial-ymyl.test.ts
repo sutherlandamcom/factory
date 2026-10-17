@@ -163,11 +163,49 @@ test("ADVERSARIAL YMYL: citation decoration — source that does not support cla
       }),
       (err: { code?: string }) => err.code === "trust_claim_lineage_invalid",
     );
+    // Omitted entailment or self-certified TIER_A also fail closed at the persistence boundary (P1-3).
+    const selfCertifiedTierA: ClaimLineage = {
+      claimId: "claim-self-tier-a",
+      claimText: "Chamonix transaction volume doubled in Q3.",
+      claimType: "SOURCE_DERIVED_FACT",
+      sourceRefs: [
+        {
+          ref: "Unverified marketing brochure",
+          sourceUrl: "https://unverified-brochure.example.com/chamonix",
+          supportingExcerpt: "Chamonix transaction volume doubled in Q3 across the valley.",
+          tier: "TIER_A",
+          sourceDate: "2026-06-01",
+          freshnessBasis: "observation_date",
+          entailment: "SUPPORTED",
+        },
+      ],
+      pageIdentity: "locations/chamonix",
+      limitation: "",
+    };
+    await assert.rejects(
+      trust.saveClaimLineage({
+        projectId,
+        pageIdentity: "locations/chamonix",
+        contentDigest: "c".repeat(64),
+        claims: [selfCertifiedTierA],
+      }),
+      (err: { code?: string }) => err.code === "trust_claim_lineage_invalid",
+    );
   } finally {
     await dbInst.close();
   }
   const { sourceAuthorityVerdict } = await import("@factory/contracts");
-  const forumOnly = [{ ref: "reddit thread", tier: "TIER_E" as const, sourceDate: "2026-01-01", freshnessBasis: "observation_date" as const }];
+  const forumOnly = [
+    {
+      ref: "reddit thread",
+      sourceUrl: "https://reddit.com/r/france",
+      supportingExcerpt: "Chamonix transaction volume doubled in Q3 according to forum commentary.",
+      tier: "TIER_E" as const,
+      sourceDate: "2026-01-01",
+      freshnessBasis: "observation_date" as const,
+      entailment: "SUPPORTED" as const,
+    },
+  ];
   assert.equal(sourceAuthorityVerdict(forumOnly, "YMYL_HIGH_IMPACT"), "FAIL");
   assert.equal(sourceAuthorityVerdict(forumOnly, "YMYL_DECISION_SUPPORT"), "REVIEW");
 });
@@ -271,17 +309,115 @@ test("ADVERSARIAL YMYL: topic/expertise mismatch and undisclosed conflict of int
   );
 });
 
-test("ADVERSARIAL YMYL: generic SEO rewrite — original-value gate requires a recorded element", async () => {
+test("ADVERSARIAL YMYL: generic SEO rewrite, missing HTML review authority, and uncovered material sentence fail runTrustQa (P1-3, P1-4, P1-5)", async () => {
+  const { mkdtemp, mkdir, writeFile, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  const { runTrustQa } = await import("../../src/production/qa/trust.js");
   const dbInst = await setupMigratedTestDatabase();
+  const tmpDist = await mkdtemp(path.join(tmpdir(), "adv-trust-qa-"));
   try {
     const { projectId } = await seedSutherlandProject(dbInst, "adv-7");
     const trust = new TrustGovernanceStore(dbInst.db);
-    await trust.setPageIntentAuthority({ projectId, intent: intentFor(projectId, "research/rewrite", { ymylClassification: "YMYL_DECISION_SUPPORT", decisionRole: "INFORMATIONAL_RESEARCH" }) });
-    // No original-value record -> trust.original_value emits REVIEW (human
-    // judgment), never a silent PASS. Prove the store returns empty.
-    const originals = await trust.listOriginalValues(projectId, "research/rewrite");
-    assert.equal(originals.length, 0);
+    const pageIdentity = "research/rewrite";
+    const route = "/research/rewrite";
+    const contentDigest = "d".repeat(64);
+    await trust.setPageIntentAuthority({
+      projectId,
+      intent: intentFor(projectId, pageIdentity, {
+        ymylClassification: "YMYL_DECISION_SUPPORT",
+        decisionRole: "INFORMATIONAL_RESEARCH",
+      }),
+    });
+    // Record a claim for 13,864 dwellings, but leave a second material sentence ("Secondary residences represent 83.1% in Megève.") uncovered in copy!
+    await trust.saveClaimLineage({
+      projectId,
+      pageIdentity,
+      contentDigest,
+      claims: [
+        {
+          claimId: "claim-chamonix-13864",
+          claimText: "INSEE records 13,864 total dwellings in Chamonix-Mont-Blanc.",
+          claimType: "SOURCE_DERIVED_FACT",
+          sourceRefs: [
+            {
+              ref: "INSEE Dossier complet Commune de Chamonix-Mont-Blanc (74056)",
+              sourceUrl: "https://www.insee.fr/fr/statistiques/2011101?geo=COM-74056",
+              supportingExcerpt: "INSEE Chamonix-Mont-Blanc (COM-74056) records 13,864 total dwellings.",
+              tier: "TIER_A",
+              sourceDate: "2025-07-01",
+              freshnessBasis: "observation_date",
+              entailment: "SUPPORTED",
+            },
+          ],
+          pageIdentity,
+          limitation: "",
+        },
+      ],
+    });
+    // Declarative OriginalValueRecord whose anchors are NOT present in the rendered HTML, and without lineageClaimId:
+    await trust.saveOriginalValue({
+      projectId,
+      record: {
+        schemaVersion: "trust-governance-v1",
+        pageIdentity,
+        kind: "first_party_observation",
+        description: "Declarative observation without lineageClaimId or HTML anchors.",
+        verifiableAnchors: ["ANCHOR_MISSING_FROM_HTML_1", "ANCHOR_MISSING_FROM_HTML_2"],
+      },
+    });
+    await mkdir(path.join(tmpDist, "research", "rewrite"), { recursive: true });
+    await writeFile(
+      path.join(tmpDist, "research", "rewrite", "index.html"),
+      `<!doctype html><html><body><h1>Rewrite</h1><p>INSEE records 13,864 total dwellings in Chamonix-Mont-Blanc. Secondary residences represent 83.1% in Megève.</p></body></html>`,
+      "utf8",
+    );
+    const manifest = {
+      schemaVersion: "production-v3" as const,
+      input: {
+        id: "ppin-adv",
+        version: 1,
+        digest: "e".repeat(64),
+        projectId,
+        pageIdentity,
+        pageType: "editorial" as const,
+        route,
+        siteIdentity: { siteId: "s", siteName: "Sutherland Private Office", canonicalOrigin: "https://sutherlandam.com", language: "en", profileDigest: "f".repeat(64) },
+      },
+      seo: { fullTitle: "Rewrite", description: "Desc", canonicalUrl: "https://sutherlandam.com/research/rewrite", ogTitle: "Rewrite", ogDescription: "Desc", ogUrl: "https://sutherlandam.com/research/rewrite" },
+      content: {
+        acceptedId: "wacc-adv",
+        acceptedVersion: 1,
+        acceptedDigest: contentDigest,
+        title: "Rewrite",
+        metaDescription: "Desc",
+        introduction: "INSEE records 13,864 total dwellings in Chamonix-Mont-Blanc.",
+        sections: [{ heading: "Uncovered", body: "Secondary residences represent 83.1% in Megève." }],
+        conclusion: "End.",
+        cta: "Cta.",
+        internalLinks: [],
+      },
+      design: {} as never,
+      links: [],
+      breadcrumbs: [],
+      assets: [],
+      manifestDigest: "1".repeat(64),
+    };
+    const report = await runTrustQa({
+      manifests: [manifest],
+      distDir: tmpDist,
+      projectId,
+      trust,
+      contentDigests: new Map([[pageIdentity, contentDigest]]),
+      manifestSetDigest: "2".repeat(64),
+    });
+    assert.equal(report.overall, "FAIL");
+    const byId = new Map(report.checks.map((c) => [c.checkId, c]));
+    assert.equal(byId.get("trust.claim_lineage")?.verdict, "FAIL", "uncovered material sentence must fail trust.claim_lineage (P1-3)");
+    assert.equal(byId.get("trust.review_authority")?.verdict, "FAIL", "missing review authority on YMYL_DECISION_SUPPORT must FAIL, never skip (P1-4)");
+    assert.equal(byId.get("trust.original_value")?.verdict, "FAIL", "declarative OriginalValueRecord missing lineageClaimId and HTML anchors must FAIL (P1-5)");
   } finally {
+    await rm(tmpDist, { recursive: true, force: true }).catch(() => undefined);
     await dbInst.close();
   }
 });

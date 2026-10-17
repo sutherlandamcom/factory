@@ -130,7 +130,7 @@ test("R11 regression (negative): missing PageIntentAuthority still FAILS in synt
 test("R11 regression (negative): synthetic mode never relaxes YMYL review/claim/source/original-value gates", async () => {
   const r = await run({ html: FIXTURE_HTML, ymyl: "YMYL_DECISION_SUPPORT", synthetic: true });
   for (const id of ["trust.claim_lineage", "trust.source_authority", "trust.review_authority", "trust.original_value"]) {
-    assert.equal(r.get(id)!.verdict, "FAIL", `${id} must still FAIL for a YMYL page in synthetic mode`);
+    assert.equal(r.get(id as never)!.verdict, "FAIL", `${id} must still FAIL for a YMYL page in synthetic mode`);
   }
   assert.equal((r.get("__overall" as never) as { verdict: string }).verdict, "FAIL");
 });

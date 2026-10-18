@@ -187,6 +187,7 @@ export interface DeploymentReadiness {
   candidate?: WorkflowAuthorityRef;
   blockers: WorkflowBlocker[];
   qaCurrent: boolean;
+  publicationEligible: boolean;
 }
 
 export interface ProjectWorkflowReadModel {

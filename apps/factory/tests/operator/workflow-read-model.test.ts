@@ -367,6 +367,7 @@ async function insertQaRun(
   candidateId: string,
   overall: string,
   artifactDigest: string | null,
+  data: Record<string, unknown> = { checks: [] },
 ) {
   const [row] = await db
     .insert(productionQaRuns)
@@ -375,7 +376,7 @@ async function insertQaRun(
       projectId,
       candidateId,
       candidateArtifactDigest: artifactDigest,
-      data: { checks: [] },
+      data,
       overall,
     })
     .returning();
@@ -1150,5 +1151,45 @@ test("workflow: foreign project read returns not_found (no cross-project leak)",
     assert.ok(pA.id && pB.id); // keep both referenced
   } finally {
     await dbInst.close();
+  }
+});
+
+
+test("workflow: READY_FOR_DEPLOYMENT is a readiness label only — publicationEligible is machine-derived from QA provenance (fail closed)", async () => {
+  const cases: Array<{ label: string; provenance?: { trustMode: string; publicationEligible: boolean }; expected: boolean }> = [
+    { label: "historical run without provenance", expected: false },
+    { label: "SYNTHETIC_FIXTURE even when self-declared eligible", provenance: { trustMode: "SYNTHETIC_FIXTURE", publicationEligible: true }, expected: false },
+    { label: "STRICT_PRODUCTION but not declared eligible", provenance: { trustMode: "STRICT_PRODUCTION", publicationEligible: false }, expected: false },
+    { label: "STRICT_PRODUCTION and eligible", provenance: { trustMode: "STRICT_PRODUCTION", publicationEligible: true }, expected: true },
+  ];
+  for (const c of cases) {
+    const { dbInst, store, intake, deps } = await setup();
+    try {
+      const p = await store.createProject({ key: `wf-pub-${Math.random().toString(36).slice(2, 7)}`, name: "Pub" });
+      const payload = buildIntakePayload();
+      await intake.saveDraft({ projectId: p.id, baseRevision: 0, payload });
+      await intake.accept({ projectId: p.id, expectedRevision: 1, expectedDigest: deterministicDigest(payload) });
+      const snapshot = (await intake.listSnapshots(p.id))[0]!;
+      await insertResearch(dbInst.db, p.id, { id: snapshot.id, version: snapshot.version, digest: snapshot.digest });
+      const content = await insertAcceptedContent(dbInst.db, p.id, "home", 1);
+      const design = await insertDesign(dbInst.db, p.id, 1);
+      const vset = await insertVisualSet(dbInst.db, p.id, 1, { id: design.id, version: design.version, digest: design.candidateDigest });
+      const input = await insertProductionInput(dbInst.db, p.id, "home", 1, ref(content), { id: design.id, version: design.version, digest: design.candidateDigest }, { id: vset.id, version: vset.version, digest: vset.setDigest });
+      const candidate = await insertCandidate(dbInst.db, p.id, "home", input, "qa_passed", deterministicDigest({ artifact: "home" }));
+      await insertQaRun(dbInst.db, p.id, candidate.id, "PASS", candidate.artifactDigest, {
+        schemaVersion: "production-v1",
+        candidateId: candidate.id,
+        checks: [],
+        overall: "PASS",
+        ...(c.provenance ? { provenance: c.provenance } : {}),
+      });
+      const wf = (await deriveProjectWorkflow(deps, p.id))!;
+      // Run 11 historical label is preserved in every case...
+      assert.equal(wf.deployment.state, "READY_FOR_DEPLOYMENT", c.label);
+      // ...but publication authority is separately and machine-readably derived.
+      assert.equal(wf.deployment.publicationEligible, c.expected, c.label);
+    } finally {
+      await dbInst.close();
+    }
   }
 });

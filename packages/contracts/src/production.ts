@@ -450,12 +450,36 @@ export const productionQaReportDataSchema = z
     checks: z.array(productionQaCheckResultSchema).max(10_000),
     /** Overall verdict: FAIL if any FAIL; REVIEW if any REVIEW; else PASS. */
     overall: qaVerdictSchema,
+    /**
+     * Machine-readable trust provenance (Run 12 remediation). Absent on
+     * historical runs; absence is treated as NOT publication-eligible
+     * (fail closed). Synthetic fixture content can never be eligible.
+     */
+    provenance: z
+      .object({
+        trustMode: z.enum(["STRICT_PRODUCTION", "SYNTHETIC_FIXTURE"]),
+        publicationEligible: z.boolean(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type ProductionQaReportData = z.infer<typeof productionQaReportDataSchema>;
 
 export function parseProductionQaReportData(input: unknown): ProductionQaReportData {
   return productionQaReportDataSchema.parse(input);
+}
+
+/**
+ * Single publication-eligibility predicate (Run 12 remediation). Future
+ * deployment/publication (Run 13) MUST gate on this; READY_FOR_DEPLOYMENT is a
+ * readiness label only and never authorizes publication. Fail closed.
+ */
+export function qaRunPublicationEligible(data: unknown): boolean {
+  const parsed = productionQaReportDataSchema.safeParse(data);
+  if (!parsed.success) return false;
+  const d = parsed.data;
+  return d.overall === "PASS" && d.provenance?.trustMode === "STRICT_PRODUCTION" && d.provenance.publicationEligible === true;
 }
 
 /** Deterministic overall verdict from individual check results. */

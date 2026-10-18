@@ -90,15 +90,15 @@ test("PG run12 trust: claim lineage fails closed on invalid records; valid recor
     // Invalid: omitted entailment must be rejected by persistence gate.
     const omittedEntailmentClaim: ClaimLineage = {
       claimId: "c-no-entailment",
-      claimText: "INSEE Chamonix-Mont-Blanc records 13,864 total dwellings.",
+      claimText: "INSEE Chamonix-Mont-Blanc records 14,538 total dwellings.",
       claimType: "SOURCE_DERIVED_FACT",
       sourceRefs: [
         {
-          ref: "INSEE Dossier complet Commune de Chamonix-Mont-Blanc (74056)",
-          sourceUrl: "https://www.insee.fr/fr/statistiques/2011101?geo=COM-74056",
-          supportingExcerpt: "INSEE Chamonix-Mont-Blanc (COM-74056) records 13,864 total dwellings.",
+          ref: "INSEE Logement en 2022 — Commune de Chamonix-Mont-Blanc (74056)",
+          sourceUrl: "https://www.insee.fr/fr/statistiques/8581193?sommaire=8581488&geo=COM-74056",
+          supportingExcerpt: "INSEE Chamonix-Mont-Blanc (COM-74056) records 14,538 total dwellings.",
           tier: "TIER_A",
-          sourceDate: "2026-01-15",
+          sourceDate: "2025-07-01",
           freshnessBasis: "observation_date",
         },
       ],

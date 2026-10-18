@@ -329,21 +329,21 @@ test("ADVERSARIAL YMYL: generic SEO rewrite, missing HTML review authority, and 
         decisionRole: "INFORMATIONAL_RESEARCH",
       }),
     });
-    // Record a claim for 13,864 dwellings, but leave a second material sentence ("Secondary residences represent 83.1% in Megève.") uncovered in copy!
+    // Record a claim for 14,538 dwellings, but leave a second material sentence ("Secondary residences represent 82.9% in Megève.") uncovered in copy!
     await trust.saveClaimLineage({
       projectId,
       pageIdentity,
       contentDigest,
       claims: [
         {
-          claimId: "claim-chamonix-13864",
-          claimText: "INSEE records 13,864 total dwellings in Chamonix-Mont-Blanc.",
+          claimId: "claim-chamonix-14538",
+          claimText: "INSEE records 14,538 total dwellings in Chamonix-Mont-Blanc.",
           claimType: "SOURCE_DERIVED_FACT",
           sourceRefs: [
             {
-              ref: "INSEE Dossier complet Commune de Chamonix-Mont-Blanc (74056)",
-              sourceUrl: "https://www.insee.fr/fr/statistiques/2011101?geo=COM-74056",
-              supportingExcerpt: "INSEE Chamonix-Mont-Blanc (COM-74056) records 13,864 total dwellings.",
+              ref: "INSEE Logement en 2022 — Commune de Chamonix-Mont-Blanc (74056)",
+              sourceUrl: "https://www.insee.fr/fr/statistiques/8581193?sommaire=8581488&geo=COM-74056",
+              supportingExcerpt: "INSEE Chamonix-Mont-Blanc (COM-74056) records 14,538 total dwellings.",
               tier: "TIER_A",
               sourceDate: "2025-07-01",
               freshnessBasis: "observation_date",
@@ -369,7 +369,7 @@ test("ADVERSARIAL YMYL: generic SEO rewrite, missing HTML review authority, and 
     await mkdir(path.join(tmpDist, "research", "rewrite"), { recursive: true });
     await writeFile(
       path.join(tmpDist, "research", "rewrite", "index.html"),
-      `<!doctype html><html><body><h1>Rewrite</h1><p>INSEE records 13,864 total dwellings in Chamonix-Mont-Blanc. Secondary residences represent 83.1% in Megève.</p></body></html>`,
+      `<!doctype html><html><body><h1>Rewrite</h1><p>INSEE records 14,538 total dwellings in Chamonix-Mont-Blanc. Secondary residences represent 82.9% in Megève.</p></body></html>`,
       "utf8",
     );
     const manifest = {
@@ -391,8 +391,8 @@ test("ADVERSARIAL YMYL: generic SEO rewrite, missing HTML review authority, and 
         acceptedDigest: contentDigest,
         title: "Rewrite",
         metaDescription: "Desc",
-        introduction: "INSEE records 13,864 total dwellings in Chamonix-Mont-Blanc.",
-        sections: [{ heading: "Uncovered", body: "Secondary residences represent 83.1% in Megève." }],
+        introduction: "INSEE records 14,538 total dwellings in Chamonix-Mont-Blanc.",
+        sections: [{ heading: "Uncovered", body: "Secondary residences represent 82.9% in Megève." }],
         conclusion: "End.",
         cta: "Cta.",
         internalLinks: [],

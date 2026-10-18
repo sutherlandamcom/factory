@@ -210,6 +210,31 @@ const EXTRA_SIXTH_PAGE: SutherlandPageSpec = {
 
 const FACTS = sutherlandIntakePayload.evidence.operatorFacts;
 
+/**
+ * Declared evidence bindings. These are DECLARATIONS only: runTrustQa verifies each value against the
+ * digest-pinned official INSEE bytes in docs/evidence/sources/insee-logement-2022/.
+ */
+const INSEE_TF = (geoCode: string, tableId: "LOG T1" | "LOG T1bis" | "LOG T2", rowKey: string, columnKey: string, value: number, unit: "dwellings" | "percent_of_dwellings") =>
+  ({ kind: "table_fact" as const, geoCode, reportingYear: 2022, tableId, rowKey, columnKey, value, unit });
+const SEC = "Résidences secondaires et logements occasionnels";
+const CHAMONIX_BINDINGS = [
+  INSEE_TF("74056", "LOG T1", "Ensemble", "2022", 14538, "dwellings"),
+  INSEE_TF("74056", "LOG T1bis", "Résidences principales", "2022", 29.7, "percent_of_dwellings"),
+  INSEE_TF("74056", "LOG T1bis", SEC, "2022", 69.3, "percent_of_dwellings"),
+  INSEE_TF("74056", "LOG T1bis", "Logements vacants", "2022", 1.1, "percent_of_dwellings"),
+  INSEE_TF("74056", "LOG T2", "Appartements", "2022:share", 72.6, "percent_of_dwellings"),
+  INSEE_TF("74056", "LOG T2", "Maisons", "2022:share", 26.6, "percent_of_dwellings"),
+  { kind: "table_fact" as const, geoCode: "74056", reportingYear: 2022, tableId: "LOG T5" as never, rowKey: "De 2006 à 2019", columnKey: "share", value: 13.5, unit: "percent_of_main_residences" as never },
+  { kind: "derived_share" as const, geoCode: "74056", reportingYear: 2022, tableId: "LOG T5" as const, numeratorRows: ["De 1946 à 1970", "De 1971 à 1990"], denominatorRow: "Résidences principales construites avant 2020", value: 58.5, unit: "percent_of_main_residences" as const },
+];
+const MEGEVE_BINDINGS = [
+  INSEE_TF("74173", "LOG T1", "Ensemble", "2022", 9354, "dwellings"),
+  INSEE_TF("74173", "LOG T1bis", "Résidences principales", "2022", 16.1, "percent_of_dwellings"),
+  INSEE_TF("74173", "LOG T1bis", SEC, "2022", 82.9, "percent_of_dwellings"),
+  INSEE_TF("74173", "LOG T1bis", "Logements vacants", "2022", 1.0, "percent_of_dwellings"),
+  INSEE_TF("74173", "LOG T2", "Appartements", "2022:share", 81.1, "percent_of_dwellings"),
+];
+
 const SOURCE_REFS = {
   operatorPositioning: {
     ref: "intake:operatorFacts[0] — Accepted Sutherland Private Office positioning",
@@ -230,31 +255,34 @@ const SOURCE_REFS = {
     entailment: "SUPPORTED",
   } satisfies SourceRef,
   inseeChamonixStock: {
-    ref: "INSEE Dossier Complet 2022 — Commune de Chamonix-Mont-Blanc (COM-74056)",
-    sourceUrl: "https://www.insee.fr/fr/statistiques/2011101?geo=COM-74056",
+    ref: "INSEE Logement en 2022 — Commune de Chamonix-Mont-Blanc (COM-74056)",
+    sourceUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
     supportingExcerpt: FACTS[5]!,
     tier: "TIER_A",
     sourceDate: "2025-07-01",
     freshnessBasis: "observation_date",
     entailment: "SUPPORTED",
+    evidenceBindings: CHAMONIX_BINDINGS,
   } satisfies SourceRef,
   inseeChamonixAge: {
-    ref: "INSEE Dossier Complet 2022 LOG T2 — Commune de Chamonix-Mont-Blanc (COM-74056)",
-    sourceUrl: "https://www.insee.fr/fr/statistiques/2011101?geo=COM-74056",
+    ref: "INSEE Logement en 2022 LOG T2 — Commune de Chamonix-Mont-Blanc (COM-74056)",
+    sourceUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
     supportingExcerpt: FACTS[6]!,
     tier: "TIER_A",
     sourceDate: "2025-07-01",
     freshnessBasis: "observation_date",
     entailment: "SUPPORTED",
+    evidenceBindings: CHAMONIX_BINDINGS,
   } satisfies SourceRef,
   inseeMegeveStock: {
-    ref: "INSEE Dossier Complet 2022 — Commune de Megève (COM-74173)",
-    sourceUrl: "https://www.insee.fr/fr/statistiques/2011101?geo=COM-74173",
+    ref: "INSEE Logement en 2022 — Commune de Megève (COM-74173)",
+    sourceUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74173",
     supportingExcerpt: FACTS[7]!,
     tier: "TIER_A",
     sourceDate: "2025-07-01",
     freshnessBasis: "observation_date",
     entailment: "SUPPORTED",
+    evidenceBindings: MEGEVE_BINDINGS,
   } satisfies SourceRef,
   chamonixPlu: {
     ref: "Ville de Chamonix-Mont-Blanc — Plan Local d'Urbanisme (PLU) & Règlement Meublés 2025",
@@ -312,7 +340,7 @@ function sutherlandProposalFor(page: SutherlandPageSpec) {
       },
       {
         heading: "How the evidence-led method produces conclusions from primary sources",
-        body: "The evidence-led analysis method produces conclusions from official French statistical and statutory datasets. In Chamonix-Mont-Blanc (COM-74056), INSEE records 13,864 total dwellings in 2022, including 69.2% secondary residences. In Megève (COM-74173), INSEE records 11,291 total dwellings in 2022, including 83.1% secondary residences. See how facts, assumptions and forecasts are separated before any capital commitment.",
+        body: "The evidence-led analysis method produces conclusions from official French statistical and statutory datasets. In Chamonix-Mont-Blanc (COM-74056), INSEE records 14,538 total dwellings in 2022, including 69.3% secondary residences. In Megève (COM-74173), INSEE records 9,354 total dwellings in 2022, including 82.9% secondary residences. See how facts, assumptions and forecasts are separated before any capital commitment.",
       },
       {
         heading: "Engagement boundaries and how an engagement begins without a sales funnel",
@@ -336,15 +364,15 @@ function sutherlandProposalFor(page: SutherlandPageSpec) {
     "locations/chamonix": [
       {
         heading: "Location context: Chamonix-Mont-Blanc and Megève housing structure",
-        body: "Sutherland Private Office is an independent buyer-side property advisory. Advisory focus: consequential French Alps property decisions, including Chamonix and Megève. INSEE Dossier Complet 2022 for Chamonix-Mont-Blanc (COM-74056) records 13,864 total dwellings: 69.2% secondary residences, 26.8% primary residences, and 4.0% vacant. In Megève (COM-74173), INSEE records 11,291 total dwellings in 2022, with 83.1% secondary residences and 13.4% primary residences.",
+        body: "Sutherland Private Office is an independent buyer-side property advisory. Advisory focus: consequential French Alps property decisions, including Chamonix and Megève. INSEE Logement en 2022 for Chamonix-Mont-Blanc (COM-74056) records 14,538 total dwellings: 69.3% secondary residences, 29.7% primary residences, and 1.1% vacant. In Megève (COM-74173), INSEE records 9,354 total dwellings in 2022, with 82.9% secondary residences and 16.1% primary residences.",
       },
       {
         heading: "Advisory coverage across Chamonix micro-markets and PLU zones",
-        body: "What buyer-side advisory covers and how an engagement works in Chamonix links commune statistics to parcel rules. INSEE Chamonix-Mont-Blanc (COM-74056) records 72.6% apartments and 27.3% houses, with 26,880 EUR median 2021 income versus 28,020 EUR in Megève. Ville de Chamonix-Mont-Blanc PLU applies permanent-housing servitudes against an outflow of 90 inhabitants per year. From 1 May 2025, tourist-rental rules require registration numbers and cap authorizations at 1 property per person.",
+        body: "What buyer-side advisory covers and how an engagement works in Chamonix links commune statistics to parcel rules. INSEE Chamonix-Mont-Blanc (COM-74056) records 72.6% apartments and 26.6% houses. Ville de Chamonix-Mont-Blanc PLU applies permanent-housing servitudes (servitudes de résidence principale) and 25% social-mix quotas across constructible residential zones. From 1 May 2025, tourist-rental rules require registration numbers and cap authorizations at 1 property per person.",
       },
       {
         heading: "Local decision factors: thermal vintage, natural hazards, and boundaries",
-        body: "INSEE Chamonix-Mont-Blanc (COM-74056) records 58.2% of main residences built between 1946 and 1990, and only 6.0% built in 2006 or later. BRGM Géorisques and the February 2024 Cour des comptes ski-resort audit document that PPRN avalanche and flood zones require pre-contract ERP verification. The evidence-led analysis method produces conclusions that distinguish independent advisory from listing intermediaries and state engagement boundaries. Understand who is responsible for the analysis, see how facts, assumptions and forecasts are separated, and how an engagement begins without a sales funnel.",
+        body: "INSEE Chamonix-Mont-Blanc (COM-74056) records 58.5% of main residences (built before 2020) were completed between 1946 and 1990, and 13.5% between 2006 and 2019. BRGM Géorisques and the February 2024 Cour des comptes ski-resort audit document that PPRN avalanche and flood zones require pre-contract ERP verification. The evidence-led analysis method produces conclusions that distinguish independent advisory from listing intermediaries and state engagement boundaries. Understand who is responsible for the analysis, see how facts, assumptions and forecasts are separated, and how an engagement begins without a sales funnel.",
       },
     ],
     "advisory/investment-decision-framework": [
@@ -354,7 +382,7 @@ function sutherlandProposalFor(page: SutherlandPageSpec) {
       },
       {
         heading: "Assumptions and their labelling: gross yield calculation and DPE capex",
-        body: "See how facts, assumptions and forecasts are separated across every underwriting table. Annual rent of 26400 EUR over a purchase price of 366000 EUR gives an illustrative gross yield of 7.2% under stated assumptions. Notaires de France statutory procedure requires DDT energy audits for classes F and G in 2023, class E in 2025, and class D in 2034. In Chamonix-Mont-Blanc (COM-74056), where 58.2% of main residences were built between 1946 and 1990, thermal capex is modelled as an explicit assumption.",
+        body: "See how facts, assumptions and forecasts are separated across every underwriting table. Annual rent of 26400 EUR over a purchase price of 366000 EUR gives an illustrative gross yield of 7.2% under stated assumptions. Notaires de France statutory procedure requires DDT energy audits for classes F and G in 2023, class E in 2025, and class D in 2034. In Chamonix-Mont-Blanc (COM-74056), where 58.5% of main residences were built between 1946 and 1990, thermal capex is modelled as an explicit assumption.",
       },
       {
         heading: "Scenario analysis with limits: rental quotas and climate dispersion",
@@ -368,7 +396,7 @@ function sutherlandProposalFor(page: SutherlandPageSpec) {
       },
       {
         heading: "Methodology: five verification stages from INSEE and DVF to labelled yield",
-        body: "Step one audits commune housing: INSEE Chamonix-Mont-Blanc (COM-74056) records 13,864 total dwellings in 2022 (69.2% secondary), and Megève (COM-74173) records 11,291 dwellings (83.1% secondary). Step two normalizes DGFiP 5-year DVF notarized transfers and checks IFI thresholds above 1,300,000 EUR (assessed from 800,000 EUR). Step three verifies Notaires de France 10-day cooling-off rules and DDT energy audits for 2023, 2025, and 2034. Step four computes labelled calculations: annual rent of 26400 EUR over 366000 EUR purchase price gives an illustrative 7.2% gross yield.",
+        body: "Step one audits commune housing: INSEE Chamonix-Mont-Blanc (COM-74056) records 14,538 total dwellings in 2022 (69.3% secondary), and Megève (COM-74173) records 9,354 dwellings (82.9% secondary). Step two normalizes DGFiP 5-year DVF notarized transfers and checks IFI thresholds above 1,300,000 EUR (assessed from 800,000 EUR). Step three verifies Notaires de France 10-day cooling-off rules and DDT energy audits for 2023, 2025, and 2034. Step four computes labelled calculations: annual rent of 26400 EUR over 366000 EUR purchase price gives an illustrative 7.2% gross yield.",
       },
       {
         heading: "Sources and limits: statutory registries, hazard maps, and scope boundaries",
@@ -378,11 +406,11 @@ function sutherlandProposalFor(page: SutherlandPageSpec) {
     "research/chamonix-supply-notes": [
       {
         heading: "INSEE housing stock composition and construction vintage in Chamonix",
-        body: "Sutherland Private Office is an independent buyer-side property advisory. What buyer-side advisory covers and how an engagement works includes auditing commune-level supply constraints. INSEE 2022 for Chamonix-Mont-Blanc (COM-74056) records 13,864 total dwellings: 69.2% secondary residences, 26.8% primary residences, 4.0% vacant, 72.6% apartments, and 27.3% houses. INSEE Chamonix-Mont-Blanc (COM-74056) records 58.2% of main residences built between 1946 and 1990, and only 6.0% built in 2006 or later.",
+        body: "Sutherland Private Office is an independent buyer-side property advisory. What buyer-side advisory covers and how an engagement works includes auditing commune-level supply constraints. INSEE 2022 for Chamonix-Mont-Blanc (COM-74056) records 14,538 total dwellings: 69.3% secondary residences, 29.7% primary residences, 1.1% vacant, 72.6% apartments, and 26.6% houses. INSEE Chamonix-Mont-Blanc (COM-74056) records 58.5% of main residences (built before 2020) were completed between 1946 and 1990, and 13.5% between 2006 and 2019.",
       },
       {
         heading: "Municipal PLU servitudes and May 2025 tourist-rental rules",
-        body: "Ville de Chamonix-Mont-Blanc PLU applies permanent-housing servitudes against an outflow of 90 inhabitants per year. From 1 May 2025, Chamonix tourist-rental rules require registration numbers and cap authorizations at 1 property per person. Notaires de France statutory procedure requires DDT energy audits for classes F and G in 2023, class E in 2025, and class D in 2034. The evidence-led analysis method produces conclusions that see how facts, assumptions and forecasts are separated.",
+        body: "Ville de Chamonix-Mont-Blanc PLU applies permanent-housing servitudes (servitudes de résidence principale) and 25% social-mix quotas across constructible residential zones. From 1 May 2025, Chamonix tourist-rental rules require registration numbers and cap authorizations at 1 property per person. Notaires de France statutory procedure requires DDT energy audits for classes F and G in 2023, class E in 2025, and class D in 2034. The evidence-led analysis method produces conclusions that see how facts, assumptions and forecasts are separated.",
       },
       {
         heading: "Natural hazard zones and snow-reliability constraints on supply",
@@ -439,7 +467,6 @@ function claimsForPage(slug: string): ClaimLineage[] {
     claimType: "FIRST_PARTY_FACT",
     sourceRefs: [
       SOURCE_REFS.operatorPositioning,
-      SOURCE_REFS.inseeChamonixStock,
       SOURCE_REFS.dgfipDvfIfi,
       SOURCE_REFS.notairesProcedure,
       SOURCE_REFS.chamonixPlu,
@@ -464,7 +491,7 @@ function claimsForPage(slug: string): ClaimLineage[] {
         {
           claimId: "claim-home-insee-chamonix",
           claimText:
-            "In Chamonix-Mont-Blanc (COM-74056), INSEE records 13,864 total dwellings in 2022, including 69.2% secondary residences.",
+            "In Chamonix-Mont-Blanc (COM-74056), INSEE records 14,538 total dwellings in 2022, including 69.3% secondary residences.",
           claimType: "SOURCE_DERIVED_FACT",
           sourceRefs: [SOURCE_REFS.inseeChamonixStock],
           pageIdentity: slug,
@@ -473,7 +500,7 @@ function claimsForPage(slug: string): ClaimLineage[] {
         {
           claimId: "claim-home-insee-megeve",
           claimText:
-            "In Megève (COM-74173), INSEE records 11,291 total dwellings in 2022, including 83.1% secondary residences.",
+            "In Megève (COM-74173), INSEE records 9,354 total dwellings in 2022, including 82.9% secondary residences.",
           claimType: "SOURCE_DERIVED_FACT",
           sourceRefs: [SOURCE_REFS.inseeMegeveStock],
           pageIdentity: slug,
@@ -526,7 +553,7 @@ function claimsForPage(slug: string): ClaimLineage[] {
         {
           claimId: "claim-chamonix-insee-stock",
           claimText:
-            "INSEE Dossier Complet 2022 for Chamonix-Mont-Blanc (COM-74056) records 13,864 total dwellings: 69.2% secondary residences, 26.8% primary residences, and 4.0% vacant.",
+            "INSEE Logement en 2022 for Chamonix-Mont-Blanc (COM-74056) records 14,538 total dwellings: 69.3% secondary residences, 29.7% primary residences, and 1.1% vacant.",
           claimType: "SOURCE_DERIVED_FACT",
           sourceRefs: [SOURCE_REFS.inseeChamonixStock],
           pageIdentity: slug,
@@ -535,7 +562,7 @@ function claimsForPage(slug: string): ClaimLineage[] {
         {
           claimId: "claim-chamonix-megeve-comparison",
           claimText:
-            "In Megève (COM-74173), INSEE records 11,291 total dwellings in 2022, with 83.1% secondary residences and 13.4% primary residences.",
+            "In Megève (COM-74173), INSEE records 9,354 total dwellings in 2022, with 82.9% secondary residences and 16.1% primary residences.",
           claimType: "SOURCE_DERIVED_FACT",
           sourceRefs: [SOURCE_REFS.inseeMegeveStock],
           pageIdentity: slug,
@@ -544,20 +571,20 @@ function claimsForPage(slug: string): ClaimLineage[] {
         {
           claimId: "claim-chamonix-typology-income",
           claimText:
-            "INSEE Chamonix-Mont-Blanc (COM-74056) records 72.6% apartments and 27.3% houses, with 26,880 EUR median 2021 income versus 28,020 EUR in Megève.",
+            "INSEE Chamonix-Mont-Blanc (COM-74056) records 72.6% apartments and 26.6% houses.",
           claimType: "SOURCE_DERIVED_FACT",
-          sourceRefs: [SOURCE_REFS.inseeChamonixStock, SOURCE_REFS.inseeMegeveStock],
+          sourceRefs: [SOURCE_REFS.inseeChamonixStock],
           pageIdentity: slug,
-          limitation: "INSEE RP2022 dwelling typology and Filosofi 2021 median disposable income.",
+          limitation: "INSEE RP2022 dwelling typology for COM-74056.",
         },
         {
           claimId: "claim-chamonix-plu-outflow",
           claimText:
-            "Ville de Chamonix-Mont-Blanc PLU applies permanent-housing servitudes against an outflow of 90 inhabitants per year.",
+            "Ville de Chamonix-Mont-Blanc PLU applies permanent-housing servitudes (servitudes de résidence principale) and 25% social-mix quotas across constructible residential zones.",
           claimType: "SOURCE_DERIVED_FACT",
           sourceRefs: [SOURCE_REFS.chamonixPlu],
           pageIdentity: slug,
-          limitation: "Municipal PLU demographic and zoning baseline.",
+          limitation: "Municipal PLU zoning servitude and social-mix policy.",
         },
         {
           claimId: "claim-chamonix-rental-2025",
@@ -571,7 +598,7 @@ function claimsForPage(slug: string): ClaimLineage[] {
         {
           claimId: "claim-chamonix-vintage",
           claimText:
-            "INSEE Chamonix-Mont-Blanc (COM-74056) records 58.2% of main residences built between 1946 and 1990, and only 6.0% built in 2006 or later.",
+            "INSEE Chamonix-Mont-Blanc (COM-74056) records 58.5% of main residences (built before 2020) were completed between 1946 and 1990, and 13.5% between 2006 and 2019.",
           claimType: "SOURCE_DERIVED_FACT",
           sourceRefs: [SOURCE_REFS.inseeChamonixAge],
           pageIdentity: slug,
@@ -639,7 +666,7 @@ function claimsForPage(slug: string): ClaimLineage[] {
         {
           claimId: "claim-invest-vintage-capex",
           claimText:
-            "In Chamonix-Mont-Blanc (COM-74056), where 58.2% of main residences were built between 1946 and 1990, thermal capex is modelled as an explicit assumption.",
+            "In Chamonix-Mont-Blanc (COM-74056), where 58.5% of main residences were built between 1946 and 1990, thermal capex is modelled as an explicit assumption.",
           claimType: "ASSUMPTION",
           sourceRefs: [SOURCE_REFS.inseeChamonixAge],
           pageIdentity: slug,
@@ -670,7 +697,7 @@ function claimsForPage(slug: string): ClaimLineage[] {
         {
           claimId: "claim-editorial-stage1-insee",
           claimText:
-            "Step one audits commune housing: INSEE Chamonix-Mont-Blanc (COM-74056) records 13,864 total dwellings in 2022 (69.2% secondary), and Megève (COM-74173) records 11,291 dwellings (83.1% secondary).",
+            "Step one audits commune housing: INSEE Chamonix-Mont-Blanc (COM-74056) records 14,538 total dwellings in 2022 (69.3% secondary), and Megève (COM-74173) records 9,354 dwellings (82.9% secondary).",
           claimType: "SOURCE_DERIVED_FACT",
           sourceRefs: [SOURCE_REFS.inseeChamonixStock, SOURCE_REFS.inseeMegeveStock],
           pageIdentity: slug,
@@ -738,7 +765,7 @@ function claimsForPage(slug: string): ClaimLineage[] {
         {
           claimId: "claim-supply-insee-stock",
           claimText:
-            "INSEE 2022 for Chamonix-Mont-Blanc (COM-74056) records 13,864 total dwellings: 69.2% secondary residences, 26.8% primary residences, 4.0% vacant, 72.6% apartments, and 27.3% houses.",
+            "INSEE 2022 for Chamonix-Mont-Blanc (COM-74056) records 14,538 total dwellings: 69.3% secondary residences, 29.7% primary residences, 1.1% vacant, 72.6% apartments, and 26.6% houses.",
           claimType: "SOURCE_DERIVED_FACT",
           sourceRefs: [SOURCE_REFS.inseeChamonixStock],
           pageIdentity: slug,
@@ -747,7 +774,7 @@ function claimsForPage(slug: string): ClaimLineage[] {
         {
           claimId: "claim-supply-insee-vintage",
           claimText:
-            "INSEE Chamonix-Mont-Blanc (COM-74056) records 58.2% of main residences built between 1946 and 1990, and only 6.0% built in 2006 or later.",
+            "INSEE Chamonix-Mont-Blanc (COM-74056) records 58.5% of main residences (built before 2020) were completed between 1946 and 1990, and 13.5% between 2006 and 2019.",
           claimType: "SOURCE_DERIVED_FACT",
           sourceRefs: [SOURCE_REFS.inseeChamonixAge],
           pageIdentity: slug,
@@ -756,7 +783,7 @@ function claimsForPage(slug: string): ClaimLineage[] {
         {
           claimId: "claim-supply-plu-outflow",
           claimText:
-            "Ville de Chamonix-Mont-Blanc PLU applies permanent-housing servitudes against an outflow of 90 inhabitants per year.",
+            "Ville de Chamonix-Mont-Blanc PLU applies permanent-housing servitudes (servitudes de résidence principale) and 25% social-mix quotas across constructible residential zones.",
           claimType: "SOURCE_DERIVED_FACT",
           sourceRefs: [SOURCE_REFS.chamonixPlu],
           pageIdentity: slug,
@@ -1056,7 +1083,7 @@ test(
           description:
             "Five-stage verification protocol combining INSEE RP2022 (COM-74056 vs COM-74173), DGFiP 5-year DVF, Notaires de France 2023/2025/2034 DPE audit schedule, and a reproducible 7.2% gross-yield worked calculation.",
           lineageClaimId: "claim-yield-calc",
-          verifiableAnchors: ["13,864 total dwellings", "1,300,000 EUR", "26400 EUR over 366000 EUR", "7.2% gross yield"],
+          verifiableAnchors: ["14,538 total dwellings", "1,300,000 EUR", "26400 EUR over 366000 EUR", "7.2% gross yield"],
         },
       });
       await trust.saveOriginalValue({
@@ -1068,7 +1095,7 @@ test(
           description:
             "Capital decision framework integrating DGFiP 5-year DVF transfer baselines, 1,300,000 EUR IFI thresholds, 1946-1990 thermal capex assumptions, and May 2025 Chamonix rental quota scenarios.",
           lineageClaimId: "claim-invest-yield-ref",
-          verifiableAnchors: ["1,300,000 EUR", "800,000 EUR", "26400 EUR over a purchase price of 366000 EUR", "58.2% of main residences"],
+          verifiableAnchors: ["1,300,000 EUR", "800,000 EUR", "26400 EUR over a purchase price of 366000 EUR", "58.5% of main residences"],
         },
       });
       await trust.saveOriginalValue({
@@ -1080,7 +1107,7 @@ test(
           description:
             "Primary-source orientation distinguishing Loi Hoguet (Law No. 70-9) brokerage intermediation from non-intermediated buyer-side research over INSEE Chamonix (COM-74056) and Megève (COM-74173) housing data.",
           lineageClaimId: "claim-home-hoguet",
-          verifiableAnchors: ["Law No. 70-9 of 2 January 1970", "13,864 total dwellings", "11,291 total dwellings"],
+          verifiableAnchors: ["Law No. 70-9 of 2 January 1970", "14,538 total dwellings", "9,354 total dwellings"],
         },
       });
       await trust.saveOriginalValue({
@@ -1102,9 +1129,9 @@ test(
           pageIdentity: "locations/chamonix",
           kind: "first_party_observation",
           description:
-            "Comparative commune analysis of Chamonix-Mont-Blanc (COM-74056) vs Megève (COM-74173) pairing INSEE 2022 stock/vintage tables with Chamonix PLU 90 inhabitants/year outflow servitudes and 1 May 2025 rental quotas.",
+            "Comparative commune analysis of Chamonix-Mont-Blanc (COM-74056) vs Megève (COM-74173) pairing INSEE 2022 stock/vintage tables with Chamonix PLU 25% social-mix quotas and 1 May 2025 rental quotas.",
           lineageClaimId: "claim-chamonix-insee-stock",
-          verifiableAnchors: ["13,864 total dwellings", "69.2% secondary residences", "90 inhabitants per year", "1 May 2025"],
+          verifiableAnchors: ["14,538 total dwellings", "69.3% secondary residences", "25% social-mix quotas", "1 May 2025"],
         },
       });
 
@@ -1568,9 +1595,9 @@ test(
           pageIdentity: extraPage.slug,
           kind: "first_party_observation",
           description:
-            "Supply-side analysis of Chamonix-Mont-Blanc (COM-74056) combining INSEE 1946-1990 construction vintage (58.2%), PLU 90 inhabitants/year outflow servitudes, and 1 May 2025 rental registration quotas.",
+            "Supply-side analysis of Chamonix-Mont-Blanc (COM-74056) combining INSEE 1946-1990 construction vintage (58.5%), PLU 25% social-mix quotas, and 1 May 2025 rental registration quotas.",
           lineageClaimId: "claim-supply-insee-vintage",
-          verifiableAnchors: ["58.2% of main residences", "90 inhabitants per year", "1 May 2025"],
+          verifiableAnchors: ["58.5% of main residences", "25% social-mix quotas", "1 May 2025"],
         },
       });
       await trust.recordReview({

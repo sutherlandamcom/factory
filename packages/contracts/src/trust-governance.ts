@@ -202,6 +202,42 @@ export const UNCERTAIN_CLAIM_TYPES: ReadonlySet<ClaimType> = new Set([
 export const sourceTierSchema = z.enum(["TIER_A", "TIER_B", "TIER_C", "TIER_D", "TIER_E"]);
 export type SourceTier = z.infer<typeof sourceTierSchema>;
 
+/**
+ * Structured evidence binding (Run 12 remediation). A claim author may only
+ * DECLARE which official table cell (or derived share) a claim relies on; the
+ * value is independently verified by the trusted backend against stored,
+ * digest-pinned source bytes. The declaration is never proof.
+ */
+export const evidenceTableIdSchema = z.enum(["LOG T1", "LOG T1bis", "LOG T2", "LOG T5"]);
+export const evidenceUnitSchema = z.enum(["dwellings", "percent_of_dwellings", "percent_of_main_residences", "main_residences"]);
+export const evidenceBindingSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("table_fact"),
+      geoCode: z.string().regex(/^\d{5}$/),
+      reportingYear: z.number().int().min(1900).max(2100),
+      tableId: evidenceTableIdSchema,
+      rowKey: boundedText(200),
+      columnKey: boundedText(60),
+      value: z.number().finite(),
+      unit: evidenceUnitSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("derived_share"),
+      geoCode: z.string().regex(/^\d{5}$/),
+      reportingYear: z.number().int().min(1900).max(2100),
+      tableId: z.literal("LOG T5"),
+      numeratorRows: z.array(boundedText(200)).min(1).max(10),
+      denominatorRow: boundedText(200),
+      value: z.number().finite(),
+      unit: z.literal("percent_of_main_residences"),
+    })
+    .strict(),
+]);
+export type EvidenceBinding = z.infer<typeof evidenceBindingSchema>;
+
 export const sourceRefSchema = z
   .object({
     /** Bounded source identifier (title/URL/registry reference). */
@@ -229,6 +265,12 @@ export const sourceRefSchema = z
     sourceUrl: boundedText(500).optional(),
     /** Verbatim or near-verbatim excerpt from the cited document/intake record that entails the claim. */
     supportingExcerpt: boundedText(2000).optional(),
+    /** Declared bindings to independently verified source facts (see evidenceBindingSchema). */
+    evidenceBindings: z.array(evidenceBindingSchema).max(20).optional(),
+    /** Explicit provenance origin classification (Block 5: separates synthetic fixtures from real evidence). */
+    evidenceOrigin: z
+      .enum(["EXTERNAL_ACQUIRED", "VERIFIED_ARCHIVED_EXTERNAL", "ACCEPTED_FIRST_PARTY", "SYNTHETIC_FIXTURE"])
+      .optional(),
   })
   .strict();
 export type SourceRef = z.infer<typeof sourceRefSchema>;
@@ -236,11 +278,24 @@ export type SourceRef = z.infer<typeof sourceRefSchema>;
 const RECOGNIZED_TIER_A_AUTHORITY_PATTERN =
   /\b(?:INSEE|DGFiP|DVF|Etalab|Notaires de France|Chambre des Notaires|Service-Public|Légifrance|Legifrance|Loi Hoguet|Loi Climat|Code de la construction|Code général des impôts|Géorisques|Georisques|BRGM|Cour des comptes|DGCCRF|Ville de Chamonix|Commune de Chamonix|Mairie de Chamonix|PLU|PPRN|Megève|Megeve|Haute-Savoie|impots\.gouv\.fr|insee\.fr|notaires\.fr|georisques\.gouv\.fr|ccomptes\.fr|legifrance\.gouv\.fr|service-public\.fr|chamonix\.fr)\b/i;
 
+const SYNTHETIC_SOURCE_PATTERN = /\b(?:synthetic[_\s-]*fixture|fixture[_\s-]*provider|mock[_\s-]*serp|synthetic[_\s-]*serp)\b/i;
+
 /**
  * Verifies that a single SourceRef is substantively verified rather than
- * self-certified or unverified.
+ * self-certified, synthetic fixture data, or unverified.
  */
 export function verifySourceRef(ref: SourceRef): { valid: boolean; reason: string | null } {
+  if (
+    ref.evidenceOrigin === "SYNTHETIC_FIXTURE" ||
+    SYNTHETIC_SOURCE_PATTERN.test(ref.ref) ||
+    (ref.sourceUrl ? SYNTHETIC_SOURCE_PATTERN.test(ref.sourceUrl) : false)
+  ) {
+    return {
+      valid: false,
+      reason:
+        "synthetic_fixture_research_rejected: Synthetic fixture or mock research evidence cannot satisfy production source authority.",
+    };
+  }
   if (ref.entailment === "UNSUPPORTED") {
     return { valid: false, reason: "Cited source does not substantively support the claim (entailment: UNSUPPORTED)." };
   }
@@ -365,6 +420,60 @@ function extractSubstantiveTokens(text: string): string[] {
 }
 
 /**
+ * Independent recalculation of a calculationRef (Block 8: M16, M17).
+ * Verifies unit coherence, formula reproducibility, and rounding discipline.
+ */
+export function verifyCalculationProvenance(
+  claimText: string,
+  calc: NonNullable<ClaimLineage["calculationRef"]>,
+): string[] {
+  const problems: string[] = [];
+  if (calc.inputs.length === 0) {
+    problems.push("Calculation provenance has no inputs.");
+    return problems;
+  }
+  const expectsPercent = /%|\byield\b|\bshare\b|\brate\b/i.test(claimText);
+  if (expectsPercent && calc.output.unit.trim() !== "%") {
+    problems.push(
+      `calculation_rounding_or_unit_mismatch: Claim states a percentage/yield but calculationRef.output.unit is "${calc.output.unit}" (expected "%").`,
+    );
+  }
+  const numericInputs = calc.inputs.map((i) => Number(i.value.replace(/[,_\s]/g, "")));
+  const claimedOutput = Number(calc.output.value.replace(/[,_%\s]/g, ""));
+  if (numericInputs.some((n) => !Number.isFinite(n)) || !Number.isFinite(claimedOutput)) {
+    problems.push("calculation_output_mismatch: Calculation inputs or output are not finite numbers.");
+    return problems;
+  }
+  if (calc.output.unit.trim() === "%" || expectsPercent) {
+    if (numericInputs.length < 2) {
+      problems.push(
+        "calculation_output_mismatch: Percentage/yield calculation requires at least two numeric inputs (numerator and denominator) for independent recalculation.",
+      );
+      return problems;
+    }
+    const [numerator, denominator] = numericInputs;
+    if (!denominator || denominator === 0) {
+      problems.push("calculation_output_mismatch: Calculation denominator cannot be zero.");
+      return problems;
+    }
+    const exactPct = (numerator! / denominator) * 100;
+    const decMatch = calc.output.value.trim().match(/\.(\d+)$/);
+    const decimals = decMatch ? decMatch[1]!.length : 0;
+    const roundedExpected = Number(exactPct.toFixed(decimals));
+    if (Math.abs(exactPct - claimedOutput) > 0.5) {
+      problems.push(
+        `calculation_output_mismatch: Independently recomputed (${numerator} / ${denominator}) * 100 = ${exactPct.toFixed(4)}%, which contradicts declared output ${calc.output.value}%.`,
+      );
+    } else if (Math.abs(roundedExpected - claimedOutput) > 1e-9) {
+      problems.push(
+        `calculation_rounding_or_unit_mismatch: Independently recomputed (${numerator} / ${denominator}) * 100 rounded to ${decimals} decimal place(s) is ${roundedExpected.toFixed(decimals)}%, not ${calc.output.value}%.`,
+      );
+    }
+  }
+  return problems;
+}
+
+/**
  * Detailed deterministic problem list for a ClaimLineage record (Block 11).
  */
 export function claimLineageProblems(lineage: ClaimLineage): string[] {
@@ -372,8 +481,8 @@ export function claimLineageProblems(lineage: ClaimLineage): string[] {
   if (lineage.claimType === "CALCULATION" && !lineage.calculationRef) {
     problems.push("CALCULATION claim lacks calculation provenance.");
   }
-  if (lineage.calculationRef && lineage.calculationRef.inputs.length === 0) {
-    problems.push("Calculation provenance has no inputs.");
+  if (lineage.calculationRef) {
+    problems.push(...verifyCalculationProvenance(lineage.claimText, lineage.calculationRef));
   }
   if (UNCERTAIN_CLAIM_TYPES.has(lineage.claimType) && lineage.limitation.trim() === "") {
     problems.push(`Uncertain claim type ${lineage.claimType} requires an explicit limitation/status.`);
@@ -423,7 +532,7 @@ export function claimLineageProblems(lineage: ClaimLineage): string[] {
       );
     }
     if (FORECAST_AS_FACT_PATTERN.test(lineage.claimText)) {
-      problems.push("Future financial outcome statement cannot be classified as an observed FACT.");
+      problems.push("forecast_as_fact_rejected: Future financial outcome statement cannot be classified as an observed FACT.");
     }
   }
   return problems;
@@ -463,6 +572,16 @@ export const reviewAuthoritySchema = z
     note: z.string().trim().max(1000).default(""),
     /** Optional explicit list of claim IDs verified during this review. */
     verifiedClaimIds: z.array(idSchema).max(100).optional(),
+    /** Explicit separation between automated QA and human editorial review (Block 11). */
+    reviewStatus: z
+      .enum(["AUTOMATED_VALIDATION", "EDITORIAL_REVIEW_PENDING", "EDITORIAL_REVIEW_APPROVED", "EDITORIAL_REVIEW_REJECTED"])
+      .optional(),
+    /** Provenance of reviewer identity (Block 11: prevents synthetic reviewer from passing as human sign-off). */
+    reviewerKind: z
+      .enum(["EXTERNAL_HUMAN_REVIEWER", "ACCEPTED_INSTITUTIONAL_COUNCIL", "SYNTHETIC_TEST_REVIEWER"])
+      .optional(),
+    /** Optional digest of the ClaimLineage set verified during review (invalidates review on claim/source/calculation mutation). */
+    claimSetDigest: digestSchema.optional(),
   })
   .strict();
 export type ReviewAuthority = z.infer<typeof reviewAuthoritySchema>;
@@ -471,13 +590,17 @@ export function parseReviewAuthority(input: unknown): ReviewAuthority {
   return reviewAuthoritySchema.parse(input);
 }
 
-/** A review is stale when the reviewed content digest no longer matches. */
+/** A review is stale when the reviewed content digest or bound claim-set digest no longer matches. */
 export function reviewStaleness(
   review: ReviewAuthority,
   currentContentDigest: string,
+  currentClaimSetDigest?: string,
 ): { stale: boolean; reason: string | null } {
   if (review.reviewedContentDigest !== currentContentDigest) {
-    return { stale: true, reason: "Reviewed content changed materially after review; the review is stale." };
+    return { stale: true, reason: "review_authority_stale: Reviewed content changed materially after review; the review is stale." };
+  }
+  if (review.claimSetDigest && currentClaimSetDigest && review.claimSetDigest !== currentClaimSetDigest) {
+    return { stale: true, reason: "review_authority_stale: Underlying claim lineage, source evidence, or calculation changed after review." };
   }
   return { stale: false, reason: null };
 }

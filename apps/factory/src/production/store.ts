@@ -1047,6 +1047,12 @@ export class ProductionStore {
     repositorySha: string;
     lockfileDigest: string;
     pageRoutes: string[];
+    /**
+     * Trusted trust-policy mode under which the trust gates were evaluated.
+     * Default STRICT_PRODUCTION. SYNTHETIC_FIXTURE can never be
+     * publication-eligible regardless of verdicts.
+     */
+    trustMode?: "STRICT_PRODUCTION" | "SYNTHETIC_FIXTURE";
   }): Promise<ProductionQaRunRecord> {
     const completeness = assertCompleteProductionQa({ checks: input.checks, pageRoutes: input.pageRoutes, manifestSetDigest: input.manifestSetDigest, repositorySha: input.repositorySha });
     if (!completeness.complete) throw productionError("production_qa_failed", `Required QA evidence missing or duplicated: ${completeness.missing.join(", ")}`);
@@ -1058,6 +1064,10 @@ export class ProductionStore {
       candidateId: input.candidateId,
       checks: input.checks,
       overall,
+      provenance: {
+        trustMode: input.trustMode ?? ("STRICT_PRODUCTION" as const),
+        publicationEligible: (input.trustMode ?? "STRICT_PRODUCTION") === "STRICT_PRODUCTION" && overall === "PASS",
+      },
     };
     parseProductionQaReportData(data);
     const result = await this.db.transaction(async (tx) => {

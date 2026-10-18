@@ -5,6 +5,12 @@ import type { ProductionRenderManifest } from "../render-manifest.js";
 import { TrustGovernanceStore } from "../../trust/store.js";
 import { normalizePageIdentity } from "../../page-authority/store.js";
 import {
+  isInseeSourceRef,
+  verifyInseeClaim,
+  verifyStatutoryAndRegulatoryClaim,
+  type InseeEvidenceRegistry,
+} from "../../trust/insee-evidence.js";
+import {
   UNCERTAIN_CLAIM_TYPES,
   claimLineageProblems,
   claimLineageVerdict,
@@ -67,6 +73,13 @@ export interface TrustQaInput {
    * treated as publication-eligible. Default is the strict production policy.
    */
   syntheticFixtureContent?: boolean;
+  /**
+   * Independently verified, digest-pinned official source evidence (INSEE).
+   * INSEE-sourced claims are verified against THIS registry, never against the
+   * claim's own supportingExcerpt. Absent registry + INSEE-sourced claim =>
+   * FAIL (fail closed).
+   */
+  inseeEvidence?: InseeEvidenceRegistry;
 }
 
 /** Leak labels inherent to deterministic fixture-writer output. */
@@ -136,7 +149,63 @@ function extractNumbers(text: string): string[] {
     .filter((m) => /^\d+(?:\.\d+)?$/.test(m));
 }
 
-function extractMaterialSentences(content: ProductionRenderManifest["content"]): string[] {
+function hasNonYearQuantitativeAssertion(text: string): boolean {
+  const withoutDates = text
+    .replace(/\b\d{4}-\d{2}-\d{2}\b/g, "")
+    .replace(/\b\d{2}\/\d{2}\/\d{4}\b/g, "");
+  const matches = withoutDates.match(/\b\d[\d,._]*%?\b/g) ?? [];
+  for (const m of matches) {
+    const bare = m.replace(/[%,_]/g, "");
+    if (!/^\d+(?:\.\d+)?$/.test(bare)) continue;
+    if (/^(19|20)\d{2}$/.test(bare) && !m.includes("%")) continue;
+    return true;
+  }
+  return false;
+}
+
+function extractHtmlRegionAssertions(html: string | null): string[] {
+  if (!html) return [];
+  const results: string[] = [];
+  const tagRegex = /<(td|th|figcaption|aside)\b([^>]*)>([\s\S]*?)<\/\1>/gi;
+  for (const m of html.matchAll(tagRegex)) {
+    const attrs = m[2] ?? "";
+    if (attrs.includes("data-review-authority") || attrs.includes("review-authority") || attrs.includes("data-reviewed-digest")) {
+      continue;
+    }
+    const text = m[3]!.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    if (text.length >= 8 && hasNonYearQuantitativeAssertion(text)) {
+      results.push(text);
+    }
+  }
+  const calloutRegex = /data-callout[^>]*>([\s\S]*?)<\//gi;
+  for (const m of html.matchAll(calloutRegex)) {
+    const text = m[1]!.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    if (text.length >= 8 && hasNonYearQuantitativeAssertion(text)) {
+      results.push(text);
+    }
+  }
+  const jsonLdRegex = /<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  for (const m of html.matchAll(jsonLdRegex)) {
+    try {
+      const parsed = JSON.parse(m[1]!) as Record<string, unknown>;
+      for (const field of ["headline", "description", "articleBody"]) {
+        const val = parsed[field];
+        if (typeof val === "string" && hasNonYearQuantitativeAssertion(val)) {
+          results.push(val.trim());
+        }
+      }
+    } catch {
+      // Ignore malformed JSON-LD here (caught by seo.structured_data check).
+    }
+  }
+  return results;
+}
+
+function extractMaterialSentences(
+  content: ProductionRenderManifest["content"],
+  seo?: ProductionRenderManifest["seo"],
+  html?: string | null,
+): string[] {
   const blocks = [
     content.introduction,
     ...content.sections.map((s) => s.body),
@@ -157,10 +226,29 @@ function extractMaterialSentences(content: ProductionRenderManifest["content"]):
       }
     }
   }
+  // Check non-body regions (H1, section headings, CTA, metaDescription, SEO description, HTML tables/callouts/captions/JSON-LD)
+  // for any quantitative factual claim (M15).
+  const auxiliaryRegions = [
+    content.title,
+    ...content.sections.map((s) => s.heading),
+    content.cta,
+    content.metaDescription,
+    seo?.description ?? "",
+    ...extractHtmlRegionAssertions(html ?? null),
+  ];
+  for (const region of auxiliaryRegions) {
+    const trimmed = region.trim();
+    if (trimmed.length >= 8 && hasNonYearQuantitativeAssertion(trimmed)) {
+      sentences.push(trimmed);
+    }
+  }
   return sentences;
 }
 
 function isSentenceCoveredByClaims(sentence: string, claims: ReadonlyArray<ClaimLineage>): boolean {
+  if (sentence.startsWith("Reviewed by:") || sentence.includes("data-review-authority")) {
+    return true;
+  }
   const normSentence = normalizeAlphaNum(sentence);
   const sentenceNumbers = extractNumbers(sentence);
   const sentenceTokens = new Set(normSentence.split(" ").filter((t) => t.length >= 4));
@@ -193,17 +281,44 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
     intentsByPage.set(normalizePageIdentity(intent.pageIdentity), intent);
   }
 
-  // 1. Site-wide anti-cannibalization check.
+  // 1. Site-wide anti-cannibalization and near-duplicate section check (M23).
   const cann = await input.trust.cannibalizationVerdict(input.projectId);
+  const duplicateSectionFindings: Array<{ pageA: string; pageB: string; detail: string }> = [];
+  for (let i = 0; i < input.manifests.length; i++) {
+    for (let j = i + 1; j < input.manifests.length; j++) {
+      const mA = input.manifests[i]!;
+      const mB = input.manifests[j]!;
+      for (const sA of mA.content.sections) {
+        for (const sB of mB.content.sections) {
+          if (
+            normalizeWhitespace(sA.heading) === normalizeWhitespace(sB.heading) ||
+            (sA.body.trim().length >= 40 && normalizeWhitespace(sA.body) === normalizeWhitespace(sB.body))
+          ) {
+            duplicateSectionFindings.push({
+              pageA: mA.input.pageIdentity,
+              pageB: mB.input.pageIdentity,
+              detail: `cannibalization_or_duplicate_page_rejected: Near-duplicate section ("${sA.heading.slice(0, 80)}") between ${mA.input.pageIdentity} and ${mB.input.pageIdentity}.`,
+            });
+          }
+        }
+      }
+    }
+  }
+  const cannVerdict = duplicateSectionFindings.length > 0 ? "FAIL" : cann.verdict;
   checks.push(
     siteCheck(
       input.manifestSetDigest,
       "trust.cannibalization",
-      cann.verdict,
-      cann.verdict === "PASS"
-        ? `No primary-purpose overlap across ${intentsByPage.size} production pages.`
-        : cann.findings.map((f) => f.detail).join(" | ").slice(0, 1900),
-      cann.findings.map((f) => ({ kind: "route" as const, ref: `${f.pageA}~${f.pageB}` })),
+      cannVerdict,
+      duplicateSectionFindings.length > 0
+        ? duplicateSectionFindings.map((f) => f.detail).join(" | ").slice(0, 1900)
+        : cann.verdict === "PASS"
+          ? `No primary-purpose overlap across ${intentsByPage.size} production pages.`
+          : `cannibalization_or_duplicate_page_rejected: ${cann.findings.map((f) => f.detail).join(" | ").slice(0, 1850)}`,
+      [
+        ...cann.findings.map((f) => ({ kind: "route" as const, ref: `${f.pageA}~${f.pageB}` })),
+        ...duplicateSectionFindings.map((f) => ({ kind: "route" as const, ref: `${f.pageA}~${f.pageB}` })),
+      ],
     ),
   );
 
@@ -272,7 +387,7 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
       const invalidClaims = claims.filter((c) => claimLineageVerdict(c) !== "PASS");
       const uncertain = claims.filter((c) => UNCERTAIN_CLAIM_TYPES.has(c.claimType));
       const missingLabels = uncertain.filter((c) => !html || !visibleLabelPresent(html, c));
-      const materialSentences = ymylPage ? extractMaterialSentences(manifest.content) : [];
+      const materialSentences = ymylPage ? extractMaterialSentences(manifest.content, manifest.seo, html) : [];
       const uncoveredSentences = materialSentences.filter((s) => !isSentenceCoveredByClaims(s, claims));
 
       if (invalidClaims.length > 0) {
@@ -295,7 +410,7 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
             route,
             "trust.claim_lineage",
             "FAIL",
-            `Page ${identity}: ${missingLabels.length} uncertain claim(s) not visibly labelled as assumption/forecast/scenario/estimate/opinion in built HTML.`,
+            `Page ${identity}: uncertain_claim_unlabelled_in_html — ${missingLabels.length} uncertain claim(s) not visibly labelled as assumption/forecast/scenario/estimate/opinion in built HTML.`,
             missingLabels.slice(0, 10).map((c) => ({ kind: "artifact" as const, ref: c.claimId })),
           ),
         );
@@ -305,7 +420,7 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
             route,
             "trust.claim_lineage",
             "FAIL",
-            `Page ${identity}: ${uncoveredSentences.length} material assertion(s) in published copy lack ClaimLineage coverage (first uncovered: "${uncoveredSentences[0]!.slice(0, 220)}").`,
+            `Page ${identity}: claim_missing_for_material_sentence — ${uncoveredSentences.length} material assertion(s) in published copy lack ClaimLineage coverage (first uncovered: "${uncoveredSentences[0]!.slice(0, 220)}").`,
             [{ kind: "route", ref: route }],
           ),
         );
@@ -355,19 +470,32 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
         const sourceVerdicts = sourcedClaims.map((c) =>
           sourceAuthorityVerdict(c.sourceRefs, intent.ymylClassification),
         );
-        const worst = sourceVerdicts.includes("FAIL")
+        const independentProblems: string[] = [];
+        for (const c of sourcedClaims) {
+          independentProblems.push(...verifyStatutoryAndRegulatoryClaim(c).problems);
+          if (!c.sourceRefs.some(isInseeSourceRef)) continue;
+          if (!input.inseeEvidence) {
+            independentProblems.push(`${c.claimId}: source_snapshot_unverified — no independent INSEE evidence registry available (fail closed).`);
+            continue;
+          }
+          independentProblems.push(...verifyInseeClaim(c, input.inseeEvidence).problems);
+        }
+        const baseWorst = sourceVerdicts.includes("FAIL")
           ? "FAIL"
           : sourceVerdicts.includes("REVIEW")
             ? "REVIEW"
             : "PASS";
+        const worst = independentProblems.length > 0 ? "FAIL" : baseWorst;
         checks.push(
           pageCheck(
             route,
             "trust.source_authority",
             worst,
-            worst === "PASS"
-              ? `Page ${identity}: all ${sourcedClaims.length} sourced claim(s) carry verified SUPPORTED entailment and satisfy the ${intent.ymylClassification} authority floor.`
-              : `Page ${identity}: source authority or entailment verification failed on ${sourceVerdicts.filter((v) => v !== "PASS").length} claim(s) for ${intent.ymylClassification}.`,
+            independentProblems.length > 0
+              ? `Page ${identity}: independent source verification FAILED (${independentProblems.join(" | ").slice(0, 1500)}).`
+              : worst === "PASS"
+                ? `Page ${identity}: all ${sourcedClaims.length} sourced claim(s) carry verified SUPPORTED entailment, satisfy the ${intent.ymylClassification} authority floor and any INSEE claims match digest-pinned official evidence.`
+                : `Page ${identity}: source authority or entailment verification failed on ${sourceVerdicts.filter((v) => v !== "PASS").length} claim(s) for ${intent.ymylClassification}.`,
             sourcedClaims.slice(0, 10).map((c) => ({ kind: "artifact" as const, ref: c.claimId })),
           ),
         );
@@ -391,6 +519,21 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
       const htmlReviewerMatch = html?.match(/data-review-authority="([^"]+)"/i);
       const htmlDigestMatch = html?.match(/data-reviewed-digest="([^"]+)"/i);
 
+      const isSyntheticOrPendingReviewer = Boolean(
+        current.review &&
+          (current.review.reviewerKind === "SYNTHETIC_TEST_REVIEWER" ||
+            current.review.reviewStatus === "AUTOMATED_VALIDATION" ||
+            current.review.reviewStatus === "EDITORIAL_REVIEW_PENDING" ||
+            current.review.reviewStatus === "EDITORIAL_REVIEW_REJECTED" ||
+            /\b(?:synthetic|fixture|mock|automated-bot)\b/i.test(current.review.reviewerRef)),
+      );
+      const currentClaimIds = new Set(claims.map((c) => c.claimId));
+      const verifiedIdsMismatch = Boolean(
+        current.review?.verifiedClaimIds &&
+          (current.review.verifiedClaimIds.length !== currentClaimIds.size ||
+            current.review.verifiedClaimIds.some((id) => !currentClaimIds.has(id))),
+      );
+
       if (requiresStrictReview || htmlHasReviewAttr) {
         if (!current.review) {
           checks.push(
@@ -402,13 +545,23 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
               [{ kind: "route", ref: route }],
             ),
           );
-        } else if (current.stale) {
+        } else if (current.stale || verifiedIdsMismatch) {
           checks.push(
             pageCheck(
               route,
               "trust.review_authority",
               "FAIL",
-              `Page ${identity}: ReviewAuthority is STALE (${current.reason}).`,
+              `Page ${identity}: review_authority_stale — ReviewAuthority is STALE (${current.reason ?? "verifiedClaimIds do not match current page ClaimLineage set"}).`,
+              [{ kind: "route", ref: route }],
+            ),
+          );
+        } else if (isSyntheticOrPendingReviewer) {
+          checks.push(
+            pageCheck(
+              route,
+              "trust.review_authority",
+              "FAIL",
+              `Page ${identity}: editorial_review_pending_or_synthetic — ReviewAuthority (${current.review.reviewerRef}, status=${current.review.reviewStatus ?? "unspecified"}, kind=${current.review.reviewerKind ?? "unspecified"}) is synthetic or pending human editorial approval.`,
               [{ kind: "route", ref: route }],
             ),
           );
@@ -459,13 +612,13 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
             ),
           );
         }
-      } else if (current.review && (current.stale || current.review.result !== "APPROVED")) {
+      } else if (current.review && (current.stale || verifiedIdsMismatch || isSyntheticOrPendingReviewer || current.review.result !== "APPROVED")) {
         checks.push(
           pageCheck(
             route,
             "trust.review_authority",
             "FAIL",
-            `Page ${identity}: recorded ReviewAuthority is stale or not approved.`,
+            `Page ${identity}: recorded ReviewAuthority is stale, synthetic/pending, or not approved.`,
             [{ kind: "route", ref: route }],
           ),
         );
@@ -482,7 +635,7 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
       }
     }
 
-    // 2f. trust.original_value (verifies lineageClaimId + verifiableAnchors in built HTML)
+    // 2f. trust.original_value (verifies lineageClaimId + structured work product anchors in built HTML — M20)
     if (!intent || !ymylPage) {
       checks.push(
         pageCheck(
@@ -508,20 +661,28 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
           ),
         );
       } else {
-        const validClaimIds = new Set(
-          claims.filter((c) => claimLineageVerdict(c) === "PASS").map((c) => c.claimId),
+        const validClaimsById = new Map(
+          claims.filter((c) => claimLineageVerdict(c) === "PASS").map((c) => [c.claimId, c] as const),
         );
         const normHtml = html ? normalizeWhitespace(html) : "";
         const verifiedOriginals = originals.filter((record) => {
-          if (!record.lineageClaimId || !validClaimIds.has(record.lineageClaimId)) {
-            return false;
-          }
+          if (!record.lineageClaimId) return false;
+          const boundClaim = validClaimsById.get(record.lineageClaimId);
+          if (!boundClaim) return false;
           if (!record.verifiableAnchors || record.verifiableAnchors.length < 2) {
             return false;
           }
-          return record.verifiableAnchors.every((anchor) =>
+          const allInHtml = record.verifiableAnchors.every((anchor) =>
             normHtml.includes(normalizeWhitespace(anchor)),
           );
+          if (!allInHtml) return false;
+          // M20: Require quantitative/statutory work-product substance in anchors and alignment with bound claim.
+          const hasQuantitativeOrStatutoryAnchor = record.verifiableAnchors.some((anchor) => /\d/.test(anchor));
+          const boundClaimNorm = normalizeWhitespace(boundClaim.claimText);
+          const linkedToBoundClaim = record.verifiableAnchors.some((anchor) =>
+            boundClaimNorm.includes(normalizeWhitespace(anchor)),
+          );
+          return hasQuantitativeOrStatutoryAnchor && linkedToBoundClaim;
         });
 
         if (verifiedOriginals.length === 0) {
@@ -530,7 +691,7 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
               route,
               "trust.original_value",
               "FAIL",
-              `Page ${identity}: OriginalValueRecord is declarative-only (must bind a valid lineageClaimId and >=2 verifiableAnchors present in built HTML).`,
+              `Page ${identity}: original_value_work_product_missing — OriginalValueRecord is declarative-only (must bind a valid lineageClaimId, align with the bound claim's work product, and carry >=2 quantitative/statutory verifiableAnchors present in built HTML).`,
               originals.slice(0, 5).map((r) => ({ kind: "artifact" as const, ref: r.kind })),
             ),
           );

@@ -49,11 +49,11 @@ function intent(overrides: Partial<PageIntentAuthority>): PageIntentAuthority {
 }
 
 const VALID_TIER_A_SOURCE: SourceRef = {
-  ref: "INSEE Dossier complet Commune de Chamonix-Mont-Blanc (74056)",
-  sourceUrl: "https://www.insee.fr/fr/statistiques/2011101?geo=COM-74056",
-  supportingExcerpt: "INSEE Chamonix-Mont-Blanc (COM-74056) records 13,864 total dwellings and 72.6% secondary residences.",
+  ref: "INSEE Logement en 2022 — Commune de Chamonix-Mont-Blanc (74056)",
+  sourceUrl: "https://www.insee.fr/fr/statistiques/8581193?sommaire=8581488&geo=COM-74056",
+  supportingExcerpt: "INSEE Chamonix-Mont-Blanc (COM-74056) records 14,538 total dwellings and 69.3% secondary residences.",
   tier: "TIER_A",
-  sourceDate: "2026-01-01",
+  sourceDate: "2025-07-01",
   freshnessBasis: "observation_date",
   entailment: "SUPPORTED",
 };
@@ -76,7 +76,7 @@ function claim(overrides: Partial<ClaimLineage>): ClaimLineage {
   return parseClaimLineage({
     ...BASE_CLAIM,
     claimId: "claim-1",
-    claimText: "INSEE Chamonix-Mont-Blanc records 13,864 total dwellings.",
+    claimText: "INSEE Chamonix-Mont-Blanc records 14,538 total dwellings.",
     claimType: "FACT",
     sourceRefs: [],
     pageIdentity: "p1",
@@ -137,7 +137,10 @@ test("claim lineage: CALCULATION with full provenance PASSES", () => {
     ],
     calculationRef: {
       modelId: "yield-model-v1",
-      inputs: [{ name: "price", value: "366000", unit: "EUR" }],
+      inputs: [
+        { name: "annual rent", value: "26400", unit: "EUR/year" },
+        { name: "price", value: "366000", unit: "EUR" },
+      ],
       assumptionRefs: [],
       output: { value: "7.2", unit: "%" },
       calculatedAt: "2026-09-01",
@@ -177,7 +180,7 @@ test("P1-3: omitted entailment, missing excerpt, self-certified TIER_A, or numer
         sourceUrl: VALID_TIER_A_SOURCE.sourceUrl,
         supportingExcerpt: VALID_TIER_A_SOURCE.supportingExcerpt,
         tier: "TIER_A",
-        sourceDate: "2026-01-01",
+        sourceDate: "2025-07-01",
         freshnessBasis: "observation_date",
       },
     ],
@@ -189,9 +192,9 @@ test("P1-3: omitted entailment, missing excerpt, self-certified TIER_A, or numer
   const selfCertifiedTierA: SourceRef = {
     ref: "My random blog post",
     sourceUrl: "https://random-blog.example.com/post",
-    supportingExcerpt: "INSEE Chamonix-Mont-Blanc records 13,864 total dwellings.",
+    supportingExcerpt: "INSEE Chamonix-Mont-Blanc records 14,538 total dwellings.",
     tier: "TIER_A",
-    sourceDate: "2026-01-01",
+    sourceDate: "2025-07-01",
     freshnessBasis: "observation_date",
     entailment: "SUPPORTED",
   };
@@ -224,7 +227,7 @@ test("P1-5: OriginalValueRecord requires at least two verifiableAnchors", () => 
     kind: "first_party_observation",
     description: "Comparative commune analysis with verifiable anchors.",
     lineageClaimId: "claim-chamonix-insee",
-    verifiableAnchors: ["13,864 total dwellings", "72.6% secondary residences"],
+    verifiableAnchors: ["14,538 total dwellings", "69.3% secondary residences"],
   });
   assert.equal(valid.verifiableAnchors?.length, 2);
 });

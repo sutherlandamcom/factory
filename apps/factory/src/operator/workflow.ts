@@ -18,6 +18,7 @@ import {
   type WorkflowNextAction,
   type WorkflowReason,
   type WorkflowState,
+  qaRunPublicationEligible,
 } from "@factory/contracts";
 import { and, desc, eq, sql } from "drizzle-orm";
 import {
@@ -253,11 +254,11 @@ export async function deriveProjectWorkflow(
   if (!project) return null;
 
   const authorities = await deriveAuthorities(deps, projectId);
-  const { pages, currentCandidate } = await derivePages(deps, projectId, authorities);
+  const { pages, currentCandidate, publicationByPage } = await derivePages(deps, projectId, authorities);
 
   const areas = deriveAreaSummaries(authorities, pages);
   const nextActions = deriveNextActions(authorities, pages);
-  const deployment = deriveDeployment(authorities, pages, currentCandidate);
+  const deployment = deriveDeployment(authorities, pages, currentCandidate, publicationByPage);
   const overall = deriveOverallState(authorities, pages, deployment);
 
   return {
@@ -593,10 +594,12 @@ async function derivePages(
 ): Promise<{
   pages: PageWorkflowRow[];
   currentCandidate: { id: string; version?: number; digest?: string; pageIdentity: string } | null;
+  /** Machine-readable per-page publication eligibility derived from persisted QA provenance. */
+  publicationByPage: Record<string, boolean>;
 }> {
   const pageReader = new PageAuthorityReader(deps.db);
   const currentPages = await pageReader.currentPages(projectId);
-  if (currentPages.length === 0) return { pages: [], currentCandidate: null };
+  if (currentPages.length === 0) return { pages: [], currentCandidate: null, publicationByPage: {} };
 
   const [derivativeSets, summaryAccepted, audioAccepted, intents, policyResult, productionInputs, candidates, qaRuns] =
     await Promise.all([
@@ -655,6 +658,7 @@ async function derivePages(
           candidateId: productionQaRuns.candidateId,
           candidateArtifactDigest: productionQaRuns.candidateArtifactDigest,
           createdAt: productionQaRuns.createdAt,
+          data: productionQaRuns.data,
         })
         .from(productionQaRuns)
         .where(eq(productionQaRuns.projectId, projectId))
@@ -884,7 +888,13 @@ async function derivePages(
 
   // Deterministic page ordering.
   rows.sort((a, b) => a.pageIdentity.localeCompare(b.pageIdentity));
-  return { pages: rows, currentCandidate: currentCandidateRecord };
+  const publicationByPage: Record<string, boolean> = {};
+  for (const row of rows) {
+    const cand = candidateByPage.get(row.pageIdentity);
+    const run = cand ? qaByCandidate.get(cand.id) : undefined;
+    publicationByPage[row.pageIdentity] = Boolean(run) && qaRunPublicationEligible(run!.data);
+  }
+  return { pages: rows, currentCandidate: currentCandidateRecord, publicationByPage };
 }
 
 // ---------------------------------------------------------------------------
@@ -1613,6 +1623,7 @@ function deriveDeployment(
   authorities: AuthorityProjection,
   pages: PageWorkflowRow[],
   currentCandidate: { id: string; version?: number; digest?: string; pageIdentity: string } | null,
+  publicationByPage: Record<string, boolean>,
 ): DeploymentReadiness {
   const blockers: WorkflowBlocker[] = [];
   if (pages.length === 0) {
@@ -1707,6 +1718,9 @@ function deriveDeployment(
       : undefined,
     blockers,
     qaCurrent: pages.length > 0 && pages.every((p) => p.qa.state === "ACCEPTED" && p.qa.relation === "CURRENT" && p.qa.freshness === "CURRENT"),
+    // READY_FOR_DEPLOYMENT is a readiness label only. Publication requires
+    // strict-production provenance on every page's QA run (fail closed).
+    publicationEligible: ready && pages.every((p) => publicationByPage[p.pageIdentity] === true),
   };
 }
 

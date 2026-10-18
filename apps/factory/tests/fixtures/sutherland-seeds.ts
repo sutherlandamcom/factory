@@ -342,7 +342,7 @@ class SutherlandAcquiredSerpProvider implements StructuredSerpProvider {
         {
           question: "How does an independent buyer-side property advisor work in France?",
           answer:
-            "An independent buyer-side advisor acts exclusively under a written mandat de recherche under Loi Hoguet (Law No. 70-9), representing the purchaser rather than listing sellers.",
+            "Under French Loi Hoguet (Law No. 70-9 of 2 January 1970), regulated property brokerage and hunting mandates (mandat de recherche) require a carte professionnelle T, whereas non-intermediated buyer-side research and decision support operates without brokerage commissions or listing inventory.",
         },
         {
           question: "What are the new short-term rental rules in Chamonix from May 2025?",
@@ -397,7 +397,7 @@ class SutherlandSearchAnalyst implements SearchAnalystModel {
           primaryQuery: "independent property advisory french alps",
           secondaryQueries: ["buyer-side property advisory france"],
           rationale:
-            "Primary commercial investigation cluster: buyers comparing fiduciary buyer-side representation under Loi Hoguet against vendor-mandated estate agencies.",
+            "Primary commercial investigation cluster: buyers comparing non-intermediated buyer-side research and decision support against regulated Loi Hoguet estate agencies.",
           confidence: 0.92,
         },
         {
@@ -449,16 +449,16 @@ class SutherlandSearchAnalyst implements SearchAnalystModel {
         },
       ],
       entities: [
-        { name: "Sutherland Private Office", kind: "organization", notes: "Independent buyer-side property advisory" },
+        { name: "Sutherland Private Office", kind: "organization", notes: "Independent non-intermediated buyer-side property research and decision-support advisory" },
         { name: "Chamonix-Mont-Blanc", kind: "location", notes: "INSEE commune 74056, Haute-Savoie" },
         { name: "Megève", kind: "location", notes: "INSEE commune 74173, Haute-Savoie" },
-        { name: "Loi Hoguet (Law No. 70-9)", kind: "regulation", notes: "Statutory framework for written mandat de recherche" },
+        { name: "Loi Hoguet (Law No. 70-9)", kind: "regulation", notes: "Statutory boundary requiring Carte T and written mandat for regulated property intermediation" },
         { name: "DGFiP DVF & IFI", kind: "dataset", notes: "Notarial transaction ledger and 1.3M EUR wealth tax threshold" },
       ],
       topics: [
         {
           topic: "buyer-side property advisory",
-          subtopics: ["mandat de recherche", "fee-only independence", "conflict-free underwriting"],
+          subtopics: ["Loi Hoguet statutory boundary", "non-intermediated research", "conflict-free underwriting"],
         },
         {
           topic: "alpine property markets",
@@ -471,7 +471,7 @@ class SutherlandSearchAnalyst implements SearchAnalystModel {
       ],
       questions: [
         "Who advises a consequential alpine property purchase without seller brokerage conflicts?",
-        "How does an independent buyer-side advisory engagement work under Loi Hoguet?",
+        "How does non-intermediated buyer-side research differ from regulated Loi Hoguet brokerage?",
         "How do INSEE housing structure, PLU zoning, and May 2025 rental caps affect Chamonix acquisitions?",
         "How are facts, assumptions, and downside scenarios separated in an alpine property investment decision?",
       ],
@@ -481,7 +481,7 @@ class SutherlandSearchAnalyst implements SearchAnalystModel {
         "evidence-led",
         "decision support",
         "advisory",
-        "mandat de recherche",
+        "non-intermediated",
         "chamonix",
         "megève",
       ],
@@ -638,13 +638,13 @@ class SutherlandGapAnalyst implements GapAnalystModel {
     }> = [
       {
         userNeed: "Distinguish independent advisory from listing intermediaries",
-        topicQuestion: "How does a fee-only buyer-side advisory mandate under Loi Hoguet differ from listing brokerage?",
+        topicQuestion: "How does non-intermediated buyer-side research and decision support differ from regulated Loi Hoguet brokerage?",
         treatmentPattern: "Competitors operate as developer consultants or seller-mandated agencies with listing funnels.",
-        baselineExpectation: "Explain statutory mandat de recherche mechanics under Law No. 70-9 of 2 January 1970 and Article 6.",
-        evidenceIndices: [0, 1, 13],
+        baselineExpectation: "Explain the statutory boundary under Law No. 70-9 of 2 January 1970 (Loi Hoguet) requiring Carte T and written mandat for regulated intermediation.",
+        evidenceIndices: [0, 1, 12],
         ourEvidenceMissing: ["Historical client roster (withheld by confidentiality policy)"],
-        claimConstraints: ["Never claim guaranteed price discounts or off-market exclusivity"],
-        differentiationOpportunity: "Publish the exact statutory Loi Hoguet mandate mechanics and zero-seller-commission rule.",
+        claimConstraints: ["Never claim regulated Carte T brokerage status, guaranteed price discounts, or off-market exclusivity"],
+        differentiationOpportunity: "Publish the exact statutory Loi Hoguet boundary between regulated intermediation and non-intermediated buyer-side research.",
         recommendedDisposition: "REQUIRED",
         priority: "HIGH",
         rationale: "Core commercial positioning gap across SERP competitors.",
@@ -655,7 +655,7 @@ class SutherlandGapAnalyst implements GapAnalystModel {
         treatmentPattern: "Competitors route prospects into brochure downloads and sales calls.",
         baselineExpectation: "Describe the four-stage written diagnostic and underwriting workflow in clear prose (Mode B).",
         evidenceIndices: [0, 5, 6],
-        ourEvidenceMissing: ["Public fee schedule table (bespoke to mandate complexity)"],
+        ourEvidenceMissing: ["Public fee schedule table (bespoke to research scope complexity)"],
         claimConstraints: ["No conversion widgets, contact forms, or promotional urgency"],
         differentiationOpportunity: "Mode B institutional briefing showing how a written scope note initiates an engagement.",
         recommendedDisposition: "REQUIRED",
@@ -667,7 +667,7 @@ class SutherlandGapAnalyst implements GapAnalystModel {
         topicQuestion: "How are verified municipal/notarial facts separated from capital assumptions and stress scenarios?",
         treatmentPattern: "Competitors blend promotional rental yield claims with general market commentary.",
         baselineExpectation: "Separate Tier-A factual baselines (DVF, INSEE, DPE, IFI) from labelled assumptions and 15-year stress scenarios.",
-        evidenceIndices: [3, 4, 10, 11, 12],
+        evidenceIndices: [3, 4, 9, 10, 11],
         ourEvidenceMissing: ["Sub-parcel private bank loan covenants"],
         claimConstraints: ["Every assumption, estimate, and scenario must carry an explicit limitation label"],
         differentiationOpportunity: "Publish a reproducible capital decision framework with explicit calculation formulas and tax/audit thresholds.",
@@ -679,8 +679,8 @@ class SutherlandGapAnalyst implements GapAnalystModel {
         userNeed: "Which location decisions the advisory supports (Chamonix, Megève)",
         topicQuestion: "How do Chamonix (INSEE 74056) and Megève (INSEE 74173) differ in housing stock, zoning, and rental regulation?",
         treatmentPattern: "Competitors describe resort lifestyle without municipal census ratios, PLU servitudes, or May 2025 rental quotas.",
-        baselineExpectation: "Contrast Chamonix (13,864 dwellings, 69.2% secondary) and Megève (11,291 dwellings, 83.1% secondary) using INSEE, PLU, and PPRN data.",
-        evidenceIndices: [2, 7, 8, 9],
+        baselineExpectation: "Contrast Chamonix (14,538 dwellings, 69.3% secondary) and Megève (9,354 dwellings, 82.9% secondary) using INSEE, PLU, and PPRN data.",
+        evidenceIndices: [2, 5, 6, 7, 8],
         ourEvidenceMissing: ["Real-time private off-market parcel inventory"],
         claimConstraints: ["Cite exact INSEE RP2022 commune codes and municipal deliberation dates"],
         differentiationOpportunity: "First-party municipal comparison pairing INSEE RP2022 housing structure with May 2025 Chamonix rental rules and PPRN hazards.",
@@ -693,7 +693,7 @@ class SutherlandGapAnalyst implements GapAnalystModel {
         topicQuestion: "How are DVF notarial transactions, DPE 2023/2025/2034 thermal audits, and Cour des comptes climate data synthesized?",
         treatmentPattern: "Competitors mention DPE or notaire steps in isolation without an integrated analytical methodology.",
         baselineExpectation: "Document the four-layer evidence hierarchy reconciling DVF deeds, Géorisques PPRN, DPE thermal capex, and Cour des comptes snow-reliability audits.",
-        evidenceIndices: [3, 4, 10, 11, 12],
+        evidenceIndices: [3, 4, 9, 10, 11],
         ourEvidenceMissing: ["Proprietary structural engineering lab test reports"],
         claimConstraints: ["Never extrapolate historical DVF prices as guaranteed future appreciation"],
         differentiationOpportunity: "Dedicated research methodology and Chamonix supply notes with verifiable quantitative anchors.",
@@ -796,7 +796,7 @@ class SutherlandGapAnalyst implements GapAnalystModel {
           {
             requirement: "Preserve Mode B non-promotional posture with zero conversion funnels or brokerage inventory claims.",
             basis: "accepted_evidence" as const,
-            rationale: "Sutherland Private Office operates exclusively under buyer-side mandates without listing inventory.",
+            rationale: "Sutherland Private Office operates exclusively as a non-intermediated buyer-side research practice without listing inventory.",
           },
         ],
       },

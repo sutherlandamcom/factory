@@ -158,6 +158,8 @@ export const deploymentReadinessSchema = z.object({
   candidate: authorityRefSchema.optional(),
   blockers: z.array(workflowBlockerSchema),
   qaCurrent: z.boolean(),
+  /** Machine-readable: false unless every page's QA ran under STRICT_PRODUCTION trust mode. READY_FOR_DEPLOYMENT is never publication authority. */
+  publicationEligible: z.boolean(),
 });
 export type DeploymentReadiness = z.infer<typeof deploymentReadinessSchema>;
 

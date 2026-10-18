@@ -6,6 +6,7 @@ import { computeArtifactDigest, ProductionBuildService } from "./build-service.j
 import { runSiteWideQa } from "./qa/site-wide.js";
 import { runDesignDriftQa } from "./qa/design-drift.js";
 import { runTrustQa } from "./qa/trust.js";
+import { loadInseeEvidenceRegistry } from "../trust/insee-evidence.js";
 import { TrustGovernanceStore } from "../trust/store.js";
 import { deterministicDigest } from "../intelligence/digest.js";
 import { qaOverallVerdict, type ProductionQaCheckResult } from "@factory/contracts";
@@ -207,6 +208,7 @@ export class ProductionApiFacade {
       contentDigests,
       manifestSetDigest,
       syntheticFixtureContent: this.trustPolicy.syntheticFixtureContent === true,
+      inseeEvidence: loadInseeEvidenceRegistry(this.repoRoot),
     });
     qa.checks.push(...trustQa.checks);
     const pageRoutes = manifests.map((manifest) => manifest.input.route);
@@ -226,6 +228,7 @@ export class ProductionApiFacade {
       repositorySha: candidate.repositorySha,
       lockfileDigest: candidate.lockfileDigest,
       pageRoutes,
+      trustMode: this.trustPolicy.syntheticFixtureContent === true ? "SYNTHETIC_FIXTURE" : "STRICT_PRODUCTION",
     });
     return {
       qaRunId: run.id,

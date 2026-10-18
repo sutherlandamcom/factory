@@ -97,7 +97,7 @@ Enforced deterministically by `checkCannibalization(intents)` in `packages/contr
 | `locations/chamonix` | `YMYL_INFORMATIONAL` | Frames Chamonix (`COM-74056`) vs Megève (`COM-74173`) INSEE 2022 stock/vintage, Chamonix PLU servitudes, May 2025 rental rules, and Géorisques PPRN hazard screening. |
 | `advisory/investment-decision-framework` | `YMYL_DECISION_SUPPORT` | Structures financial/investment decision-making using DGFiP 5-year DVF deeds, `1,300,000 EUR` / `800,000 EUR` IFI thresholds, DPE capex assumptions, and the `7.2%` worked calculation. |
 | `research/alpine-decision-framework` | `YMYL_DECISION_SUPPORT` | Publishes the four-step analytical verification methodology across INSEE, DGFiP DVF/IFI, Notaires de France DPE, Géorisques PPRN, and the `26400 EUR / 366000 EUR = 7.2%` calculation. |
-| `research/chamonix-supply-notes` | `YMYL_DECISION_SUPPORT` | Publishes commune-specific supply-side analysis for Chamonix-Mont-Blanc (`13,864` dwellings, `58.2%` 1946–1990 stock, `90 inhabitants/year` PLU servitude, May 2025 rental cap). |
+| `research/chamonix-supply-notes` | `YMYL_DECISION_SUPPORT` | Publishes commune-specific supply-side analysis for Chamonix-Mont-Blanc (`14,538` dwellings, `58.5%` 1946–1990 stock of pre-2020 main residences, Chamonix PLU `25%` social-mix quotas and servitudes, May 2025 rental cap). |
 
 ---
 

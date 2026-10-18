@@ -21,7 +21,8 @@ export interface ChamonixSupplySynthesis {
     vintage1946To1990Count: number;
     vintage1946To1990SharePercent: number;
     pluSocialMixQuotaPercent: number;
-    pluThresholdSqm: number;
+    pluThresholdIndividualSqm: number;
+    pluThresholdCollectiveUnits: number;
     shortTermRentalCapDaysPrimary: number;
     shortTermRentalEffectiveDate: string;
   };
@@ -62,7 +63,8 @@ export function computeChamonixSupplyDataset(root = repoRoot): ChamonixSupplySyn
       vintage1946To1990Count,
       vintage1946To1990SharePercent: share,
       pluSocialMixQuotaPercent: 25,
-      pluThresholdSqm: 300,
+      pluThresholdIndividualSqm: 200,
+      pluThresholdCollectiveUnits: 8,
       shortTermRentalCapDaysPrimary: 90,
       shortTermRentalEffectiveDate: "2025-05-01",
     },

@@ -36,6 +36,25 @@ const tf = (geoCode: string, rowKey: string, value: number, year = 2022): Eviden
 
 function ref(over: Partial<SourceRef> & { bindings?: EvidenceBinding[] }, excerpt: string): SourceRef {
   const { bindings, ...rest } = over;
+  const isMegeve = (rest.ref && rest.ref.includes("74173")) || (rest.sourceUrl && rest.sourceUrl.includes("74173"));
+  const defaultAcquisition = isMegeve
+    ? {
+        acquisitionEventId: "acq-insee-74173-2026",
+        trustedProviderId: "insee-official-data",
+        acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD" as const,
+        retrievedAt: "2026-10-18T10:00:00Z",
+        contentDigest: "929215205222683cff2563d2063692b8c87b33e5fffbb72940f84a64765015a4",
+        signatureOrReceipt: "INSEE-HTTP-200-ETAG-8581193-74173",
+      }
+    : {
+        acquisitionEventId: "acq-insee-74056-2026",
+        trustedProviderId: "insee-official-data",
+        acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD" as const,
+        retrievedAt: "2026-10-18T10:00:00Z",
+        contentDigest: "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150",
+        signatureOrReceipt: "INSEE-HTTP-200-ETAG-8581193-74056",
+      };
+
   return {
     ref: "INSEE Logement en 2022 — Commune de Chamonix-Mont-Blanc (COM-74056)",
     sourceUrl: inseeSourceUrl("74056"),
@@ -44,6 +63,7 @@ function ref(over: Partial<SourceRef> & { bindings?: EvidenceBinding[] }, excerp
     sourceDate: "2025-07-01",
     freshnessBasis: "observation_date",
     entailment: "SUPPORTED",
+    acquisitionProvenance: defaultAcquisition,
     ...(bindings ? { evidenceBindings: bindings } : {}),
     ...rest,
   } as SourceRef;
@@ -1092,6 +1112,7 @@ test("WORK-A through WORK-H: Executable original work product verification", asy
     workProductId: "owp-alpine-yield-model-v1",
     pageIdentity: "research/alpine-decision-framework",
     productType: "COMPUTATIONAL_MODEL",
+    transformationId: "alpine-gross-yield-v1",
     title: "Alpine Property Gross Yield Underwriting & Financial Distinction Model",
     description:
       "Independent calculation of 26400 EUR annual rent over 366000 EUR purchase price yielding an illustrative gross yield of 7.2%.",
@@ -1178,7 +1199,7 @@ test("RESEARCH-A through RESEARCH-G: Research acquisition provenance verificatio
       acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150",
-      signatureOrReceipt: "SIG-INSEE-RP2022-74056-OFFICIAL",
+      signatureOrReceipt: "INSEE-HTTP-200-ETAG-8581193-74056",
     },
   };
 

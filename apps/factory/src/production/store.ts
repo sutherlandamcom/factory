@@ -1059,6 +1059,11 @@ export class ProductionStore {
     const rawOverall = qaOverallVerdict(input.checks);
     const hasUnresolvedTrustGate = input.checks.some((entry) => entry.checkId.startsWith("trust.") && entry.verdict !== "PASS");
     const overall = rawOverall === "FAIL" || hasUnresolvedTrustGate ? ("FAIL" as const) : rawOverall;
+    const hasTestOnlyReview = input.checks.some(
+      (entry) =>
+        entry.checkId === "trust.review_authority" &&
+        entry.detail.includes("TEST_ONLY_REVIEW_AUTHORITY"),
+    );
     const data = {
       schemaVersion: "production-v1" as const,
       candidateId: input.candidateId,
@@ -1066,7 +1071,10 @@ export class ProductionStore {
       overall,
       provenance: {
         trustMode: input.trustMode ?? ("STRICT_PRODUCTION" as const),
-        publicationEligible: (input.trustMode ?? "STRICT_PRODUCTION") === "STRICT_PRODUCTION" && overall === "PASS",
+        publicationEligible:
+          (input.trustMode ?? "STRICT_PRODUCTION") === "STRICT_PRODUCTION" &&
+          overall === "PASS" &&
+          !hasTestOnlyReview,
       },
     };
     parseProductionQaReportData(data);

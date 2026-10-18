@@ -1,18 +1,52 @@
 COMMUNE DE CHAMONIX-MONT-BLANC (HAUTE-SAVOIE)
-Plan Local d'Urbanisme (PLU)
-Règlement d'urbanisme — Dispositions générales et zonage (Zones U et AU)
-Source URL: https://www.chamonix.fr/urbanisme/plu/
+Plan Local d'Urbanisme (PLU) — Document d'urbanisme 74056_PLU_20260226
+Approbation : Délibération du Conseil Municipal du 26 février 2026
+Opposabilité et caractère exécutoire : 9 mai 2026
 Territoire : Commune de Chamonix-Mont-Blanc (Code INSEE 74056)
-Statut : Document exécutoire approuvé par délibération du Conseil Municipal.
+Source officielle : Géoportail de l'Urbanisme (ID: beaa82a7b5594b3913d5156928287d07)
+URL canonique : https://www.geoportail-urbanisme.gouv.fr/document/by-id/beaa82a7b5594b3913d5156928287d07
+Fichier source officiel : 74056_reglement_20260226.pdf
+Empreinte SHA-256 du document brut : 25425f385c72a88d3607a0314db9166efe9add139ca45314e124d3eb9bac707f
 
-DISPOSITIONS PARTICULIÈRES RELATIVES À LA MIXITÉ SOCIALE ET AUX RÉSIDENCES PRINCIPALES :
+DISPOSITIONS OFFICIELLES APPLICABLES (EXTRAITS REGLEMENTAIRES VERBATIM) :
 
-1. Servitudes de mixité sociale (Logements locatifs sociaux) :
-Conformément aux dispositions de l'article L. 151-15 du Code de l'urbanisme, afin de préserver l'accès au logement de la population permanente et des actifs de la vallée, le règlement du PLU impose un quota de 25 % de surface de plancher affectée au logement locatif social ou aidé.
-SEUIL ET CONDITIONS D'APPLICATION STRICTES :
-- Ce taux de 25 % ne s'applique pas de manière uniforme à toute construction individuelle.
-- Il s'applique aux opérations de construction neuve, d'extension ou de changement de destination réalisant une surface de plancher (SP) égale ou supérieure à 300 m² (ou 200 m² à 300 m² pour les opérations d'habitat selon les secteurs de zone) situées dans les zones constructibles urbaines (U) et à urbaniser (AU) repérées au règlement de zone.
-- Les opérations inférieures à ce seuil de 300 m² SP ou situées en dehors des zones soumises à la servitude de mixité sociale ne sont pas assujetties à cette quote-part de 25 %.
+1. MIXITE SOCIALE RESIDENTIELLE (Article UA3, UAS3, UC3, UBD3, UBP3 - Paragraphe 2) :
+"Pour les logements individuels :
+Toute opération de construction de logement ainsi que toute demande de changement de destination à vocation de logement, d’une surface de plancher supérieure ou égale à 200 m², doit comporter un minimum de 25% de cette surface de plancher à usage de logements locatifs conventionnés, ou en accession sociale à la propriété (bail réel solidaire...) ou sous maîtrise d’ouvrage publique.
 
-2. Servitudes de résidence principale :
-Dans les secteurs identifiés au document graphique et au règlement du PLU (notamment en zones U et AU soumises à la servitude de résidence principale), les nouvelles constructions de logements sont obligatoirement réservées à l'occupation à titre de résidence principale (définie par une occupation effective d'au moins huit mois par an), afin d'enrayer la prolifération des résidences secondaires et de maintenir les services publics et commerces annuels.
+Pour les logements collectifs :
+Tout programme de construction de logement supérieur à 8 logements (inclus et y compris dans le cadre d’une opération de réhabilitation) doit comporter un minimum de 25% de cette surface de plancher à usage de logements locatifs conventionnés, ou en accession sociale à la propriété (bail réel solidaire...) ou sous maîtrise d’ouvrage publique.
+
+Les dispositions ci-dessus s'appliquent également aux opérations de lotissement (permis d'aménager et déclarations préalables), ainsi qu'aux permis de construire valant division."
+
+2. SERVITUDE DE RESIDENCE PRINCIPALE (Article 1, Note 1 de chaque zone urbaine) :
+"Hors secteur de mixité sociale (SMS), emplacement réservé de mixité sociale (ER-MS), programme de construction de logement supérieur à 8 logements (pour lequel s’applique des obligations de mixité prévues à l’article 3) et OAP sectorielle prévoyant des dispositions spécifiques de mixité sociale : Toutes les constructions nouvelles de logements sont à usage exclusif de résidence principale, au sens de l'article 2 de la loi n° 89-462 du 6 juillet 1989 tendant à améliorer les rapports locatifs et portant modification de la loi n° 86-1290 du 23 décembre 1986.
+A peine de nullité, toute promesse de vente, tout contrat de vente ou de location ou tout contrat constitutif de droits réels portant sur des constructions soumises à l'obligation prévue au présent article en porte la mention expresse.
+Les logements concernés ne peuvent faire l'objet d'une location en tant que meublé de tourisme, au sens du I de l'article L. 324-1-1 du code du tourisme, en dehors de la location temporaire de la résidence principale dans les conditions prévues au premier alinéa du IV du même article L. 324-1-1."
+
+3. HEBERGEMENTS TOURISTIQUES ET LOGEMENT DES TRAVAILLEURS (Articles 6.6 et 6.7) :
+"6.6. Sous-secteurs en faveur de l’hôtellerie (-h) :
+Au sein de ces zones, le changement de destination des hôtels est interdit.
+L’extension est autorisée uniquement dans les deux cas de figure suivants et sous réserve d’un conventionnement loi Montagne (articles L. 342-1 à L.342-5 du code du Tourisme) :
+• Pour les hôtels dont la capacité est inférieure à 40 chambres, dans la limite de 30% de surface plancher supplémentaire et de 20% de chambres supplémentaires à la date d’approbation de la présente révision générale et uniquement à destination d’hôtel ;
+• Pour tous les hôtels, afin de créer des logements locatifs des travailleurs dans la limite de 20% supplémentaire de surface plancher à la date d’approbation de la présente révision générale.
+
+6.7. Autres hébergements touristiques :
+• Pour les établissements dont la surface de plancher est inférieure à 3 500 m² à la date d’approbation de la présente révision générale, une extension supplémentaire de 30 % de surface de plancher est possible sous réserve d’un conventionnement Loi Montagne ;
+• Pour tous les hébergements touristiques, afin de créer des logements locatifs des travailleurs dans la limite de 20% supplémentaire de surface plancher à la date d’approbation de la présente révision générale sous réserve d’un conventionnement Loi Montagne."
+
+4. SECTEURS DE MIXITE SOCIALE RENFORCEE (Article 10, SMS 1 à 17) :
+"Servitude de mixité sociale (SMS) :
+Les sites concernés par une servitude de mixité sociale (SMS) sont repérés au règlement graphique par une trame particulière et un numéro.
+Le SMS s’impose à toute opération de logements (neuve, adaptation, réhabilitation ou extension), soit dans le cadre d’une réalisation globale soit par la réalisation d’opérations successives. Dans ce deuxième cas de figure, le pourcentage à respecter s’applique dès la première opération, et les suivantes doivent garantir le maintien du pourcentage global fixé.
+Pourcentages applicables :
+SMS 1 : 50% | SMS 2 : 75% | SMS 3 : 50% | SMS 4 : 50% | SMS 5 : 50% | SMS 6 : 50% | SMS 7 : 50% | SMS 8 : 50% | SMS 9 : 50% | SMS 10 : 30% | SMS 11 : 50% | SMS 12 : 50% | SMS 13 : 50% | SMS 14 : 50% | SMS 15 : 75% | SMS 16 : 50% | SMS 17 : 50%"
+
+5. ORIENTATIONS D'AMENAGEMENT ET DE PROGRAMMATION (Article 11) :
+"Les OAP prévoyant jusqu’à 10 logements sont soumises à la servitude de résidence principale.
+Les OAP de plus de 10 logements sont encadrées en termes de mixité sociale."
+
+6. ZONES SANS MIXITE SOCIALE (Exemple Article UT3) :
+"ARTICLE UT3 : MIXITE SOCIALE ET MIXITE FONCTIONNELLE
+1/ Mixité fonctionnelle : Sans objet.
+2/ Mixité sociale : Sans objet."

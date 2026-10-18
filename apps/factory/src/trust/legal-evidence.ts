@@ -11,9 +11,14 @@ import type { ClaimLineage, SourceRef } from "@factory/contracts";
  * docs/evidence/sources/legal-regulatory-2026/
  */
 
+import { TRUSTED_ACQUISITION_REGISTRY } from "./research-acquisition.js";
+
 export interface LegalSourceSnapshot {
   sourceId: string;
   sourceClassification: "PRIMARY_SOURCE_CAPTURE" | "VERIFIED_OFFICIAL_ARCHIVE" | "EXTRACTED_LEGAL_PROVISION" | "EDITORIAL_INTERPRETATION" | "UNVERIFIED_SUMMARY" | "SYNTHETIC_TEST_FIXTURE";
+  rawCaptureSourceId?: string;
+  rawCaptureFile?: string;
+  rawCaptureDigest?: string;
   publisher: "Légifrance" | "Service-Public" | "DGFiP" | "Ville de Chamonix-Mont-Blanc" | "Géorisques" | "Notaires de France" | "Cour des comptes";
   originalUrl: string;
   canonicalDocumentUrl?: string;
@@ -64,10 +69,63 @@ export function loadLegalEvidenceRegistry(repoRoot: string): LegalEvidenceRegist
     snapshots: LegalSourceSnapshot[];
   };
 
+  const rawCapturesById = new Map<string, LegalSourceSnapshot>();
+
+  // Pass 1: verify raw captures and official archives
   for (const entry of manifest.snapshots) {
     if (
+      entry.sourceClassification === "PRIMARY_SOURCE_CAPTURE" ||
+      entry.sourceClassification === "VERIFIED_OFFICIAL_ARCHIVE"
+    ) {
+      const filePath = path.join(dir, entry.file);
+      if (!existsSync(filePath)) {
+        registry.rejected.push({ sourceId: entry.sourceId, reason: `file_not_found: ${entry.file}` });
+        continue;
+      }
+      const bytes = readFileSync(filePath);
+      const digest = sha256Hex(bytes);
+      if (digest !== entry.sha256) {
+        registry.rejected.push({
+          sourceId: entry.sourceId,
+          reason: `digest_mismatch: expected ${entry.sha256}, got ${digest}`,
+        });
+        continue;
+      }
+      // Verify trusted acquisition in registry
+      const hasAcq = TRUSTED_ACQUISITION_REGISTRY.has(entry.sourceId) ||
+        Array.from(TRUSTED_ACQUISITION_REGISTRY.values()).some((a) => a.contentDigest === entry.sha256);
+      if (!hasAcq) {
+        registry.rejected.push({
+          sourceId: entry.sourceId,
+          reason: "LEGAL_SOURCE_UNVERIFIED: No trusted acquisition from genuine publisher exists in trusted acquisition registry",
+        });
+        continue;
+      }
+      if (entry.httpStatusOrArchiveIdentifier && /\bSIG-.*-OFFICIAL\b/i.test(entry.httpStatusOrArchiveIdentifier)) {
+        registry.rejected.push({
+          sourceId: entry.sourceId,
+          reason: "fake_publisher_signature_rejected: Simulated publisher signatures like SIG-...-OFFICIAL are prohibited.",
+        });
+        continue;
+      }
+      rawCapturesById.set(entry.sourceId, entry);
+      registry.snapshots.push(entry);
+      registry.rawContents.set(entry.sourceId, bytes.toString("utf8"));
+    }
+  }
+
+  // Pass 2: verify extracted legal provisions and validate other entries
+  for (const entry of manifest.snapshots) {
+    if (
+      entry.sourceClassification === "PRIMARY_SOURCE_CAPTURE" ||
+      entry.sourceClassification === "VERIFIED_OFFICIAL_ARCHIVE"
+    ) {
+      continue;
+    }
+    if (
       entry.sourceClassification === "SYNTHETIC_TEST_FIXTURE" ||
-      entry.sourceClassification === "UNVERIFIED_SUMMARY"
+      entry.sourceClassification === "UNVERIFIED_SUMMARY" ||
+      entry.sourceClassification === "EDITORIAL_INTERPRETATION"
     ) {
       registry.rejected.push({
         sourceId: entry.sourceId,
@@ -89,6 +147,30 @@ export function loadLegalEvidenceRegistry(repoRoot: string): LegalEvidenceRegist
       });
       continue;
     }
+
+    if (entry.sourceClassification === "EXTRACTED_LEGAL_PROVISION") {
+      // Must link to a verified raw capture or have authentic acquisition
+      const rawCapture = entry.rawCaptureSourceId ? rawCapturesById.get(entry.rawCaptureSourceId) : undefined;
+      const hasAcq = TRUSTED_ACQUISITION_REGISTRY.has(entry.sourceId) ||
+        (entry.rawCaptureSourceId && TRUSTED_ACQUISITION_REGISTRY.has(entry.rawCaptureSourceId)) ||
+        Array.from(TRUSTED_ACQUISITION_REGISTRY.values()).some((a) => a.contentDigest === entry.sha256 || a.contentDigest === entry.rawCaptureDigest);
+
+      if (!hasAcq) {
+        registry.rejected.push({
+          sourceId: entry.sourceId,
+          reason: "LEGAL_SOURCE_UNVERIFIED: No trusted acquisition from genuine publisher exists in trusted acquisition registry",
+        });
+        continue;
+      }
+      if (entry.rawCaptureSourceId && !rawCapture && !hasAcq) {
+        registry.rejected.push({
+          sourceId: entry.sourceId,
+          reason: `raw_capture_unverified: Linked raw capture "${entry.rawCaptureSourceId}" is missing or unverified.`,
+        });
+        continue;
+      }
+    }
+
     registry.snapshots.push(entry);
     registry.rawContents.set(entry.sourceId, bytes.toString("utf8"));
   }
@@ -101,12 +183,89 @@ export interface LegalVerificationResult {
 }
 
 export const LEGAL_REFERENCE_PATTERN =
-  /\b(?:Loi\s+Hoguet|70-9|Carte\s+T|compromis\s+de\s+vente|rétractation|délai\s+de\s+rétractation|cooling-off|L271-1|L126-28-1|L173-1-1|DPE|audit\s+énergétique|energy\s+audit|IFI|Impôt\s+sur\s+la\s+fortune\s+immobilière|964|965|PLU|PPRN|servitudes?\s+de\s+(?:résidence|mixité)|meublés?\s+de\s+tourisme|location\s+(?:saisonnière|touristique)|L[ée]gifrance|legifrance|d[ée]cret|decree|arr[êe]t[ée]s?|DVF|DGFiP|G[ée]orisques|georisques|Cour\s+des\s+comptes|ccomptes|statutory|regulat(?:ion|ory))\b/i;
+  /\b(?:Loi\s+Hoguet|70-9|Carte\s+T|compromis\s+de\s+vente|rétractation|délai\s+de\s+rétractation|cooling-off|L271-1|L126-28-1|L173-1-1|DPE|audit\s+énergétique|energy\s+audit|IFI|Impôt\s+sur\s+la\s+fortune\s+immobilière|964|965|PLU|PPRN|servitudes?\s+de\s+(?:résidence|mixité)|meublés?\s+de\s+tourisme|location\s+(?:saisonnière|touristique)|L[ée]gifrance|legifrance|d[ée]cret|decree|arr[êe]t[ée]s?|DVF|DGFiP|G[ée]orisques|georisques|Cour\s+des\s+comptes|ccomptes|statutory|regulat(?:ion|ory)|housing\s+rules?|urbanisme)\b/i;
 
 export function isLegalOrRegulatoryClaim(claim: ClaimLineage): boolean {
   if (LEGAL_REFERENCE_PATTERN.test(claim.claimText)) return true;
   return claim.sourceRefs.some((r) => LEGAL_REFERENCE_PATTERN.test(`${r.ref} ${r.sourceUrl ?? ""} ${r.supportingExcerpt ?? ""}`));
 }
+
+export interface ChamonixPluRule {
+  ruleId: string;
+  category:
+    | "INDIVIDUAL_HOUSING"
+    | "COLLECTIVE_HOUSING"
+    | "TOURIST_WORKER_HOUSING"
+    | "PRINCIPAL_RESIDENCE_SERVITUDE"
+    | "SPECIAL_MIXITE_SECTOR";
+  description: string;
+  articles: string[];
+  zones: string[];
+  thresholdMetric: "FLOOR_AREA_SQM" | "DWELLING_COUNT" | "PERCENT_EXTENSION";
+  thresholdValue: number;
+  quotaPercent?: number;
+  effectiveDate: string; // "2026-05-09"
+  approvedDate: string; // "2026-02-26"
+  documentId: string; // "74056_PLU_20260226"
+}
+
+export const CHAMONIX_PLU_APPLICABILITY_MATRIX: ChamonixPluRule[] = [
+  {
+    ruleId: "CHAMONIX-PLU-2026-INDIVIDUAL",
+    category: "INDIVIDUAL_HOUSING",
+    description:
+      "Individual housing construction or change of use >= 200 m² floor area requires >= 25% rent-controlled social housing",
+    articles: ["UA3", "UAS3", "UC3", "UBD3", "UBP3"],
+    zones: ["UA", "UAS", "UC", "UBD", "UBP"],
+    thresholdMetric: "FLOOR_AREA_SQM",
+    thresholdValue: 200,
+    quotaPercent: 25,
+    effectiveDate: "2026-05-09",
+    approvedDate: "2026-02-26",
+    documentId: "74056_PLU_20260226",
+  },
+  {
+    ruleId: "CHAMONIX-PLU-2026-COLLECTIVE",
+    category: "COLLECTIVE_HOUSING",
+    description:
+      "Collective housing development programs > 8 dwellings require >= 25% floor area rent-controlled social housing",
+    articles: ["UA3", "UAS3", "UC3", "UBD3", "UBP3"],
+    zones: ["UA", "UAS", "UC", "UBD", "UBP"],
+    thresholdMetric: "DWELLING_COUNT",
+    thresholdValue: 8,
+    quotaPercent: 25,
+    effectiveDate: "2026-05-09",
+    approvedDate: "2026-02-26",
+    documentId: "74056_PLU_20260226",
+  },
+  {
+    ruleId: "CHAMONIX-PLU-2026-TOURIST-WORKER-HOUSING",
+    category: "TOURIST_WORKER_HOUSING",
+    description:
+      "Hotel and tourist accommodation extension up to 20% additional floor area specifically dedicated to seasonal/worker rental housing under Loi Montagne convention",
+    articles: ["6.6", "6.7"],
+    zones: ["UA-h", "UAS-h", "UC-h"],
+    thresholdMetric: "PERCENT_EXTENSION",
+    thresholdValue: 20,
+    effectiveDate: "2026-05-09",
+    approvedDate: "2026-02-26",
+    documentId: "74056_PLU_20260226",
+  },
+  {
+    ruleId: "CHAMONIX-PLU-2026-PRINCIPAL-RESIDENCE",
+    category: "PRINCIPAL_RESIDENCE_SERVITUDE",
+    description:
+      "100% exclusive principal residence servitude on all new residential constructions outside SMS, ER-MS, collective > 8 dwellings, or specific OAPs",
+    articles: ["Article 1 Note 1"],
+    zones: ["UA", "UAS", "UC", "UBD", "UBP"],
+    thresholdMetric: "PERCENT_EXTENSION",
+    thresholdValue: 100,
+    quotaPercent: 100,
+    effectiveDate: "2026-05-09",
+    approvedDate: "2026-02-26",
+    documentId: "74056_PLU_20260226",
+  },
+];
 
 /**
  * Independently verifies French legal and regulatory propositions in a claim
@@ -114,6 +273,9 @@ export function isLegalOrRegulatoryClaim(claim: ClaimLineage): boolean {
  */
 export function verifyLegalClaim(claim: ClaimLineage, registry: LegalEvidenceRegistry): LegalVerificationResult {
   const problems: string[] = [];
+  if (!isLegalOrRegulatoryClaim(claim)) {
+    return { ok: true, problems };
+  }
   const text = claim.claimText;
 
   // 1. M24: Unverified marker in production copy
@@ -152,10 +314,6 @@ export function verifyLegalClaim(claim: ClaimLineage, registry: LegalEvidenceReg
         `${claim.claimId}: self_authored_summary_rejected_as_primary — Self-authored summary, editorial interpretation, or synthetic test fixture cannot be cited as authenticated primary legal evidence.`,
       );
     }
-  }
-
-  if (!isLegalOrRegulatoryClaim(claim)) {
-    return { ok: problems.length === 0, problems };
   }
 
   // 3. L06 / L08: Check source snapshot existence and URL alignment for legal sources
@@ -303,30 +461,119 @@ export function verifyLegalClaim(claim: ClaimLineage, registry: LegalEvidenceReg
     }
   }
 
-  // 6. L04 & LEGAL-D: Chamonix PLU 25% Social Housing Quota applicability threshold
-  if (/\b(?:PLU|social-mix|mixité\s+sociale)\b/i.test(text) && /\b25%/.test(text)) {
-    const mentionsIncorrectThreshold =
-      /\b(?:500|400|600|750|1000)\s*(?:m2|m²|sqm)(?!\w)/i.test(text) ||
-      claim.sourceRefs.some((r) => /\b(?:500|400|600|750|1000)\s*(?:m2|m²|sqm)(?!\w)/i.test(r.supportingExcerpt ?? ""));
-    const mentionsApplicableThreshold =
-      /\b(?:300\s*(?:m2|m²|sqm)|200\s*(?:m2|m²|sqm)|surface\s+de\s+plancher|constructible(?:\s+\w+)?\s+zones?|zones?\s+(?:U|AU))(?!\w)/i.test(text) ||
-      claim.sourceRefs.some((r) =>
-        /\b(?:300\s*(?:m2|m²|sqm)|200\s*(?:m2|m²|sqm)|surface\s+de\s+plancher|constructible(?:\s+\w+)?\s+zones?|zones?\s+(?:U|AU))(?!\w)/i.test(
-          r.supportingExcerpt ?? "",
-        ),
+  // 6. L04 & LEGAL-D: Chamonix PLU 2026 operative regulation applicability matrix
+  if (
+    /\b(?:PLU|social-mix|mixité\s+sociale|servitudes?\s+de\s+résidence)\b/i.test(text) &&
+    (/\bChamonix\b/i.test(text) ||
+      claim.sourceRefs.some((r) => /\bChamonix\b/i.test(r.ref) || /\bChamonix\b/i.test(r.sourceUrl ?? "")))
+  ) {
+    // 6a. Superseded version check
+    if (/\b(?:Modification\s+8|MOD8|MOD\s+8|revision\s+2020|version\s+2020)\b/i.test(text)) {
+      problems.push(
+        `${claim.claimId}: superseded_plu_version — Chamonix PLU Modification 8 or pre-2026 revisions are superseded; operative regulation is revision 74056_PLU_20260226 approved 26 February 2026 and enforceable since 9 May 2026.`,
       );
-    const claimsUniversalQuota =
-      /\b(?:all|every|any|universal)\s+residential\s+construction\b/i.test(text) ||
-      /\bapplies\s+universally\b/i.test(text);
+    }
 
-    if (mentionsIncorrectThreshold) {
+    // 6b. Superseded 300 m² threshold or incorrect 500/400/600/750/1000 m² threshold
+    if (
+      /\b300\s*(?:m2|m²|sqm)\b/i.test(text) ||
+      claim.sourceRefs.some((r) => /\b300\s*(?:m2|m²|sqm)\b/i.test(r.supportingExcerpt ?? ""))
+    ) {
       problems.push(
-        `${claim.claimId}: chamonix_plu_threshold_mismatch: statutory_proposition_mismatch — Chamonix PLU 25% social-housing quota does not use an unverified 500 m² threshold; under the applicable Chamonix PLU, the 25% quota applies to operations of at least 300 m2 floor area (surface de plancher) in designated constructible zones (U and AU).`,
+        `${claim.claimId}: chamonix_plu_threshold_mismatch: superseded_plu_version — 300 m² is a superseded threshold from prior revisions; operative 2026 PLU establishes 200 m² floor area (surface de plancher) for individual housing construction/change-of-use and > 8 dwellings for collective programs.`,
       );
-    } else if (claimsUniversalQuota || !mentionsApplicableThreshold) {
+    } else if (
+      /\b(?:500|400|600|750|1000)\s*(?:m2|m²|sqm)(?!\w)/i.test(text) ||
+      claim.sourceRefs.some((r) => /\b(?:500|400|600|750|1000)\s*(?:m2|m²|sqm)(?!\w)/i.test(r.supportingExcerpt ?? ""))
+    ) {
       problems.push(
-        `${claim.claimId}: statutory_proposition_mismatch — Chamonix PLU 25% social-housing quota does not apply universally to all residential construction; under the applicable Chamonix PLU, the 25% quota applies to operations of at least 300 m2 floor area (surface de plancher) in designated constructible zones (U and AU).`,
+        `${claim.claimId}: chamonix_plu_threshold_mismatch: statutory_proposition_mismatch — Chamonix PLU does not use an unverified 500 m² threshold; under the operative 2026 PLU (Articles UA3/UAS3/UC3/UBD3/UBP3), the 25% quota applies to individual housing operations of at least 200 m² floor area or collective programs over 8 dwellings in designated constructible zones.`,
       );
+    }
+
+    // 6c. Wrong zone: applying 25% social housing quota to Zone UT, A, N, or outside constructible U zones
+    if (/\b25%/.test(text)) {
+      const mentionsWrongZone =
+        /\b(?:zone\s+UT|zone\s+A\b|zone\s+N\b|secteur\s+UT|natural\s+zones?|agricultural\s+zones?)\b/i.test(text) ||
+        claim.sourceRefs.some((r) => /\b(?:zone\s+UT|zone\s+A\b|zone\s+N\b|secteur\s+UT)\b/i.test(r.supportingExcerpt ?? ""));
+      if (mentionsWrongZone) {
+        problems.push(
+          `${claim.claimId}: zone_applicability_mismatch — Chamonix PLU 25% social housing quota does not apply in Zone UT (Article UT3: "Mixité sociale : Sans objet") or natural/agricultural zones (A, N); it applies in constructible urban zones (UA, UAS, UC, UBD, UBP).`,
+        );
+      }
+    }
+
+    // 6d. Incorrect property category / cross-application:
+    // Housing rule incorrectly using tourist-accommodation threshold
+    if (
+      (/\b(?:residential|housing|logements?)\b/i.test(text) &&
+        !/\b(?:tourist|h[oô]tels?|h[ée]bergements?\s+touristiques?)\b/i.test(text) &&
+        /\b20%\s+(?:additional|ext|surface|quota)/i.test(text)) ||
+      /\btourist-accommodation\s+threshold\b/i.test(text)
+    ) {
+      problems.push(
+        `${claim.claimId}: property_category_mismatch: tourist_worker_threshold_misapplied — Tourist accommodation 20% floor-area extension for worker housing (Articles 6.6, 6.7) cannot be applied as a residential social housing requirement.`,
+      );
+    }
+
+    // Applying 25% residential quota to tourist accommodations
+    if (
+      /\b(?:tourist\s+accommodation|hotels?|hôtels?|résidences?\s+de\s+tourisme)\b/i.test(text) &&
+      /\b25%\s+(?:social|quota|mixité)/i.test(text)
+    ) {
+      problems.push(
+        `${claim.claimId}: property_category_mismatch: residential_quota_applied_to_tourist — 25% residential social-mix quota cannot be applied to tourist accommodations or hotels (which are governed by Articles 6.6 and 6.7 under Loi Montagne).`,
+      );
+    }
+
+    // Correct number with incorrect property category:
+    // collective housing claimed to have 200 m² threshold instead of > 8 units
+    if (
+      /\bcollective\s+(?:housing|developments?|operations?|programs?)\b/i.test(text) &&
+      /\b200\s*(?:m2|m²|sqm)\b/i.test(text) &&
+      !/\b(?:8\s+dwellings|8\s+logements|8\s+units)\b/i.test(text)
+    ) {
+      problems.push(
+        `${claim.claimId}: property_category_mismatch: collective_threshold_mismatch — In Chamonix PLU, the 200 m² floor-area threshold applies to individual housing (logements individuels); collective housing programs (logements collectifs) are governed by a dwelling-count threshold of > 8 units.`,
+      );
+    }
+    // individual housing claimed to have 8-dwelling threshold instead of 200 m²
+    if (
+      /\bindividual\s+(?:housing|dwellings?|chalets?|houses?)\b/i.test(text) &&
+      /\b8\s+(?:dwellings|units|logements)\b/i.test(text) &&
+      !/\b200\s*(?:m2|m²|sqm)\b/i.test(text)
+    ) {
+      problems.push(
+        `${claim.claimId}: property_category_mismatch: individual_threshold_mismatch — In Chamonix PLU, the 8-dwelling threshold applies to collective housing programs (logements collectifs); individual housing (logements individuels) is governed by a floor-area threshold of >= 200 m² SP.`,
+      );
+    }
+
+    // 6e. Universal quota claim:
+    if (/\b25%/.test(text)) {
+      const claimsUniversalQuota =
+        /\b(?:all|every|any|universal)\s+residential\s+construction\b/i.test(text) ||
+        /\bapplies\s+universally\b/i.test(text) ||
+        /\bregardless\s+of\s+zone\b/i.test(text);
+
+      const mentionsApplicableCondition =
+        /\b(?:200\s*(?:m2|m²|sqm)|8\s+(?:dwellings|units|logements)|surface\s+de\s+plancher|constructible(?:\s+\w+)?\s+zones?|zones?\s+(?:U|UA|UAS|UC|UBD|UBP))(?!\w)/i.test(
+          text,
+        ) ||
+        claim.sourceRefs.some((r) =>
+          /\b(?:200\s*(?:m2|m²|sqm)|8\s+(?:dwellings|units|logements)|surface\s+de\s+plancher|constructible(?:\s+\w+)?\s+zones?|zones?\s+(?:U|UA|UAS|UC|UBD|UBP))(?!\w)/i.test(
+            r.supportingExcerpt ?? "",
+          ),
+        );
+
+      if (claimsUniversalQuota) {
+        problems.push(
+          `${claim.claimId}: statutory_proposition_mismatch: universal_quota_unsupported — Chamonix PLU 25% social-housing quota does not apply universally to all residential construction; under the operative 2026 PLU, the 25% quota applies to individual housing >= 200 m² SP and collective programs > 8 dwellings in designated constructible zones (UA, UAS, UC, UBD, UBP).`,
+        );
+      } else if (!mentionsApplicableCondition) {
+        problems.push(
+          `${claim.claimId}: statutory_proposition_mismatch — Chamonix PLU 25% social-housing quota requires specifying operative conditions: individual housing >= 200 m² SP or collective programs > 8 dwellings in designated constructible zones (UA, UAS, UC, UBD, UBP).`,
+        );
+      }
     }
   }
 

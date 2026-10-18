@@ -25,7 +25,8 @@ export interface InvestmentMatrixOutput {
     ifiAssessmentBaseEur: number;
     illustrativeGrossYieldPercent: number;
     shortTermRentalPrimaryCapDays: number;
-    chamonixMixiteSocialeThresholdSqm: number;
+    chamonixMixiteSocialeThresholdIndividualSqm: number;
+    chamonixMixiteSocialeThresholdCollectiveUnits: number;
   };
   verifiableAnchors: string[];
 }
@@ -62,7 +63,8 @@ export function computeInvestmentMatrix(root = repoRoot): InvestmentMatrixOutput
       ifiAssessmentBaseEur: 800000,
       illustrativeGrossYieldPercent: 7.2,
       shortTermRentalPrimaryCapDays: 90,
-      chamonixMixiteSocialeThresholdSqm: 300,
+      chamonixMixiteSocialeThresholdIndividualSqm: 200,
+      chamonixMixiteSocialeThresholdCollectiveUnits: 8,
     },
     verifiableAnchors: [
       "1,300,000 EUR",

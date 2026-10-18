@@ -4,7 +4,7 @@
   "generatedAt": "2026-10-18T12:00:00Z",
   "sourceDigests": {
     "inseeLogement2022": "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150",
-    "pluServitudes": "0859d0ba9255908125db389d77cbbaa69059f3f9fb37730841ceef94e6ac11e5",
+    "pluServitudes": "d16422afa2deebbda53feb8aef0f9b509ba14bc35963678d8fb4bc6c8480f397",
     "deliberationMeublesTourisme": "9465ed55d509560ec7803b37dd718824f85723708ddfd88bddeb9f7d9a32bf36"
   },
   "metrics": {
@@ -13,7 +13,8 @@
     "vintage1946To1990Count": 2475,
     "vintage1946To1990SharePercent": 58.5,
     "pluSocialMixQuotaPercent": 25,
-    "pluThresholdSqm": 300,
+    "pluThresholdIndividualSqm": 200,
+    "pluThresholdCollectiveUnits": 8,
     "shortTermRentalCapDaysPrimary": 90,
     "shortTermRentalEffectiveDate": "2025-05-01"
   },

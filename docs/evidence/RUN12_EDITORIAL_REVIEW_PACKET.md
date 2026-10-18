@@ -141,10 +141,10 @@
 - **Authoritative Fact Ledger**:
   - Physical supply constraints: `14,538` total dwellings; `10,073` secondary residences (`69.3%`); only `154` vacant dwellings (`1.1%`).
   - Stock vintage: `58.5%` of pre-2020 primary residences built between 1946 and 1990; only `13.5%` built between 2006 and 2019, reflecting strict valley topographical limits.
-  - Regulatory squeeze: `25%` social-mix quotas in constructible zones under the Chamonix PLU for collective operations exceeding 300 m² floor area; municipal short-term rental quotas effective `1 May 2025` limiting primary rentals to `90` days and restricting owners to `1` secondary authorization.
+  - Regulatory squeeze: `25%` social-mix quotas across constructible urban zones (UA, UAS, UC, UBD, UBP) under the operative Chamonix PLU (`74056_PLU_20260226`) for individual operations $\ge 200\text{ m}^2$ SP and collective programs $> 8$ units; municipal short-term rental quotas effective `1 May 2025` limiting primary rentals to `90` days and restricting natural-person owners to `1` secondary authorization.
 - **Reviewer Checklist**:
   - [ ] Analysis accurately synthesizes INSEE data with local planning servitudes.
-  - [ ] Social-housing quota specifies the 300 m² floor-area threshold.
+  - [ ] Social-housing quota specifies operative 2026 PLU conditions (individual housing $\ge 200\text{ m}^2$ SP / collective programs $> 8$ dwellings in constructible zones).
   - [ ] Clear distinction between general supply observations and individual investment advice.
   - [ ] Independent reviewer attribution and reviewed content digest correctly embedded.
 

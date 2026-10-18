@@ -9,7 +9,7 @@
   },
   "sourceDigests": {
     "ifiStatute": "c85b399e7dc37eb56b5b8c9a430dca81606ffa9e59df43edf922f10730996938",
-    "pluServitudes": "0859d0ba9255908125db389d77cbbaa69059f3f9fb37730841ceef94e6ac11e5",
+    "pluServitudes": "d16422afa2deebbda53feb8aef0f9b509ba14bc35963678d8fb4bc6c8480f397",
     "loiHoguet": "3e0210c9ef8eb3ba43d1a624afbf19eb2e748575f6d749ff16090af60d370238"
   },
   "parameters": {
@@ -17,7 +17,8 @@
     "ifiAssessmentBaseEur": 800000,
     "illustrativeGrossYieldPercent": 7.2,
     "shortTermRentalPrimaryCapDays": 90,
-    "chamonixMixiteSocialeThresholdSqm": 300
+    "chamonixMixiteSocialeThresholdIndividualSqm": 200,
+    "chamonixMixiteSocialeThresholdCollectiveUnits": 8
   },
   "verifiableAnchors": [
     "1,300,000 EUR",

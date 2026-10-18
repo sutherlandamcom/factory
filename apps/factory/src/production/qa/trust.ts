@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
-import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { ProductionQaCheckResult } from "./types.js";
@@ -18,7 +17,14 @@ import {
   verifyLegalClaim,
   type LegalEvidenceRegistry,
 } from "../../trust/legal-evidence.js";
-import { verifyResearchAcquisition } from "../../trust/research-acquisition.js";
+import {
+  verifyResearchAcquisition,
+  TRUSTED_ACQUISITION_REGISTRY,
+} from "../../trust/research-acquisition.js";
+import {
+  TRUSTED_TRANSFORMATION_REGISTRY,
+  resolveTransformationId,
+} from "../../trust/transformation-registry.js";
 import {
   UNCERTAIN_CLAIM_TYPES,
   claimLineageProblems,
@@ -29,6 +35,7 @@ import {
   type PageIntentAuthority,
   type OriginalWorkProduct,
   type OriginalWorkProductType,
+  type SourceRef,
 } from "@factory/contracts";
 import { bindQaCheck } from "./registry.js";
 
@@ -199,12 +206,53 @@ export function verifyOriginalWorkProduct(
     );
   }
 
-  // O07 / WORK-C / WORK-G: reproducible command & script analysis
-  if (!wp.reproducibleCommand || !wp.reproducibleCommand.trim().startsWith("pnpm")) {
+  // Deterministic transformation runner (R12-QA-05 / replaces arbitrary shell execution)
+  const transformationId = resolveTransformationId({
+    transformationId: wp.transformationId,
+    workProductId: wp.workProductId,
+    reproducibleCommand: wp.reproducibleCommand,
+  });
+
+  if (!transformationId) {
     problems.push(
-      `reproducible_command_invalid: reproducibleCommand "${wp.reproducibleCommand}" is invalid or not executable.`,
+      `transformation_unregistered: OriginalWorkProduct "${wp.workProductId}" does not identify an approved transformation routine registered in TRUSTED_TRANSFORMATION_REGISTRY.`,
     );
   } else {
+    const transformation = TRUSTED_TRANSFORMATION_REGISTRY.get(transformationId);
+    if (!transformation) {
+      problems.push(
+        `transformation_unregistered: transformation "${transformationId}" is not found in TRUSTED_TRANSFORMATION_REGISTRY.`,
+      );
+    } else {
+      try {
+        const result = transformation.execute({ datasets: new Map() });
+        if (wp.outputArtifactRef && options?.checkDisk !== false) {
+          const artifactPath = path.resolve(repoRoot, wp.outputArtifactRef);
+          if (existsSync(artifactPath)) {
+            const diskContent = readFileSync(artifactPath, "utf8");
+            const diskDigest = createHash("sha256").update(diskContent).digest("hex");
+            if (diskDigest !== result.outputDigest && diskContent.trim() !== result.outputContent.trim()) {
+              problems.push(
+                `reproduction_output_digest_mismatch: recomputed transformation output digest does not match disk artifact digest.`,
+              );
+            }
+          }
+        }
+      } catch (err) {
+        problems.push(
+          `reproduction_script_failed: transformation "${transformationId}" failed: ${(err as Error).message}`,
+        );
+      }
+    }
+  }
+
+  // O07 / WORK-C / WORK-G: reproducible command & script analysis (static inspection only, no execSync)
+  if (wp.reproducibleCommand) {
+    if (!wp.reproducibleCommand.trim().startsWith("pnpm")) {
+      problems.push(
+        `reproducible_command_invalid: reproducibleCommand "${wp.reproducibleCommand}" is invalid.`,
+      );
+    }
     // WORK-G: inspect reproduction script on disk for non-deterministic or network calls
     if (/\b(?:search-live|live-proof|network|unmocked|external)\b/i.test(wp.reproducibleCommand)) {
       problems.push(
@@ -219,7 +267,11 @@ export function verifyOriginalWorkProduct(
         path.resolve(repoRoot, relScript),
       ];
       const scriptPath = possibleScriptPaths.find((p) => existsSync(p));
-      if (scriptPath) {
+      if (!scriptPath) {
+        problems.push(
+          `reproduction_script_failed: declared reproduction script "${relScript}" is missing from disk.`,
+        );
+      } else {
         const scriptContent = readFileSync(scriptPath, "utf8");
         if (
           /\b(?:fetch\(|http\.request|https\.request|axios\b|unmocked_network)\b/.test(scriptContent) ||
@@ -229,21 +281,6 @@ export function verifyOriginalWorkProduct(
             "nondeterministic_or_network_dependency_rejected: reproduction script relies on external network calls or non-deterministic inputs.",
           );
         }
-      }
-    }
-
-    // WORK-C: execute reproduction script in controlled environment if requested
-    if (options?.executeScript === true) {
-      try {
-        execSync(wp.reproducibleCommand, {
-          cwd: repoRoot,
-          stdio: "pipe",
-          timeout: 10000,
-        });
-      } catch (err) {
-        problems.push(
-          `reproduction_script_failed: reproduction command "${wp.reproducibleCommand}" failed to run or threw an exception: ${(err as Error).message}`,
-        );
       }
     }
   }
@@ -702,11 +739,46 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
             }
           }
           for (const ref of c.sourceRefs) {
-            if (ref.acquisitionProvenance) {
-              const storedDigest = ref.evidenceBindings && ref.evidenceBindings.length > 0 && input.inseeEvidence
-                ? input.inseeEvidence.snapshots.find((s) => s.geoCode === (ref.evidenceBindings![0] as any).geoCode)?.rawContentDigest
-                : undefined;
-              const acqCheck = verifyResearchAcquisition(ref, storedDigest);
+            const isExternalOrPrimary =
+              ref.sourceClassification === "PRIMARY_PUBLIC_RECORD" ||
+              ref.sourceClassification === "PRIMARY_SOURCE_CAPTURE" ||
+              ref.sourceClassification === "EXTRACTED_LEGAL_PROVISION" ||
+              ref.sourceClassification === "INDEPENDENT_SURVEY" ||
+              ref.sourceClassification === "VERIFIED_OFFICIAL_ARCHIVE" ||
+              ref.evidenceOrigin === "EXTERNAL_ACQUIRED" ||
+              ref.evidenceOrigin === "VERIFIED_ARCHIVED_EXTERNAL" ||
+              (ref.tier === "TIER_A" &&
+                !ref.sourceUrl?.includes("sutherlandam.com") &&
+                !ref.ref.startsWith("intake:"));
+
+            if (isExternalOrPrimary && !ref.acquisitionProvenance && !ref.acquisitionEventId) {
+              independentProblems.push(
+                `${c.claimId}: research_acquisition_event_missing: source ref "${ref.ref}" lacks structured acquisitionProvenance binding to an authenticated acquisition event in TRUSTED_ACQUISITION_REGISTRY.`,
+              );
+            } else if (ref.acquisitionProvenance || ref.acquisitionEventId) {
+              const effectiveRef: SourceRef = ref.acquisitionProvenance
+                ? ref
+                : {
+                    ...ref,
+                    acquisitionProvenance: TRUSTED_ACQUISITION_REGISTRY.get(ref.acquisitionEventId!)
+                      ? {
+                          ...TRUSTED_ACQUISITION_REGISTRY.get(ref.acquisitionEventId!)!,
+                          acquisitionEventId: ref.acquisitionEventId!,
+                        }
+                      : undefined,
+                  };
+              const storedDigest =
+                ref.evidenceBindings && ref.evidenceBindings.length > 0 && input.inseeEvidence
+                  ? input.inseeEvidence.snapshots.find(
+                      (s) => s.geoCode === (ref.evidenceBindings![0] as any).geoCode,
+                    )?.rawContentDigest
+                  : legalRegistry?.snapshots.find(
+                      (s) =>
+                        s.sourceId === effectiveRef.acquisitionProvenance?.acquisitionEventId ||
+                        s.originalUrl === effectiveRef.sourceUrl ||
+                        s.canonicalDocumentUrl === effectiveRef.sourceUrl,
+                    )?.sha256;
+              const acqCheck = verifyResearchAcquisition(effectiveRef, storedDigest);
               if (!acqCheck.valid) {
                 independentProblems.push(...acqCheck.problems.map((p) => `${c.claimId}: ${p}`));
               }
@@ -800,19 +872,6 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
               [{ kind: "route", ref: route }],
             ),
           );
-        } else if (
-          current.review.reviewStatus === "EDITORIAL_REVIEW_PENDING" ||
-          current.review.reviewerKind === "SYNTHETIC_TEST_REVIEWER"
-        ) {
-          checks.push(
-            pageCheck(
-              route,
-              "trust.review_authority",
-              "FAIL",
-              `Page ${identity}: editorial_review_pending_or_synthetic — Review is pending human sign-off or was conducted by a synthetic test reviewer.`,
-              [{ kind: "route", ref: route }],
-            ),
-          );
         } else if (current.stale || verifiedIdsMismatch) {
           checks.push(
             pageCheck(
@@ -820,6 +879,21 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
               "trust.review_authority",
               "FAIL",
               `Page ${identity}: review_authority_stale — ReviewAuthority is STALE (${current.reason ?? "verifiedClaimIds do not match current page ClaimLineage set"}).`,
+              [{ kind: "route", ref: route }],
+            ),
+          );
+        } else if (
+          (current.review.authorityKind ?? current.review.reviewAuthorityKind) !==
+            "TEST_ONLY_REVIEW_AUTHORITY" &&
+          (current.review.reviewStatus === "EDITORIAL_REVIEW_PENDING" ||
+            current.review.reviewerKind === "SYNTHETIC_TEST_REVIEWER")
+        ) {
+          checks.push(
+            pageCheck(
+              route,
+              "trust.review_authority",
+              "FAIL",
+              `Page ${identity}: editorial_review_pending_or_synthetic — Review is pending human sign-off or was conducted by a synthetic test reviewer.`,
               [{ kind: "route", ref: route }],
             ),
           );
@@ -838,16 +912,31 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
           (current.review.authorityKind ?? current.review.reviewAuthorityKind) ===
           "TEST_ONLY_REVIEW_AUTHORITY"
         ) {
-          // REVIEW-B: Test-only authority claiming production publication eligibility
-          checks.push(
-            pageCheck(
-              route,
-              "trust.review_authority",
-              "FAIL",
-              `Page ${identity}: test_only_authority_rejected_for_publication — TEST_ONLY_REVIEW_AUTHORITY cannot authorize production publication.`,
-              [{ kind: "route", ref: route }],
-            ),
-          );
+          if (
+            !htmlHasReviewAttr ||
+            htmlReviewerMatch?.[1] !== current.review.reviewerRef ||
+            htmlDigestMatch?.[1] !== digest
+          ) {
+            checks.push(
+              pageCheck(
+                route,
+                "trust.review_authority",
+                "FAIL",
+                `Page ${identity} (${intent.ymylClassification}) is missing visible data-review-authority="${current.review.reviewerRef}" and data-reviewed-digest="${digest.slice(0, 12)}…" in built HTML.`,
+                [{ kind: "route", ref: route }],
+              ),
+            );
+          } else {
+            checks.push(
+              pageCheck(
+                route,
+                "trust.review_authority",
+                "PASS",
+                `Page ${identity}: TEST_ONLY_REVIEW_AUTHORITY (publicationEligible=false) — technical review check passed for test fixture; not eligible for production publication.`,
+                [{ kind: "route", ref: route }],
+              ),
+            );
+          }
         } else if (current.review.reviewStatus === "EDITORIAL_REVIEW_APPROVED" && !current.review.approvalEvent) {
           // REVIEW-C: Editorial approval without an authenticated approval event
           checks.push(

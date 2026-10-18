@@ -331,3 +331,29 @@ Executed via `runSiteWideQa`, `runDesignDriftQa`, and `runTrustQa` (and enforced
 1. **No Standalone `About` Archetype in Run 12**: `DESIGN_ARCHETYPE_KINDS` is fixed to `["homepage", "service", "location", "editorial", "investment_advisory"]`; per Block 2, no `about` archetype was invented and organization/creator/reviewer identity is presented on the 5 mandatory pages and 6th editorial page.
 2. **Mode B Conversion Surface**: Because accepted Sutherland operator inputs do not yet include a live contact endpoint, phone number, or physical office address, pages use Mode B prose engagement instructions rather than interactive contact forms.
 3. **Derivatives Disabled**: Static summary/audio derivatives remain in governed `state: "disabled"` for the Run 12 Sutherland proof.
+
+---
+
+## X. Run 12 P1 Audit Findings Closure Verification
+
+All five P1 findings from the Independent Evidence QA Audit have been resolved and deterministically verified:
+
+1. **R12-QA-01 — Chamonix PLU Operative Regulation Grounding**:
+   - Acquired and archived official regulation PDF `74056_reglement_20260226.pdf` (approved 2026-02-26, enforceable 2026-05-09, Géoportail de l'Urbanisme `beaa82a7b5594b3913d5156928287d07`, SHA-256 `25425f385c72a88d3607a0314db9166efe9add139ca45314e124d3eb9bac707f`).
+   - Implemented `CHAMONIX_PLU_APPLICABILITY_MATRIX` in `legal-evidence.ts` enforcing distinct thresholds: individual housing $\ge 200\text{ m}^2$ SP, collective programs $> 8$ units, tourist worker housing extensions up to 20% under Loi Montagne, principal-residence servitudes, and zone exclusions (UT, A, N). Universal hardcoded 300 m² and 200 m² assumptions eliminated.
+
+2. **R12-QA-02 — Real Legal-Source Authenticity**:
+   - `loadLegalEvidenceRegistry` enforces two-pass verification linking extracted provisions directly to verified raw captures in `TRUSTED_ACQUISITION_REGISTRY`.
+   - `UNVERIFIED_SUMMARY` and unlinked extracts fail closed. Simulated signatures (e.g. `SIG-...-OFFICIAL`) are prohibited and rejected.
+
+3. **R12-QA-03 — Real Editorial Review Boundary**:
+   - `EditorialReviewService` (`editorial-review-boundary.ts`) requires authenticated principals and verified permissions.
+   - `recordReviewLocked` in `trust/store.ts` rejects unauthenticated author-supplied review authority.
+   - In `production/store.ts`, `TEST_ONLY_REVIEW_AUTHORITY` allows technical build and QA tests to run while strictly enforcing `publicationEligible: false`. Production publishing remains blocked until authentic human sign-off.
+
+4. **R12-QA-04 — Trusted Research Acquisition Provenance**:
+   - `TRUSTED_ACQUISITION_REGISTRY` enforces authenticated acquisition events for external research sources, checking canonical and final URLs, system timestamps, HTTP/archive metadata, raw digests, and authorized provider registrations. Missing provenance fails closed.
+
+5. **R12-QA-05 — Elimination of Arbitrary Shell Execution**:
+   - Dynamic shell execution (`execSync`) has been eliminated from `production/qa/trust.ts`.
+   - Deterministic model reproductions run via registered pure TypeScript transformation functions (`transformation-registry.ts`) that compute outputs in memory and verify exact file digests and anchor text against disk artifacts.

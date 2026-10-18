@@ -55,7 +55,7 @@ All 26 mutations are executed deterministically in `apps/factory/tests/persisten
 | **LEGAL-A** | Fabricated text with matching SHA-256 | Self-authored summary text promoted to primary source with hash | `self_authored_summary_rejected_as_primary` / `LEGAL_SOURCE_UNVERIFIED` | `run12-source-integrity-qa.test.ts` (line 801) | **PASS (`FAIL` emitted with code)** |
 | **LEGAL-B** | Genuine publisher URL with invented content | Official Légifrance URL paired with invented Article 99 Carte T exemption | `statutory_proposition_mismatch` / `primary_legal_authenticity_failed` | `run12-source-integrity-qa.test.ts` (line 825) | **PASS (`FAIL` emitted with code)** |
 | **LEGAL-C** | Correct statute but superseded version | CCH L271-1 citing 7-day cooling-off under Loi SRU 2000 instead of current 10 days | `superseded_statutory_version` / `statutory_schedule_mismatch` | `run12-source-integrity-qa.test.ts` (line 848) | **PASS (`FAIL` emitted with code)** |
-| **LEGAL-D** | Chamonix PLU quota with incorrect threshold | 25% social housing quota claimed for operations > 500 m² (applicable threshold is 300 m²) | `chamonix_plu_threshold_mismatch` | `run12-source-integrity-qa.test.ts` (line 871) | **PASS (`FAIL` emitted with code)** |
+| **LEGAL-D** | Chamonix PLU quota with incorrect threshold | 25% social housing quota claimed for operations > 500 m² (applicable thresholds under operative 2026 PLU matrix are individual housing $\ge 200\text{ m}^2$ SP or collective programs $> 8$ units in constructible zones UA, UAS, UC, UBD, UBP) | `chamonix_plu_threshold_mismatch` | `run12-source-integrity-qa.test.ts` (line 871) | **PASS (`FAIL` emitted with code)** |
 | **LEGAL-E** | Statutory rule applied outside legal scope | CCH L126-28-1 pre-sale energy audit applied to individual co-ownership apartments | `statutory_proposition_mismatch` | `run12-source-integrity-qa.test.ts` (line 894) | **PASS (`FAIL` emitted with code)** |
 | **LEGAL-F** | Self-authored summary promoted to official source | Internal broker memo submitted with `UNVERIFIED_SUMMARY` classification | `self_authored_summary_rejected_as_primary` / `LEGAL_SOURCE_UNVERIFIED` | `run12-source-integrity-qa.test.ts` (line 917) | **PASS (`FAIL` emitted with code)** |
 | **LEGAL-G** | Official document reference without acquired evidence | Unacquired municipal decree referenced without authentic archive or capture | `LEGAL_SOURCE_UNVERIFIED` | `run12-source-integrity-qa.test.ts` (line 941) | **PASS (`FAIL` emitted with code)** |
@@ -113,23 +113,38 @@ All 26 mutations are executed deterministically in `apps/factory/tests/persisten
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **R01** | Altered total dwelling count | 13,864 dwellings claimed for Chamonix instead of authentic 14,538 | `claim_value_mismatch` (`trust.source_authority`) | `run12-source-integrity-qa.test.ts` (line 1256) | **PASS (`FAIL` emitted with code)** |
 | **R02** | Inverted housing category shares | 69.3% primary and 29.7% secondary claimed (inverted from official INSEE) | `claim_category_mismatch` (`trust.source_authority`) | `run12-source-integrity-qa.test.ts` (line 1262) | **PASS (`FAIL` emitted with code)** |
-| **R03** | Fabricated statutory thresholds | Chamonix PLU threshold set to 500 m² floor area instead of 300 m² | `chamonix_plu_threshold_mismatch` (`trust.source_authority`) | `run12-source-integrity-qa.test.ts` (line 1291) | **PASS (`FAIL` emitted with code)** |
+| **R03** | Fabricated statutory thresholds | Chamonix PLU threshold set to 500 m² floor area instead of operative 2026 PLU conditions (individual housing $\ge 200\text{ m}^2$ SP or collective programs $> 8$ units in constructible zones) | `chamonix_plu_threshold_mismatch` (`trust.source_authority`) | `run12-source-integrity-qa.test.ts` (line 1291) | **PASS (`FAIL` emitted with code)** |
 | **R04** | Altered DPE applicability dates | DDT energy audit for class E claimed in 2026 instead of 2025 | `statutory_schedule_mismatch` (`trust.source_authority`) | `run12-source-integrity-qa.test.ts` (line 1315) | **PASS (`FAIL` emitted with code)** |
 | **R05** | Swapped DVF transfer prices | Fabricated average transfer price (2,500 EUR/m²) ungrounded in DVF data | `statutory_schedule_mismatch` / `LEGAL_SOURCE_UNVERIFIED` / `claim_value_mismatch` | `run12-source-integrity-qa.test.ts` (line 1340) | **PASS (`FAIL` emitted with code)** |
 | **R06** | Fabricated short-term rental rules | Primary residence rental cap claimed as 120 days instead of 90 days | `statutory_schedule_mismatch` / `statutory_proposition_mismatch` | `run12-source-integrity-qa.test.ts` (line 1368) | **PASS (`FAIL` emitted with code)** |
 
 ---
 
-## 8. Key Findings & Assurance
+## 8. Key Findings & Assurance (P1 Remediation Verification)
 
-1. **Elimination of False Passes**:
-   - In previous iterations, a fabricated excerpt containing `13,864` combined with `entailment: "SUPPORTED"` and self-certified `TIER_A` could pass naive string-matching. Under the Run 12 independent verifier (`insee-evidence.ts` + `verifyInseeClaim`), the authentic raw HTML snapshot table is parsed directly. Both `M07` and `M07b` fail closed with `claim_number_unbound` and `claim_value_mismatch`.
+1. **R12-QA-01: Chamonix PLU Operative Regulation Grounding**:
+   - The code and tests no longer enforce an ungrounded, hardcoded 300 m² or 200 m² universal threshold.
+   - Primary regulation PDF `74056_reglement_20260226.pdf` (approved 2026-02-26, enforceable 2026-05-09, Géoportail de l'Urbanisme `beaa82a7b5594b3913d5156928287d07`) is archived and verified with exact SHA-256 (`25425f385c72a88d3607a0314db9166efe9add139ca45314e124d3eb9bac707f`).
+   - The structured `CHAMONIX_PLU_APPLICABILITY_MATRIX` in `legal-evidence.ts` validates distinct thresholds and scopes: individual housing $\ge 200\text{ m}^2$ SP, collective programs $> 8$ dwellings, tourist worker accommodation extensions up to $20\%$ under Loi Montagne, principal-residence servitudes, and zone exclusions (UT, A, N).
+   - Negative tests correctly fail on misapplied quotas, wrong zones, swapped categories, or superseded regulations.
 
-2. **Denominators and Vintages**:
-   - `M12` confirms that housing construction vintage shares (`58.5%` for 1946–1990 and `13.5%` for 2006–2019) cannot be falsely attributed to total dwellings (`14,538`), but must strictly bind to main residences built before 2020 (`4,231` in `LOG T5`).
+2. **R12-QA-02: Real Legal-Source Authenticity & Provenance**:
+   - `loadLegalEvidenceRegistry` implements a strict two-pass acquisition boundary: raw publisher captures (`PRIMARY_SOURCE_CAPTURE`, `VERIFIED_OFFICIAL_ARCHIVE`) are authenticated first; extracted provisions (`EXTRACTED_LEGAL_PROVISION`) must bind to an authenticated raw capture with verified bytes and digest in `TRUSTED_ACQUISITION_REGISTRY`.
+   - `UNVERIFIED_SUMMARY` and self-authored editorial interpretations are rejected closed. Fake publisher signatures (e.g. `SIG-...-OFFICIAL`) are prohibited and rejected.
 
-3. **Authentic Primary Evidence over Self-Consistent Summaries**:
-   - The implementation of `LEGAL-A` through `LEGAL-H`, `RESEARCH-A` through `RESEARCH-G`, and `WORK-A` through `WORK-H` guarantees that textual summaries authored by Factory cannot masquerade as official primary sources. Acquisition event receipts, provider authorization, physical file existence on disk, deterministic script execution, and exact digest binding are mandatory.
+3. **R12-QA-03: Real Editorial Review Boundary**:
+   - The review authority layer rejects self-approved or author-supplied human review objects.
+   - `EditorialReviewService` (`editorial-review-boundary.ts`) requires authenticated principals, active reviewer permissions, and matching content, claim-set, and evidence digests.
+   - `TEST_ONLY_REVIEW_AUTHORITY` exercises technical build QA (validating HTML review attribute projection) but strictly enforces `publicationEligible: false`.
+   - Production publication remains blocked until an authentic human review event is recorded.
 
-4. **Human Review Integrity**:
-   - `REVIEW-A` through `REVIEW-H` prove that synthetic or test reviewer identities cannot authorize production publication. Any candidate lacking authentic human approval remains in `EDITORIAL_REVIEW_PENDING` with `publicationEligible = false`.
+4. **R12-QA-04: Trusted Research Acquisition Provenance**:
+   - In `runTrustQa()`, external sources must bind to authenticated acquisition records in `TRUSTED_ACQUISITION_REGISTRY`.
+   - Acquisition event records require canonical and retrieval URLs, system timestamps, HTTP/archive metadata, raw byte digests, document version identifiers, and authorized provider registration. Missing or forged provenance fails closed.
+
+5. **R12-QA-05: Elimination of Arbitrary Shell Execution**:
+   - All dynamic shell execution (`execSync`) has been eliminated from `production/qa/trust.ts`.
+   - Deterministic model reproductions are executed via registered TypeScript transformation functions (`transformation-registry.ts`) that compute outputs in memory and verify exact file digests and anchor text against disk artifacts.
+
+6. **Elimination of False Passes & Denominator Checks**:
+   - Under the Run 12 independent verifier (`insee-evidence.ts` + `verifyInseeClaim`), authentic raw HTML snapshot tables are parsed directly. Negative mutations (`M01`–`M26`, `LEGAL-A`–`LEGAL-H`, `REVIEW-A`–`REVIEW-H`, `WORK-A`–`WORK-H`, `RESEARCH-A`–`RESEARCH-G`, `R01`–`R06`) fail closed with exact diagnostic codes. All 28 test suites pass green.

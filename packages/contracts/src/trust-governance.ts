@@ -244,8 +244,11 @@ export type EvidenceBinding = z.infer<typeof evidenceBindingSchema>;
  */
 export const legalSourceClassificationSchema = z.enum([
   "PRIMARY_SOURCE_CAPTURE",
+  "PRIMARY_PUBLIC_RECORD",
   "VERIFIED_OFFICIAL_ARCHIVE",
   "EXTRACTED_LEGAL_PROVISION",
+  "INDEPENDENT_SURVEY",
+  "ORIGINAL_WORK_PRODUCT",
   "EDITORIAL_INTERPRETATION",
   "UNVERIFIED_SUMMARY",
   "SYNTHETIC_TEST_FIXTURE",
@@ -276,6 +279,8 @@ export const researchAcquisitionSchema = z
       .optional(),
     retrievedContentReference: boundedText(500).optional(),
     archiveEvidenceRef: boundedText(500).optional(),
+    description: boundedText(500).optional(),
+    sourceFileRef: boundedText(500).optional(),
   })
   .strict();
 export type ResearchAcquisition = z.infer<typeof researchAcquisitionSchema>;
@@ -948,6 +953,7 @@ export const originalWorkProductSchema = z
     title: boundedText(200),
     description: boundedText(1000),
     inputDatasetDigests: z.array(digestSchema).min(1),
+    transformationId: boundedText(100).optional(),
     transformationDigest: digestSchema,
     executionHash: digestSchema,
     outputArtifactRef: boundedText(500),

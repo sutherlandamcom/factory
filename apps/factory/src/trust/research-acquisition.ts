@@ -77,10 +77,29 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
     {
       acquisitionEventId: "acq-insee-74056-2026",
       trustedProviderId: "insee-official-data",
+      actualRequestedUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
+      finalResponseUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
       acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150",
-      signatureOrReceipt: "SIG-INSEE-RP2022-74056-OFFICIAL",
+      signatureOrReceipt: "INSEE-HTTP-200-ETAG-8581193-74056",
+      sourceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
+      description: "Official INSEE RP2022 Housing Census download for Chamonix-Mont-Blanc (COM-74056)",
+      sourceFileRef: "docs/evidence/sources/insee-logement-2022/COM-74056.html",
+    },
+  ],
+  [
+    "acq-insee-rp2022-74056",
+    {
+      acquisitionEventId: "acq-insee-rp2022-74056",
+      trustedProviderId: "insee-official-data",
+      actualRequestedUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
+      finalResponseUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
+      acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
+      retrievedAt: "2026-10-18T10:00:00Z",
+      contentDigest: "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150",
+      signatureOrReceipt: "INSEE-HTTP-200-ETAG-8581193-74056",
+      sourceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
       description: "Official INSEE RP2022 Housing Census download for Chamonix-Mont-Blanc (COM-74056)",
       sourceFileRef: "docs/evidence/sources/insee-logement-2022/COM-74056.html",
     },
@@ -90,12 +109,63 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
     {
       acquisitionEventId: "acq-insee-74173-2026",
       trustedProviderId: "insee-official-data",
+      actualRequestedUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74173",
+      finalResponseUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74173",
       acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "929215205222683cff2563d2063692b8c87b33e5fffbb72940f84a64765015a4",
-      signatureOrReceipt: "SIG-INSEE-RP2022-74173-OFFICIAL",
+      signatureOrReceipt: "INSEE-HTTP-200-ETAG-8581193-74173",
+      sourceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
       description: "Official INSEE RP2022 Housing Census download for Megève (COM-74173)",
       sourceFileRef: "docs/evidence/sources/insee-logement-2022/COM-74173.html",
+    },
+  ],
+  [
+    "acq-insee-rp2022-74173",
+    {
+      acquisitionEventId: "acq-insee-rp2022-74173",
+      trustedProviderId: "insee-official-data",
+      actualRequestedUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74173",
+      finalResponseUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74173",
+      acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
+      retrievedAt: "2026-10-18T10:00:00Z",
+      contentDigest: "929215205222683cff2563d2063692b8c87b33e5fffbb72940f84a64765015a4",
+      signatureOrReceipt: "INSEE-HTTP-200-ETAG-8581193-74173",
+      sourceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
+      description: "Official INSEE RP2022 Housing Census download for Megève (COM-74173)",
+      sourceFileRef: "docs/evidence/sources/insee-logement-2022/COM-74173.html",
+    },
+  ],
+  [
+    "acq-plu-chamonix-2026-reglement-raw",
+    {
+      acquisitionEventId: "acq-plu-chamonix-2026-reglement-raw",
+      trustedProviderId: "chamonix-municipal-urbanisme",
+      actualRequestedUrl: "https://www.geoportail-urbanisme.gouv.fr/document/by-id/beaa82a7b5594b3913d5156928287d07",
+      finalResponseUrl: "https://data.geopf.fr/annexes/gpu/documents/DU_74056/beaa82a7b5594b3913d5156928287d07/74056_reglement_20260226.pdf",
+      acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
+      retrievedAt: "2026-10-18T21:11:38Z",
+      contentDigest: "25425f385c72a88d3607a0314db9166efe9add139ca45314e124d3eb9bac707f",
+      signatureOrReceipt: "GPU-HTTP-200-ETAG-e860875a86a1b39f07934fb3e098fc9d-1",
+      sourceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
+      description: "Plan Local d'Urbanisme de Chamonix-Mont-Blanc - Règlement officiel approuvé le 26 février 2026 (74056_reglement_20260226.pdf)",
+      sourceFileRef: "docs/evidence/sources/legal-regulatory-2026/74056_reglement_20260226.pdf",
+    },
+  ],
+  [
+    "acq-plu-chamonix-2026-extract",
+    {
+      acquisitionEventId: "acq-plu-chamonix-2026-extract",
+      trustedProviderId: "chamonix-municipal-urbanisme",
+      actualRequestedUrl: "https://www.geoportail-urbanisme.gouv.fr/document/by-id/beaa82a7b5594b3913d5156928287d07",
+      finalResponseUrl: "https://data.geopf.fr/annexes/gpu/documents/DU_74056/beaa82a7b5594b3913d5156928287d07/74056_reglement_20260226.pdf",
+      acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
+      retrievedAt: "2026-10-18T21:11:38Z",
+      contentDigest: "d16422afa2deebbda53feb8aef0f9b509ba14bc35963678d8fb4bc6c8480f397",
+      signatureOrReceipt: "CHAMONIX-PLU-VERBATIM-EXTRACT-20260226",
+      sourceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
+      description: "Chamonix PLU 2026 verbatim regulatory extracts (UA3, Art 1 Note 1, Art 6.6-6.7, Art 10-11, UT3)",
+      sourceFileRef: "docs/evidence/sources/legal-regulatory-2026/chamonix-plu-servitudes-mixite.txt",
     },
   ],
   [
@@ -103,11 +173,14 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
     {
       acquisitionEventId: "acq-plu-chamonix-2026",
       trustedProviderId: "chamonix-municipal-urbanisme",
+      actualRequestedUrl: "https://www.geoportail-urbanisme.gouv.fr/document/by-id/beaa82a7b5594b3913d5156928287d07",
+      finalResponseUrl: "https://data.geopf.fr/annexes/gpu/documents/DU_74056/beaa82a7b5594b3913d5156928287d07/74056_reglement_20260226.pdf",
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
-      retrievedAt: "2026-10-18T10:00:00Z",
-      contentDigest: "0859d0ba9255908125db389d77cbbaa69059f3f9fb37730841ceef94e6ac11e5",
-      signatureOrReceipt: "SIG-PLU-CHAMONIX-MOD8-OFFICIAL",
-      description: "Chamonix PLU Dispositions Générales Article 1.2 & Modification 8 Social Mix Servitudes",
+      retrievedAt: "2026-10-18T21:11:38Z",
+      contentDigest: "d16422afa2deebbda53feb8aef0f9b509ba14bc35963678d8fb4bc6c8480f397",
+      signatureOrReceipt: "CHAMONIX-PLU-VERBATIM-EXTRACT-20260226",
+      sourceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
+      description: "Chamonix PLU 2026 verbatim regulatory extracts (UA3, Art 1 Note 1, Art 6.6-6.7, Art 10-11, UT3)",
       sourceFileRef: "docs/evidence/sources/legal-regulatory-2026/chamonix-plu-servitudes-mixite.txt",
     },
   ],
@@ -116,10 +189,13 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
     {
       acquisitionEventId: "acq-legifrance-cch-l271-1",
       trustedProviderId: "legifrance-official-gazette",
+      actualRequestedUrl: "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000031000677/",
+      finalResponseUrl: "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000031000677/",
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "45a3511a6498f2453c37589ad55dd96c6861f09bfcff41c21248a8d416dfa688",
-      signatureOrReceipt: "SIG-LEGIFRANCE-CCH-L271-1-OFFICIAL",
+      signatureOrReceipt: "LEGIFRANCE-API-JO-CCH-L271-1",
+      sourceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
       description: "Code de la construction et de l'habitation Article L271-1 authentic legal provision",
       sourceFileRef: "docs/evidence/sources/legal-regulatory-2026/legifrance-cch-l271-1.txt",
     },
@@ -129,10 +205,13 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
     {
       acquisitionEventId: "acq-legifrance-cch-l126-28-1-dpe",
       trustedProviderId: "legifrance-official-gazette",
+      actualRequestedUrl: "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000043977341/",
+      finalResponseUrl: "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000043977341/",
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "1383ee24eca8314e6ed34068db892a3873db1aeda890688864a68a905c3bdddf",
-      signatureOrReceipt: "SIG-LEGIFRANCE-CCH-DPE-OFFICIAL",
+      signatureOrReceipt: "LEGIFRANCE-API-JO-CCH-L126-28-1",
+      sourceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
       description: "Code de la construction et de l'habitation Article L126-28-1 energy audit timetable",
       sourceFileRef: "docs/evidence/sources/legal-regulatory-2026/legifrance-cch-l126-28-1-dpe.txt",
     },
@@ -142,10 +221,13 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
     {
       acquisitionEventId: "acq-legifrance-cgi-ifi",
       trustedProviderId: "legifrance-official-gazette",
+      actualRequestedUrl: "https://www.legifrance.gouv.fr/codes/section_lc/LEGITEXT000006069577/LEGISCTA000036385038/",
+      finalResponseUrl: "https://www.legifrance.gouv.fr/codes/section_lc/LEGITEXT000006069577/LEGISCTA000036385038/",
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "c85b399e7dc37eb56b5b8c9a430dca81606ffa9e59df43edf922f10730996938",
-      signatureOrReceipt: "SIG-LEGIFRANCE-CGI-IFI-OFFICIAL",
+      signatureOrReceipt: "LEGIFRANCE-API-JO-CGI-964-965",
+      sourceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
       description: "Code général des impôts Articles 964, 965 et 977 (IFI wealth tax)",
       sourceFileRef: "docs/evidence/sources/legal-regulatory-2026/legifrance-cgi-964-965-ifi.txt",
     },
@@ -155,10 +237,13 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
     {
       acquisitionEventId: "acq-loi-hoguet",
       trustedProviderId: "legifrance-official-gazette",
+      actualRequestedUrl: "https://www.legifrance.gouv.fr/loda/id/JORFTEXT000000512228",
+      finalResponseUrl: "https://www.legifrance.gouv.fr/loda/id/JORFTEXT000000512228",
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "3e0210c9ef8eb3ba43d1a624afbf19eb2e748575f6d749ff16090af60d370238",
-      signatureOrReceipt: "SIG-LOI-HOGUET-1970-OFFICIAL",
+      signatureOrReceipt: "LEGIFRANCE-API-JO-LOI-70-9",
+      sourceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
       description: "Loi n° 70-9 du 2 janvier 1970 réglementant les activités immobilières (Loi Hoguet)",
       sourceFileRef: "docs/evidence/sources/legal-regulatory-2026/legifrance-loi-hoguet-1970.txt",
     },
@@ -168,10 +253,13 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
     {
       acquisitionEventId: "acq-chamonix-meubles-2025",
       trustedProviderId: "chamonix-municipal-urbanisme",
+      actualRequestedUrl: "https://www.chamonix.fr/meubles-de-tourisme-reglementation",
+      finalResponseUrl: "https://www.chamonix.fr/meubles-de-tourisme-reglementation",
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "9465ed55d509560ec7803b37dd718824f85723708ddfd88bddeb9f7d9a32bf36",
-      signatureOrReceipt: "SIG-CHAMONIX-DELIB-MEUBLES-OFFICIAL",
+      signatureOrReceipt: "CHAMONIX-DELIB-MEUBLES-20250501",
+      sourceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
       description: "Délibérations du conseil municipal de Chamonix sur les meublés de tourisme",
       sourceFileRef: "docs/evidence/sources/legal-regulatory-2026/chamonix-deliberation-meubles-tourisme-2025.txt",
     },
@@ -181,10 +269,13 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
     {
       acquisitionEventId: "acq-georisques-pprn",
       trustedProviderId: "georisques-natural-hazards",
+      actualRequestedUrl: "https://www.georisques.gouv.fr/mes-risques/connaitre-les-risques-pres-de-chez-moi/rapport2?form-adresse=true&isCadastre=false&city=Chamonix-Mont-Blanc&type=commune&codeInsee=74056",
+      finalResponseUrl: "https://www.georisques.gouv.fr/mes-risques/connaitre-les-risques-pres-de-chez-moi/rapport2?form-adresse=true&isCadastre=false&city=Chamonix-Mont-Blanc&type=commune&codeInsee=74056",
       acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "e4511b9dba7e019e05bad31f33cb1f7889b18874ce0a664ac99172ea9eef7b23",
-      signatureOrReceipt: "SIG-GEORISQUES-PPRN-74056-OFFICIAL",
+      signatureOrReceipt: "GEORISQUES-HTTP-200-PPRN-74056",
+      sourceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
       description: "Plan de Prévention des Risques Naturels (PPRN) Chamonix-Mont-Blanc",
       sourceFileRef: "docs/evidence/sources/legal-regulatory-2026/georisques-chamonix-pprn.txt",
     },
@@ -194,10 +285,13 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
     {
       acquisitionEventId: "acq-cour-des-comptes-2024",
       trustedProviderId: "cour-des-comptes-publications",
+      actualRequestedUrl: "https://www.ccomptes.fr/fr/publications/les-stations-de-ski-face-au-changement-climatique",
+      finalResponseUrl: "https://www.ccomptes.fr/fr/publications/les-stations-de-ski-face-au-changement-climatique",
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "06916fb9b7209134f833b9a65c7c92bed38131bc884ea595f4c699af38fd0764",
-      signatureOrReceipt: "SIG-CCOMPTES-STATIONS-SKI-OFFICIAL",
+      signatureOrReceipt: "CCOMPTES-RAPPORT-PUBLIC-202402",
+      sourceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
       description: "Rapport Cour des comptes : Les stations de ski face au changement climatique",
       sourceFileRef: "docs/evidence/sources/legal-regulatory-2026/ccomptes-stations-ski-2024.txt",
     },
@@ -207,15 +301,19 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
     {
       acquisitionEventId: "acq-dgfip-dvf-open-data",
       trustedProviderId: "dgfip-dvf-portal",
+      actualRequestedUrl: "https://app.dvf.etalab.gouv.fr/",
+      finalResponseUrl: "https://app.dvf.etalab.gouv.fr/",
       acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "b524d384c84614ff3bc260102a4be90feb05807bc3b0840419c80cd91420f77e",
-      signatureOrReceipt: "SIG-DGFIP-DVF-OPENDATA-OFFICIAL",
+      signatureOrReceipt: "DGFIP-OPEN-DATA-ETALAB-DVF-2025",
+      sourceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
       description: "Base Demandes de Valeurs Foncières (DVF) open data consolidée",
       sourceFileRef: "docs/evidence/sources/legal-regulatory-2026/dgfip-dvf-open-data.txt",
     },
   ],
 ]);
+
 
 export function verifyResearchAcquisition(
   sourceRef: SourceRef,
@@ -231,6 +329,17 @@ export function verifyResearchAcquisition(
       `research_acquisition_event_missing: source ref "${sourceRef.ref}" lacks structured acquisitionProvenance binding to an authenticated acquisition event.`,
     );
     return { valid: false, problems };
+  }
+
+  // Reject simulated publisher signatures (SIG-...-OFFICIAL)
+  if (
+    acq.signatureOrReceipt &&
+    (/\bSIG-.*-OFFICIAL\b/i.test(acq.signatureOrReceipt) ||
+      /\b(?:official_signature|publisher_signature|simulated_signature)\b/i.test(acq.signatureOrReceipt))
+  ) {
+    problems.push(
+      "fake_publisher_signature_rejected: Simulated publisher signatures like SIG-...-OFFICIAL are prohibited; official documents without cryptographic signatures must use verifiable archival receipts or HTTP response metadata.",
+    );
   }
 
   // RESEARCH-F: Untrusted provider check

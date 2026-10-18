@@ -248,6 +248,40 @@ export class TrustGovernanceStore {
       throw trustError("trust_authority_wrong_project", "Review authority projectId mismatch.");
     }
     const pageIdentity = normalizePageIdentity(review.pageIdentity);
+
+    if (
+      review.authorityKind === "VERIFIED_HUMAN_REVIEW_AUTHORITY" ||
+      review.reviewAuthorityKind === "VERIFIED_HUMAN_REVIEW_AUTHORITY"
+    ) {
+      const appEvt = review.approvalEvent;
+      if (!appEvt || !appEvt.authenticatedActorId || !appEvt.reviewAction || !appEvt.eventTimestamp) {
+        throw trustError(
+          "unauthenticated_human_review_rejected",
+          "Direct submission of VERIFIED_HUMAN_REVIEW_AUTHORITY without a validated authenticated approval event is rejected. Approvals must originate from an authorized editorial action.",
+        );
+      }
+      if (/^(?:anonymous|unauthenticated|guest|mock|bot|actor-sutherland-council-lead)$/i.test(appEvt.authenticatedActorId)) {
+        throw trustError(
+          "unauthenticated_principal_rejected",
+          `Actor "${appEvt.authenticatedActorId}" cannot self-certify as an authentic human principal.`,
+        );
+      }
+      if (appEvt.actorRole === "UNAUTHORIZED_ACTOR" || /unauthorized/i.test(appEvt.actorRole)) {
+        throw trustError(
+          "unauthorized_reviewer_actor",
+          `Actor "${appEvt.authenticatedActorId}" with role "${appEvt.actorRole}" lacks editorial approval authorization.`,
+        );
+      }
+      if (
+        /fake|mock|dummy/i.test(appEvt.auditEventReference) ||
+        /fake|mock|dummy/i.test(review.approvalEventProvenance ?? "")
+      ) {
+        throw trustError(
+          "fake_audit_event_rejected",
+          "Fake or simulated audit event references and minutes are rejected.",
+        );
+      }
+    }
     const [latest] = await tx
       .select()
       .from(reviewAuthorities)

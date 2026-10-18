@@ -34,6 +34,7 @@ import {
 } from "../../src/production/qa/trust.js";
 import { loadInseeEvidenceRegistry } from "../../src/trust/insee-evidence.js";
 import { loadLegalEvidenceRegistry } from "../../src/trust/legal-evidence.js";
+import { TRUSTED_ACQUISITION_REGISTRY } from "../../src/trust/research-acquisition.js";
 import { createAssetStorage } from "../../src/assets/storage.js";
 import { resolveRepositoryRoot } from "../../src/repo-root.js";
 import {
@@ -249,10 +250,11 @@ const SOURCE_REFS = {
     ref: "intake:operatorFacts[0] — Accepted Sutherland Private Office positioning",
     sourceUrl: "https://sutherlandam.com/home",
     supportingExcerpt: `${FACTS[0]} ${FACTS[1]} ${FACTS[2]}`,
-    tier: "TIER_A",
+    tier: "TIER_B",
     sourceDate: "2026-09-04",
     freshnessBasis: "historical_date",
     entailment: "SUPPORTED",
+    evidenceOrigin: "ACCEPTED_FIRST_PARTY",
   } satisfies SourceRef,
   workedExample: {
     ref: "intake:operatorFacts[4] — Accepted first-party worked calculation example",
@@ -262,6 +264,8 @@ const SOURCE_REFS = {
     sourceDate: "2026-09-01",
     freshnessBasis: "model_as_of_date",
     entailment: "SUPPORTED",
+    evidenceOrigin: "ACCEPTED_FIRST_PARTY",
+    sourceClassification: "ORIGINAL_WORK_PRODUCT",
   } satisfies SourceRef,
   inseeChamonixStock: {
     ref: "INSEE Logement en 2022 — Commune de Chamonix-Mont-Blanc (COM-74056)",
@@ -272,6 +276,9 @@ const SOURCE_REFS = {
     freshnessBasis: "observation_date",
     entailment: "SUPPORTED",
     evidenceBindings: CHAMONIX_BINDINGS,
+    evidenceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
+    sourceClassification: "PRIMARY_PUBLIC_RECORD",
+    acquisitionProvenance: TRUSTED_ACQUISITION_REGISTRY.get("acq-insee-rp2022-74056")!,
   } satisfies SourceRef,
   inseeChamonixAge: {
     ref: "INSEE Logement en 2022 LOG T2 — Commune de Chamonix-Mont-Blanc (COM-74056)",
@@ -282,6 +289,9 @@ const SOURCE_REFS = {
     freshnessBasis: "observation_date",
     entailment: "SUPPORTED",
     evidenceBindings: CHAMONIX_BINDINGS,
+    evidenceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
+    sourceClassification: "PRIMARY_PUBLIC_RECORD",
+    acquisitionProvenance: TRUSTED_ACQUISITION_REGISTRY.get("acq-insee-rp2022-74056")!,
   } satisfies SourceRef,
   inseeMegeveStock: {
     ref: "INSEE Logement en 2022 — Commune de Megève (COM-74173)",
@@ -292,6 +302,9 @@ const SOURCE_REFS = {
     freshnessBasis: "observation_date",
     entailment: "SUPPORTED",
     evidenceBindings: MEGEVE_BINDINGS,
+    evidenceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
+    sourceClassification: "PRIMARY_PUBLIC_RECORD",
+    acquisitionProvenance: TRUSTED_ACQUISITION_REGISTRY.get("acq-insee-rp2022-74173")!,
   } satisfies SourceRef,
   chamonixPlu: {
     ref: "Ville de Chamonix PLU & Règlement meublés de tourisme 2025",
@@ -301,6 +314,9 @@ const SOURCE_REFS = {
     sourceDate: "2025-05-01",
     freshnessBasis: "effective_version",
     entailment: "SUPPORTED",
+    evidenceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
+    sourceClassification: "EXTRACTED_LEGAL_PROVISION",
+    acquisitionProvenance: TRUSTED_ACQUISITION_REGISTRY.get("acq-plu-chamonix-2026-extract")!,
   } satisfies SourceRef,
   notairesProcedure: {
     ref: "Code de la construction et de l'habitation — CCH Art. L271-1 & CCH Art. L126-28-1",
@@ -310,6 +326,9 @@ const SOURCE_REFS = {
     sourceDate: "2025-01-01",
     freshnessBasis: "effective_version",
     entailment: "SUPPORTED",
+    evidenceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
+    sourceClassification: "PRIMARY_PUBLIC_RECORD",
+    acquisitionProvenance: TRUSTED_ACQUISITION_REGISTRY.get("acq-legifrance-cch-l271-1")!,
   } satisfies SourceRef,
   dgfipDvfIfi: {
     ref: "DGFiP / Etalab DVF & CGI Arts. 964, 965, 977 (IFI)",
@@ -319,6 +338,9 @@ const SOURCE_REFS = {
     sourceDate: "2025-01-01",
     freshnessBasis: "effective_version",
     entailment: "SUPPORTED",
+    evidenceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
+    sourceClassification: "PRIMARY_PUBLIC_RECORD",
+    acquisitionProvenance: TRUSTED_ACQUISITION_REGISTRY.get("acq-dgfip-dvf-open-data")!,
   } satisfies SourceRef,
   georisquesCourDesComptes: {
     ref: "BRGM Géorisques PPRN Chamonix & Cour des comptes Rapport Février 2024",
@@ -328,6 +350,9 @@ const SOURCE_REFS = {
     sourceDate: "2024-02-06",
     freshnessBasis: "observation_date",
     entailment: "SUPPORTED",
+    evidenceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
+    sourceClassification: "PRIMARY_PUBLIC_RECORD",
+    acquisitionProvenance: TRUSTED_ACQUISITION_REGISTRY.get("acq-georisques-pprn")!,
   } satisfies SourceRef,
   loiHoguet: {
     ref: "Loi Hoguet — Loi n° 70-9 du 2 janvier 1970 (Légifrance)",
@@ -337,6 +362,9 @@ const SOURCE_REFS = {
     sourceDate: "1970-01-02",
     freshnessBasis: "effective_version",
     entailment: "SUPPORTED",
+    evidenceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
+    sourceClassification: "PRIMARY_PUBLIC_RECORD",
+    acquisitionProvenance: TRUSTED_ACQUISITION_REGISTRY.get("acq-loi-hoguet")!,
   } satisfies SourceRef,
 };
 
@@ -1099,6 +1127,7 @@ test(
       const wpAlpine: OriginalWorkProduct = {
         workProductId: "owp-alpine-decision-framework-01",
         pageIdentity: "research/alpine-decision-framework",
+        transformationId: "alpine-gross-yield-v1",
         productType: "COMPUTATIONAL_MODEL",
         title: "Alpine Property Gross Yield Underwriting & Source Cross-Verification Model",
         description:
@@ -1122,6 +1151,7 @@ test(
       const wpInvest: OriginalWorkProduct = {
         workProductId: "owp-investment-decision-framework-01",
         pageIdentity: "advisory/investment-decision-framework",
+        transformationId: "alpine-investment-matrix-v1",
         productType: "COMPARATIVE_DECISION_MATRIX",
         title: "Alpine Capital Allocation & French Wealth Tax Statutory Exposure Matrix",
         description:
@@ -1449,29 +1479,15 @@ test(
             schemaVersion: "trust-governance-v1",
             projectId: seeded.projectId,
             pageIdentity: ymylSlug,
-            reviewerKind: "ACCEPTED_INSTITUTIONAL_COUNCIL",
+            reviewerKind: "SYNTHETIC_TEST_REVIEWER",
             reviewStatus: "EDITORIAL_REVIEW_APPROVED",
-            authorityKind: "VERIFIED_HUMAN_REVIEW_AUTHORITY",
-            approvalEventId: `appr-sutherland-council-${ymylSlug.replace(/[^a-z0-9]/g, "-")}-20260904`,
-            approvalEventProvenance: "Accepted by Sutherland Institutional Review Council Minutes 2026-09-04 Item 4",
-            approvalEvent: {
-              reviewEventId: `appr-sutherland-council-${ymylSlug.replace(/[^a-z0-9]/g, "-")}-20260904`,
-              authenticatedActorId: "actor-sutherland-council-lead",
-              actorRole: "Managing Director & Head of Editorial Governance",
-              authorizationScope: "YMYL_DECISION_SUPPORT:EDITORIAL_REVIEW",
-              reviewAction: "APPROVED",
-              reviewedContentDigest: ymylPage.contentDigest,
-              reviewedClaimSetDigest: claimSetDigest,
-              reviewedSourceEvidenceDigest: sourceEvidenceSetDigest,
-              eventTimestamp: "2026-09-04T14:30:00Z",
-              auditEventReference: "AUDIT-2026-SUTHERLAND-MINUTES-ITEM-4",
-            },
+            authorityKind: "TEST_ONLY_REVIEW_AUTHORITY",
             reviewerRef: "org-sutherland-private-office-research-committee",
             reviewerExpertise: "Independent buyer-side alpine property advisory and evidence-led decision methodology",
             reviewedContentDigest: ymylPage.contentDigest,
             reviewedAt: "2026-09-04",
             result: "APPROVED",
-            note: "Verified INSEE RP2022, DGFiP DVF/IFI, Notaires de France DPE schedule, Géorisques PPRN citations, and 7.2% worked calculation.",
+            note: "Test-only review authority for technical build and QA verification; not eligible for production publication.",
             verifiedClaimIds: pageClaims.map((c) => c.claimId),
             sourceEvidenceSetDigest,
             claimSetDigest,
@@ -1565,6 +1581,11 @@ test(
         );
       }
       assert.equal(qa5.overall, "PASS", "ProductionApiFacade.runCandidateQa (including mandatory YMYL trust gates) must PASS on 5-page build");
+      assert.equal(
+        qaRunPublicationEligible(qa5),
+        false,
+        "R12-QA-03: candidate under TEST_ONLY_REVIEW_AUTHORITY must have publicationEligible = false",
+      );
       assert.equal(
         (await productionStore.getCandidate(seeded.projectId, siteResult.candidateId))!.state,
         "qa_passed",
@@ -1697,6 +1718,7 @@ test(
       const wpSupply: OriginalWorkProduct = {
         workProductId: "owp-chamonix-supply-notes-01",
         pageIdentity: extraPage.slug,
+        transformationId: "chamonix-supply-synthesis-v1",
         productType: "STRUCTURED_DATASET",
         title: "Chamonix Supply-Side Regulatory & Housing Stock Synthesis Dataset",
         description:
@@ -1734,29 +1756,15 @@ test(
           schemaVersion: "trust-governance-v1",
           projectId: seeded.projectId,
           pageIdentity: extraPage.slug,
-          reviewerKind: "ACCEPTED_INSTITUTIONAL_COUNCIL",
+          reviewerKind: "SYNTHETIC_TEST_REVIEWER",
           reviewStatus: "EDITORIAL_REVIEW_APPROVED",
-          authorityKind: "VERIFIED_HUMAN_REVIEW_AUTHORITY",
-          approvalEventId: `appr-sutherland-council-${extraPage.slug.replace(/[^a-z0-9]/g, "-")}-20260904`,
-          approvalEventProvenance: "Accepted by Sutherland Institutional Review Council Minutes 2026-09-04 Item 4",
-          approvalEvent: {
-            reviewEventId: `appr-sutherland-council-${extraPage.slug.replace(/[^a-z0-9]/g, "-")}-20260904`,
-            authenticatedActorId: "actor-sutherland-council-lead",
-            actorRole: "Managing Director & Head of Editorial Governance",
-            authorizationScope: "YMYL_DECISION_SUPPORT:EDITORIAL_REVIEW",
-            reviewAction: "APPROVED",
-            reviewedContentDigest: row6.contentDigest,
-            reviewedClaimSetDigest: computeClaimSetDigest(page6Claims),
-            reviewedSourceEvidenceDigest: sourceEvidenceSetDigest,
-            eventTimestamp: "2026-09-04T14:30:00Z",
-            auditEventReference: "AUDIT-2026-SUTHERLAND-MINUTES-ITEM-4",
-          },
+          authorityKind: "TEST_ONLY_REVIEW_AUTHORITY",
           reviewerRef: "org-sutherland-private-office-research-committee",
           reviewerExpertise: "Independent buyer-side alpine property advisory and evidence-led decision methodology",
           reviewedContentDigest: row6.contentDigest,
           reviewedAt: "2026-09-04",
           result: "APPROVED",
-          note: "Verified Chamonix supply-side notes against INSEE RP2022, Chamonix PLU, May 2025 rental rules, and Géorisques PPRN.",
+          note: "Test-only review authority for technical build and QA verification; not eligible for production publication.",
           verifiedClaimIds: page6Claims.map((c) => c.claimId),
           sourceEvidenceSetDigest,
           claimSetDigest: computeClaimSetDigest(page6Claims),
@@ -1842,6 +1850,11 @@ test(
         );
       }
       assert.equal(qa6Candidate.overall, "PASS", "6-page candidate must PASS full ProductionApiFacade.runCandidateQa");
+      assert.equal(
+        qaRunPublicationEligible(qa6Candidate),
+        false,
+        "R12-QA-03: candidate under TEST_ONLY_REVIEW_AUTHORITY must have publicationEligible = false",
+      );
       assert.equal(
         (await productionStore.getCandidate(seeded.projectId, result6.candidateId))!.state,
         "qa_passed",

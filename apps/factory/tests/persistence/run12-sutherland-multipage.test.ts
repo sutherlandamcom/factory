@@ -26,7 +26,12 @@ import { loadProductionBuildIdentity } from "../../src/production/identity.js";
 import { bindQaCheck, TRUSTED_PRODUCTION_QA_GATES } from "../../src/production/qa/registry.js";
 import { runSiteWideQa } from "../../src/production/qa/site-wide.js";
 import { createHash } from "node:crypto";
-import { runTrustQa, computeClaimSetDigest, computeSourceEvidenceSetDigest } from "../../src/production/qa/trust.js";
+import {
+  runTrustQa,
+  computeClaimSetDigest,
+  computeSourceEvidenceSetDigest,
+  computeWorkProductExecutionHash,
+} from "../../src/production/qa/trust.js";
 import { loadInseeEvidenceRegistry } from "../../src/trust/insee-evidence.js";
 import { loadLegalEvidenceRegistry } from "../../src/trust/legal-evidence.js";
 import { createAssetStorage } from "../../src/assets/storage.js";
@@ -35,7 +40,6 @@ import {
   parseDesignInputSnapshotAnyVersion,
   isDesignInputSnapshotV2,
   parseDesignCandidateAnyVersion,
-  computeWorkProductExecutionHash,
   type DesignArchetypeKind,
   type PageIntentAuthority,
   type ClaimLineage,

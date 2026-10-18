@@ -849,11 +849,10 @@ test("R01–R08 Review authority fail-closed governance mutations fail closed wi
 });
 
 test("O01–O08 Original work product and independent recomputation mutations fail closed with exact error codes", async () => {
-  const {
-    computeWorkProductExecutionHash,
-    verifyOriginalWorkProduct,
-    parseOriginalWorkProduct,
-  } = await import("@factory/contracts");
+  const { parseOriginalWorkProduct } = await import("@factory/contracts");
+  const { computeWorkProductExecutionHash, verifyOriginalWorkProduct } = await import(
+    "../../src/production/qa/trust.js"
+  );
 
   const validSourceDigests = new Set([
     "1d858343f11467ba6cb56ec94c1f930e46a782b85fa19ea3fc805d7fb797c5f8", // INSEE Chamonix

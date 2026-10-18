@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { z } from "zod";
 import { digestSchema, idSchema, qaVerdictSchema } from "./writer-content.js";
 
@@ -831,64 +830,6 @@ export function parseOriginalWorkProduct(input: unknown): OriginalWorkProduct {
   return originalWorkProductSchema.parse(input);
 }
 
-export function computeWorkProductExecutionHash(input: {
-  productType: OriginalWorkProductType;
-  inputDatasetDigests: string[];
-  transformationDigest: string;
-}): string {
-  return createHash("sha256")
-    .update(`${input.productType}:${[...input.inputDatasetDigests].sort().join(",")}:${input.transformationDigest}`)
-    .digest("hex");
-}
-
-export function verifyOriginalWorkProduct(
-  wp: OriginalWorkProduct,
-  availableSourceDigests: Set<string>,
-): { valid: boolean; problems: string[] } {
-  const problems: string[] = [];
-
-  // O02: input dataset digests match actual source evidence files
-  for (const inputDigest of wp.inputDatasetDigests) {
-    if (!availableSourceDigests.has(inputDigest)) {
-      problems.push(
-        `input_dataset_digest_mismatch: declared input dataset digest ${inputDigest.slice(0, 12)}… is not found in authenticated source evidence registry.`,
-      );
-    }
-  }
-
-  // O04: execution hash reproduced from (productType + inputDatasetDigests + transformationDigest)
-  const expectedHash = computeWorkProductExecutionHash({
-    productType: wp.productType,
-    inputDatasetDigests: wp.inputDatasetDigests,
-    transformationDigest: wp.transformationDigest,
-  });
-  if (wp.executionHash !== expectedHash) {
-    problems.push(
-      `execution_hash_mismatch: declared executionHash ${wp.executionHash.slice(0, 12)}… does not match recomputed hash ${expectedHash.slice(0, 12)}…`,
-    );
-  }
-
-  // O05: output artifact ref
-  if (!wp.outputArtifactRef || wp.outputArtifactRef.trim().length === 0) {
-    problems.push("output_artifact_missing: outputArtifactRef cannot be empty.");
-  }
-
-  // O07: reproducible command
-  if (!wp.reproducibleCommand || !wp.reproducibleCommand.trim().startsWith("pnpm")) {
-    problems.push(
-      `reproducible_command_invalid: reproducibleCommand "${wp.reproducibleCommand}" is invalid or not executable.`,
-    );
-  }
-
-  // O08: declarative-only placeholder
-  if (/placeholder|mock|dummy|todo/i.test(`${wp.title} ${wp.description} ${wp.provenance}`)) {
-    problems.push(
-      "declarative_only_work_product_rejected: Work product contains placeholder text and lacks substantive computational or analytical content.",
-    );
-  }
-
-  return { valid: problems.length === 0, problems };
-}
 
 export const originalValueRecordSchema = z
   .object({

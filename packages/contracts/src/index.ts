@@ -495,8 +495,6 @@ export {
   parseReviewAuthority,
   parseOriginalValueRecord,
   parseOriginalWorkProduct,
-  computeWorkProductExecutionHash,
-  verifyOriginalWorkProduct,
   checkCannibalization,
   verifySourceRef,
   sourceAuthorityVerdict,

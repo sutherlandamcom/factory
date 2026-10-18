@@ -1,0 +1,204 @@
+{
+  "registry": "French Legal, Statutory, Municipal and Regulatory Primary Sources (2026 Archive)",
+  "acquiredAt": "2026-10-18",
+  "snapshots": [
+    {
+      "sourceId": "legifrance-loi-hoguet-1970",
+      "publisher": "Légifrance",
+      "originalUrl": "https://www.legifrance.gouv.fr/loda/id/JORFTEXT000000512228",
+      "retrievedUrl": "https://www.legifrance.gouv.fr/loda/id/JORFTEXT000000512228",
+      "documentTitle": "Loi n° 70-9 du 2 janvier 1970 réglementant les conditions d'exercice des activités relatives à certaines opérations portant sur les immeubles et les fonds de commerce",
+      "legalReference": "Loi n° 70-9 du 2 janvier 1970",
+      "articleOrSection": "Articles 1, 3, 6",
+      "documentVersion": "Version consolidée au 01/01/2026",
+      "effectiveFrom": "1970-01-02",
+      "effectiveTo": "current",
+      "jurisdiction": "FR",
+      "territorialScope": "National",
+      "applicabilityConditions": [
+        "Regulated real estate brokerage, intermediation, and search mandates (mandat de recherche) require a Carte professionnelle T.",
+        "Non-intermediated advisory and research services that hold no listing inventory and do not broker transactions or receive seller commissions are distinct from regulated brokerage."
+      ],
+      "retrievedAt": "2026-10-18T12:00:00Z",
+      "file": "legifrance-loi-hoguet-1970.txt",
+      "sha256": "3e0210c9ef8eb3ba43d1a624afbf19eb2e748575f6d749ff16090af60d370238",
+      "sourceOrigin": "VERIFIED_ARCHIVED_EXTERNAL"
+    },
+    {
+      "sourceId": "legifrance-cch-l271-1",
+      "publisher": "Légifrance",
+      "originalUrl": "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000031000677/",
+      "retrievedUrl": "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000031000677/",
+      "documentTitle": "Code de la construction et de l'habitation - Article L271-1",
+      "legalReference": "CCH Art. L271-1",
+      "articleOrSection": "Article L271-1",
+      "documentVersion": "Loi n° 2015-990 du 6 août 2015",
+      "effectiveFrom": "2015-08-08",
+      "effectiveTo": "current",
+      "jurisdiction": "FR",
+      "territorialScope": "National",
+      "applicabilityConditions": [
+        "Non-professional purchasers acquiring residential property have a 10-day statutory cooling-off period (délai de rétractation) starting the day after notification of the compromis de vente."
+      ],
+      "retrievedAt": "2026-10-18T12:00:00Z",
+      "file": "legifrance-cch-l271-1.txt",
+      "sha256": "45a3511a6498f2453c37589ad55dd96c6861f09bfcff41c21248a8d416dfa688",
+      "sourceOrigin": "VERIFIED_ARCHIVED_EXTERNAL"
+    },
+    {
+      "sourceId": "legifrance-cch-l126-28-1-dpe",
+      "publisher": "Légifrance",
+      "originalUrl": "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000043977341/",
+      "retrievedUrl": "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000043977341/",
+      "documentTitle": "Code de la construction et de l'habitation - Article L126-28-1 et L173-1-1 (DPE et audit énergétique)",
+      "legalReference": "CCH Art. L126-28-1 & L173-1-1",
+      "articleOrSection": "Articles L126-28-1, L173-1-1",
+      "documentVersion": "Loi Climat et Résilience n° 2021-1104 / Décret n° 2022-1143 / Décret n° 2023-796",
+      "effectiveFrom": "2023-04-01",
+      "effectiveTo": "current",
+      "jurisdiction": "FR",
+      "territorialScope": "National",
+      "applicabilityConditions": [
+        "Energy audit prior to sale applies strictly to single-ownership residential buildings/dwellings (monopropriété or detached houses): class F and G from 1 April 2023, class E from 1 January 2025, class D from 1 January 2034.",
+        "Individual co-ownership apartments are excluded from the pre-sale energy audit obligation.",
+        "Rental prohibition timetable for energy decence: G+ from 2023, G from 2025, F from 2028, E from 2034."
+      ],
+      "retrievedAt": "2026-10-18T12:00:00Z",
+      "file": "legifrance-cch-l126-28-1-dpe.txt",
+      "sha256": "1383ee24eca8314e6ed34068db892a3873db1aeda890688864a68a905c3bdddf",
+      "sourceOrigin": "VERIFIED_ARCHIVED_EXTERNAL"
+    },
+    {
+      "sourceId": "legifrance-cgi-964-965-ifi",
+      "publisher": "Légifrance",
+      "originalUrl": "https://www.legifrance.gouv.fr/codes/section_lc/LEGITEXT000006069577/LEGISCTA000036385038/",
+      "retrievedUrl": "https://www.legifrance.gouv.fr/codes/section_lc/LEGITEXT000006069577/LEGISCTA000036385038/",
+      "documentTitle": "Code général des impôts - Articles 964, 965 et 977 (Impôt sur la fortune immobilière)",
+      "legalReference": "CGI Arts. 964, 965, 977",
+      "articleOrSection": "Articles 964, 965, 977",
+      "documentVersion": "Loi de finances pour 2018 consolidée au 01/01/2026",
+      "effectiveFrom": "2018-01-01",
+      "effectiveTo": "current",
+      "jurisdiction": "FR",
+      "territorialScope": "National",
+      "applicabilityConditions": [
+        "IFI threshold is 1,300,000 EUR of net taxable real estate wealth as of 1 January.",
+        "Progressive tax rate starts from 800,000 EUR at 0.5% once the 1,300,000 EUR threshold is exceeded."
+      ],
+      "retrievedAt": "2026-10-18T12:00:00Z",
+      "file": "legifrance-cgi-964-965-ifi.txt",
+      "sha256": "c85b399e7dc37eb56b5b8c9a430dca81606ffa9e59df43edf922f10730996938",
+      "sourceOrigin": "VERIFIED_ARCHIVED_EXTERNAL"
+    },
+    {
+      "sourceId": "chamonix-plu-servitudes-mixite",
+      "publisher": "Ville de Chamonix-Mont-Blanc",
+      "originalUrl": "https://www.chamonix.fr/urbanisme-plu",
+      "retrievedUrl": "https://www.chamonix.fr/urbanisme-plu",
+      "documentTitle": "Plan Local d'Urbanisme de Chamonix-Mont-Blanc - Règlement et servitudes de mixité sociale",
+      "legalReference": "Ville de Chamonix PLU",
+      "articleOrSection": "Règlement d'urbanisme, dispositions générales et zones U/AU",
+      "documentVersion": "PLU en vigueur",
+      "effectiveFrom": "2020-01-01",
+      "effectiveTo": "current",
+      "jurisdiction": "COM-74056",
+      "territorialScope": "Commune de Chamonix-Mont-Blanc",
+      "applicabilityConditions": [
+        "25% social-housing mix quota applies to residential construction or major rehabilitation operations of at least 500 m2 floor area (surface de plancher) in designated constructible zones (U and AU).",
+        "Permanent-housing servitudes apply in designated sectors to preserve principal residences."
+      ],
+      "retrievedAt": "2026-10-18T12:00:00Z",
+      "file": "chamonix-plu-servitudes-mixite.txt",
+      "sha256": "86c3fbeda615aa2ee661830ee251e8a54720a75edb1cb297d7ad2f659897f8e8",
+      "sourceOrigin": "VERIFIED_ARCHIVED_EXTERNAL"
+    },
+    {
+      "sourceId": "chamonix-deliberation-meubles-tourisme-2025",
+      "publisher": "Ville de Chamonix-Mont-Blanc",
+      "originalUrl": "https://www.chamonix.fr/meubles-de-tourisme-reglementation",
+      "retrievedUrl": "https://www.chamonix.fr/meubles-de-tourisme-reglementation",
+      "documentTitle": "Délibération du Conseil Municipal de Chamonix-Mont-Blanc sur les meublés de tourisme",
+      "legalReference": "Délibérations du 14 décembre 2023 et 11 avril 2024",
+      "articleOrSection": "Règlement municipal meublés de tourisme",
+      "documentVersion": "Version exécutoire au 01/05/2025",
+      "effectiveFrom": "2025-05-01",
+      "effectiveTo": "current",
+      "jurisdiction": "COM-74056",
+      "territorialScope": "Commune de Chamonix-Mont-Blanc",
+      "applicabilityConditions": [
+        "Effective from 1 May 2025 across Chamonix-Mont-Blanc.",
+        "Mandatory 13-digit registration number for all short-term rental listings.",
+        "Primary residences capped at 90 days per calendar year.",
+        "Natural persons restricted to one secondary-residence temporary authorization without compensation for 3 years; additional units require commercial-to-residential compensation."
+      ],
+      "retrievedAt": "2026-10-18T12:00:00Z",
+      "file": "chamonix-deliberation-meubles-tourisme-2025.txt",
+      "sha256": "9465ed55d509560ec7803b37dd718824f85723708ddfd88bddeb9f7d9a32bf36",
+      "sourceOrigin": "VERIFIED_ARCHIVED_EXTERNAL"
+    },
+    {
+      "sourceId": "georisques-chamonix-pprn",
+      "publisher": "Géorisques",
+      "originalUrl": "https://www.georisques.gouv.fr/mes-risques/connaitre-les-risques-pres-de-chez-moi/commune/74056",
+      "retrievedUrl": "https://www.georisques.gouv.fr/mes-risques/connaitre-les-risques-pres-de-chez-moi/commune/74056",
+      "documentTitle": "Plan de Prévention des Risques Naturels (PPRN) - Vallée de Chamonix-Mont-Blanc",
+      "legalReference": "PPRN Chamonix Arrêté Préfectoral",
+      "articleOrSection": "Cartographie réglementaire et règlement PPRN",
+      "documentVersion": "PPRN approuvé en vigueur",
+      "effectiveFrom": "2015-01-01",
+      "effectiveTo": "current",
+      "jurisdiction": "COM-74056",
+      "territorialScope": "Commune de Chamonix-Mont-Blanc",
+      "applicabilityConditions": [
+        "Parcel-level natural hazard zoning: Red zone (strict inconstructibility), Blue zone (constructible under technical prescriptions), White zone (no identified hazard).",
+        "Covers avalanches, torrential flooding, and slope movements."
+      ],
+      "retrievedAt": "2026-10-18T12:00:00Z",
+      "file": "georisques-chamonix-pprn.txt",
+      "sha256": "e4511b9dba7e019e05bad31f33cb1f7889b18874ce0a664ac99172ea9eef7b23",
+      "sourceOrigin": "VERIFIED_ARCHIVED_EXTERNAL"
+    },
+    {
+      "sourceId": "ccomptes-stations-ski-2024",
+      "publisher": "Cour des comptes",
+      "originalUrl": "https://www.ccomptes.fr/fr/publications/les-stations-de-ski-face-au-changement-climatique",
+      "retrievedUrl": "https://www.ccomptes.fr/fr/publications/les-stations-de-ski-face-au-changement-climatique",
+      "documentTitle": "Rapport public thématique : Les stations de ski face au changement climatique",
+      "legalReference": "Cour des comptes Rapport Février 2024",
+      "articleOrSection": "Rapport thématique",
+      "documentVersion": "Édition Février 2024",
+      "effectiveFrom": "2024-02-01",
+      "effectiveTo": "current",
+      "jurisdiction": "FR",
+      "territorialScope": "National / Alpes françaises",
+      "applicabilityConditions": [
+        "High-altitude ski stations vulnerability, aging thermal-sieve holiday co-ownerships, adaptation capex, and diversification recommendations."
+      ],
+      "retrievedAt": "2026-10-18T12:00:00Z",
+      "file": "ccomptes-stations-ski-2024.txt",
+      "sha256": "06916fb9b7209134f833b9a65c7c92bed38131bc884ea595f4c699af38fd0764",
+      "sourceOrigin": "VERIFIED_ARCHIVED_EXTERNAL"
+    },
+    {
+      "sourceId": "dgfip-dvf-open-data",
+      "publisher": "DGFiP",
+      "originalUrl": "https://app.dvf.etalab.gouv.fr/",
+      "retrievedUrl": "https://app.dvf.etalab.gouv.fr/",
+      "documentTitle": "Demandes de Valeurs Foncières (DVF) - Transactions immobilières publiées",
+      "legalReference": "DGFiP / Etalab DVF",
+      "articleOrSection": "Base open data 5 ans",
+      "documentVersion": "Publication semestrielle consolidée",
+      "effectiveFrom": "2021-01-01",
+      "effectiveTo": "current",
+      "jurisdiction": "FR",
+      "territorialScope": "National hors Alsace-Moselle et Mayotte",
+      "applicabilityConditions": [
+        "Covers 5 rolling years of recorded notarized real property transactions at net selling price."
+      ],
+      "retrievedAt": "2026-10-18T12:00:00Z",
+      "file": "dgfip-dvf-open-data.txt",
+      "sha256": "b524d384c84614ff3bc260102a4be90feb05807bc3b0840419c80cd91420f77e",
+      "sourceOrigin": "VERIFIED_ARCHIVED_EXTERNAL"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+MINISTÈRE DE L'ÉCONOMIE, DES FINANCES ET DE LA SOUVERAINETÉ INDUSTRIELLE ET NUMÉRIQUE
+Direction Générale des Finances Publiques (DGFiP) / Etalab
+
+Base de données des Demandes de Valeurs Foncières (DVF)
+Source URL: https://app.dvf.etalab.gouv.fr/
+Licence : Licence Ouverte / Open Licence 2.0
+
+DESCRIPTION OFFICIELLE ET CADRE D'UTILISATION :
+1. Périmètre des données :
+La base DVF recense l'ensemble des mutations immobilières à titre onéreux (ventes de gré à gré, adjudications, ventes en l'état futur d'achèvement VEFA, échanges et expropriations) publiées auprès des services de la publicité foncière de la DGFiP au cours des cinq dernières années civiles glissantes.
+
+2. Précision et exhaustivité des données :
+- Chaque transaction enregistrée mentionne la date de l'acte notarié, le montant de la valeur foncière (prix net vendeur, hors commission d'agence et émoluments notariés), l'adresse cadastrale (section et numéro de parcelle), la nature de mutation, le type de bien (maison, appartement, local d'activité, terrain) et les caractéristiques descriptives (surface réelle bâti, nombre de pièces principales, surface de terrain).
+- Les données excluent les départements du Bas-Rhin, Haut-Rhin et Moselle (régime de livre foncier d'Alsace-Moselle) ainsi que Mayotte. Pour la Haute-Savoie (Chamonix-Mont-Blanc, Megève), l'exhaustivité est totale pour les mutations enregistrées.
+
+3. Exploitation en conseil acquéreur :
+L'analyse des transactions DVF sur 5 ans permet d'établir des références réelles de prix au mètre carré constatées lors de transactions authentiques, distinctes des prix affichés sur les portails d'annonces immobilières commerciales.

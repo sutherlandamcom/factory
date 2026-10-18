@@ -7,6 +7,7 @@ import { runSiteWideQa } from "./qa/site-wide.js";
 import { runDesignDriftQa } from "./qa/design-drift.js";
 import { runTrustQa } from "./qa/trust.js";
 import { loadInseeEvidenceRegistry } from "../trust/insee-evidence.js";
+import { loadLegalEvidenceRegistry } from "../trust/legal-evidence.js";
 import { TrustGovernanceStore } from "../trust/store.js";
 import { deterministicDigest } from "../intelligence/digest.js";
 import { qaOverallVerdict, type ProductionQaCheckResult } from "@factory/contracts";
@@ -209,6 +210,7 @@ export class ProductionApiFacade {
       manifestSetDigest,
       syntheticFixtureContent: this.trustPolicy.syntheticFixtureContent === true,
       inseeEvidence: loadInseeEvidenceRegistry(this.repoRoot),
+      legalEvidence: loadLegalEvidenceRegistry(this.repoRoot),
     });
     qa.checks.push(...trustQa.checks);
     const pageRoutes = manifests.map((manifest) => manifest.input.route);

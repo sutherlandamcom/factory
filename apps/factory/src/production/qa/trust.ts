@@ -1,4 +1,6 @@
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import type { ProductionQaCheckResult } from "./types.js";
 import type { ProductionRenderManifest } from "../render-manifest.js";
@@ -11,11 +13,17 @@ import {
   type InseeEvidenceRegistry,
 } from "../../trust/insee-evidence.js";
 import {
+  loadLegalEvidenceRegistry,
+  verifyLegalClaim,
+  type LegalEvidenceRegistry,
+} from "../../trust/legal-evidence.js";
+import {
   UNCERTAIN_CLAIM_TYPES,
   claimLineageProblems,
   claimLineageVerdict,
   sourceAuthorityVerdict,
   checkTopicExpertiseMatch,
+  verifyOriginalWorkProduct,
   type ClaimLineage,
   type PageIntentAuthority,
 } from "@factory/contracts";
@@ -80,6 +88,59 @@ export interface TrustQaInput {
    * FAIL (fail closed).
    */
   inseeEvidence?: InseeEvidenceRegistry;
+  /**
+   * Independently verified, digest-pinned French legal and regulatory evidence.
+   * Primary statutory/regulatory claims are verified against THIS registry.
+   */
+  legalEvidence?: LegalEvidenceRegistry;
+  /**
+   * Optional override for sourceEvidenceSetDigest. If omitted, computed from
+   * inseeEvidence and legalEvidence.
+   */
+  sourceEvidenceSetDigest?: string;
+}
+
+export function computeSourceEvidenceSetDigest(input: {
+  inseeEvidence?: InseeEvidenceRegistry;
+  legalEvidence?: LegalEvidenceRegistry;
+}): string {
+  const entries: string[] = [];
+  if (input.inseeEvidence) {
+    for (const snap of input.inseeEvidence.snapshots) {
+      entries.push(`insee:${snap.geoCode}:${snap.rawContentDigest}`);
+    }
+  }
+  if (input.legalEvidence) {
+    for (const snap of input.legalEvidence.snapshots) {
+      entries.push(`legal:${snap.sourceId}:${snap.sha256}`);
+    }
+  }
+  entries.sort();
+  return createHash("sha256").update(entries.join(";")).digest("hex");
+}
+
+export function computeClaimSetDigest(claims: ClaimLineage[]): string {
+  return createHash("sha256")
+    .update(
+      claims
+        .map((c) => `${c.claimId}:${c.claimType}:${c.claimText}:${c.sourceRefs.map((r) => r.ref).join(",")}`)
+        .sort()
+        .join(";"),
+    )
+    .digest("hex");
+}
+
+function findRepoRoot(startDir: string): string {
+  let curr = path.resolve(startDir);
+  for (let i = 0; i < 10; i++) {
+    if (existsSync(path.join(curr, "package.json")) && existsSync(path.join(curr, "docs"))) {
+      return curr;
+    }
+    const parent = path.dirname(curr);
+    if (parent === curr) break;
+    curr = parent;
+  }
+  return process.cwd();
 }
 
 /** Leak labels inherent to deterministic fixture-writer output. */
@@ -276,6 +337,7 @@ function isSentenceCoveredByClaims(sentence: string, claims: ReadonlyArray<Claim
 
 export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
   const checks: ProductionQaCheckResult[] = [];
+  const legalRegistry = input.legalEvidence ?? loadLegalEvidenceRegistry(findRepoRoot(input.distDir));
   const intentsByPage = new Map<string, PageIntentAuthority>();
   for (const intent of await input.trust.listCurrentIntentAuthorities(input.projectId)) {
     intentsByPage.set(normalizePageIdentity(intent.pageIdentity), intent);
@@ -473,6 +535,9 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
         const independentProblems: string[] = [];
         for (const c of sourcedClaims) {
           independentProblems.push(...verifyStatutoryAndRegulatoryClaim(c).problems);
+          if (legalRegistry) {
+            independentProblems.push(...verifyLegalClaim(c, legalRegistry).problems);
+          }
           if (!c.sourceRefs.some(isInseeSourceRef)) continue;
           if (!input.inseeEvidence) {
             independentProblems.push(`${c.claimId}: source_snapshot_unverified — no independent INSEE evidence registry available (fail closed).`);
@@ -514,7 +579,23 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
         ),
       );
     } else {
-      const current = await input.trust.currentReview(input.projectId, identity, digest);
+      const claimSetDigest = createHash("sha256")
+        .update(claims.map((c) => `${c.claimId}:${c.claimType}:${c.claimText}:${c.sourceRefs.map((r) => r.ref).join(",")}`).sort().join(";"))
+        .digest("hex");
+      const currentSourceEvidenceSetDigest =
+        input.sourceEvidenceSetDigest ??
+        computeSourceEvidenceSetDigest({
+          inseeEvidence: input.inseeEvidence,
+          legalEvidence: legalRegistry,
+        });
+
+      const current = await input.trust.currentReview(
+        input.projectId,
+        identity,
+        digest,
+        claimSetDigest,
+        currentSourceEvidenceSetDigest,
+      );
       const htmlHasReviewAttr = Boolean(html && /data-review-authority="([^"]+)"/i.test(html));
       const htmlReviewerMatch = html?.match(/data-review-authority="([^"]+)"/i);
       const htmlDigestMatch = html?.match(/data-reviewed-digest="([^"]+)"/i);
@@ -526,6 +607,12 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
             current.review.reviewStatus === "EDITORIAL_REVIEW_PENDING" ||
             current.review.reviewStatus === "EDITORIAL_REVIEW_REJECTED" ||
             /\b(?:synthetic|fixture|mock|automated-bot)\b/i.test(current.review.reviewerRef)),
+      );
+      const isUnauthenticatedHuman = Boolean(
+        current.review &&
+          (current.review.reviewerKind === "EXTERNAL_HUMAN_REVIEWER" ||
+            current.review.reviewerKind === "ACCEPTED_INSTITUTIONAL_COUNCIL") &&
+          (!current.review.approvalEventId || !current.review.approvalEventProvenance),
       );
       const currentClaimIds = new Set(claims.map((c) => c.claimId));
       const verifiedIdsMismatch = Boolean(
@@ -562,6 +649,16 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
               "trust.review_authority",
               "FAIL",
               `Page ${identity}: editorial_review_pending_or_synthetic — ReviewAuthority (${current.review.reviewerRef}, status=${current.review.reviewStatus ?? "unspecified"}, kind=${current.review.reviewerKind ?? "unspecified"}) is synthetic or pending human editorial approval.`,
+              [{ kind: "route", ref: route }],
+            ),
+          );
+        } else if (isUnauthenticatedHuman) {
+          checks.push(
+            pageCheck(
+              route,
+              "trust.review_authority",
+              "FAIL",
+              `Page ${identity}: unauthenticated_human_approval — ReviewAuthority (${current.review!.reviewerRef}) lacks verified approvalEventId or audit provenance statement.`,
               [{ kind: "route", ref: route }],
             ),
           );
@@ -612,13 +709,13 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
             ),
           );
         }
-      } else if (current.review && (current.stale || verifiedIdsMismatch || isSyntheticOrPendingReviewer || current.review.result !== "APPROVED")) {
+      } else if (current.review && (current.stale || verifiedIdsMismatch || isSyntheticOrPendingReviewer || isUnauthenticatedHuman || current.review.result !== "APPROVED")) {
         checks.push(
           pageCheck(
             route,
             "trust.review_authority",
             "FAIL",
-            `Page ${identity}: recorded ReviewAuthority is stale, synthetic/pending, or not approved.`,
+            `Page ${identity}: recorded ReviewAuthority is stale, synthetic/pending, unauthenticated, or not approved.`,
             [{ kind: "route", ref: route }],
           ),
         );
@@ -685,6 +782,10 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
           return hasQuantitativeOrStatutoryAnchor && linkedToBoundClaim;
         });
 
+        const isDecisionSupport =
+          intent.ymylClassification === "YMYL_DECISION_SUPPORT" ||
+          intent.ymylClassification === "YMYL_HIGH_IMPACT";
+
         if (verifiedOriginals.length === 0) {
           checks.push(
             pageCheck(
@@ -695,6 +796,66 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
               originals.slice(0, 5).map((r) => ({ kind: "artifact" as const, ref: r.kind })),
             ),
           );
+        } else if (isDecisionSupport) {
+          // Block 3: Inspectable OriginalWorkProduct verification (O01-O08)
+          const availableSourceDigests = new Set<string>();
+          if (input.inseeEvidence) {
+            for (const s of input.inseeEvidence.snapshots) availableSourceDigests.add(s.rawContentDigest);
+          }
+          if (legalRegistry) {
+            for (const s of legalRegistry.snapshots) availableSourceDigests.add(s.sha256);
+          }
+
+          const recordsWithWp = verifiedOriginals.filter((r) => r.workProduct);
+          if (recordsWithWp.length === 0) {
+            checks.push(
+              pageCheck(
+                route,
+                "trust.original_value",
+                "FAIL",
+                `Page ${identity}: original_value_work_product_missing — YMYL decision support page requires an inspectable OriginalWorkProduct (O01).`,
+                originals.slice(0, 5).map((r) => ({ kind: "artifact" as const, ref: r.kind })),
+              ),
+            );
+          } else {
+            const wpProblems: string[] = [];
+            for (const rec of recordsWithWp) {
+              const wp = rec.workProduct!;
+              const wpCheck = verifyOriginalWorkProduct(wp, availableSourceDigests);
+              if (!wpCheck.valid) {
+                wpProblems.push(...wpCheck.problems);
+              }
+              const missingWpAnchors = wp.verifiableAnchors.filter(
+                (a) => !normHtml.includes(normalizeWhitespace(a)),
+              );
+              if (missingWpAnchors.length > 0) {
+                wpProblems.push(
+                  `original_value_anchors_missing: verifiable anchors missing from rendered page HTML (${missingWpAnchors.join(", ")})`,
+                );
+              }
+            }
+            if (wpProblems.length > 0) {
+              checks.push(
+                pageCheck(
+                  route,
+                  "trust.original_value",
+                  "FAIL",
+                  `Page ${identity}: OriginalWorkProduct verification FAILED (${wpProblems.join("; ")}).`,
+                  recordsWithWp.slice(0, 5).map((r) => ({ kind: "artifact" as const, ref: r.workProduct!.workProductId })),
+                ),
+              );
+            } else {
+              checks.push(
+                pageCheck(
+                  route,
+                  "trust.original_value",
+                  "PASS",
+                  `Page ${identity}: ${recordsWithWp.length} inspectable OriginalWorkProduct(s) recomputed and verified against source evidence and HTML anchors.`,
+                  recordsWithWp.slice(0, 5).map((r) => ({ kind: "artifact" as const, ref: r.workProduct!.workProductId })),
+                ),
+              );
+            }
+          }
         } else {
           checks.push(
             pageCheck(

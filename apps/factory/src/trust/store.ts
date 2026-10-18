@@ -286,6 +286,8 @@ export class TrustGovernanceStore {
     projectId: string,
     pageIdentity: string,
     currentContentDigest: string,
+    currentClaimSetDigest?: string,
+    currentSourceEvidenceSetDigest?: string,
   ): Promise<{ review: ReviewAuthority | null; stale: boolean; reason: string | null }> {
     const norm = normalizePageIdentity(pageIdentity);
     const [row] = await this.db
@@ -301,7 +303,12 @@ export class TrustGovernanceStore {
       .limit(1);
     if (!row) return { review: null, stale: false, reason: null };
     const review = row.data as ReviewAuthority;
-    const staleness = reviewStaleness(review, currentContentDigest);
+    const staleness = reviewStaleness(
+      review,
+      currentContentDigest,
+      currentClaimSetDigest,
+      currentSourceEvidenceSetDigest,
+    );
     return { review, stale: staleness.stale, reason: staleness.reason };
   }
 

@@ -124,7 +124,7 @@
 - **Reviewer Checklist**:
   - [ ] Methodology is described with academic and professional rigor.
   - [ ] Primary sources are cited with complete, verifiable metadata.
-  - [ ] Visible attribution to `Alistair Sutherland` (`[data-review-authority]`) is present in the rendered HTML.
+  - [ ] Visible attribution to `org-sutherland-private-office-research-committee` (`[data-review-authority]`) is present in the rendered HTML.
 
 ---
 

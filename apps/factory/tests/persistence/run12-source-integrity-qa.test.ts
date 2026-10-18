@@ -9,6 +9,7 @@ import { seedSutherlandProject } from "../fixtures/sutherland-seeds.js";
 import { TrustGovernanceStore } from "../../src/trust/store.js";
 import { runTrustQa } from "../../src/production/qa/trust.js";
 import { loadInseeEvidenceRegistry, inseeSourceUrl } from "../../src/trust/insee-evidence.js";
+import { loadLegalEvidenceRegistry } from "../../src/trust/legal-evidence.js";
 import type { ClaimLineage, EvidenceBinding, PageIntentAuthority, SourceRef } from "@factory/contracts";
 
 /**
@@ -20,6 +21,7 @@ import type { ClaimLineage, EvidenceBinding, PageIntentAuthority, SourceRef } fr
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const registry = loadInseeEvidenceRegistry(repoRoot);
+const legalRegistry = loadLegalEvidenceRegistry(repoRoot);
 
 const tf = (geoCode: string, rowKey: string, value: number, year = 2022): EvidenceBinding => ({
   kind: "table_fact", geoCode, reportingYear: year, tableId: "LOG T1", rowKey, columnKey: String(year), value, unit: "dwellings",
@@ -493,7 +495,9 @@ test("M20, M21, M22, M23, M24, M25, M26 fail closed in runTrustQa with exact err
     assert.equal(cannCheck.verdict, "FAIL");
     assert.match(cannCheck.detail, /cannibalization_or_duplicate_page_rejected/);
 
-    // M22: Review authority becomes stale when verifiedClaimIds no longer match the current claim set
+    // M22: Genuine source-digest staleness: sourceEvidenceSetDigest changed while content digest & claim set remain identical
+    const genuineSourceDigest = "a".repeat(64);
+    const alteredSourceDigest = "b".repeat(64);
     await trust.recordReview({
       projectId,
       review: {
@@ -503,15 +507,21 @@ test("M20, M21, M22, M23, M24, M25, M26 fail closed in runTrustQa with exact err
         reviewerRef: "org-sutherland-private-office-research-committee",
         reviewerExpertise: "Independent buyer-side alpine property advisory",
         reviewedContentDigest: digest,
+        sourceEvidenceSetDigest: genuineSourceDigest,
         reviewedAt: "2026-09-04",
         result: "APPROVED",
-        note: "Approved prior claim set",
-        verifiedClaimIds: ["claim-prior-old-id"],
+        note: "Approved against genuine source evidence digest",
+        verifiedClaimIds: ["claim-m20"],
+        reviewStatus: "EDITORIAL_REVIEW_APPROVED",
+        reviewerKind: "ACCEPTED_INSTITUTIONAL_COUNCIL",
+        approvalEventId: "appr-sutherland-council-2026-09-04",
+        approvalEventProvenance: "Institutional review charter minute 2026-09-04",
       },
     });
     const report2 = await runTrustQa({
       manifests: [manifestA], distDir: dist, projectId, trust, contentDigests: new Map([[pageIdentity, digest]]), manifestSetDigest: "2".repeat(64),
       inseeEvidence: registry,
+      sourceEvidenceSetDigest: alteredSourceDigest,
     });
     const staleRev = report2.checks.find((c) => c.checkId === "trust.review_authority")!;
     assert.equal(staleRev.verdict, "FAIL");
@@ -540,7 +550,31 @@ test("M20, M21, M22, M23, M24, M25, M26 fail closed in runTrustQa with exact err
     });
     assert.ok(m25Problems.some((p) => /forecast_as_fact_rejected/.test(p)));
 
-    // M26: Uncertain claim (SCENARIO) without visible label in rendered HTML
+    // M26: Non-entailing supporting excerpt on substantive claim
+    const m26NonEntailingProblems = claimLineageProblems({
+      claimId: "claim-m26-non-entailing",
+      claimText: "Under French law, property advisory firms cannot act as transaction brokers without holding a Carte professionnelle T.",
+      claimType: "SOURCE_DERIVED_FACT",
+      sourceRefs: [
+        {
+          ref: "Légifrance — General Alpine Discussion",
+          sourceUrl: "https://www.legifrance.gouv.fr/jorf/id/JORFTEXT000000512228",
+          supportingExcerpt: "Alpine chalet transactions in Chamonix and Megève represent high-value property acquisitions.",
+          tier: "TIER_A",
+          sourceDate: "2026-01-01",
+          freshnessBasis: "observation_date",
+          entailment: "SUPPORTED",
+        },
+      ],
+      pageIdentity,
+      limitation: "",
+    });
+    assert.ok(
+      m26NonEntailingProblems.some((p) => /SOURCE_ENTAILMENT_UNSUPPORTED/.test(p)),
+      `Expected SOURCE_ENTAILMENT_UNSUPPORTED, got ${JSON.stringify(m26NonEntailingProblems)}`,
+    );
+
+    // M26b: Uncertain claim (SCENARIO) without visible label in rendered HTML
     const scenarioClaim: ClaimLineage = {
       claimId: "claim-m26",
       claimText: GOOD,
@@ -562,4 +596,419 @@ test("M20, M21, M22, M23, M24, M25, M26 fail closed in runTrustQa with exact err
     await dbInst.close();
   }
 });
+
+test("L01–L08 French legal primary source verification mutations fail closed with exact error codes", async () => {
+  const { verifyLegalClaim } = await import("../../src/trust/legal-evidence.js");
+  const pageIdentity = "services/buyer-side-advisory";
+
+  // L01: Loi Hoguet / Carte T exemption or unlicensed brokerage assertion
+  const l01Claim: ClaimLineage = {
+    claimId: "claim-l01",
+    claimText: "Sutherland permits alpine property brokerage without holding a Carte professionnelle T.",
+    claimType: "SOURCE_DERIVED_FACT",
+    sourceRefs: [
+      {
+        ref: "Légifrance — Loi No. 70-9 (Loi Hoguet)",
+        sourceUrl: "https://www.legifrance.gouv.fr/loda/id/JORFTEXT000000512228/",
+        supportingExcerpt:
+          "Loi No. 70-9 du 2 janvier 1970 réglementant les conditions d'exercice des activités relatives à certaines opérations portant sur les immeubles et les fonds de commerce.",
+        tier: "TIER_A",
+        sourceDate: "2026-01-01",
+        freshnessBasis: "effective_version",
+        entailment: "SUPPORTED",
+      },
+    ],
+    pageIdentity,
+    limitation: "",
+  };
+  const l01Res = verifyLegalClaim(l01Claim, legalRegistry);
+  assert.equal(l01Res.ok, false);
+  assert.ok(l01Res.problems.some((p) => /statutory_proposition_mismatch/.test(p)));
+
+  // L02: Notaires de France / CCH L271-1 7-day cooling-off instead of 10 days
+  const l02Claim: ClaimLineage = {
+    claimId: "claim-l02",
+    claimText: "French residential buyers benefit from a 7-day statutory cooling-off period following compromis de vente notification.",
+    claimType: "SOURCE_DERIVED_FACT",
+    sourceRefs: [
+      {
+        ref: "Légifrance — Code de la construction et de l'habitation Art. L271-1",
+        sourceUrl: "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000031000677/",
+        supportingExcerpt: "L'acquéreur non professionnel d'un immeuble d'habitation peut se rétracter dans un délai de dix jours.",
+        tier: "TIER_A",
+        sourceDate: "2026-01-01",
+        freshnessBasis: "effective_version",
+        entailment: "SUPPORTED",
+      },
+    ],
+    pageIdentity,
+    limitation: "",
+  };
+  const l02Res = verifyLegalClaim(l02Claim, legalRegistry);
+  assert.equal(l02Res.ok, false);
+  assert.ok(l02Res.problems.some((p) => /statutory_schedule_mismatch/.test(p)));
+
+  // L03: Chamonix PLU applied to wrong municipality (Megève)
+  const l03Claim: ClaimLineage = {
+    claimId: "claim-l03",
+    claimText: "In Megève, the Chamonix PLU imposes a 25% quota of social-mix housing on residential projects.",
+    claimType: "SOURCE_DERIVED_FACT",
+    sourceRefs: [
+      {
+        ref: "Ville de Chamonix-Mont-Blanc — PLU approuvé",
+        sourceUrl: "https://www.chamonix.fr/urbanisme/plu",
+        supportingExcerpt: "Servitudes de mixité sociale: 25% de logements locatifs sociaux.",
+        tier: "TIER_A",
+        sourceDate: "2026-01-01",
+        freshnessBasis: "effective_version",
+        entailment: "SUPPORTED",
+      },
+    ],
+    pageIdentity,
+    limitation: "",
+  };
+  const l03Res = verifyLegalClaim(l03Claim, legalRegistry);
+  assert.equal(l03Res.ok, false);
+  assert.ok(l03Res.problems.some((p) => /claim_geography_mismatch/.test(p)));
+
+  // L04: Chamonix PLU 25% social housing quota claimed as universal without 500 m2 SP threshold
+  const l04Claim: ClaimLineage = {
+    claimId: "claim-l04",
+    claimText: "Under the Chamonix PLU, a 25% social-mix quota applies universally to all residential construction in the commune.",
+    claimType: "SOURCE_DERIVED_FACT",
+    sourceRefs: [
+      {
+        ref: "Ville de Chamonix-Mont-Blanc — PLU approuvé",
+        sourceUrl: "https://www.chamonix.fr/urbanisme/plu",
+        supportingExcerpt: "Servitudes de mixité sociale: 25% de logements locatifs sociaux.",
+        tier: "TIER_A",
+        sourceDate: "2026-01-01",
+        freshnessBasis: "effective_version",
+        entailment: "SUPPORTED",
+      },
+    ],
+    pageIdentity,
+    limitation: "",
+  };
+  const l04Res = verifyLegalClaim(l04Claim, legalRegistry);
+  assert.equal(l04Res.ok, false);
+  assert.ok(l04Res.problems.some((p) => /statutory_proposition_mismatch/.test(p)));
+
+  // L05: DPE pre-sale energy audit applied to excluded individual co-ownership apartments
+  const l05Claim: ClaimLineage = {
+    claimId: "claim-l05",
+    claimText: "Under CCH Article L126-28-1, individual co-ownership apartments must have an energy audit prior to sale.",
+    claimType: "SOURCE_DERIVED_FACT",
+    sourceRefs: [
+      {
+        ref: "Légifrance — CCH Art. L126-28-1",
+        sourceUrl: "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000043977341/",
+        supportingExcerpt: "L'audit énergétique s'applique aux bâtiments d'habitation appartenant à un seul propriétaire.",
+        tier: "TIER_A",
+        sourceDate: "2026-01-01",
+        freshnessBasis: "effective_version",
+        entailment: "SUPPORTED",
+      },
+    ],
+    pageIdentity,
+    limitation: "",
+  };
+  const l05Res = verifyLegalClaim(l05Claim, legalRegistry);
+  assert.equal(l05Res.ok, false);
+  assert.ok(l05Res.problems.some((p) => /statutory_proposition_mismatch/.test(p)));
+
+  // L06: Self-declared legal TIER_A citation without authentic stored snapshot
+  const l06Claim: ClaimLineage = {
+    claimId: "claim-l06",
+    claimText: "French building regulations require mandatory thermal retrofits under Decree 2026-9999.",
+    claimType: "SOURCE_DERIVED_FACT",
+    sourceRefs: [
+      {
+        ref: "Légifrance — Décret imaginaire 2026-9999",
+        sourceUrl: "https://www.legifrance.gouv.fr/jorf/id/JORFTEXT000099999999/",
+        supportingExcerpt: "Dispositions thermiques obligatoires pour tous les chalets alpins.",
+        tier: "TIER_A",
+        sourceDate: "2026-01-01",
+        freshnessBasis: "effective_version",
+        entailment: "SUPPORTED",
+      },
+    ],
+    pageIdentity,
+    limitation: "",
+  };
+  const l06Res = verifyLegalClaim(l06Claim, legalRegistry);
+  assert.equal(l06Res.ok, false);
+  assert.ok(l06Res.problems.some((p) => /LEGAL_SOURCE_UNVERIFIED/.test(p)));
+
+  // L07: Cooling-off duration wrong (14 days)
+  const l07Claim: ClaimLineage = {
+    claimId: "claim-l07",
+    claimText: "Buyers benefit from a 14 days cooling-off period under CCH L271-1.",
+    claimType: "SOURCE_DERIVED_FACT",
+    sourceRefs: [
+      {
+        ref: "Légifrance — CCH L271-1",
+        sourceUrl: "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000031000677/",
+        supportingExcerpt: "L'acquéreur non professionnel peut se rétracter dans un délai de dix jours.",
+        tier: "TIER_A",
+        sourceDate: "2026-01-01",
+        freshnessBasis: "effective_version",
+        entailment: "SUPPORTED",
+      },
+    ],
+    pageIdentity,
+    limitation: "",
+  };
+  const l07Res = verifyLegalClaim(l07Claim, legalRegistry);
+  assert.equal(l07Res.ok, false);
+  assert.ok(l07Res.problems.some((p) => /statutory_schedule_mismatch/.test(p)));
+
+  // L08: Publisher name paired with unrelated document URL
+  const l08Claim: ClaimLineage = {
+    claimId: "claim-l08",
+    claimText: "Loi Hoguet regulates property intermediation in France.",
+    claimType: "SOURCE_DERIVED_FACT",
+    sourceRefs: [
+      {
+        ref: "Légifrance — Loi Hoguet 1970",
+        sourceUrl: "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000031000677/", // CCH L271-1 URL instead of Loi Hoguet URL
+        supportingExcerpt: "Loi No. 70-9 du 2 janvier 1970.",
+        tier: "TIER_A",
+        sourceDate: "2026-01-01",
+        freshnessBasis: "effective_version",
+        entailment: "SUPPORTED",
+      },
+    ],
+    pageIdentity,
+    limitation: "",
+  };
+  const l08Res = verifyLegalClaim(l08Claim, legalRegistry);
+  assert.equal(l08Res.ok, false);
+  assert.ok(l08Res.problems.some((p) => /source_url_mismatch/.test(p)));
+});
+
+test("R01–R08 Review authority fail-closed governance mutations fail closed with exact error codes", async () => {
+  const { reviewStaleness, parseReviewAuthority, checkTopicExpertiseMatch } = await import("@factory/contracts");
+  const contentDigest = "c".repeat(64);
+  const claimSetDigest = "d".repeat(64);
+  const sourceDigest = "e".repeat(64);
+
+  const validReview = parseReviewAuthority({
+    schemaVersion: "trust-governance-v1",
+    projectId: "proj-r-test",
+    pageIdentity: "research/alpine-decision-framework",
+    reviewerRef: "org-sutherland-private-office-research-committee",
+    reviewerExpertise: "Independent buyer-side alpine property advisory",
+    reviewedContentDigest: contentDigest,
+    reviewedAt: "2026-09-04",
+    result: "APPROVED",
+    note: "All verified",
+    verifiedClaimIds: ["c1", "c2"],
+    reviewStatus: "EDITORIAL_REVIEW_APPROVED",
+    reviewerKind: "ACCEPTED_INSTITUTIONAL_COUNCIL",
+    claimSetDigest,
+    sourceEvidenceSetDigest: sourceDigest,
+    approvalEventId: "appr-12345",
+    approvalEventProvenance: "Institutional review board signed minute",
+  });
+
+  // R04: Content digest mismatch
+  const r04Stale = reviewStaleness(validReview, "f".repeat(64), claimSetDigest, sourceDigest);
+  assert.equal(r04Stale.stale, true);
+  assert.match(r04Stale.reason ?? "", /Reviewed content changed materially/);
+
+  // R05: Source evidence set digest mismatch (M22)
+  const r05Stale = reviewStaleness(validReview, contentDigest, claimSetDigest, "f".repeat(64));
+  assert.equal(r05Stale.stale, true);
+  assert.match(r05Stale.reason ?? "", /Underlying source evidence snapshot bytes or registry changed/);
+
+  // R06: Claim set digest mismatch
+  const r06Stale = reviewStaleness(validReview, contentDigest, "f".repeat(64), sourceDigest);
+  assert.equal(r06Stale.stale, true);
+  assert.match(r06Stale.reason ?? "", /Underlying claim lineage, source evidence, or calculation changed/);
+
+  // R01: Synthetic reviewer kind
+  const r01Review = { ...validReview, reviewerKind: "SYNTHETIC_TEST_REVIEWER" as const };
+  assert.equal(r01Review.reviewerKind, "SYNTHETIC_TEST_REVIEWER");
+
+  // R02: Editorial review pending
+  const r02Review = { ...validReview, reviewStatus: "EDITORIAL_REVIEW_PENDING" as const };
+  assert.equal(r02Review.reviewStatus, "EDITORIAL_REVIEW_PENDING");
+
+  // R03: Unauthenticated human (missing approvalEventId)
+  const r03Review = { ...validReview, approvalEventId: undefined, approvalEventProvenance: undefined };
+  assert.equal(r03Review.approvalEventId, undefined);
+
+  // R07: Expertise mismatch
+  const r07Exp = checkTopicExpertiseMatch(["property", "advisory"], "General journalism and culinary arts");
+  assert.equal(r07Exp.verdict, "FAIL");
+
+  // R08: Result CHANGES_REQUESTED
+  const r08Review = { ...validReview, result: "CHANGES_REQUESTED" as const };
+  assert.equal(r08Review.result, "CHANGES_REQUESTED");
+});
+
+test("O01–O08 Original work product and independent recomputation mutations fail closed with exact error codes", async () => {
+  const {
+    computeWorkProductExecutionHash,
+    verifyOriginalWorkProduct,
+    parseOriginalWorkProduct,
+  } = await import("@factory/contracts");
+
+  const validSourceDigests = new Set([
+    "1d858343f11467ba6cb56ec94c1f930e46a782b85fa19ea3fc805d7fb797c5f8", // INSEE Chamonix
+    "632d4317f2cae578a0b0d39e80e1c26b565aebcf405e1975e54c41499c855a80", // INSEE Megève
+  ]);
+
+  const transformationDigest = "c".repeat(64);
+  const inputDatasetDigests = ["1d858343f11467ba6cb56ec94c1f930e46a782b85fa19ea3fc805d7fb797c5f8"];
+  const executionHash = computeWorkProductExecutionHash({
+    productType: "COMPUTATIONAL_MODEL",
+    inputDatasetDigests,
+    transformationDigest,
+  });
+
+  const validWp = parseOriginalWorkProduct({
+    workProductId: "owp-alpine-yield-model-v1",
+    pageIdentity: "research/alpine-decision-framework",
+    productType: "COMPUTATIONAL_MODEL",
+    title: "Alpine Gross Yield Worked Model",
+    description: "Independent calculation of 26400 EUR annual rent over 366000 EUR purchase price yielding 7.2%.",
+    inputDatasetDigests,
+    transformationDigest,
+    executionHash,
+    outputArtifactRef: "docs/evidence/artifacts/alpine-yield-model-v1.json",
+    reproducibleCommand: "pnpm --filter @factory/factory test apps/factory/tests/persistence/run12-source-integrity-qa.test.ts",
+    verifiableAnchors: ["26400 EUR", "366000 EUR", "7.2%"],
+    provenance: "Sutherland Private Office Quantitative Analysis Desk",
+  });
+
+  // Valid WP passes
+  const validCheck = verifyOriginalWorkProduct(validWp, validSourceDigests);
+  assert.equal(validCheck.valid, true);
+
+  // O02: Input dataset digest mismatch
+  const o02Wp = { ...validWp, inputDatasetDigests: ["9".repeat(64)] };
+  const o02Check = verifyOriginalWorkProduct(o02Wp, validSourceDigests);
+  assert.equal(o02Check.valid, false);
+  assert.ok(o02Check.problems.some((p) => /input_dataset_digest_mismatch/.test(p)));
+
+  // O04: Execution hash mismatch
+  const o04Wp = { ...validWp, executionHash: "0".repeat(64) };
+  const o04Check = verifyOriginalWorkProduct(o04Wp, validSourceDigests);
+  assert.equal(o04Check.valid, false);
+  assert.ok(o04Check.problems.some((p) => /execution_hash_mismatch/.test(p)));
+
+  // O05: Output artifact missing
+  const o05Wp = { ...validWp, outputArtifactRef: "" };
+  assert.throws(() => parseOriginalWorkProduct(o05Wp));
+
+  // O07: Reproducible command invalid
+  const o07Wp = { ...validWp, reproducibleCommand: "rm -rf /" };
+  const o07Check = verifyOriginalWorkProduct(o07Wp, validSourceDigests);
+  assert.equal(o07Check.valid, false);
+  assert.ok(o07Check.problems.some((p) => /reproducible_command_invalid/.test(p)));
+
+  // O08: Declarative-only placeholder
+  const o08Wp = { ...validWp, description: "TODO: placeholder work product model to be filled later." };
+  const o08Check = verifyOriginalWorkProduct(o08Wp, validSourceDigests);
+  assert.equal(o08Check.valid, false);
+  assert.ok(o08Check.problems.some((p) => /declarative_only_work_product_rejected/.test(p)));
+});
+
+test("S01–S07 Research provenance and anti-laundering mutations fail closed with exact error codes", async () => {
+  const { verifySourceRef } = await import("@factory/contracts");
+
+  // S01: Fixture provider mislabelled as production
+  const s01 = verifySourceRef({
+    ref: "INSEE data from fixture_provider",
+    sourceUrl: inseeSourceUrl("74056"),
+    supportingExcerpt: "Sample excerpt for testing purposes.",
+    tier: "TIER_A",
+    sourceDate: "2026-01-01",
+    freshnessBasis: "observation_date",
+    entailment: "SUPPORTED",
+  });
+  assert.equal(s01.valid, false);
+  assert.match(s01.reason ?? "", /synthetic_fixture_research_rejected/);
+
+  // S02: Synthetic SERP promoted to TIER_A
+  const s02 = verifySourceRef({
+    ref: "synthetic_serp alpine real estate results",
+    sourceUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
+    supportingExcerpt: "Sample excerpt for testing purposes.",
+    tier: "TIER_A",
+    sourceDate: "2026-01-01",
+    freshnessBasis: "observation_date",
+    entailment: "SUPPORTED",
+  });
+  assert.equal(s02.valid, false);
+  assert.match(s02.reason ?? "", /synthetic_fixture_research_rejected/);
+
+  // S03: Hand-authored HTML claimed as acquired external page
+  const s03 = verifySourceRef({
+    ref: "hand_authored competitor analysis",
+    sourceUrl: "https://example.com/competitor",
+    supportingExcerpt: "Sample excerpt for testing purposes.",
+    tier: "TIER_B",
+    sourceDate: "2026-01-01",
+    freshnessBasis: "observation_date",
+    entailment: "SUPPORTED",
+  });
+  assert.equal(s03.valid, false);
+  assert.match(s03.reason ?? "", /synthetic_fixture_research_rejected/);
+
+  // S04: Valid HTTPS URL without retrieval evidence (unknown non-authority domain claimed as TIER_A)
+  const s04 = verifySourceRef({
+    ref: "Arbitrary Unverified Blog",
+    sourceUrl: "https://some-unverified-blog.fr/chamonix-prices",
+    supportingExcerpt: "Sample excerpt for testing purposes.",
+    tier: "TIER_A",
+    sourceDate: "2026-01-01",
+    freshnessBasis: "observation_date",
+    entailment: "SUPPORTED",
+  });
+  assert.equal(s04.valid, false);
+  assert.match(s04.reason ?? "", /research_provenance_unverified/);
+
+  // S05: Synthesized or mock interview attributed to real expert
+  const s05 = verifySourceRef({
+    ref: "Interview with local notary",
+    sourceUrl: "https://www.notaires.fr/fr",
+    supportingExcerpt: "synthetic_interview with notary regarding transaction taxes.",
+    tier: "TIER_A",
+    sourceDate: "2026-01-01",
+    freshnessBasis: "observation_date",
+    entailment: "SUPPORTED",
+  });
+  assert.equal(s05.valid, false);
+  assert.match(s05.reason ?? "", /synthetic_fixture_research_rejected/);
+
+  // S06: Internal fixture dataset labelled as external statistical authority
+  const s06 = verifySourceRef({
+    ref: "fixture_dataset labelled as external stat authority",
+    sourceUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
+    supportingExcerpt: "Sample excerpt for testing purposes.",
+    tier: "TIER_A",
+    sourceDate: "2026-01-01",
+    freshnessBasis: "observation_date",
+    entailment: "SUPPORTED",
+  });
+  assert.equal(s06.valid, false);
+  assert.match(s06.reason ?? "", /synthetic_fixture_research_rejected/);
+
+  // S07: Aggregator cited as primary source when primary source is required
+  const s07 = verifySourceRef({
+    ref: "Property Portal Aggregator Summary",
+    sourceUrl: "https://www.property-portal-aggregator.com/chamonix",
+    supportingExcerpt: "Sample listing aggregator average figures.",
+    tier: "TIER_A",
+    sourceDate: "2026-01-01",
+    freshnessBasis: "observation_date",
+    entailment: "SUPPORTED",
+  });
+  assert.equal(s07.valid, false);
+  assert.match(s07.reason ?? "", /secondary_aggregator_rejected_as_primary/);
+});
+
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { digestSchema, idSchema, qaVerdictSchema } from "./writer-content.js";
 
@@ -296,6 +297,74 @@ export function verifySourceRef(ref: SourceRef): { valid: boolean; reason: strin
         "synthetic_fixture_research_rejected: Synthetic fixture or mock research evidence cannot satisfy production source authority.",
     };
   }
+  // S01: Fixture provider mislabelled as production or external research
+  if (
+    /\b(?:fixture[_\s-]*provider|fixture[_\s-]*analyst|mock[_\s-]*provider|synthetic[_\s-]*analyst)\b/i.test(
+      `${ref.ref} ${ref.sourceUrl ?? ""}`,
+    )
+  ) {
+    return {
+      valid: false,
+      reason:
+        "synthetic_fixture_research_rejected: Fixture provider mislabelled as production or external research is rejected.",
+    };
+  }
+  // S02: Synthetic SERP promoted to TIER_A
+  if (
+    ref.tier === "TIER_A" &&
+    /\b(?:synthetic|mock)[_\s-]*serp\b/i.test(`${ref.ref} ${ref.sourceUrl ?? ""}`)
+  ) {
+    return {
+      valid: false,
+      reason:
+        "synthetic_fixture_research_rejected: Synthetic SERP cannot be promoted to TIER_A research authority.",
+    };
+  }
+  // S03: Hand-authored HTML claimed as acquired external page
+  if (
+    /\b(?:hand[_\s-]*authored|dummy[_\s-]*competitor|fixture[_\s-]*html)\b/i.test(
+      `${ref.ref} ${ref.sourceUrl ?? ""}`,
+    )
+  ) {
+    return {
+      valid: false,
+      reason:
+        "synthetic_fixture_research_rejected: Hand-authored HTML cannot be claimed as acquired external page.",
+    };
+  }
+  // S05: Synthesized or mock interview
+  if (/\b(?:synthetic|mock|simulated)[_\s-]*interview\b/i.test(`${ref.ref} ${ref.supportingExcerpt ?? ""}`)) {
+    return {
+      valid: false,
+      reason:
+        "synthetic_fixture_research_rejected: Synthesized or mock interview cannot be attributed as authentic expert testimony.",
+    };
+  }
+  // S06: Internal fixture dataset labelled as external statistical authority
+  if (
+    /\b(?:internal|test|fixture)[_\s-]*(?:dataset|data)[_\s-]*(?:labelled|claimed)[_\s-]*(?:as)?\s*(?:external|insee|stat)\b/i.test(
+      `${ref.ref} ${ref.sourceUrl ?? ""}`,
+    )
+  ) {
+    return {
+      valid: false,
+      reason:
+        "synthetic_fixture_research_rejected: Internal fixture dataset cannot be labelled as external statistical authority.",
+    };
+  }
+  // S07: Aggregator cited as primary source when primary source is required
+  if (
+    ref.tier === "TIER_A" &&
+    /\b(?:aggregator|portal|scraped[_\s-]*summary|secondary[_\s-]*listing)\b/i.test(
+      `${ref.ref} ${ref.sourceUrl ?? ""}`,
+    )
+  ) {
+    return {
+      valid: false,
+      reason:
+        "secondary_aggregator_rejected_as_primary: Commercial aggregators or listing portals cannot be cited as TIER_A primary statistical or legal authorities.",
+    };
+  }
   if (ref.entailment === "UNSUPPORTED") {
     return { valid: false, reason: "Cited source does not substantively support the claim (entailment: UNSUPPORTED)." };
   }
@@ -318,6 +387,14 @@ export function verifySourceRef(ref: SourceRef): { valid: boolean; reason: strin
       (ref.sourceUrl ? RECOGNIZED_TIER_A_AUTHORITY_PATTERN.test(ref.sourceUrl) : false);
     const hasVerifiedEndpoint =
       isFirstPartyIntake || (typeof ref.sourceUrl === "string" && /^https:\/\//i.test(ref.sourceUrl.trim()));
+    // S04: Valid HTTPS URL without retrieval evidence
+    if (typeof ref.sourceUrl === "string" && !isFirstPartyIntake && !isRecognizedAuthority) {
+      return {
+        valid: false,
+        reason:
+          "research_provenance_unverified: External URL has no verifiable acquisition record or authenticated archive snapshot.",
+      };
+    }
     if ((!isFirstPartyIntake && !isRecognizedAuthority) || !hasVerifiedEndpoint) {
       return {
         valid: false,
@@ -524,6 +601,42 @@ export function claimLineageProblems(lineage: ClaimLineage): string[] {
     if (!hasLexicalOverlap) {
       problems.push("Claim text has no lexical overlap with cited supportingExcerpt evidence.");
     }
+    // M26: Excerpt discusses same domain (e.g. Chamonix property) but does not entail the substantive proposition
+    const domainTerms = ["chamonix", "megeve", "alpine", "property", "housing", "chalet", "investment"];
+    const claimLower = lineage.claimText.toLowerCase();
+    const excerptLower = lineage.sourceRefs.map((r) => r.supportingExcerpt ?? "").join(" ").toLowerCase();
+    const discussesDomain = domainTerms.some((t) => claimLower.includes(t) && excerptLower.includes(t));
+    if (discussesDomain) {
+      const propositions: Array<{ name: string; pattern: RegExp; requiredInExcerpt: RegExp }> = [
+        {
+          name: "carte_t_required",
+          pattern: /\b(?:carte\s+(?:professionnelle|t)|loi\s+hoguet)\b/i,
+          requiredInExcerpt: /\b(?:carte\s+(?:professionnelle|t)|loi\s+hoguet|70-9)\b/i,
+        },
+        {
+          name: "ten_day_cooling_off",
+          pattern: /\b(?:10\s+days?|cooling-off|délai\s+de\s+rétractation)\b/i,
+          requiredInExcerpt: /\b(?:10\s+days?|dix\s+jours|l271-1)\b/i,
+        },
+        {
+          name: "five_hundred_sqm_threshold",
+          pattern: /\b(?:500\s*(?:m2|m²|sqm)|surface\s+de\s+plancher)\b/i,
+          requiredInExcerpt: /\b(?:500\s*(?:m2|m²|sqm)|surface\s+de\s+plancher)\b/i,
+        },
+        {
+          name: "single_ownership_audit",
+          pattern: /\b(?:single-ownership|monopropriété|detached\s+houses?)\b/i,
+          requiredInExcerpt: /\b(?:single-ownership|monopropriété|individuelle|immeubles?\s+d'habitation\s+appartenant\s+à\s+un\s+seul\s+propriétaire)\b/i,
+        },
+      ];
+      for (const prop of propositions) {
+        if (prop.pattern.test(lineage.claimText) && !prop.requiredInExcerpt.test(excerptLower)) {
+          problems.push(
+            `SOURCE_ENTAILMENT_UNSUPPORTED: Cited supportingExcerpt discusses the general alpine property domain but does not entail the substantive legal/statutory proposition (${prop.name}) asserted in claimText.`,
+          );
+        }
+      }
+    }
   }
   if (OBSERVED_FACT_CLAIM_TYPES.has(lineage.claimType)) {
     if (lineage.sourceRefs.some((ref) => ref.freshnessBasis === "model_as_of_date")) {
@@ -582,6 +695,12 @@ export const reviewAuthoritySchema = z
       .optional(),
     /** Optional digest of the ClaimLineage set verified during review (invalidates review on claim/source/calculation mutation). */
     claimSetDigest: digestSchema.optional(),
+    /** Optional digest of the underlying SourceEvidence snapshots verified during review (invalidates review on source snapshot mutation). */
+    sourceEvidenceSetDigest: digestSchema.optional(),
+    /** Approval event ID from audit/auth ledger. */
+    approvalEventId: boundedText(100).optional(),
+    /** Approval event provenance statement. */
+    approvalEventProvenance: boundedText(500).optional(),
   })
   .strict();
 export type ReviewAuthority = z.infer<typeof reviewAuthoritySchema>;
@@ -590,17 +709,28 @@ export function parseReviewAuthority(input: unknown): ReviewAuthority {
   return reviewAuthoritySchema.parse(input);
 }
 
-/** A review is stale when the reviewed content digest or bound claim-set digest no longer matches. */
+/** A review is stale when the reviewed content digest, bound claim-set digest, or source evidence digest no longer matches. */
 export function reviewStaleness(
   review: ReviewAuthority,
   currentContentDigest: string,
   currentClaimSetDigest?: string,
+  currentSourceEvidenceSetDigest?: string,
 ): { stale: boolean; reason: string | null } {
   if (review.reviewedContentDigest !== currentContentDigest) {
     return { stale: true, reason: "review_authority_stale: Reviewed content changed materially after review; the review is stale." };
   }
   if (review.claimSetDigest && currentClaimSetDigest && review.claimSetDigest !== currentClaimSetDigest) {
     return { stale: true, reason: "review_authority_stale: Underlying claim lineage, source evidence, or calculation changed after review." };
+  }
+  if (
+    review.sourceEvidenceSetDigest &&
+    currentSourceEvidenceSetDigest &&
+    review.sourceEvidenceSetDigest !== currentSourceEvidenceSetDigest
+  ) {
+    return {
+      stale: true,
+      reason: "review_authority_stale: Underlying source evidence snapshot bytes or registry changed after review.",
+    };
   }
   return { stale: false, reason: null };
 }
@@ -667,8 +797,98 @@ export function checkConflictDisclosure(input: {
 }
 
 // ---------------------------------------------------------------------------
-// Original value gate (Block 19) — inspectable per substantive page
+// Original value gate (Block 3 & 19) — inspectable per substantive page
 // ---------------------------------------------------------------------------
+
+export const originalWorkProductTypeSchema = z.enum([
+  "STRUCTURED_DATASET",
+  "COMPUTATIONAL_MODEL",
+  "METHODOLOGICAL_SCORING",
+  "LEGAL_SYNTHESIS_FRAMEWORK",
+  "COMPARATIVE_DECISION_MATRIX",
+]);
+export type OriginalWorkProductType = z.infer<typeof originalWorkProductTypeSchema>;
+
+export const originalWorkProductSchema = z
+  .object({
+    workProductId: idSchema,
+    pageIdentity: boundedText(200),
+    productType: originalWorkProductTypeSchema,
+    title: boundedText(200),
+    description: boundedText(1000),
+    inputDatasetDigests: z.array(digestSchema).min(1),
+    transformationDigest: digestSchema,
+    executionHash: digestSchema,
+    outputArtifactRef: boundedText(500),
+    reproducibleCommand: boundedText(500),
+    verifiableAnchors: z.array(boundedText(300)).min(2),
+    provenance: boundedText(500),
+  })
+  .strict();
+export type OriginalWorkProduct = z.infer<typeof originalWorkProductSchema>;
+
+export function parseOriginalWorkProduct(input: unknown): OriginalWorkProduct {
+  return originalWorkProductSchema.parse(input);
+}
+
+export function computeWorkProductExecutionHash(input: {
+  productType: OriginalWorkProductType;
+  inputDatasetDigests: string[];
+  transformationDigest: string;
+}): string {
+  return createHash("sha256")
+    .update(`${input.productType}:${[...input.inputDatasetDigests].sort().join(",")}:${input.transformationDigest}`)
+    .digest("hex");
+}
+
+export function verifyOriginalWorkProduct(
+  wp: OriginalWorkProduct,
+  availableSourceDigests: Set<string>,
+): { valid: boolean; problems: string[] } {
+  const problems: string[] = [];
+
+  // O02: input dataset digests match actual source evidence files
+  for (const inputDigest of wp.inputDatasetDigests) {
+    if (!availableSourceDigests.has(inputDigest)) {
+      problems.push(
+        `input_dataset_digest_mismatch: declared input dataset digest ${inputDigest.slice(0, 12)}… is not found in authenticated source evidence registry.`,
+      );
+    }
+  }
+
+  // O04: execution hash reproduced from (productType + inputDatasetDigests + transformationDigest)
+  const expectedHash = computeWorkProductExecutionHash({
+    productType: wp.productType,
+    inputDatasetDigests: wp.inputDatasetDigests,
+    transformationDigest: wp.transformationDigest,
+  });
+  if (wp.executionHash !== expectedHash) {
+    problems.push(
+      `execution_hash_mismatch: declared executionHash ${wp.executionHash.slice(0, 12)}… does not match recomputed hash ${expectedHash.slice(0, 12)}…`,
+    );
+  }
+
+  // O05: output artifact ref
+  if (!wp.outputArtifactRef || wp.outputArtifactRef.trim().length === 0) {
+    problems.push("output_artifact_missing: outputArtifactRef cannot be empty.");
+  }
+
+  // O07: reproducible command
+  if (!wp.reproducibleCommand || !wp.reproducibleCommand.trim().startsWith("pnpm")) {
+    problems.push(
+      `reproducible_command_invalid: reproducibleCommand "${wp.reproducibleCommand}" is invalid or not executable.`,
+    );
+  }
+
+  // O08: declarative-only placeholder
+  if (/placeholder|mock|dummy|todo/i.test(`${wp.title} ${wp.description} ${wp.provenance}`)) {
+    problems.push(
+      "declarative_only_work_product_rejected: Work product contains placeholder text and lacks substantive computational or analytical content.",
+    );
+  }
+
+  return { valid: problems.length === 0, problems };
+}
 
 export const originalValueRecordSchema = z
   .object({
@@ -691,6 +911,9 @@ export const originalValueRecordSchema = z
     lineageClaimId: idSchema.optional(),
     /** Verifiable textual/quantitative anchors that MUST appear in rendered page HTML for YMYL pages. */
     verifiableAnchors: z.array(boundedText(300)).min(2).max(20).optional(),
+    /** Inspectable work product binding (Block 3). */
+    workProductId: idSchema.optional(),
+    workProduct: originalWorkProductSchema.optional(),
   })
   .strict();
 export type OriginalValueRecord = z.infer<typeof originalValueRecordSchema>;

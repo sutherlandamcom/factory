@@ -1,0 +1,44 @@
+{
+  "modelId": "owp-alpine-yield-model-v1",
+  "title": "Alpine Property Gross Yield Underwriting & Financial Distinction Model",
+  "generatedAt": "2026-10-18T12:00:00Z",
+  "author": {
+    "role": "Quantitative Real Estate Research Analyst",
+    "desk": "Sutherland Private Office Quantitative Analysis Desk",
+    "institution": "Sutherland Advisory"
+  },
+  "sourceDigests": {
+    "inseeChamonix": "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150",
+    "cchCooling": "45a3511a6498f2453c37589ad55dd96c6861f09bfcff41c21248a8d416dfa688",
+    "ifiStatute": "c85b399e7dc37eb56b5b8c9a430dca81606ffa9e59df43edf922f10730996938"
+  },
+  "metrics": {
+    "metricClassification": "GROSS_RENTAL_YIELD",
+    "isNetYield": false,
+    "annualRentEur": 26400,
+    "purchasePriceEur": 366000,
+    "grossYieldPercent": 7.2,
+    "illustrativeNetSimulation": {
+      "estimatedChargesAndTaxesEur": 10600,
+      "estimatedNetOperatingIncomeEur": 15800,
+      "estimatedNetYieldPercent": 4.3
+    }
+  },
+  "qualificationFootnote": "Footnote: The 7.2% metric is strictly an illustrative gross rental yield (annual gross rent / purchase price). It does not reflect net cash yield, levered IRR, or after-tax return. Net returns are reduced by co-ownership charges, local property taxes (taxe foncière), management fees, maintenance reserves, utilities, and French income/wealth taxation (IFI / LMNP régime réel).",
+  "baselineContext": {
+    "inseeHousingDwellingsCOM74056": "14,538 total dwellings",
+    "ifiWealthTaxThreshold": "1,300,000 EUR",
+    "calculationFormula": "26400 EUR over 366000 EUR",
+    "targetGrossMetric": "7.2% gross yield"
+  },
+  "verifiableAnchors": [
+    "14,538 total dwellings",
+    "1,300,000 EUR",
+    "26400 EUR over 366000 EUR",
+    "7.2% gross yield",
+    "26400 EUR",
+    "366000 EUR",
+    "7.2%",
+    "gross yield"
+  ]
+}

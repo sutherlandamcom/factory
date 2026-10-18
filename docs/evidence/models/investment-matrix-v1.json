@@ -1,0 +1,28 @@
+{
+  "modelId": "owp-investment-decision-framework-01",
+  "title": "Alpine Capital Allocation & French Wealth Tax Statutory Exposure Matrix",
+  "generatedAt": "2026-10-18T12:00:00Z",
+  "author": {
+    "role": "Senior Real Estate Advisory Director",
+    "desk": "Sutherland Private Office Advisory Committee",
+    "institution": "Sutherland Advisory"
+  },
+  "sourceDigests": {
+    "ifiStatute": "c85b399e7dc37eb56b5b8c9a430dca81606ffa9e59df43edf922f10730996938",
+    "pluServitudes": "0859d0ba9255908125db389d77cbbaa69059f3f9fb37730841ceef94e6ac11e5",
+    "loiHoguet": "3e0210c9ef8eb3ba43d1a624afbf19eb2e748575f6d749ff16090af60d370238"
+  },
+  "parameters": {
+    "ifiThresholdEur": 1300000,
+    "ifiAssessmentBaseEur": 800000,
+    "illustrativeGrossYieldPercent": 7.2,
+    "shortTermRentalPrimaryCapDays": 90,
+    "chamonixMixiteSocialeThresholdSqm": 300
+  },
+  "verifiableAnchors": [
+    "1,300,000 EUR",
+    "800,000 EUR",
+    "26400 EUR over a purchase price of 366000 EUR",
+    "58.5% of main residences"
+  ]
+}

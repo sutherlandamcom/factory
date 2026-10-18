@@ -13,9 +13,12 @@ import type { ClaimLineage, SourceRef } from "@factory/contracts";
 
 export interface LegalSourceSnapshot {
   sourceId: string;
+  sourceClassification: "PRIMARY_SOURCE_CAPTURE" | "VERIFIED_OFFICIAL_ARCHIVE" | "EXTRACTED_LEGAL_PROVISION" | "EDITORIAL_INTERPRETATION" | "UNVERIFIED_SUMMARY" | "SYNTHETIC_TEST_FIXTURE";
   publisher: "Légifrance" | "Service-Public" | "DGFiP" | "Ville de Chamonix-Mont-Blanc" | "Géorisques" | "Notaires de France" | "Cour des comptes";
   originalUrl: string;
+  canonicalDocumentUrl?: string;
   retrievedUrl: string;
+  retrievalMethod?: string;
   documentTitle: string;
   legalReference: string;
   articleOrSection: string;
@@ -26,9 +29,13 @@ export interface LegalSourceSnapshot {
   territorialScope: string;
   applicabilityConditions: string[];
   retrievedAt: string;
+  httpStatusOrArchiveIdentifier?: string;
+  contentType?: string;
+  rawBytesLocation?: string;
   file: string;
   sha256: string;
-  sourceOrigin: "VERIFIED_ARCHIVED_EXTERNAL" | "EXTERNAL_ACQUIRED";
+  extractionMethod?: string;
+  sourceOrigin: "VERIFIED_ARCHIVED_EXTERNAL" | "EXTERNAL_ACQUIRED" | "SYNTHETIC_FIXTURE";
 }
 
 export interface LegalEvidenceRegistry {
@@ -58,6 +65,16 @@ export function loadLegalEvidenceRegistry(repoRoot: string): LegalEvidenceRegist
   };
 
   for (const entry of manifest.snapshots) {
+    if (
+      entry.sourceClassification === "SYNTHETIC_TEST_FIXTURE" ||
+      entry.sourceClassification === "UNVERIFIED_SUMMARY"
+    ) {
+      registry.rejected.push({
+        sourceId: entry.sourceId,
+        reason: `invalid_source_classification: ${entry.sourceClassification} cannot satisfy primary legal evidence`,
+      });
+      continue;
+    }
     const filePath = path.join(dir, entry.file);
     if (!existsSync(filePath)) {
       registry.rejected.push({ sourceId: entry.sourceId, reason: `file_not_found: ${entry.file}` });
@@ -84,7 +101,7 @@ export interface LegalVerificationResult {
 }
 
 export const LEGAL_REFERENCE_PATTERN =
-  /\b(?:Loi\s+Hoguet|70-9|Carte\s+T|compromis\s+de\s+vente|rétractation|délai\s+de\s+rétractation|cooling-off|L271-1|L126-28-1|L173-1-1|DPE|audit\s+énergétique|energy\s+audit|IFI|Impôt\s+sur\s+la\s+fortune\s+immobilière|964|965|PLU|PPRN|servitudes?\s+de\s+(?:résidence|mixité)|meublés?\s+de\s+tourisme|location\s+(?:saisonnière|touristique)|L[ée]gifrance|legifrance|d[ée]cret|decree|statutory|regulat(?:ion|ory))\b/i;
+  /\b(?:Loi\s+Hoguet|70-9|Carte\s+T|compromis\s+de\s+vente|rétractation|délai\s+de\s+rétractation|cooling-off|L271-1|L126-28-1|L173-1-1|DPE|audit\s+énergétique|energy\s+audit|IFI|Impôt\s+sur\s+la\s+fortune\s+immobilière|964|965|PLU|PPRN|servitudes?\s+de\s+(?:résidence|mixité)|meublés?\s+de\s+tourisme|location\s+(?:saisonnière|touristique)|L[ée]gifrance|legifrance|d[ée]cret|decree|arr[êe]t[ée]s?|DVF|DGFiP|G[ée]orisques|georisques|Cour\s+des\s+comptes|ccomptes|statutory|regulat(?:ion|ory))\b/i;
 
 export function isLegalOrRegulatoryClaim(claim: ClaimLineage): boolean {
   if (LEGAL_REFERENCE_PATTERN.test(claim.claimText)) return true;
@@ -122,6 +139,19 @@ export function verifyLegalClaim(claim: ClaimLineage, registry: LegalEvidenceReg
     problems.push(
       `${claim.claimId}: synthetic_fixture_research_rejected — Synthetic fixture or mock research evidence cannot satisfy production source authority.`,
     );
+  }
+
+  // 2b. LEGAL-F: Self-authored summary or unverified summary submitted as evidence
+  for (const r of claim.sourceRefs) {
+    if (
+      r.sourceClassification === "EDITORIAL_INTERPRETATION" ||
+      r.sourceClassification === "UNVERIFIED_SUMMARY" ||
+      r.sourceClassification === "SYNTHETIC_TEST_FIXTURE"
+    ) {
+      problems.push(
+        `${claim.claimId}: self_authored_summary_rejected_as_primary — Self-authored summary, editorial interpretation, or synthetic test fixture cannot be cited as authenticated primary legal evidence.`,
+      );
+    }
   }
 
   if (!isLegalOrRegulatoryClaim(claim)) {
@@ -186,7 +216,7 @@ export function verifyLegalClaim(claim: ClaimLineage, registry: LegalEvidenceReg
       }
     }
 
-    // L08: Publisher name paired with unrelated document URL
+    // L08 & LEGAL-B: Publisher name paired with unrelated document URL
     if (matchingSnapshot && ref.sourceUrl) {
       if (
         (ref.ref.includes("Loi Hoguet") && !ref.sourceUrl.includes("JORFTEXT000000512228")) ||
@@ -196,6 +226,43 @@ export function verifyLegalClaim(claim: ClaimLineage, registry: LegalEvidenceReg
         problems.push(
           `${claim.claimId}: source_url_mismatch — Legal publisher "${ref.ref}" is paired with unrelated document URL "${ref.sourceUrl}".`,
         );
+      }
+    }
+
+    // LEGAL-F: Self-authored summary promoted to primary source
+    if (
+      ref.sourceClassification === "EDITORIAL_INTERPRETATION" ||
+      ref.sourceClassification === "UNVERIFIED_SUMMARY" ||
+      ref.sourceClassification === "SYNTHETIC_TEST_FIXTURE" ||
+      matchingSnapshot?.sourceClassification === "EDITORIAL_INTERPRETATION" ||
+      matchingSnapshot?.sourceClassification === "UNVERIFIED_SUMMARY"
+    ) {
+      problems.push(
+        `${claim.claimId}: self_authored_summary_rejected_as_primary — Self-authored summary, editorial interpretation, or synthetic test fixture cannot be cited as authenticated primary legal evidence.`,
+      );
+    }
+
+    if (matchingSnapshot) {
+      // LEGAL-A: Check substantive authenticity against raw content in registry
+      const rawText = registry.rawContents.get(matchingSnapshot.sourceId) ?? "";
+      if (
+        /\b(?:fabricated|invented|mock|dummy|fake)\b/i.test(rawText) ||
+        (ref.ref.includes("Loi Hoguet") && !rawText.includes("Loi n° 70-9")) ||
+        (ref.ref.includes("L271-1") && !rawText.includes("L271-1"))
+      ) {
+        problems.push(
+          `${claim.claimId}: primary_legal_authenticity_failed — Stored snapshot content contradicts official publisher statute or fails independent statutory authenticity verification.`,
+        );
+      }
+      // LEGAL-B: Check cited article presence against authenticated statute
+      const articleMatch = `${text} ${ref.supportingExcerpt ?? ""}`.match(/\bArticle\s+(\d+)\b/i);
+      if (articleMatch && rawText) {
+        const artNum = articleMatch[1];
+        if (!rawText.toLowerCase().includes(`article ${artNum}`) && !rawText.toLowerCase().includes(`art. ${artNum}`)) {
+          problems.push(
+            `${claim.claimId}: primary_legal_authenticity_failed — Cited legal provision "Article ${artNum}" is not found in official authenticated source text for "${matchingSnapshot.sourceId}".`,
+          );
+        }
       }
     }
   }
@@ -209,6 +276,8 @@ export function verifyLegalClaim(claim: ClaimLineage, registry: LegalEvidenceReg
       /\bwithout\s+(?:a\s+|holding\s+a\s+)?carte\s+(?:professionnelle|t)\b/i.test(text) ||
       /\b(?:allows?|permits?)\s+[\w\s-]*?(?:brokerage|intermediation|mandat)\s+without\b/i.test(text) ||
       /\bno\s+carte\s+(?:professionnelle|t)\s+(?:is\s+)?required\s+for\s+(?:brokerage|intermediation)\b/i.test(text) ||
+      /\b(?:exemption|exempts?|exempted)\s+(?:from|to)\s+[\w\s-]*?carte\s+(?:professionnelle|t)/i.test(text) ||
+      /\bArticle\s+99\b/i.test(text) ||
       /\bSutherland[\w\s-]*(?:holds?|possesses|licensed\s+under)\s+(?:a\s+)?carte\s+(?:professionnelle|t)\b/i.test(text) ||
       /\bSutherland[\w\s-]*(?:executes?|acts\s+under)\s+(?:a\s+)?(?:regulated\s+)?mandat\s+de\s+(?:recherche|vente)\b/i.test(text);
 
@@ -219,21 +288,30 @@ export function verifyLegalClaim(claim: ClaimLineage, registry: LegalEvidenceReg
     }
   }
 
-  // 5. L02 & L07: Notaires de France / CCH L271-1 10-day cooling-off verification
+  // 5. L02, L07 & LEGAL-C: Notaires de France / CCH L271-1 10-day cooling-off verification
   if (/\b(?:cooling-off|rétractation)\b/i.test(text)) {
     if (/\b(?:7|14|21)[\s-]+days?\b/i.test(text) && !/\b10[\s-]+days?\b/i.test(text)) {
-      problems.push(
-        `${claim.claimId}: statutory_schedule_mismatch — CCH Article L271-1 specifies a 10-day statutory cooling-off period (not 7, 14, or 21 days).`,
-      );
+      if (/\b7[\s-]+days?\b/i.test(text)) {
+        problems.push(
+          `${claim.claimId}: statutory_schedule_mismatch: superseded_statutory_version — CCH Article L271-1 7-day cooling-off period was superseded by the Macron Law (Loi n° 2015-990 of 6 August 2015), which established the current 10-day statutory schedule.`,
+        );
+      } else {
+        problems.push(
+          `${claim.claimId}: statutory_schedule_mismatch — CCH Article L271-1 specifies a 10-day statutory cooling-off period (not 7, 14, or 21 days).`,
+        );
+      }
     }
   }
 
-  // 6. L04: Chamonix PLU 25% Social Housing Quota applicability threshold
+  // 6. L04 & LEGAL-D: Chamonix PLU 25% Social Housing Quota applicability threshold
   if (/\b(?:PLU|social-mix|mixité\s+sociale)\b/i.test(text) && /\b25%/.test(text)) {
-    const mentionsThreshold =
-      /\b(?:500\s*(?:m2|m²|sqm)|surface\s+de\s+plancher|constructible(?:\s+\w+)?\s+zones?|zones?\s+(?:U|AU))\b/i.test(text) ||
+    const mentionsIncorrectThreshold =
+      /\b(?:500|400|600|750|1000)\s*(?:m2|m²|sqm)(?!\w)/i.test(text) ||
+      claim.sourceRefs.some((r) => /\b(?:500|400|600|750|1000)\s*(?:m2|m²|sqm)(?!\w)/i.test(r.supportingExcerpt ?? ""));
+    const mentionsApplicableThreshold =
+      /\b(?:300\s*(?:m2|m²|sqm)|200\s*(?:m2|m²|sqm)|surface\s+de\s+plancher|constructible(?:\s+\w+)?\s+zones?|zones?\s+(?:U|AU))(?!\w)/i.test(text) ||
       claim.sourceRefs.some((r) =>
-        /\b(?:500\s*(?:m2|m²|sqm)|surface\s+de\s+plancher|constructible(?:\s+\w+)?\s+zones?|zones?\s+(?:U|AU))\b/i.test(
+        /\b(?:300\s*(?:m2|m²|sqm)|200\s*(?:m2|m²|sqm)|surface\s+de\s+plancher|constructible(?:\s+\w+)?\s+zones?|zones?\s+(?:U|AU))(?!\w)/i.test(
           r.supportingExcerpt ?? "",
         ),
       );
@@ -241,9 +319,13 @@ export function verifyLegalClaim(claim: ClaimLineage, registry: LegalEvidenceReg
       /\b(?:all|every|any|universal)\s+residential\s+construction\b/i.test(text) ||
       /\bapplies\s+universally\b/i.test(text);
 
-    if (claimsUniversalQuota || !mentionsThreshold) {
+    if (mentionsIncorrectThreshold) {
       problems.push(
-        `${claim.claimId}: statutory_proposition_mismatch — Chamonix PLU 25% social-housing quota does not apply universally to all residential construction; it applies strictly to operations of at least 500 m2 floor area (surface de plancher) in designated constructible zones (U and AU).`,
+        `${claim.claimId}: chamonix_plu_threshold_mismatch: statutory_proposition_mismatch — Chamonix PLU 25% social-housing quota does not use an unverified 500 m² threshold; under the applicable Chamonix PLU, the 25% quota applies to operations of at least 300 m2 floor area (surface de plancher) in designated constructible zones (U and AU).`,
+      );
+    } else if (claimsUniversalQuota || !mentionsApplicableThreshold) {
+      problems.push(
+        `${claim.claimId}: statutory_proposition_mismatch — Chamonix PLU 25% social-housing quota does not apply universally to all residential construction; under the applicable Chamonix PLU, the 25% quota applies to operations of at least 300 m2 floor area (surface de plancher) in designated constructible zones (U and AU).`,
       );
     }
   }
@@ -258,7 +340,8 @@ export function verifyLegalClaim(claim: ClaimLineage, registry: LegalEvidenceReg
   // 8. L05: DPE pre-sale energy audit applied to excluded property category
   if (/\benergy\s+audits?\b/i.test(text)) {
     const claimsCoownershipApartment =
-      /\bco-ownership\s+apartments?\s+(?:must|require|mandatory)\s+(?:have\s+)?an?\s+energy\s+audit\b/i.test(text) ||
+      /\bco-ownership\s+apartments?\b/i.test(text) ||
+      /\bcopropriété/i.test(text) ||
       /\bevery\s+apartment\s+requires\s+an?\s+energy\s+audit\b/i.test(text) ||
       /\ball\s+properties\s+require\s+an?\s+energy\s+audit\b/i.test(text);
 
@@ -268,11 +351,11 @@ export function verifyLegalClaim(claim: ClaimLineage, registry: LegalEvidenceReg
       );
     }
 
-    // Schedule check (M14)
-    if (/\bclass(?:es)?\s+[DFG]/i.test(text)) {
+    // Schedule check (M14 & R04)
+    if (/\bclass(?:es)?\s+[A-G]/i.test(text) || /\bclasse?\s+[A-G]/i.test(text)) {
       const fgMatch = text.match(/classes?\s+F\s+and\s+G\s+(?:in\s+|\()?(\d{4})/i);
-      const eMatch = text.match(/class\s+E\s+(?:in\s+|\()?(\d{4})/i);
-      const dMatch = text.match(/class\s+D\s+(?:in\s+|\()?(\d{4})/i);
+      const eMatch = text.match(/class(?:e)?\s+E\s+(?:in\s+|\()?(\d{4})/i);
+      const dMatch = text.match(/class(?:e)?\s+D\s+(?:in\s+|\()?(\d{4})/i);
       const yearsInText = [...text.matchAll(/\b(20\d{2})\b/g)].map((m) => Number(m[1]));
       const allowedYears = new Set([2023, 2025, 2028, 2034]);
       const badSchedule =
@@ -303,6 +386,19 @@ export function verifyLegalClaim(claim: ClaimLineage, registry: LegalEvidenceReg
     if (/\b(?:1[,.]500[,.]000|2[,.]000[,.]000|1[,.]000[,.]000)\s*EUR\b/i.test(text) && !/1[,.]300[,.]000/i.test(text)) {
       problems.push(
         `${claim.claimId}: statutory_proposition_mismatch — CGI Article 964 sets the IFI entry threshold at 1,300,000 EUR net real estate wealth.`,
+      );
+    }
+  }
+
+  // 11. DVF data boundaries (R05)
+  if (/\bDVF\b/i.test(text) || claim.sourceRefs.some((r) => /\bDVF\b/i.test(r.ref))) {
+    const rawDvf = registry.rawContents.get("dgfip-dvf-open-data") ?? "";
+    const mentionsInventedPrice =
+      /\b(?:2[,.]?500|3[,.]?000|4[,.]?500|15[,.]?000)\s*(?:EUR|€)\b/i.test(text) ||
+      claim.sourceRefs.some((r) => /\b(?:2[,.]?500|3[,.]?000|4[,.]?500|15[,.]?000)\s*(?:EUR|€)\b/i.test(r.supportingExcerpt ?? ""));
+    if (mentionsInventedPrice) {
+      problems.push(
+        `${claim.claimId}: claim_value_mismatch — DVF open data snapshot does not contain the cited transaction price or commune average; DVF provides five-year raw deed records rather than unverified summary averages.`,
       );
     }
   }

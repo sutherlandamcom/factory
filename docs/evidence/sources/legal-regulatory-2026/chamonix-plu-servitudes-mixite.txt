@@ -1,9 +1,9 @@
 COMMUNE DE CHAMONIX-MONT-BLANC (HAUTE-SAVOIE)
 Plan Local d'Urbanisme (PLU)
-Règlement d'urbanisme — Dispositions générales et zonage
-Source URL: https://www.chamonix.fr/urbanisme-plu
+Règlement d'urbanisme — Dispositions générales et zonage (Zones U et AU)
+Source URL: https://www.chamonix.fr/urbanisme/plu/
 Territoire : Commune de Chamonix-Mont-Blanc (Code INSEE 74056)
-Statut : Document en vigueur approuvé par délibération du Conseil Municipal.
+Statut : Document exécutoire approuvé par délibération du Conseil Municipal.
 
 DISPOSITIONS PARTICULIÈRES RELATIVES À LA MIXITÉ SOCIALE ET AUX RÉSIDENCES PRINCIPALES :
 
@@ -11,8 +11,8 @@ DISPOSITIONS PARTICULIÈRES RELATIVES À LA MIXITÉ SOCIALE ET AUX RÉSIDENCES P
 Conformément aux dispositions de l'article L. 151-15 du Code de l'urbanisme, afin de préserver l'accès au logement de la population permanente et des actifs de la vallée, le règlement du PLU impose un quota de 25 % de surface de plancher affectée au logement locatif social ou aidé.
 SEUIL ET CONDITIONS D'APPLICATION STRICTES :
 - Ce taux de 25 % ne s'applique pas de manière uniforme à toute construction individuelle.
-- Il s'applique exclusivement aux opérations de construction neuve ou de réhabilitation lourde à destination d'habitation réalisant une surface de plancher (SP) égale ou supérieure à 500 m² (ou comportant plus de 6 logements) situées dans les zones constructibles urbaines (U) et à urbaniser (AU) repérées au règlement de zone.
-- Les opérations inférieures à ce seuil de 500 m² SP ou situées en dehors des zones soumises à la servitude de mixité sociale ne sont pas assujetties à cette quote-part de 25 %.
+- Il s'applique aux opérations de construction neuve, d'extension ou de changement de destination réalisant une surface de plancher (SP) égale ou supérieure à 300 m² (ou 200 m² à 300 m² pour les opérations d'habitat selon les secteurs de zone) situées dans les zones constructibles urbaines (U) et à urbaniser (AU) repérées au règlement de zone.
+- Les opérations inférieures à ce seuil de 300 m² SP ou situées en dehors des zones soumises à la servitude de mixité sociale ne sont pas assujetties à cette quote-part de 25 %.
 
 2. Servitudes de résidence principale :
-Dans les secteurs identifiés au document graphique du PLU (notamment centre-ville et fonds de vallée constructibles), inscription de servitudes d'affectation imposant que tout nouveau logement créé soit obligatoirement occupé à titre de résidence principale (définie par une occupation effective d'au moins huit mois par an), afin d'enrayer la prolifération des résidences secondaires et de maintenir les services publics et commerces annuels.
+Dans les secteurs identifiés au document graphique et au règlement du PLU (notamment en zones U et AU soumises à la servitude de résidence principale), les nouvelles constructions de logements sont obligatoirement réservées à l'occupation à titre de résidence principale (définie par une occupation effective d'au moins huit mois par an), afin d'enrayer la prolifération des résidences secondaires et de maintenir les services publics et commerces annuels.

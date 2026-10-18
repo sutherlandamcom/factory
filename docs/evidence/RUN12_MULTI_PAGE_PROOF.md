@@ -95,8 +95,8 @@ Enforced deterministically by `checkCannibalization(intents)` in `packages/contr
 | `home` | `YMYL_INFORMATIONAL` | Introduces the practice positioning, Loi Hoguet statutory distinction, and INSEE 2022 commune housing baselines without individualized financial calculations. |
 | `services/buyer-side-advisory` | `YMYL_INFORMATIONAL` | Explains advisory engagement scope, Notaires de France 10-day cooling-off and DPE 2023/2025/2034 audit rules, and Loi Hoguet non-intermediation boundaries. |
 | `locations/chamonix` | `YMYL_INFORMATIONAL` | Frames Chamonix (`COM-74056`) vs Megève (`COM-74173`) INSEE 2022 stock/vintage, Chamonix PLU servitudes, May 2025 rental rules, and Géorisques PPRN hazard screening. |
-| `advisory/investment-decision-framework` | `YMYL_DECISION_SUPPORT` | Structures financial/investment decision-making using DGFiP 5-year DVF deeds, `1,300,000 EUR` / `800,000 EUR` IFI thresholds, DPE capex assumptions, and the `7.2%` worked calculation. |
-| `research/alpine-decision-framework` | `YMYL_DECISION_SUPPORT` | Publishes the four-step analytical verification methodology across INSEE, DGFiP DVF/IFI, Notaires de France DPE, Géorisques PPRN, and the `26400 EUR / 366000 EUR = 7.2%` calculation. |
+| `advisory/investment-decision-framework` | `YMYL_DECISION_SUPPORT` | Structures financial/investment decision-making using DGFiP 5-year DVF deeds, `1,300,000 EUR` / `800,000 EUR` IFI thresholds, DPE capex assumptions, and the `7.2%` illustrative gross equity yield calculation (distinguished from net return). |
+| `research/alpine-decision-framework` | `YMYL_DECISION_SUPPORT` | Publishes the four-step analytical verification methodology across INSEE, DGFiP DVF/IFI, Notaires de France DPE, Géorisques PPRN, and the `26400 EUR / 366000 EUR = 7.2%` illustrative gross equity yield calculation (with net return simulated at `4.3%`). |
 | `research/chamonix-supply-notes` | `YMYL_DECISION_SUPPORT` | Publishes commune-specific supply-side analysis for Chamonix-Mont-Blanc (`14,538` dwellings, `58.5%` 1946–1990 stock of pre-2020 main residences, Chamonix PLU `25%` social-mix quotas and servitudes, May 2025 rental cap). |
 
 ---

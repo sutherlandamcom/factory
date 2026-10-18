@@ -1111,7 +1111,7 @@ test(
           transformationDigest: wpAlpineTransDigest,
         }),
         outputArtifactRef: "docs/evidence/models/alpine-yield-model-v1.json",
-        reproducibleCommand: "pnpm --filter @factory/factory exec tsx scripts/reproduce-alpine-model.ts",
+        reproducibleCommand: "pnpm --filter @factory/factory exec tsx scripts/reproduce-alpine-yield.ts",
         verifiableAnchors: ["14,538 total dwellings", "1,300,000 EUR", "26400 EUR over 366000 EUR", "7.2% gross yield"],
         provenance: "Authored by Sutherland Private Office Quantitative Research Committee based on authentic French statistical and statutory primary sources.",
       };
@@ -1413,6 +1413,12 @@ test(
         "FAIL",
         "P1-4 & P1-6: candidate without governed ReviewAuthority on YMYL_DECISION_SUPPORT pages must FAIL runCandidateQa",
       );
+      const { qaRunPublicationEligible } = await import("@factory/contracts");
+      assert.equal(
+        qaRunPublicationEligible(unreviewedQaResult),
+        false,
+        "R12-FINAL-02: candidate with EDITORIAL_REVIEW_PENDING or missing review has publicationEligible = false",
+      );
       const unreviewedReviewChecks = unreviewedQaResult.checks.filter(
         (c) =>
           c.checkId === "trust.review_authority" &&
@@ -1445,8 +1451,21 @@ test(
             pageIdentity: ymylSlug,
             reviewerKind: "ACCEPTED_INSTITUTIONAL_COUNCIL",
             reviewStatus: "EDITORIAL_REVIEW_APPROVED",
+            authorityKind: "VERIFIED_HUMAN_REVIEW_AUTHORITY",
             approvalEventId: `appr-sutherland-council-${ymylSlug.replace(/[^a-z0-9]/g, "-")}-20260904`,
             approvalEventProvenance: "Accepted by Sutherland Institutional Review Council Minutes 2026-09-04 Item 4",
+            approvalEvent: {
+              reviewEventId: `appr-sutherland-council-${ymylSlug.replace(/[^a-z0-9]/g, "-")}-20260904`,
+              authenticatedActorId: "actor-sutherland-council-lead",
+              actorRole: "Managing Director & Head of Editorial Governance",
+              authorizationScope: "YMYL_DECISION_SUPPORT:EDITORIAL_REVIEW",
+              reviewAction: "APPROVED",
+              reviewedContentDigest: ymylPage.contentDigest,
+              reviewedClaimSetDigest: claimSetDigest,
+              reviewedSourceEvidenceDigest: sourceEvidenceSetDigest,
+              eventTimestamp: "2026-09-04T14:30:00Z",
+              auditEventReference: "AUDIT-2026-SUTHERLAND-MINUTES-ITEM-4",
+            },
             reviewerRef: "org-sutherland-private-office-research-committee",
             reviewerExpertise: "Independent buyer-side alpine property advisory and evidence-led decision methodology",
             reviewedContentDigest: ymylPage.contentDigest,
@@ -1717,8 +1736,21 @@ test(
           pageIdentity: extraPage.slug,
           reviewerKind: "ACCEPTED_INSTITUTIONAL_COUNCIL",
           reviewStatus: "EDITORIAL_REVIEW_APPROVED",
+          authorityKind: "VERIFIED_HUMAN_REVIEW_AUTHORITY",
           approvalEventId: `appr-sutherland-council-${extraPage.slug.replace(/[^a-z0-9]/g, "-")}-20260904`,
           approvalEventProvenance: "Accepted by Sutherland Institutional Review Council Minutes 2026-09-04 Item 4",
+          approvalEvent: {
+            reviewEventId: `appr-sutherland-council-${extraPage.slug.replace(/[^a-z0-9]/g, "-")}-20260904`,
+            authenticatedActorId: "actor-sutherland-council-lead",
+            actorRole: "Managing Director & Head of Editorial Governance",
+            authorizationScope: "YMYL_DECISION_SUPPORT:EDITORIAL_REVIEW",
+            reviewAction: "APPROVED",
+            reviewedContentDigest: row6.contentDigest,
+            reviewedClaimSetDigest: computeClaimSetDigest(page6Claims),
+            reviewedSourceEvidenceDigest: sourceEvidenceSetDigest,
+            eventTimestamp: "2026-09-04T14:30:00Z",
+            auditEventReference: "AUDIT-2026-SUTHERLAND-MINUTES-ITEM-4",
+          },
           reviewerRef: "org-sutherland-private-office-research-committee",
           reviewerExpertise: "Independent buyer-side alpine property advisory and evidence-led decision methodology",
           reviewedContentDigest: row6.contentDigest,

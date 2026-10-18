@@ -238,6 +238,48 @@ export const evidenceBindingSchema = z.discriminatedUnion("kind", [
 ]);
 export type EvidenceBinding = z.infer<typeof evidenceBindingSchema>;
 
+/**
+ * Explicit taxonomy separating official primary captures from derived extracts,
+ * editorial summaries, and synthetic fixtures (Block 1 / R12-FINAL-01).
+ */
+export const legalSourceClassificationSchema = z.enum([
+  "PRIMARY_SOURCE_CAPTURE",
+  "VERIFIED_OFFICIAL_ARCHIVE",
+  "EXTRACTED_LEGAL_PROVISION",
+  "EDITORIAL_INTERPRETATION",
+  "UNVERIFIED_SUMMARY",
+  "SYNTHETIC_TEST_FIXTURE",
+]);
+export type LegalSourceClassification = z.infer<typeof legalSourceClassificationSchema>;
+
+/**
+ * Immutable acquisition provenance for external research (Block 4 / R12-FINAL-04).
+ */
+export const researchAcquisitionSchema = z
+  .object({
+    acquisitionEventId: idSchema,
+    trustedProviderId: boundedText(100),
+    actualRequestedUrl: boundedText(500).optional(),
+    finalResponseUrl: boundedText(500).optional(),
+    retrievalTimestamp: boundedText(40).optional(),
+    retrievedAt: boundedText(40).optional(),
+    acquisitionMethod: boundedText(100).optional(),
+    contentDigest: digestSchema,
+    signatureOrReceipt: boundedText(500).optional(),
+    sourceOrigin: z
+      .enum([
+        "EXTERNAL_ACQUIRED",
+        "VERIFIED_ARCHIVED_EXTERNAL",
+        "ACCEPTED_FIRST_PARTY",
+        "SYNTHETIC_FIXTURE",
+      ])
+      .optional(),
+    retrievedContentReference: boundedText(500).optional(),
+    archiveEvidenceRef: boundedText(500).optional(),
+  })
+  .strict();
+export type ResearchAcquisition = z.infer<typeof researchAcquisitionSchema>;
+
 export const sourceRefSchema = z
   .object({
     /** Bounded source identifier (title/URL/registry reference). */
@@ -271,6 +313,14 @@ export const sourceRefSchema = z
     evidenceOrigin: z
       .enum(["EXTERNAL_ACQUIRED", "VERIFIED_ARCHIVED_EXTERNAL", "ACCEPTED_FIRST_PARTY", "SYNTHETIC_FIXTURE"])
       .optional(),
+    /** Explicit legal source taxonomy classification (Block 1). */
+    sourceClassification: legalSourceClassificationSchema.optional(),
+    /** Structured research acquisition provenance record (Block 4). */
+    acquisitionProvenance: researchAcquisitionSchema.optional(),
+    /** Binding to trusted research acquisition event (Block 4). */
+    acquisitionEventId: idSchema.optional(),
+    /** Expected digest of acquired content (Block 4). */
+    acquisitionDigest: digestSchema.optional(),
   })
   .strict();
 export type SourceRef = z.infer<typeof sourceRefSchema>;
@@ -285,6 +335,27 @@ const SYNTHETIC_SOURCE_PATTERN = /\b(?:synthetic[_\s-]*fixture|fixture[_\s-]*pro
  * self-certified, synthetic fixture data, or unverified.
  */
 export function verifySourceRef(ref: SourceRef): { valid: boolean; reason: string | null } {
+  if (ref.sourceClassification === "SYNTHETIC_TEST_FIXTURE") {
+    return {
+      valid: false,
+      reason:
+        "synthetic_fixture_research_rejected: Synthetic test fixture cannot satisfy production source authority.",
+    };
+  }
+  if (ref.sourceClassification === "UNVERIFIED_SUMMARY") {
+    return {
+      valid: false,
+      reason:
+        "unverified_summary_rejected: Unverified summary cannot satisfy official source authority.",
+    };
+  }
+  if (ref.sourceClassification === "EDITORIAL_INTERPRETATION" && ref.tier === "TIER_A") {
+    return {
+      valid: false,
+      reason:
+        "editorial_interpretation_rejected_as_primary: Editorial interpretation or self-authored summary cannot be cited as TIER_A primary authority.",
+    };
+  }
   if (
     ref.evidenceOrigin === "SYNTHETIC_FIXTURE" ||
     SYNTHETIC_SOURCE_PATTERN.test(ref.ref) ||
@@ -546,6 +617,17 @@ export function verifyCalculationProvenance(
       );
     }
   }
+  // WORK-G: Misleading KPI classification check (gross rental yield vs net equity return / cash-on-cash)
+  const claimsNetReturn = /\b(?:net\s+(?:equity\s+)?return|cash-on-cash|net\s+yield)\b/i.test(claimText);
+  const inputNames = calc.inputs.map((i) => i.name.toLowerCase());
+  const hasOperatingDeductions = inputNames.some((n) =>
+    /(?:expense|charge|tax|maintenance|debt|interest|mortgage|net\s+operating)/i.test(n),
+  );
+  if (claimsNetReturn && !hasOperatingDeductions) {
+    problems.push(
+      "misleading_kpi_classification: Calculation represents simple gross rental ratio (rent / price) but claim asserts net return or net equity return without deducting operating expenses, co-ownership charges, taxes, or financing costs.",
+    );
+  }
   return problems;
 }
 
@@ -665,6 +747,31 @@ export function claimLineageVerdict(lineage: ClaimLineage): "PASS" | "REVIEW" | 
 // Review authority (Block 9) — real review events, digest-bound
 // ---------------------------------------------------------------------------
 
+export const reviewAuthorityKindSchema = z.enum([
+  "TEST_ONLY_REVIEW_AUTHORITY",
+  "VERIFIED_HUMAN_REVIEW_AUTHORITY",
+]);
+export type ReviewAuthorityKind = z.infer<typeof reviewAuthorityKindSchema>;
+
+/**
+ * Structured cryptographic/audit evidence of an authorized review event (Block 2 / R12-FINAL-02).
+ */
+export const authenticatedApprovalEventSchema = z
+  .object({
+    reviewEventId: idSchema,
+    authenticatedActorId: boundedText(200),
+    actorRole: boundedText(200),
+    authorizationScope: boundedText(300),
+    reviewAction: z.enum(["APPROVED", "CHANGES_REQUESTED", "REJECTED"]),
+    reviewedContentDigest: digestSchema,
+    reviewedClaimSetDigest: digestSchema,
+    reviewedSourceEvidenceDigest: digestSchema,
+    eventTimestamp: boundedText(40),
+    auditEventReference: boundedText(500),
+  })
+  .strict();
+export type AuthenticatedApprovalEvent = z.infer<typeof authenticatedApprovalEventSchema>;
+
 export const reviewAuthoritySchema = z
   .object({
     schemaVersion: z.literal(TRUST_GOVERNANCE_SCHEMA_VERSION),
@@ -692,6 +799,9 @@ export const reviewAuthoritySchema = z
     reviewerKind: z
       .enum(["EXTERNAL_HUMAN_REVIEWER", "ACCEPTED_INSTITUTIONAL_COUNCIL", "SYNTHETIC_TEST_REVIEWER"])
       .optional(),
+    /** Authority classification separating test-only reviewers from verified human reviews (Block 2). */
+    authorityKind: reviewAuthorityKindSchema.optional(),
+    reviewAuthorityKind: reviewAuthorityKindSchema.optional(),
     /** Optional digest of the ClaimLineage set verified during review (invalidates review on claim/source/calculation mutation). */
     claimSetDigest: digestSchema.optional(),
     /** Optional digest of the underlying SourceEvidence snapshots verified during review (invalidates review on source snapshot mutation). */
@@ -700,6 +810,8 @@ export const reviewAuthoritySchema = z
     approvalEventId: boundedText(100).optional(),
     /** Approval event provenance statement. */
     approvalEventProvenance: boundedText(500).optional(),
+    /** Structured authenticated approval event (Block 2). */
+    approvalEvent: authenticatedApprovalEventSchema.optional(),
   })
   .strict();
 export type ReviewAuthority = z.infer<typeof reviewAuthoritySchema>;
@@ -730,6 +842,26 @@ export function reviewStaleness(
       stale: true,
       reason: "review_authority_stale: Underlying source evidence snapshot bytes or registry changed after review.",
     };
+  }
+  if (review.approvalEvent) {
+    if (review.approvalEvent.reviewedContentDigest !== currentContentDigest) {
+      return {
+        stale: true,
+        reason: "review_authority_stale: Authenticated approval event content digest does not match current content digest.",
+      };
+    }
+    if (currentClaimSetDigest && review.approvalEvent.reviewedClaimSetDigest !== currentClaimSetDigest) {
+      return {
+        stale: true,
+        reason: "review_authority_stale: Authenticated approval event claim set digest does not match current claim set digest.",
+      };
+    }
+    if (currentSourceEvidenceSetDigest && review.approvalEvent.reviewedSourceEvidenceDigest !== currentSourceEvidenceSetDigest) {
+      return {
+        stale: true,
+        reason: "review_authority_stale: Authenticated approval event source evidence digest does not match current source evidence digest.",
+      };
+    }
   }
   return { stale: false, reason: null };
 }

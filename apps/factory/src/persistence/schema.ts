@@ -2852,6 +2852,7 @@ export const editorialApprovalAuditEvents = pgTable(
     auditEventReference: text("audit_event_reference").notNull(),
     isSynthetic: boolean("is_synthetic").notNull().default(false),
     revoked: boolean("revoked").notNull().default(false),
+    verificationSeal: text("verification_seal").notNull().default(""),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
@@ -2870,6 +2871,10 @@ export const editorialApprovalAuditEvents = pgTable(
     check(
       "editorial_approval_audit_events_source_evidence_digest_shape",
       sql`${table.sourceEvidenceSetDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "editorial_approval_audit_events_verification_seal_shape",
+      sql`${table.verificationSeal} ~ '^[0-9a-f]{64}$'`,
     ),
     index("editorial_approval_audit_events_project_page_idx").on(
       table.projectId,

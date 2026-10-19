@@ -54,125 +54,221 @@ export function sha256Hex(bytes: Buffer | string): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-export function extractPdfText(buf: Buffer): string {
+function parseCMapStream(uncompressed: string): Map<number, string> {
   const cMap = new Map<number, string>();
-  let offset = 0;
-  while (true) {
-    const streamIdx = buf.indexOf("stream\r\n", offset);
-    const altStreamIdx = buf.indexOf("stream\n", offset);
-    const sIdx = streamIdx !== -1 && altStreamIdx !== -1 ? Math.min(streamIdx, altStreamIdx) : Math.max(streamIdx, altStreamIdx);
-    if (sIdx === -1) break;
-    const start = buf[sIdx + 6] === 0x0a ? sIdx + 7 : sIdx + 8;
-    const end = buf.indexOf("endstream", start);
-    if (end === -1) break;
-    const slice = buf.subarray(start, end);
-    try {
-      const uncompressed = zlib.inflateSync(slice).toString("latin1");
-      if (uncompressed.includes("beginbfchar")) {
-        const bfcharBlocks = uncompressed.match(/beginbfchar([\s\S]*?)endbfchar/g) || [];
-        for (const block of bfcharBlocks) {
-          const lines = block.split("\n");
-          for (const line of lines) {
-            const m = line.match(/<([0-9a-fA-F]+)>\s+<([0-9a-fA-F]+)>/);
-            if (m && m[1] && m[2]) {
-              const src = parseInt(m[1], 16);
-              let dst = "";
-              for (let i = 0; i + 4 <= m[2].length; i += 4) {
-                dst += String.fromCharCode(parseInt(m[2].substring(i, i + 4), 16));
-              }
-              cMap.set(src, dst);
-            }
+  if (uncompressed.includes("beginbfchar")) {
+    const bfcharBlocks = uncompressed.match(/beginbfchar([\s\S]*?)endbfchar/g) || [];
+    for (const block of bfcharBlocks) {
+      for (const line of block.split("\n")) {
+        const m = line.match(/<([0-9a-fA-F]+)>\s+<([0-9a-fA-F]+)>/);
+        if (m && m[1] && m[2]) {
+          const src = parseInt(m[1], 16);
+          let dst = "";
+          for (let i = 0; i + 4 <= m[2].length; i += 4) {
+            dst += String.fromCharCode(parseInt(m[2].substring(i, i + 4), 16));
           }
+          cMap.set(src, dst);
         }
       }
-      if (uncompressed.includes("beginbfrange")) {
-        const bfrangeBlocks = uncompressed.match(/beginbfrange([\s\S]*?)endbfrange/g) || [];
-        for (const block of bfrangeBlocks) {
-          const lines = block.split("\n");
-          for (const line of lines) {
-            const mArr = line.match(/<([0-9a-fA-F]+)>\s+<([0-9a-fA-F]+)>\s+\[([^\]]+)\]/);
-            if (mArr && mArr[1] && mArr[2] && mArr[3]) {
-              const s = parseInt(mArr[1], 16);
-              const e = parseInt(mArr[2], 16);
-              const list = mArr[3].match(/<([0-9a-fA-F]+)>/g) || [];
-              for (let i = 0; i <= e - s && i < list.length; i++) {
-                const item = list[i];
-                if (!item) continue;
-                const hex = item.replace(/[<>]/g, "");
-                let dst = "";
-                for (let j = 0; j + 4 <= hex.length; j += 4) {
-                  dst += String.fromCharCode(parseInt(hex.substring(j, j + 4), 16));
-                }
-                cMap.set(s + i, dst);
-              }
-              continue;
-            }
-            const mSeq = line.match(/<([0-9a-fA-F]+)>\s+<([0-9a-fA-F]+)>\s+<([0-9a-fA-F]+)>/);
-            if (mSeq && mSeq[1] && mSeq[2] && mSeq[3]) {
-              const s = parseInt(mSeq[1], 16);
-              const e = parseInt(mSeq[2], 16);
-              const dstBase = parseInt(mSeq[3], 16);
-              for (let i = 0; i <= e - s; i++) {
-                cMap.set(s + i, String.fromCharCode(dstBase + i));
-              }
-            }
-          }
-        }
-      }
-    } catch {
-      // not a deflate stream
     }
-    offset = end + 9;
+  }
+  if (uncompressed.includes("beginbfrange")) {
+    const bfrangeBlocks = uncompressed.match(/beginbfrange([\s\S]*?)endbfrange/g) || [];
+    for (const block of bfrangeBlocks) {
+      for (const line of block.split("\n")) {
+        const mArr = line.match(/<([0-9a-fA-F]+)>\s+<([0-9a-fA-F]+)>\s+\[([^\]]+)\]/);
+        if (mArr && mArr[1] && mArr[2] && mArr[3]) {
+          const s = parseInt(mArr[1], 16);
+          const e = parseInt(mArr[2], 16);
+          const list = mArr[3].match(/<([0-9a-fA-F]+)>/g) || [];
+          for (let i = 0; i <= e - s && i < list.length; i++) {
+            const item = list[i];
+            if (!item) continue;
+            const hex = item.replace(/[<>]/g, "");
+            let dst = "";
+            for (let j = 0; j + 4 <= hex.length; j += 4) {
+              dst += String.fromCharCode(parseInt(hex.substring(j, j + 4), 16));
+            }
+            cMap.set(s + i, dst);
+          }
+          continue;
+        }
+        const mSeq = line.match(/<([0-9a-fA-F]+)>\s+<([0-9a-fA-F]+)>\s+<([0-9a-fA-F]+)>/);
+        if (mSeq && mSeq[1] && mSeq[2] && mSeq[3]) {
+          const s = parseInt(mSeq[1], 16);
+          const e = parseInt(mSeq[2], 16);
+          const dstBase = parseInt(mSeq[3], 16);
+          for (let i = 0; i <= e - s; i++) {
+            cMap.set(s + i, String.fromCharCode(dstBase + i));
+          }
+        }
+      }
+    }
+  }
+  return cMap;
+}
+
+function unescapePdfLiteral(str: string): string {
+  return str.replace(/\\([()\\nrtbf])/g, (_, ch: string) => {
+    if (ch === "n") return "\n";
+    if (ch === "r") return "\r";
+    if (ch === "t") return "\t";
+    return ch;
+  });
+}
+
+export function extractPdfText(buf: Buffer): string {
+  const raw = buf.toString("latin1");
+  const objStreams = new Map<number, string>();
+  const objDicts = new Map<number, string>();
+
+  const objRegex = /(\d+)\s+0\s+obj\b([\s\S]*?)endobj/g;
+  let match: RegExpExecArray | null;
+  while ((match = objRegex.exec(raw)) !== null) {
+    const id = parseInt(match[1]!, 10);
+    const body = match[2]!;
+    const sIdx = body.indexOf("stream");
+    if (sIdx !== -1) {
+      objDicts.set(id, body.slice(0, sIdx));
+      const absObjStart = match.index + match[0].indexOf(body);
+      const streamStartInBuf = absObjStart + sIdx;
+      const afterStream =
+        buf[streamStartInBuf + 6] === 0x0d && buf[streamStartInBuf + 7] === 0x0a
+          ? streamStartInBuf + 8
+          : buf[streamStartInBuf + 6] === 0x0a
+            ? streamStartInBuf + 7
+            : -1;
+      const endStreamInBuf = buf.indexOf("endstream", afterStream);
+      if (afterStream !== -1 && endStreamInBuf !== -1) {
+        try {
+          const inflated = zlib.inflateSync(buf.subarray(afterStream, endStreamInBuf)).toString("latin1");
+          objStreams.set(id, inflated);
+        } catch {
+          // ignore non-deflate streams
+        }
+      }
+    } else {
+      objDicts.set(id, body);
+    }
   }
 
-  function decodeHex(hexStr: string): string {
+  // Build CMap table per object ID
+  const cMapsByObj = new Map<number, Map<number, string>>();
+  const fallbackCMap = new Map<number, string>();
+  for (const [id, streamStr] of objStreams.entries()) {
+    if (streamStr.includes("beginbfchar") || streamStr.includes("beginbfrange")) {
+      const parsed = parseCMapStream(streamStr);
+      cMapsByObj.set(id, parsed);
+      for (const [k, v] of parsed.entries()) {
+        if (!fallbackCMap.has(k)) fallbackCMap.set(k, v);
+      }
+    }
+  }
+
+  // Map font object ID -> ToUnicode CMap object ID
+  const fontObjToCMap = new Map<number, Map<number, string>>();
+  for (const [id, dict] of objDicts.entries()) {
+    const m = dict.match(/\/ToUnicode\s+(\d+)\s+0\s+R/);
+    if (m && m[1]) {
+      const cmapObjId = parseInt(m[1], 10);
+      const cmap = cMapsByObj.get(cmapObjId);
+      if (cmap) fontObjToCMap.set(id, cmap);
+    }
+  }
+
+  function decodeStreamWithFonts(streamStr: string, fontMap: Map<string, Map<number, string>>): string {
+    let activeCMap: Map<number, string> = fallbackCMap;
     let out = "";
-    for (let i = 0; i + 4 <= hexStr.length; i += 4) {
-      const code = parseInt(hexStr.substring(i, i + 4), 16);
-      out += cMap.get(code) || "";
+    const tokenRe =
+      /\/(F\d+)\s+[\d.]+\s+Tf|\[((?:\\.|[^\]])*)\]\s*TJ|\(((?:\\.|[^\\)])*)\)\s*Tj|<([0-9a-fA-F]+)>\s*Tj/g;
+    let tm: RegExpExecArray | null;
+    while ((tm = tokenRe.exec(streamStr)) !== null) {
+      if (tm[1]) {
+        activeCMap = fontMap.get(tm[1]) ?? fallbackCMap;
+      } else if (tm[2] !== undefined) {
+        const inner = tm[2];
+        const partRe = /<([0-9a-fA-F]+)>|\(((?:\\.|[^\\)])*)\)/g;
+        let pm: RegExpExecArray | null;
+        while ((pm = partRe.exec(inner)) !== null) {
+          if (pm[1]) {
+            const hex = pm[1];
+            for (let i = 0; i + 4 <= hex.length; i += 4) {
+              const code = parseInt(hex.substring(i, i + 4), 16);
+              out += activeCMap.get(code) ?? fallbackCMap.get(code) ?? "";
+            }
+          } else if (pm[2] !== undefined) {
+            out += unescapePdfLiteral(pm[2]);
+          }
+        }
+        out += " ";
+      } else if (tm[3] !== undefined) {
+        out += unescapePdfLiteral(tm[3]) + " ";
+      } else if (tm[4]) {
+        const hex = tm[4];
+        for (let i = 0; i + 4 <= hex.length; i += 4) {
+          const code = parseInt(hex.substring(i, i + 4), 16);
+          out += activeCMap.get(code) ?? fallbackCMap.get(code) ?? "";
+        }
+        out += " ";
+      }
     }
     return out;
   }
 
   let allText = "";
-  offset = 0;
-  while (true) {
-    const streamIdx = buf.indexOf("stream\r\n", offset);
-    const altStreamIdx = buf.indexOf("stream\n", offset);
-    const sIdx = streamIdx !== -1 && altStreamIdx !== -1 ? Math.min(streamIdx, altStreamIdx) : Math.max(streamIdx, altStreamIdx);
-    if (sIdx === -1) break;
-    const start = buf[sIdx + 6] === 0x0a ? sIdx + 7 : sIdx + 8;
-    const end = buf.indexOf("endstream", start);
-    if (end === -1) break;
-    const slice = buf.subarray(start, end);
-    try {
-      const uncompressed = zlib.inflateSync(slice).toString("latin1");
-      const tjArray = /\[([^\]]+)\]\s*TJ/g;
-      let m: RegExpExecArray | null;
-      while ((m = tjArray.exec(uncompressed)) !== null) {
-        const inner = m[1];
-        if (inner) {
-          const tokenRegex = /<([0-9a-fA-F]+)>|\(([^)]*)\)/g;
-          let tm: RegExpExecArray | null;
-          while ((tm = tokenRegex.exec(inner)) !== null) {
-            if (tm[1]) allText += decodeHex(tm[1]);
-            else if (tm[2]) allText += tm[2];
-          }
-          allText += " ";
-        }
+  let matchedPages = 0;
+  for (const [, dict] of objDicts.entries()) {
+    if (!/\/Type\s*\/Page\b/.test(dict)) continue;
+    matchedPages += 1;
+    const fontMap = new Map<string, Map<number, string>>();
+    const fontSectionMatch = dict.match(/\/Font\s*<<([\s\S]*?)>>/);
+    if (fontSectionMatch && fontSectionMatch[1]) {
+      const fRe = /\/(F\d+)\s+(\d+)\s+0\s+R/g;
+      let fm: RegExpExecArray | null;
+      while ((fm = fRe.exec(fontSectionMatch[1])) !== null) {
+        const fName = fm[1]!;
+        const fObjId = parseInt(fm[2]!, 10);
+        const cmap = fontObjToCMap.get(fObjId);
+        if (cmap) fontMap.set(fName, cmap);
       }
-      const tjSingle = /\(([^)]+)\)\s*Tj|<([0-9a-fA-F]+)>\s*Tj/g;
-      while ((m = tjSingle.exec(uncompressed)) !== null) {
-        if (m[1]) allText += m[1] + " ";
-        if (m[2]) allText += decodeHex(m[2]) + " ";
-      }
-    } catch {
-      // ignore
     }
-    offset = end + 9;
+    const contentIds: number[] = [];
+    const arrMatch = dict.match(/\/Contents\s*\[([\s\S]*?)\]/);
+    if (arrMatch && arrMatch[1]) {
+      const rRe = /(\d+)\s+0\s+R/g;
+      let rm: RegExpExecArray | null;
+      while ((rm = rRe.exec(arrMatch[1])) !== null) contentIds.push(parseInt(rm[1]!, 10));
+    } else {
+      const singleMatch = dict.match(/\/Contents\s+(\d+)\s+0\s+R/);
+      if (singleMatch && singleMatch[1]) contentIds.push(parseInt(singleMatch[1], 10));
+    }
+    for (const cid of contentIds) {
+      const streamStr = objStreams.get(cid);
+      if (streamStr) {
+        allText += decodeStreamWithFonts(streamStr, fontMap) + "\n";
+      }
+    }
   }
 
-  return allText.replace(/\\([()\\])/g, "$1").replace(/\s+/g, " ");
+  if (matchedPages === 0) {
+    for (const [, streamStr] of objStreams.entries()) {
+      if (streamStr.includes("TJ") || streamStr.includes("Tj")) {
+        allText += decodeStreamWithFonts(streamStr, new Map()) + "\n";
+      }
+    }
+  }
+
+  return allText.normalize("NFC").replace(/\s+/g, " ");
+}
+
+function normalizeLegalAlpha(input: string): string {
+  return input
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/g, "")
+    .replace(/(?:pludechamonixmontblanc|reglementlitteral)\d*fevrier2026/g, "")
+    .replace(/operations+uccessives/g, "operationsuccessives");
 }
 
 export function verifyLegalExtract(
@@ -181,20 +277,49 @@ export function verifyLegalExtract(
   rawCaptureEntry: LegalSourceSnapshot,
   rawBytes: Buffer,
 ): { ok: boolean; reason?: string } {
+  // 0. Currency verification: check if regulation version is obsolete
+  if (
+    extractedEntry.effectiveTo &&
+    extractedEntry.effectiveTo !== "current" &&
+    new Date(extractedEntry.effectiveTo).getTime() < Date.now()
+  ) {
+    return {
+      ok: false,
+      reason: "obsolete_regulation_version: Document version is superseded or obsolete.",
+    };
+  }
+  if (
+    /superseded|obsolete|version\s+2015|version\s+2020|plu\s+2015/i.test(extractedEntry.documentVersion ?? "") &&
+    !/current|opposable/i.test(extractedEntry.documentVersion ?? "")
+  ) {
+    return {
+      ok: false,
+      reason: "obsolete_regulation_version: Document version is superseded or obsolete.",
+    };
+  }
+
   let rawText = rawCaptureEntry.file.endsWith(".pdf")
     ? extractPdfText(rawBytes)
     : rawBytes.toString("utf8");
 
   if (rawCaptureEntry.file.endsWith(".pdf")) {
-    rawText = rawText.replace(/\\([()\\])/g, "$1");
-    rawText = rawText.replace(/(?:PLU DE CHAMONIX\s*-\s*MONT\s*-\s*BLANC|REGLEMENT LITTERAL)\s*\d*\s*f[ée]vrier\s*2026/gi, " ");
+    rawText = rawText.replace(
+      /(?:PLU DE CHAMONIX\s*-\s*MONT\s*-\s*BLANC|REGLEMENT LITTERAL)\s*\d*\s*f[ée]vrier\s*2026/gi,
+      " ",
+    );
   }
 
-  const rawTextNorm = rawText.toLowerCase().replace(/\s+/g, " ");
-  const rawTextAlpha = rawTextNorm
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]/g, "");
+  const rawTextNorm = rawText.normalize("NFKD").toLowerCase().replace(/\s+/g, " ");
+  const rawTextAlpha = normalizeLegalAlpha(rawText);
+
+  if (rawTextAlpha.length < 100) {
+    return {
+      ok: false,
+      reason: "pdf_extraction_unreliable_fail_closed: Authenticated raw source text extraction produced insufficient verifiable content.",
+    };
+  }
+
+  const extractedStr = extractedBytes.toString("utf8");
 
   // 1. Article references verification
   if (extractedEntry.articleOrSection) {
@@ -206,7 +331,7 @@ export function verifyLegalExtract(
 
     for (const art of articleTokens) {
       const artWithSpace = art.replace(/([a-zA-Z]+)(\d+)/g, "$1 $2");
-      const artAlpha = art.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+      const artAlpha = normalizeLegalAlpha(art);
       if (
         !rawTextNorm.includes(art) &&
         !rawTextNorm.includes(artWithSpace) &&
@@ -221,100 +346,172 @@ export function verifyLegalExtract(
     }
   }
 
-  // 0. Currency verification: check if regulation version is obsolete
-  if (
-    extractedEntry.effectiveTo &&
-    extractedEntry.effectiveTo !== "current" &&
-    new Date(extractedEntry.effectiveTo).getTime() < Date.now()
-  ) {
-    return {
-      ok: false,
-      reason: "obsolete_regulation_version: Document version is superseded or obsolete.",
-    };
-  }
-
-  const extractedStr = extractedBytes.toString("utf8");
-
-  // 2. Provision threshold and quota co-occurrence check (LEGAL-08)
+  // 2. Article, zone, and provision threshold/quota binding (LEGAL-08, LEGAL-15, LEGAL-16)
+  const citedArticleNorm = (extractedEntry.articleOrSection ?? "").toLowerCase();
   const has200m2 = /\b200\s*(?:m²|m2|sqm)(?!\w)/i.test(extractedStr);
+  const has8Logements = /\b8\s*logements?\b/i.test(extractedStr);
   const has20Percent = /\b20\s*%/i.test(extractedStr);
   const has25Percent = /\b25\s*%/i.test(extractedStr);
 
   if (has200m2 && has20Percent && !has25Percent) {
     return {
       ok: false,
-      reason: `threshold_provision_mismatch: 200 m² residential threshold does not co-occur with 20% quota (which applies to tourist accommodations in Articles 6.6/6.7, not residential social mix).`,
+      reason:
+        "threshold_provision_mismatch: 200 m² residential threshold does not co-occur with 20% quota (which applies to tourist accommodations in Articles 6.6/6.7, not residential social mix).",
     };
   }
 
-  // 3. Extracted text verification: complete contiguous quote span matching
+  // LEGAL-16: Correct number from elsewhere in PDF attributed to wrong article or zone
+  const citesOnlyTouristArticles =
+    /\b6\.[67]\b/.test(citedArticleNorm) && !/\b(?:ua|uas|uc|ubd|ubp)\s*3?\b/.test(citedArticleNorm);
+  if (citesOnlyTouristArticles && (has200m2 || has25Percent || has8Logements)) {
+    return {
+      ok: false,
+      reason:
+        "article_zone_threshold_mismatch: threshold_provision_mismatch: Residential social-mix thresholds (200 m², 8 logements, 25%) do not belong to tourist accommodation Articles 6.6/6.7.",
+    };
+  }
+
+  const citesOnlyNonApplicableZone =
+    /\b(?:ut\s*3?|zone\s*ut|zone\s*n\b|zone\s*a\b)\b/i.test(citedArticleNorm) &&
+    !/\b(?:ua|uas|uc|ubd|ubp)\s*3?\b/.test(citedArticleNorm);
+  if (citesOnlyNonApplicableZone && (has200m2 || has25Percent || has8Logements)) {
+    return {
+      ok: false,
+      reason:
+        "article_zone_threshold_mismatch: zone_applicability_mismatch: Zone UT / N / A does not impose the 25% / 200 m² / 8 logements residential social-mix obligation (Article UT 3: 'Mixité sociale : Sans objet').",
+    };
+  }
+
+  // Check if SMS-only sector percentages (33%, 50%, 60%, 75%) or SMS floor-area targets (3 500 m², 6 012 m², 632 m²)
+  // are falsely attributed as general Zone UA/UC Article 3 thresholds outside SMS context
+  const mentionsSmsOnlyNumbers =
+    /\b(?:33|60|75)\s*%|(?:\b3\s*500|\b6\s*012|\b632)\s*(?:m²|m2|sqm)/i.test(extractedStr);
+  const mentionsSmsContext = /\b(?:SMS|secteurs?\s+de\s+mixit[ée]\s+sociale)\b/i.test(extractedStr);
+  if (mentionsSmsOnlyNumbers && !mentionsSmsContext) {
+    return {
+      ok: false,
+      reason:
+        "article_zone_threshold_mismatch: Numerical quota or floor area from the SMS sector schedule cannot be applied as a general zone threshold without its governing SMS provision.",
+    };
+  }
+
+  // 3. Strict quote-by-quote and line-by-line attribution against authenticated source (LEGAL-13, LEGAL-14, LEGAL-15, LEGAL-17)
   const quoteMatches = extractedStr.match(/"([^"]{20,})"/g) || [];
+  if (quoteMatches.length === 0) {
+    return {
+      ok: false,
+      reason: "extracted_text_not_found_in_raw_capture: Extract contains no verifiable quoted legal provisions.",
+    };
+  }
+
   for (const q of quoteMatches) {
     const cleanQuote = q.replace(/^"|"$/g, "").trim();
-    const cleanNorm = cleanQuote.toLowerCase().replace(/\s+/g, " ");
-    const cleanAlpha = cleanNorm
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z0-9]/g, "");
 
-    // Check complete contiguous match
-    const isContiguous = rawTextNorm.includes(cleanNorm) || rawTextAlpha.includes(cleanAlpha);
+    // LEGAL-15: Within a single quoted obligation, combining residential social-mix rules (200 m² / 8 logements / 25% logements locatifs sociaux)
+    // with unrelated tourist-accommodation worker-housing extensions (20% / hébergements touristiques / 6.6 / 6.7)
+    // or non-applicable UT zone provisions into a single combined quote is rejected.
+    const qHasResidentialMix =
+      /\b(?:200\s*(?:m²|m2)|8\s*logements?|25\s*%[\s\S]{0,60}logements?\s+locatifs?)\b/i.test(cleanQuote);
+    const qHasTouristExtension =
+      /\b(?:20\s*%[\s\S]{0,80}(?:h[ée]bergements?\s+touristiques?|h[oô]teli[èe]res?|saisonniers?)|dans\s+la\s+limite\s+de\s+20\s*%)\b/i.test(
+        cleanQuote,
+      );
+    if (qHasResidentialMix && qHasTouristExtension) {
+      return {
+        ok: false,
+        reason:
+          "unrelated_provisions_combined: quote_span_mismatch: Individually genuine provisions from separate articles (residential social mix vs tourist accommodation extension) cannot be combined into one legal obligation.",
+      };
+    }
 
-    if (!isContiguous) {
-      const lines = cleanQuote
-        .split(/\n+/)
-        .map((l) => l.trim())
-        .filter((l) => l.length >= 20);
+    const rawLines = cleanQuote
+      .split(/\n+/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
 
-      // Single continuous clause or sentence
-      if (lines.length <= 1) {
-        const prefixAlpha = cleanAlpha.substring(0, Math.min(cleanAlpha.length, 35));
-        const prefixMatched = rawTextAlpha.includes(prefixAlpha);
+    const substantiveLines = rawLines.filter((line) => {
+      // Skip short structural headings like "6.6. Sous-secteurs..." or "ARTICLE UT3 : ..."
+      if (/^\d+(?:\.\d+)*\.?\s+[^.\n]{3,65}:?$/.test(line)) return false;
+      if (/^[A-Z0-9\s:\/-]{3,65}:?$/.test(line)) return false;
+      if (/^[^.\n]{3,45}:$/.test(line)) return false;
+      return normalizeLegalAlpha(line).length >= 15;
+    });
 
-        if (prefixMatched) {
-          return {
-            ok: false,
-            reason: `invented_clause_detected: extracted_text_not_found_in_raw_capture: quote_span_mismatch: Extracted provision starts with genuine text but contains invented or altered clauses not found contiguously in raw capture.`,
-          };
-        }
+    if (substantiveLines.length === 0) {
+      return {
+        ok: false,
+        reason: "extracted_text_not_found_in_raw_capture: quote_span_mismatch: Quoted block contains no substantive verifiable legal text.",
+      };
+    }
 
-        return {
-          ok: false,
-          reason: `extracted_text_not_found_in_raw_capture: quote_span_mismatch: Extracted text does not match contiguous source span in raw document.`,
-        };
-      }
-
-      // Multi-line quote with multiple paragraphs or cited sections
-      for (const line of lines) {
-        const lineAlpha = line.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
-        if (lineAlpha.length < 25) continue;
-        if (/^\d+(\.\d+)*\b.*:?$/.test(line) || /^[A-Z0-9\s-]{3,}:$/.test(line)) continue;
-
-        const lineMatches = rawTextAlpha.includes(lineAlpha);
-        if (!lineMatches) {
-          let maxPrefix = 0;
-          for (let k = 35; k <= lineAlpha.length; k += 5) {
-            if (rawTextAlpha.includes(lineAlpha.slice(0, k))) maxPrefix = k;
-          }
-          if (maxPrefix >= 35 && lineAlpha.length - maxPrefix >= 20) {
+    // Collect valid end-positions after each substantive line to support repeated phrases (e.g. "1/ Mixité fonctionnelle : Sans objet.")
+    let validPrevEndPositions: number[] | null = null;
+    for (const line of substantiveLines) {
+      // Special case for pipe-delimited SMS table row summaries ("SMS 1 : 50% | SMS 2 : 75% | ...")
+      if (/^SMS\s*\d+\s*:\s*\d+\s*%(\s*\|\s*SMS\s*\d+\s*:\s*\d+\s*%)+$/i.test(line)) {
+        const cells = line.split("|").map((c) => normalizeLegalAlpha(c));
+        let cellSearchFrom: number =
+          validPrevEndPositions && validPrevEndPositions.length > 0 ? validPrevEndPositions[0]! : 0;
+        for (const cellAlpha of cells) {
+          const cellIdx = rawTextAlpha.indexOf(cellAlpha, cellSearchFrom);
+          if (cellIdx === -1 || (cellSearchFrom > 0 && cellIdx - cellSearchFrom > 600)) {
             return {
               ok: false,
-              reason: `invented_clause_detected: extracted_text_not_found_in_raw_capture: quote_span_mismatch: Extracted line in provision starts with genuine text but contains invented or altered clauses ("${line.slice(0, 40)}…").`,
+              reason: `extracted_text_not_found_in_raw_capture: quote_span_mismatch: Table segment "${line}" does not match authenticated SMS table in raw capture.`,
             };
           }
+          cellSearchFrom = cellIdx + cellAlpha.length;
         }
+        validPrevEndPositions = [cellSearchFrom];
+        continue;
       }
 
-      const matchedLines = lines.filter((line) => {
-        const lineAlpha = line.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
-        return rawTextAlpha.includes(lineAlpha);
-      });
+      const lineAlpha = normalizeLegalAlpha(line);
+      const occurrences: number[] = [];
+      let searchFrom = 0;
+      while (searchFrom <= rawTextAlpha.length - lineAlpha.length) {
+        const idx = rawTextAlpha.indexOf(lineAlpha, searchFrom);
+        if (idx === -1) break;
+        occurrences.push(idx);
+        searchFrom = idx + 1;
+      }
 
-      if (matchedLines.length === 0) {
+      if (occurrences.length === 0) {
+        // Check if the line starts with genuine source text but has a fabricated ending or clause (LEGAL-07, LEGAL-10, LEGAL-14)
+        const prefixLen = Math.min(35, Math.floor(lineAlpha.length * 0.6));
+        const hasGenuinePrefix = prefixLen >= 20 && rawTextAlpha.includes(lineAlpha.slice(0, prefixLen));
+        if (hasGenuinePrefix) {
+          return {
+            ok: false,
+            reason: `invented_clause_detected: extracted_text_not_found_in_raw_capture: quote_span_mismatch: Extracted provision segment starts with genuine text but contains a fabricated sentence or altered clause ("${line.slice(0, 50)}…").`,
+          };
+        }
+        // Unmatched substantive line (LEGAL-03, LEGAL-13)
         return {
           ok: false,
-          reason: `extracted_text_not_found_in_raw_capture: quote_span_mismatch: None of the cited sections match contiguous source spans in raw document.`,
+          reason: `unmatched_substantive_line: extracted_text_not_found_in_raw_capture: quote_span_mismatch: Substantive quoted segment is not present in the authenticated raw source ("${line.slice(0, 50)}…").`,
         };
+      }
+
+      // LEGAL-15: Verify that consecutive substantive lines in the same quote are in ascending order
+      // and come from the same provision neighborhood (not stitched from distant unrelated pages/articles)
+      if (validPrevEndPositions === null) {
+        validPrevEndPositions = occurrences.map((idx) => idx + lineAlpha.length);
+      } else {
+        const nextEndPositions = occurrences
+          .filter((idx) =>
+            validPrevEndPositions!.some((prevEnd) => idx >= prevEnd && idx - prevEnd <= 1600),
+          )
+          .map((idx) => idx + lineAlpha.length);
+
+        if (nextEndPositions.length === 0) {
+          return {
+            ok: false,
+            reason: `unrelated_provisions_combined: quote_span_mismatch: Quoted lines come from non-contiguous or reordered provisions across the raw document ("${line.slice(0, 50)}…").`,
+          };
+        }
+        validPrevEndPositions = nextEndPositions;
       }
     }
   }
@@ -331,10 +528,8 @@ export function verifyLegalExtract(
       const val = tm[1];
       if (!val) continue;
       if (Number(val) > 1900 && Number(val) < 2050) continue; // skip years
-      const unit = tm[0].toLowerCase().replace(/\s+/g, " ");
-      const unitNoSpace = tm[0].toLowerCase().replace(/\s+/g, "");
-      const unitWithSpace = tm[0].toLowerCase().replace(/(\d+)\s*(%|m²|m2|sqm|logements?)/i, "$1 $2");
-      if (!rawTextNorm.includes(unit) && !rawTextNorm.includes(unitNoSpace) && !rawTextNorm.includes(unitWithSpace)) {
+      const unitAlpha = normalizeLegalAlpha(tm[0]);
+      if (!rawTextAlpha.includes(unitAlpha)) {
         return {
           ok: false,
           reason: `threshold_not_in_raw_document: Extracted threshold "${tm[0]}" is not present in the captured raw document.`,
@@ -855,6 +1050,17 @@ export function verifyLegalClaim(claim: ClaimLineage, registry: LegalEvidenceReg
           `${claim.claimId}: zone_applicability_mismatch — Chamonix PLU 25% social housing quota does not apply in Zone UT (Article UT3: "Mixité sociale : Sans objet") or natural/agricultural zones (A, N); it applies in constructible urban zones (UA, UAS, UC, UBD, UBP).`,
         );
       }
+    }
+
+    // 6c-bis. LEGAL-16: Correct number from SMS schedule (30%, 50%, 75%) attributed to general Zone UA/UC Article 3 rule
+    if (
+      /\b(?:30|50|75)\s*%/.test(text) &&
+      /\b(?:social[\s-]+housing|mixit[ée]\s+sociale|social[\s-]+mix)\b/i.test(text) &&
+      !/\b(?:SMS|secteurs?\s+de\s+mixit[ée]\s+sociale)\b/i.test(text)
+    ) {
+      problems.push(
+        `${claim.claimId}: chamonix_plu_threshold_mismatch: article_zone_threshold_mismatch — Under Chamonix PLU Articles UA3/UAS3/UC3/UBD3/UBP3, the general residential social-housing quota is 25% (whereas 30%, 50%, and 75% apply only to designated SMS 1–17 sectors under Article 10).`,
+      );
     }
 
     // 6d. Incorrect property category / cross-application:

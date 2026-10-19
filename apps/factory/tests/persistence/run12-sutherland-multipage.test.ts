@@ -270,6 +270,13 @@ const SOURCE_REFS = {
   inseeChamonixStock: {
     ref: "INSEE Logement en 2022 — Commune de Chamonix-Mont-Blanc (COM-74056)",
     sourceUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
+    canonicalDatasetId: "INSEE-RP2022-LOGEMENT-COM-74056",
+    datasetIdentity: {
+      geoCode: "74056",
+      reportingPeriod: 2022,
+      documentIdentifier: "INSEE-8581193-COM-74056",
+      documentType: "census",
+    },
     supportingExcerpt: FACTS[5]!,
     tier: "TIER_A",
     sourceDate: "2025-07-01",
@@ -283,6 +290,13 @@ const SOURCE_REFS = {
   inseeChamonixAge: {
     ref: "INSEE Logement en 2022 LOG T2 — Commune de Chamonix-Mont-Blanc (COM-74056)",
     sourceUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
+    canonicalDatasetId: "INSEE-RP2022-LOGEMENT-COM-74056",
+    datasetIdentity: {
+      geoCode: "74056",
+      reportingPeriod: 2022,
+      documentIdentifier: "INSEE-8581193-COM-74056",
+      documentType: "census",
+    },
     supportingExcerpt: FACTS[6]!,
     tier: "TIER_A",
     sourceDate: "2025-07-01",
@@ -296,6 +310,13 @@ const SOURCE_REFS = {
   inseeMegeveStock: {
     ref: "INSEE Logement en 2022 — Commune de Megève (COM-74173)",
     sourceUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74173",
+    canonicalDatasetId: "INSEE-RP2022-LOGEMENT-COM-74173",
+    datasetIdentity: {
+      geoCode: "74173",
+      reportingPeriod: 2022,
+      documentIdentifier: "INSEE-8581193-COM-74173",
+      documentType: "census",
+    },
     supportingExcerpt: FACTS[7]!,
     tier: "TIER_A",
     sourceDate: "2025-07-01",
@@ -309,6 +330,13 @@ const SOURCE_REFS = {
   chamonixPlu: {
     ref: "Ville de Chamonix PLU & Règlement meublés de tourisme 2025",
     sourceUrl: "https://www.chamonix.fr/urbanisme-plu",
+    canonicalDatasetId: "CHAMONIX-PLU-REGLEMENT-20260226",
+    datasetIdentity: {
+      geoCode: "74056",
+      reportingPeriod: 2026,
+      documentIdentifier: "GPU-DU-74056-beaa82a7b5594b3913d5156928287d07",
+      documentType: "regulatory_plu",
+    },
     supportingExcerpt: FACTS[8]!,
     tier: "TIER_A",
     sourceDate: "2025-05-01",
@@ -321,6 +349,11 @@ const SOURCE_REFS = {
   notairesProcedure: {
     ref: "Code de la construction et de l'habitation — CCH Art. L271-1 & CCH Art. L126-28-1",
     sourceUrl: "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000031000677/",
+    canonicalDatasetId: "LEGIFRANCE-CCH-L271-1",
+    datasetIdentity: {
+      documentIdentifier: "LEGIARTI000031000677",
+      documentType: "statute",
+    },
     supportingExcerpt: FACTS[9]!,
     tier: "TIER_A",
     sourceDate: "2025-01-01",
@@ -333,6 +366,11 @@ const SOURCE_REFS = {
   dgfipDvfIfi: {
     ref: "DGFiP / Etalab DVF & CGI Arts. 964, 965, 977 (IFI)",
     sourceUrl: "https://app.dvf.etalab.gouv.fr/",
+    canonicalDatasetId: "DGFIP-DVF-CONSOLIDATED",
+    datasetIdentity: {
+      documentIdentifier: "DVF-ETALAB-2026",
+      documentType: "dvf",
+    },
     supportingExcerpt: FACTS[10]!,
     tier: "TIER_A",
     sourceDate: "2025-01-01",
@@ -345,6 +383,12 @@ const SOURCE_REFS = {
   georisquesCourDesComptes: {
     ref: "BRGM Géorisques PPRN Chamonix & Cour des comptes Rapport Février 2024",
     sourceUrl: "https://www.georisques.gouv.fr/mes-risques/connaitre-les-risques-pres-de-chez-moi/commune/74056",
+    canonicalDatasetId: "GEORISQUES-PPRN-74056",
+    datasetIdentity: {
+      geoCode: "74056",
+      documentIdentifier: "PPRN-74056-2015",
+      documentType: "risk_plan",
+    },
     supportingExcerpt: FACTS[11]!,
     tier: "TIER_A",
     sourceDate: "2024-02-06",
@@ -357,6 +401,11 @@ const SOURCE_REFS = {
   loiHoguet: {
     ref: "Loi Hoguet — Loi n° 70-9 du 2 janvier 1970 (Légifrance)",
     sourceUrl: "https://www.legifrance.gouv.fr/loda/id/JORFTEXT000000512228",
+    canonicalDatasetId: "LEGIFRANCE-LOI-HOGUET",
+    datasetIdentity: {
+      documentIdentifier: "JORFTEXT000000512228",
+      documentType: "statute",
+    },
     supportingExcerpt: FACTS[12]!,
     tier: "TIER_A",
     sourceDate: "1970-01-02",

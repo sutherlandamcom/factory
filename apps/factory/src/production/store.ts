@@ -1114,6 +1114,7 @@ export class ProductionStore {
         const auditEvent = eventId ? await auditStore.getApprovalAuditEvent(eventId) : null;
         if (
           !auditEvent ||
+          !auditEvent.sealVerified ||
           auditEvent.revoked ||
           auditEvent.isSynthetic ||
           auditEvent.projectId !== input.projectId ||

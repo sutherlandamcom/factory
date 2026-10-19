@@ -59,6 +59,10 @@ function trustError(code: string, message: string): TrustGovernanceError {
 export class TrustGovernanceStore {
   constructor(private readonly db: FactoryDb) {}
 
+  getDb(): FactoryDb {
+    return this.db;
+  }
+
   // ---- PageIntentAuthority ----------------------------------------------------
 
   /**
@@ -261,12 +265,18 @@ export class TrustGovernanceStore {
           "Direct submission of VERIFIED_HUMAN_REVIEW_AUTHORITY without a validated authenticated approval event is rejected. Approvals must originate from an authorized editorial action.",
         );
       }
-      const auditStore = EditorialAuditStore.getInstance(this.db);
-      const auditEvent = await auditStore.getApprovalAuditEvent(appEvt.reviewEventId);
+      const auditStore = EditorialAuditStore.getInstance(tx);
+      const auditEvent = await auditStore.getApprovalAuditEvent(appEvt.reviewEventId, tx);
       if (!auditEvent) {
         throw trustError(
           "unauthenticated_human_review_rejected",
           `No verified server audit event found for review event "${appEvt.reviewEventId}". Direct store insertion of VERIFIED_HUMAN_REVIEW_AUTHORITY is rejected.`,
+        );
+      }
+      if (!auditEvent.sealVerified) {
+        throw trustError(
+          "forged_audit_event_rejected",
+          `Audit event "${appEvt.reviewEventId}" failed cryptographic verification seal check. Forged or directly injected audit events cannot certify production review authority.`,
         );
       }
       if (auditEvent.revoked || appEvt.revoked) {
@@ -287,8 +297,8 @@ export class TrustGovernanceStore {
           `Audit event "${appEvt.reviewEventId}" was recorded for project "${auditEvent.projectId}", not "${input.projectId}". Cross-project approvals are rejected.`,
         );
       }
-      const membershipAuthority = ProjectMembershipAuthority.getInstance(this.db);
-      const permissions = await membershipAuthority.getMemberPermissions(input.projectId, auditEvent.actorId);
+      const membershipAuthority = ProjectMembershipAuthority.getInstance(tx);
+      const permissions = await membershipAuthority.getMemberPermissions(input.projectId, auditEvent.actorId, tx);
       if (!permissions.includes("EDITORIAL_REVIEW:APPROVE")) {
         throw trustError(
           "unauthorized_reviewer_actor",

@@ -38,6 +38,22 @@ const tf = (geoCode: string, rowKey: string, value: number, year = 2022): Eviden
 function ref(over: Partial<SourceRef> & { bindings?: EvidenceBinding[] }, excerpt: string): SourceRef {
   const { bindings, ...rest } = over;
   const isMegeve = (rest.ref && rest.ref.includes("74173")) || (rest.sourceUrl && rest.sourceUrl.includes("74173"));
+  const defaultCanonicalDatasetId = isMegeve
+    ? "INSEE-RP2022-LOGEMENT-COM-74173"
+    : "INSEE-RP2022-LOGEMENT-COM-74056";
+  const defaultDatasetIdentity = isMegeve
+    ? {
+        geoCode: "74173",
+        reportingPeriod: 2022,
+        documentIdentifier: "INSEE-8581193-COM-74173",
+        documentType: "census",
+      }
+    : {
+        geoCode: "74056",
+        reportingPeriod: 2022,
+        documentIdentifier: "INSEE-8581193-COM-74056",
+        documentType: "census",
+      };
   const defaultAcquisition = isMegeve
     ? {
         acquisitionEventId: "acq-insee-74173-2026",
@@ -46,6 +62,8 @@ function ref(over: Partial<SourceRef> & { bindings?: EvidenceBinding[] }, excerp
         retrievedAt: "2026-10-18T10:00:00Z",
         contentDigest: "929215205222683cff2563d2063692b8c87b33e5fffbb72940f84a64765015a4",
         signatureOrReceipt: "INSEE-HTTP-200-ETAG-8581193-74173",
+        canonicalDatasetId: defaultCanonicalDatasetId,
+        datasetIdentity: defaultDatasetIdentity,
       }
     : {
         acquisitionEventId: "acq-insee-74056-2026",
@@ -54,11 +72,15 @@ function ref(over: Partial<SourceRef> & { bindings?: EvidenceBinding[] }, excerp
         retrievedAt: "2026-10-18T10:00:00Z",
         contentDigest: "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150",
         signatureOrReceipt: "INSEE-HTTP-200-ETAG-8581193-74056",
+        canonicalDatasetId: defaultCanonicalDatasetId,
+        datasetIdentity: defaultDatasetIdentity,
       };
 
   return {
     ref: "INSEE Logement en 2022 — Commune de Chamonix-Mont-Blanc (COM-74056)",
     sourceUrl: inseeSourceUrl("74056"),
+    canonicalDatasetId: defaultCanonicalDatasetId,
+    datasetIdentity: defaultDatasetIdentity,
     supportingExcerpt: excerpt,
     tier: "TIER_A",
     sourceDate: "2025-07-01",
@@ -1189,6 +1211,13 @@ test("RESEARCH-A through RESEARCH-G: Research acquisition provenance verificatio
   const validAcquisitionRef: SourceRef = {
     ref: "INSEE Logement en 2022 — Commune de Chamonix-Mont-Blanc (COM-74056)",
     sourceUrl: inseeSourceUrl("74056"),
+    canonicalDatasetId: "INSEE-RP2022-LOGEMENT-COM-74056",
+    datasetIdentity: {
+      geoCode: "74056",
+      reportingPeriod: 2022,
+      documentIdentifier: "INSEE-8581193-COM-74056",
+      documentType: "census",
+    },
     supportingExcerpt: "14,538 total dwellings",
     tier: "TIER_A",
     sourceDate: "2025-07-01",
@@ -1201,6 +1230,13 @@ test("RESEARCH-A through RESEARCH-G: Research acquisition provenance verificatio
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150",
       signatureOrReceipt: "INSEE-HTTP-200-ETAG-8581193-74056",
+      canonicalDatasetId: "INSEE-RP2022-LOGEMENT-COM-74056",
+      datasetIdentity: {
+        geoCode: "74056",
+        reportingPeriod: 2022,
+        documentIdentifier: "INSEE-8581193-COM-74056",
+        documentType: "census",
+      },
     },
   };
 
@@ -1417,7 +1453,7 @@ test("R01–R06: Realistic source, statutory, and municipal mutations executed t
 test("AUTH-01 through AUTH-06: Human approval cannot be self-certified, forged, or replayed", async () => {
   const {
     EditorialReviewService,
-    TrustedSessionRegistry,
+    TrustedExternalIdpAdapter,
     ProjectMembershipAuthority,
     EditorialAuditStore,
   } = await import("../../src/trust/editorial-review-boundary.js");
@@ -1426,203 +1462,207 @@ test("AUTH-01 through AUTH-06: Human approval cannot be self-certified, forged, 
   const { seedSutherlandProject } = await import("../fixtures/sutherland-seeds.js");
 
   const dbInst = await setupMigratedTestDatabase();
-  const { projectId } = await seedSutherlandProject(dbInst, `auth-${Math.random().toString(36).slice(2, 8)}`);
-  const trustStore = new TrustGovernanceStore(dbInst.db);
-  const sessionRegistry = TrustedSessionRegistry.getInstance();
-  const membershipAuth = ProjectMembershipAuthority.getInstance();
-  const auditStore = EditorialAuditStore.getInstance();
-  const service = new EditorialReviewService(trustStore, sessionRegistry, membershipAuth, auditStore);
+  try {
+    const { projectId } = await seedSutherlandProject(dbInst, `auth-${Math.random().toString(36).slice(2, 8)}`);
+    const trustStore = new TrustGovernanceStore(dbInst.db);
+    const idpHarness = TrustedExternalIdpAdapter.createTestHarness("sutherland-corp-okta");
+    const membershipAuth = ProjectMembershipAuthority.getInstance(dbInst.db);
+    const auditStore = EditorialAuditStore.getInstance(dbInst.db);
+    const service = new EditorialReviewService(trustStore, idpHarness.adapter, membershipAuth, auditStore);
 
-  const pageIdentity = "locations/chamonix";
-  const contentDigest = "a".repeat(64);
-  const claimSetDigest = "b".repeat(64);
-  const sourceEvidenceSetDigest = "c".repeat(64);
+    const pageIdentity = "locations/chamonix";
+    const contentDigest = "a".repeat(64);
+    const claimSetDigest = "b".repeat(64);
+    const sourceEvidenceSetDigest = "c".repeat(64);
 
-  // AUTH-01: Caller provides an apparently valid AuthenticatedPrincipal directly in a request without an authenticated session
-  await assert.rejects(
-    async () => {
-      await (service as any).recordAuthenticatedApproval({
-        projectId,
-        pageIdentity,
-        contentDigest,
-        claimSetDigest,
-        sourceEvidenceSetDigest,
-        verifiedClaimIds: ["c1"],
-        note: "Directly passed principal without session",
-        callerProvidedPrincipal: {
-          actorId: "attacker-alice",
-          role: "Editor-in-Chief",
-          permissions: ["EDITORIAL_REVIEW:APPROVE"],
-        },
-      });
-    },
-    (err: any) => {
-      assert.match(err.code || err.message, /unauthenticated_session_required/);
-      return true;
-    },
-  );
-
-  // AUTH-02: Direct store insertion with VERIFIED_HUMAN_REVIEW_AUTHORITY without server audit event
-  await assert.rejects(
-    async () => {
-      await trustStore.recordReview({
-        projectId,
-        review: {
-          schemaVersion: "trust-governance-v1",
+    // AUTH-01: Caller provides an apparently valid AuthenticatedPrincipal directly in a request without an authenticated session
+    await assert.rejects(
+      async () => {
+        await (service as any).recordAuthenticatedApproval({
           projectId,
           pageIdentity,
-          reviewerRef: "org-sutherland",
-          reviewerExpertise: "Expertise",
-          reviewedContentDigest: contentDigest,
-          reviewedAt: "2026-10-18",
-          result: "APPROVED",
-          note: "Direct store insertion bypass attempt",
-          reviewStatus: "EDITORIAL_REVIEW_APPROVED",
-          reviewerKind: "ACCEPTED_INSTITUTIONAL_COUNCIL",
-          authorityKind: "VERIFIED_HUMAN_REVIEW_AUTHORITY",
+          contentDigest,
           claimSetDigest,
           sourceEvidenceSetDigest,
-          approvalEventId: "fake-event-id-999",
-          approvalEvent: {
-            reviewEventId: "fake-event-id-999",
-            authenticatedActorId: "attacker-bob",
-            actorRole: "Editorial Director",
-            authorizationScope: "YMYL_DECISION_SUPPORT:EDITORIAL_REVIEW",
-            reviewAction: "APPROVED",
-            reviewedContentDigest: contentDigest,
-            reviewedClaimSetDigest: claimSetDigest,
-            reviewedSourceEvidenceDigest: sourceEvidenceSetDigest,
-            eventTimestamp: "2026-10-18T12:00:00Z",
-            auditEventReference: "AUDIT-REALISTIC-LOOKING-MINUTES",
+          verifiedClaimIds: ["c1"],
+          note: "Directly passed principal without session",
+          callerProvidedPrincipal: {
+            actorId: "attacker-alice",
+            role: "Editor-in-Chief",
+            permissions: ["EDITORIAL_REVIEW:APPROVE"],
           },
-        },
-      });
-    },
-    (err: any) => {
-      assert.match(err.code || err.message, /unauthenticated_human_review_rejected/);
-      return true;
-    },
-  );
+        });
+      },
+      (err: any) => {
+        assert.match(err.code || err.message, /unauthenticated_session_required/);
+        return true;
+      },
+    );
 
-  // AUTH-03: Valid authenticated actor without project-specific review permission
-  const actorCharlie = "charlie-user";
-  const tokenCharlie = sessionRegistry.createSession({
-    actorId: actorCharlie,
-    actorName: "Charlie User",
-    actorRole: "VIEWER",
-  });
-  await assert.rejects(
-    async () => {
-      await service.recordAuthenticatedApproval({
-        projectId,
-        pageIdentity,
-        contentDigest,
-        claimSetDigest,
-        sourceEvidenceSetDigest,
-        verifiedClaimIds: ["c1"],
-        note: "Unauthorized actor review",
-        sessionToken: tokenCharlie,
-        reviewerRef: "charlie",
-        reviewerExpertise: "None",
-        reviewAction: "APPROVED",
-      });
-    },
-    (err: any) => {
-      assert.match(err.code || err.message, /unauthorized_reviewer_actor/);
-      return true;
-    },
-  );
+    // AUTH-02: Direct store insertion with VERIFIED_HUMAN_REVIEW_AUTHORITY without server audit event
+    await assert.rejects(
+      async () => {
+        await trustStore.recordReview({
+          projectId,
+          review: {
+            schemaVersion: "trust-governance-v1",
+            projectId,
+            pageIdentity,
+            reviewerRef: "org-sutherland",
+            reviewerExpertise: "Expertise",
+            reviewedContentDigest: contentDigest,
+            reviewedAt: "2026-10-18",
+            result: "APPROVED",
+            note: "Direct store insertion bypass attempt",
+            reviewStatus: "EDITORIAL_REVIEW_APPROVED",
+            reviewerKind: "ACCEPTED_INSTITUTIONAL_COUNCIL",
+            authorityKind: "VERIFIED_HUMAN_REVIEW_AUTHORITY",
+            claimSetDigest,
+            sourceEvidenceSetDigest,
+            approvalEventId: "fake-event-id-999",
+            approvalEvent: {
+              reviewEventId: "fake-event-id-999",
+              authenticatedActorId: "attacker-bob",
+              actorRole: "Editorial Director",
+              authorizationScope: "YMYL_DECISION_SUPPORT:EDITORIAL_REVIEW",
+              reviewAction: "APPROVED",
+              reviewedContentDigest: contentDigest,
+              reviewedClaimSetDigest: claimSetDigest,
+              reviewedSourceEvidenceDigest: sourceEvidenceSetDigest,
+              eventTimestamp: "2026-10-18T12:00:00Z",
+              auditEventReference: "AUDIT-REALISTIC-LOOKING-MINUTES",
+            },
+          },
+        });
+      },
+      (err: any) => {
+        assert.match(err.code || err.message, /unauthenticated_human_review_rejected/);
+        return true;
+      },
+    );
 
-  // AUTH-04: Authentic event from another project
-  const { projectId: otherProject } = await seedSutherlandProject(dbInst, `oth-${Math.random().toString(36).slice(2, 8)}`);
-  membershipAuth.grantMembership(otherProject, actorCharlie, ["EDITORIAL_REVIEW:APPROVE"]);
-  const otherApproval = await service.recordAuthenticatedApproval({
-    projectId: otherProject,
-    pageIdentity,
-    contentDigest,
-    claimSetDigest,
-    sourceEvidenceSetDigest,
-    verifiedClaimIds: ["c1"],
-    note: "Other project approval",
-    sessionToken: tokenCharlie,
-    reviewerRef: "charlie",
-    reviewerExpertise: "Alpine governance lead",
-    reviewAction: "APPROVED",
-  });
-  await assert.rejects(
-    async () => {
-      await trustStore.recordReview({
-        projectId,
-        review: {
-          schemaVersion: "trust-governance-v1",
+    // AUTH-03: Valid authenticated actor without project-specific review permission
+    const actorCharlie = "charlie-user";
+    const tokenCharlie = idpHarness.issueSignedSession({
+      actorId: actorCharlie,
+      actorName: "Charlie User",
+      actorRole: "VIEWER",
+    });
+    await assert.rejects(
+      async () => {
+        await service.recordAuthenticatedApproval({
           projectId,
           pageIdentity,
-          reviewerRef: "org-sutherland",
-          reviewerExpertise: "Expertise",
-          reviewedContentDigest: contentDigest,
-          reviewedAt: "2026-10-18",
-          result: "APPROVED",
-          note: "Replaying audit event across projects",
-          reviewStatus: "EDITORIAL_REVIEW_APPROVED",
-          reviewerKind: "ACCEPTED_INSTITUTIONAL_COUNCIL",
-          authorityKind: "VERIFIED_HUMAN_REVIEW_AUTHORITY",
+          contentDigest,
           claimSetDigest,
           sourceEvidenceSetDigest,
-          approvalEventId: otherApproval.approvalEventId,
-          approvalEvent: otherApproval.approvalEvent,
-        },
-      });
-    },
-    (err: any) => {
-      assert.match(err.code || err.message, /cross_project_audit_event_rejected/);
-      return true;
-    },
-  );
+          verifiedClaimIds: ["c1"],
+          note: "Unauthorized actor review",
+          sessionToken: tokenCharlie,
+          reviewerRef: "charlie",
+          reviewerExpertise: "None",
+          reviewAction: "APPROVED",
+        });
+      },
+      (err: any) => {
+        assert.match(err.code || err.message, /unauthorized_reviewer_actor/);
+        return true;
+      },
+    );
 
-  // AUTH-05: Approval replayed after source evidence changes while HTML remains unchanged
-  const validActor = "david-governor";
-  membershipAuth.grantMembership(projectId, validActor, ["EDITORIAL_REVIEW:APPROVE"]);
-  const tokenDavid = sessionRegistry.createSession({
-    actorId: validActor,
-    actorName: "David Governor",
-    actorRole: "MANAGING_DIRECTOR",
-  });
-  const validApproval = await service.recordAuthenticatedApproval({
-    projectId,
-    pageIdentity,
-    contentDigest,
-    claimSetDigest,
-    sourceEvidenceSetDigest,
-    verifiedClaimIds: ["c1"],
-    note: "Valid initial approval",
-    sessionToken: tokenDavid,
-    reviewerRef: "david",
-    reviewerExpertise: "Sutherland Managing Director",
-    reviewAction: "APPROVED",
-  });
-  const mutatedSourceEvidenceDigest = "f".repeat(64);
-  const current = await trustStore.currentReview(
-    projectId,
-    pageIdentity,
-    contentDigest,
-    claimSetDigest,
-    mutatedSourceEvidenceDigest,
-  );
-  assert.equal(current.stale, true);
-  assert.match(current.reason ?? "", /source evidence/i);
+    // AUTH-04: Authentic event from another project
+    const { projectId: otherProject } = await seedSutherlandProject(dbInst, `oth-${Math.random().toString(36).slice(2, 8)}`);
+    await membershipAuth.grantMembership(otherProject, actorCharlie, ["EDITORIAL_REVIEW:APPROVE"]);
+    const otherApproval = await service.recordAuthenticatedApproval({
+      projectId: otherProject,
+      pageIdentity,
+      contentDigest,
+      claimSetDigest,
+      sourceEvidenceSetDigest,
+      verifiedClaimIds: ["c1"],
+      note: "Other project approval",
+      sessionToken: tokenCharlie,
+      reviewerRef: "charlie",
+      reviewerExpertise: "Alpine governance lead",
+      reviewAction: "APPROVED",
+    });
+    await assert.rejects(
+      async () => {
+        await trustStore.recordReview({
+          projectId,
+          review: {
+            schemaVersion: "trust-governance-v1",
+            projectId,
+            pageIdentity,
+            reviewerRef: "org-sutherland",
+            reviewerExpertise: "Expertise",
+            reviewedContentDigest: contentDigest,
+            reviewedAt: "2026-10-18",
+            result: "APPROVED",
+            note: "Replaying audit event across projects",
+            reviewStatus: "EDITORIAL_REVIEW_APPROVED",
+            reviewerKind: "ACCEPTED_INSTITUTIONAL_COUNCIL",
+            authorityKind: "VERIFIED_HUMAN_REVIEW_AUTHORITY",
+            claimSetDigest,
+            sourceEvidenceSetDigest,
+            approvalEventId: otherApproval.approvalEventId,
+            approvalEvent: otherApproval.approvalEvent,
+          },
+        });
+      },
+      (err: any) => {
+        assert.match(err.code || err.message, /cross_project_audit_event_rejected/);
+        return true;
+      },
+    );
 
-  // AUTH-06: Authorized human with valid session, project permission, matching digests, and persisted audit event
-  assert.equal(validApproval.authorityKind, "VERIFIED_HUMAN_REVIEW_AUTHORITY");
-  assert.equal(validApproval.result, "APPROVED");
-  const currentValid = await trustStore.currentReview(
-    projectId,
-    pageIdentity,
-    contentDigest,
-    claimSetDigest,
-    sourceEvidenceSetDigest,
-  );
-  assert.equal(currentValid.stale, false);
-  assert.equal(currentValid.review?.authorityKind, "VERIFIED_HUMAN_REVIEW_AUTHORITY");
+    // AUTH-05: Approval replayed after source evidence changes while HTML remains unchanged
+    const validActor = "david-governor";
+    await membershipAuth.grantMembership(projectId, validActor, ["EDITORIAL_REVIEW:APPROVE"]);
+    const tokenDavid = idpHarness.issueSignedSession({
+      actorId: validActor,
+      actorName: "David Governor",
+      actorRole: "MANAGING_DIRECTOR",
+    });
+    const validApproval = await service.recordAuthenticatedApproval({
+      projectId,
+      pageIdentity,
+      contentDigest,
+      claimSetDigest,
+      sourceEvidenceSetDigest,
+      verifiedClaimIds: ["c1"],
+      note: "Valid initial approval",
+      sessionToken: tokenDavid,
+      reviewerRef: "david",
+      reviewerExpertise: "Sutherland Managing Director",
+      reviewAction: "APPROVED",
+    });
+    const mutatedSourceEvidenceDigest = "f".repeat(64);
+    const current = await trustStore.currentReview(
+      projectId,
+      pageIdentity,
+      contentDigest,
+      claimSetDigest,
+      mutatedSourceEvidenceDigest,
+    );
+    assert.equal(current.stale, true);
+    assert.match(current.reason ?? "", /source evidence/i);
+
+    // AUTH-06: Authorized human with valid session, project permission, matching digests, and persisted audit event
+    assert.equal(validApproval.authorityKind, "VERIFIED_HUMAN_REVIEW_AUTHORITY");
+    assert.equal(validApproval.result, "APPROVED");
+    const currentValid = await trustStore.currentReview(
+      projectId,
+      pageIdentity,
+      contentDigest,
+      claimSetDigest,
+      sourceEvidenceSetDigest,
+    );
+    assert.equal(currentValid.stale, false);
+    assert.equal(currentValid.review?.authorityKind, "VERIFIED_HUMAN_REVIEW_AUTHORITY");
+  } finally {
+    await dbInst.close();
+  }
 });
 
 test("ACQ-01 through ACQ-08: Research acquisition physical and cryptographic authenticity", async () => {
@@ -1631,6 +1671,13 @@ test("ACQ-01 through ACQ-08: Research acquisition physical and cryptographic aut
   const validRef: SourceRef = {
     ref: "INSEE Logement en 2022 — Commune de Chamonix-Mont-Blanc (COM-74056)",
     sourceUrl: inseeSourceUrl("74056"),
+    canonicalDatasetId: "INSEE-RP2022-LOGEMENT-COM-74056",
+    datasetIdentity: {
+      geoCode: "74056",
+      reportingPeriod: 2022,
+      documentIdentifier: "INSEE-8581193-COM-74056",
+      documentType: "census",
+    },
     supportingExcerpt: "14,538 total dwellings",
     tier: "TIER_A",
     sourceDate: "2025-07-01",
@@ -1643,6 +1690,13 @@ test("ACQ-01 through ACQ-08: Research acquisition physical and cryptographic aut
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150",
       signatureOrReceipt: "INSEE-HTTP-200-ETAG-8581193-74056",
+      canonicalDatasetId: "INSEE-RP2022-LOGEMENT-COM-74056",
+      datasetIdentity: {
+        geoCode: "74056",
+        reportingPeriod: 2022,
+        documentIdentifier: "INSEE-8581193-COM-74056",
+        documentType: "census",
+      },
     },
   };
 
@@ -2111,14 +2165,14 @@ test("AUTH-07 through AUTH-12: Independent verification of IdP boundary and dura
     // AUTH-09: Restart application services after approval. Verify that protected durable audit evidence
     // is still available and correctly associated with the reviewer and project.
     // Expected: valid durable record or explicitly pending; no silent approval from ephemeral state.
-    const trustedIdp = new TrustedExternalIdpAdapter("sutherland-corp-okta");
+    const idpHarness = TrustedExternalIdpAdapter.createTestHarness("sutherland-corp-okta");
+    const trustedIdp = idpHarness.adapter;
     const validActor = "verified-reviewer-auth09";
     await membershipAuth.grantMembership(projectId, validActor, ["EDITORIAL_REVIEW:APPROVE"]);
-    const validSession = trustedIdp.issueSessionForVerifiedPrincipal({
+    const validSession = idpHarness.issueSignedSession({
       actorId: validActor,
       actorName: "Authorized Editor",
       actorRole: "CHIEF_EDITOR",
-      providerId: "sutherland-corp-okta",
     });
 
     const trustedService = new EditorialReviewService(trustStore, trustedIdp, membershipAuth, auditStore);
@@ -2134,11 +2188,6 @@ test("AUTH-07 through AUTH-12: Independent verification of IdP boundary and dura
       reviewerRef: validActor,
       reviewerExpertise: "Alpine Property Editorial Board",
       reviewAction: "APPROVED",
-    });
-
-    await trustStore.recordReview({
-      projectId,
-      review: validApproval,
     });
 
     // Simulate application restart by creating fresh instances connected to the database
@@ -2219,11 +2268,10 @@ test("AUTH-07 through AUTH-12: Independent verification of IdP boundary and dura
     // Expected: PASS only if a genuine identity and authorization source exists.
     const newActor = "auth12-genuine-reviewer";
     await membershipAuth.grantMembership(projectId, newActor, ["EDITORIAL_REVIEW:APPROVE"]);
-    const newSession = trustedIdp.issueSessionForVerifiedPrincipal({
+    const newSession = idpHarness.issueSignedSession({
       actorId: newActor,
       actorName: "Genuine Reviewer",
       actorRole: "EDITORIAL_BOARD",
-      providerId: "sutherland-corp-okta",
     });
     const genuineApproval = await trustedService.recordAuthenticatedApproval({
       projectId,
@@ -2238,10 +2286,10 @@ test("AUTH-07 through AUTH-12: Independent verification of IdP boundary and dura
       reviewerExpertise: "Real Estate Law",
       reviewAction: "APPROVED",
     });
-    await trustStore.recordReview({ projectId, review: genuineApproval });
     const current = await trustStore.currentReview(projectId, pageIdentity, contentDigest, claimSetDigest, sourceEvidenceSetDigest);
     assert.equal(current.stale, false);
     assert.equal(current.review?.authorityKind, "VERIFIED_HUMAN_REVIEW_AUTHORITY");
+    assert.equal(current.review?.approvalEventId, genuineApproval.approvalEventId);
   } finally {
     await dbInst.close();
   }
@@ -2354,14 +2402,14 @@ test("PUB-07 through PUB-12: Fail-closed publication eligibility on missing revi
     );
 
     // PUB-10: Multi-page candidate where one page has pending editorial approval
-    const trustedIdp = new TrustedExternalIdpAdapter("sutherland-corp-okta");
+    const pub10Harness = TrustedExternalIdpAdapter.createTestHarness("sutherland-corp-okta");
+    const trustedIdp = pub10Harness.adapter;
     const reviewerActor = "pub10-reviewer";
     await membershipAuth.grantMembership(projectId, reviewerActor, ["EDITORIAL_REVIEW:APPROVE"]);
-    const reviewerSession = trustedIdp.issueSessionForVerifiedPrincipal({
+    const reviewerSession = pub10Harness.issueSignedSession({
       actorId: reviewerActor,
       actorName: "Pub Reviewer",
       actorRole: "EDITOR",
-      providerId: "sutherland-corp-okta",
     });
     const reviewService = new EditorialReviewService(trustStore, trustedIdp, membershipAuth, auditStore);
     const chamonixApproval = await reviewService.recordAuthenticatedApproval({
@@ -2377,7 +2425,7 @@ test("PUB-07 through PUB-12: Fail-closed publication eligibility on missing revi
       reviewerExpertise: "Chamonix Lead",
       reviewAction: "APPROVED",
     });
-    await trustStore.recordReview({ projectId, review: chamonixApproval });
+    assert.equal(chamonixApproval.authorityKind, "VERIFIED_HUMAN_REVIEW_AUTHORITY");
 
     // Set Megève intent as YMYL, with NO review recorded (pending)
     await trustStore.setPageIntentAuthority({
@@ -2851,6 +2899,737 @@ test("WORK-08 through WORK-14: Dynamic transformation parsing without fallback c
   assert.equal(validExecution.structuredMetrics.grossYieldPercent, 7.2);
   assert.equal(validExecution.structuredMetrics.totalDwellings2022, 14538);
 });
+
+test("AUTH-13 through AUTH-20: Fail-closed default identity, transactional PostgreSQL authority, and immutable audit seal enforcement", async () => {
+  const {
+    EditorialReviewService,
+    FailClosedProductionIdentityProvider,
+    TrustedExternalIdpAdapter,
+    SyntheticTestSessionRegistry,
+    TrustedSessionRegistry,
+    ProjectMembershipAuthority,
+    EditorialAuditStore,
+  } = await import("../../src/trust/editorial-review-boundary.js");
+  const { TrustGovernanceStore } = await import("../../src/trust/store.js");
+  const { editorialApprovalAuditEvents, reviewAuthorities } = await import("../../src/persistence/schema.js");
+  const { eq } = await import("drizzle-orm");
+  const { setupMigratedTestDatabase } = await import("./helpers.js");
+  const { seedSutherlandProject } = await import("../fixtures/sutherland-seeds.js");
+
+  const dbInst = await setupMigratedTestDatabase();
+  try {
+    const { projectId } = await seedSutherlandProject(dbInst, `auth3-${Math.random().toString(36).slice(2, 8)}`);
+    const trustStore = new TrustGovernanceStore(dbInst.db);
+    const membershipAuth = ProjectMembershipAuthority.getInstance(dbInst.db);
+    const auditStore = EditorialAuditStore.getInstance(dbInst.db);
+
+    const pageIdentity = "locations/chamonix";
+    const contentDigest = "a".repeat(64);
+    const claimSetDigest = "b".repeat(64);
+    const sourceEvidenceSetDigest = "c".repeat(64);
+
+    // AUTH-13: Self-created session with isSynthetic=false cannot certify real human review.
+    const syntheticRegistry = TrustedSessionRegistry.getInstance();
+    const actor13 = "auth13-self-certified-caller";
+    await membershipAuth.grantMembership(projectId, actor13, ["EDITORIAL_REVIEW:APPROVE"]);
+    const selfCreatedToken = syntheticRegistry.createSession({
+      actorId: actor13,
+      actorName: "Caller Attempt",
+      actorRole: "EDITORIAL_DIRECTOR",
+      isSynthetic: false,
+    });
+    const resolvedSelfSession = await syntheticRegistry.verifySession(selfCreatedToken);
+    assert.ok(resolvedSelfSession);
+    assert.equal(resolvedSelfSession.isSynthetic, true, "Caller-supplied isSynthetic=false must be ignored on synthetic registry");
+
+    // Also verify TrustedExternalIdpAdapter rejects caller-supplied raw principal objects without cryptographic assertion
+    const unconfiguredIdp = new TrustedExternalIdpAdapter("sutherland-corp-okta");
+    assert.throws(
+      () => {
+        unconfiguredIdp.issueSessionForVerifiedPrincipal({
+          actorId: actor13,
+          actorName: "Raw Principal Caller",
+          actorRole: "EDITORIAL_DIRECTOR",
+        } as any);
+      },
+      (err: any) => {
+        assert.match(err.code || err.message, /unverified_idp_assertion_required/);
+        return true;
+      },
+    );
+    assert.throws(
+      () => {
+        unconfiguredIdp.registerVerifiedPrincipal("tok-raw", {
+          sessionId: "tok-raw",
+          actorId: actor13,
+          actorName: "Raw Principal Caller",
+          actorRole: "EDITORIAL_DIRECTOR",
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+          isSynthetic: false,
+          trustedProviderId: "sutherland-corp-okta",
+        });
+      },
+      (err: any) => {
+        assert.match(err.code || err.message, /unverified_principal_registration_prohibited/);
+        return true;
+      },
+    );
+
+    const syntheticService = new EditorialReviewService(trustStore, syntheticRegistry, membershipAuth, auditStore);
+    await assert.rejects(
+      async () => {
+        await syntheticService.recordAuthenticatedApproval({
+          projectId,
+          pageIdentity,
+          contentDigest,
+          claimSetDigest,
+          sourceEvidenceSetDigest,
+          verifiedClaimIds: ["c1"],
+          note: "AUTH-13 self-created session with isSynthetic=false",
+          sessionToken: selfCreatedToken,
+          reviewerRef: actor13,
+          reviewerExpertise: "Alpine Law",
+          reviewAction: "APPROVED",
+        });
+      },
+      (err: any) => {
+        assert.match(err.code || err.message, /synthetic_approval_not_production_authority/);
+        return true;
+      },
+    );
+
+    // AUTH-14: Default EditorialReviewService rejects an unverified session.
+    const defaultService = new EditorialReviewService(trustStore, undefined, membershipAuth, auditStore);
+    await assert.rejects(
+      async () => {
+        await defaultService.recordAuthenticatedApproval({
+          projectId,
+          pageIdentity,
+          contentDigest,
+          claimSetDigest,
+          sourceEvidenceSetDigest,
+          verifiedClaimIds: ["c1"],
+          note: "AUTH-14 default service with synthetic token",
+          sessionToken: selfCreatedToken,
+          reviewerRef: actor13,
+          reviewerExpertise: "Alpine Law",
+          reviewAction: "APPROVED",
+        });
+      },
+      (err: any) => {
+        assert.match(err.code || err.message, /production_idp_not_configured_fail_closed|unauthenticated_session_required/);
+        return true;
+      },
+    );
+
+    // AUTH-15: Test identity provider cannot upgrade to production through request metadata.
+    await assert.rejects(
+      async () => {
+        await syntheticService.recordAuthenticatedApproval({
+          projectId,
+          pageIdentity,
+          contentDigest,
+          claimSetDigest,
+          sourceEvidenceSetDigest,
+          verifiedClaimIds: ["c1"],
+          note: "AUTH-15 metadata upgrade attempt",
+          sessionToken: selfCreatedToken,
+          reviewerRef: actor13,
+          reviewerExpertise: "Alpine Law",
+          reviewAction: "APPROVED",
+          ...({
+            isSynthetic: false,
+            authorityKind: "VERIFIED_HUMAN_REVIEW_AUTHORITY",
+            reviewAuthorityKind: "VERIFIED_HUMAN_REVIEW_AUTHORITY",
+            reviewStatus: "EDITORIAL_REVIEW_APPROVED",
+            trustedProviderId: "sutherland-corp-okta",
+          } as any),
+        });
+      },
+      (err: any) => {
+        assert.match(
+          err.code || err.message,
+          /synthetic_identity_upgrade_rejected|synthetic_approval_not_production_authority/,
+        );
+        return true;
+      },
+    );
+
+    // AUTH-16: Database unavailable during approval: no approval is issued or retained.
+    const brokenDb: any = {
+      select: () => {
+        throw new Error("ECONNREFUSED: PostgreSQL connection refused");
+      },
+      insert: () => {
+        throw new Error("ECONNREFUSED: PostgreSQL connection refused");
+      },
+      delete: () => {
+        throw new Error("ECONNREFUSED: PostgreSQL connection refused");
+      },
+      transaction: async () => {
+        throw new Error("ECONNREFUSED: PostgreSQL connection refused");
+      },
+    };
+    const brokenMembership = new ProjectMembershipAuthority(brokenDb);
+    const brokenAuditStore = new EditorialAuditStore(brokenDb);
+    const brokenTrustStore = new TrustGovernanceStore(brokenDb);
+    const idpHarness = TrustedExternalIdpAdapter.createTestHarness("sutherland-corp-okta");
+    const actor16 = "auth16-db-down-reviewer";
+    const token16 = idpHarness.issueSignedSession({
+      actorId: actor16,
+      actorName: "DB Down Reviewer",
+      actorRole: "EDITORIAL_BOARD",
+    });
+    const brokenService = new EditorialReviewService(
+      brokenTrustStore,
+      idpHarness.adapter,
+      brokenMembership,
+      brokenAuditStore,
+    );
+
+    await assert.rejects(
+      async () => {
+        await brokenMembership.grantMembership(projectId, actor16, ["EDITORIAL_REVIEW:APPROVE"]);
+      },
+      (err: any) => {
+        assert.match(err.code || err.message, /trust_database_unavailable/);
+        return true;
+      },
+    );
+    await assert.rejects(
+      async () => {
+        await brokenService.recordAuthenticatedApproval({
+          projectId,
+          pageIdentity,
+          contentDigest,
+          claimSetDigest,
+          sourceEvidenceSetDigest,
+          verifiedClaimIds: ["c1"],
+          note: "AUTH-16 approval while DB unavailable",
+          sessionToken: token16,
+          reviewerRef: actor16,
+          reviewerExpertise: "Alpine Law",
+          reviewAction: "APPROVED",
+        });
+      },
+      (err: any) => {
+        assert.match(err.code || err.message, /trust_database_unavailable/);
+        return true;
+      },
+    );
+    const rowsAfterBroken = await dbInst.db
+      .select()
+      .from(editorialApprovalAuditEvents)
+      .where(eq(editorialApprovalAuditEvents.actorId, actor16));
+    assert.equal(rowsAfterBroken.length, 0, "No audit event may be retained when DB is unavailable");
+
+    // AUTH-17: Database transaction rolls back: no orphaned usable audit approval remains.
+    const actor17 = "auth17-tx-rollback-reviewer";
+    await membershipAuth.grantMembership(projectId, actor17, ["EDITORIAL_REVIEW:APPROVE"]);
+    const token17 = idpHarness.issueSignedSession({
+      actorId: actor17,
+      actorName: "Rollback Reviewer",
+      actorRole: "EDITORIAL_BOARD",
+    });
+    const realService = new EditorialReviewService(trustStore, idpHarness.adapter, membershipAuth, auditStore);
+    // Passing an invalid contentDigest ("not-a-64-hex-digest") causes parseReviewAuthority inside recordReviewLocked
+    // to throw AFTER auditStore.recordApprovalAuditEvent has inserted into the transaction.
+    await assert.rejects(
+      async () => {
+        await realService.recordAuthenticatedApproval({
+          projectId,
+          pageIdentity,
+          contentDigest: "invalid-digest-triggers-review-schema-rollback",
+          claimSetDigest,
+          sourceEvidenceSetDigest,
+          verifiedClaimIds: ["c1"],
+          note: "AUTH-17 transaction rollback test",
+          sessionToken: token17,
+          reviewerRef: actor17,
+          reviewerExpertise: "Alpine Law",
+          reviewAction: "APPROVED",
+        });
+      },
+    );
+    const orphanedAuditRows = await dbInst.db
+      .select()
+      .from(editorialApprovalAuditEvents)
+      .where(eq(editorialApprovalAuditEvents.actorId, actor17));
+    assert.equal(orphanedAuditRows.length, 0, "Transaction rollback must leave zero orphaned audit events in PostgreSQL");
+
+    // AUTH-18: Revoked reviewer after restart: new approval rejected.
+    const actor18 = "auth18-revoked-reviewer";
+    await membershipAuth.grantMembership(projectId, actor18, ["EDITORIAL_REVIEW:APPROVE"]);
+    const token18 = idpHarness.issueSignedSession({
+      actorId: actor18,
+      actorName: "Revoked Reviewer",
+      actorRole: "EDITORIAL_BOARD",
+    });
+    await membershipAuth.revokeMembership(projectId, actor18);
+
+    // Simulate process restart with fresh store instances backed by PostgreSQL
+    const restartedMembership = new ProjectMembershipAuthority(dbInst.db);
+    const restartedAudit = new EditorialAuditStore(dbInst.db);
+    const restartedTrust = new TrustGovernanceStore(dbInst.db);
+    const restartedService = new EditorialReviewService(
+      restartedTrust,
+      idpHarness.adapter,
+      restartedMembership,
+      restartedAudit,
+    );
+    await assert.rejects(
+      async () => {
+        await restartedService.recordAuthenticatedApproval({
+          projectId,
+          pageIdentity,
+          contentDigest,
+          claimSetDigest,
+          sourceEvidenceSetDigest,
+          verifiedClaimIds: ["c1"],
+          note: "AUTH-18 approval after revocation and restart",
+          sessionToken: token18,
+          reviewerRef: actor18,
+          reviewerExpertise: "Alpine Law",
+          reviewAction: "APPROVED",
+        });
+      },
+      (err: any) => {
+        assert.match(err.code || err.message, /unauthorized_reviewer_actor/);
+        return true;
+      },
+    );
+
+    // AUTH-19: Forged audit event with matching digests: production approval rejected.
+    const forgedEventId = `appr-evt-forged-${Math.random().toString(36).slice(2, 8)}`;
+    const actor19 = "auth19-forged-actor";
+    await membershipAuth.grantMembership(projectId, actor19, ["EDITORIAL_REVIEW:APPROVE"]);
+    await dbInst.db.insert(editorialApprovalAuditEvents).values({
+      id: forgedEventId,
+      projectId,
+      pageIdentity,
+      actorId: actor19,
+      actorRole: "EDITORIAL_BOARD",
+      reviewAction: "APPROVED",
+      contentDigest,
+      claimSetDigest,
+      sourceEvidenceSetDigest,
+      auditEventReference: `AUDIT-${forgedEventId}`,
+      isSynthetic: false,
+      revoked: false,
+      verificationSeal: "f".repeat(64), // Forged seal
+      createdAt: new Date(),
+    });
+
+    await assert.rejects(
+      async () => {
+        await trustStore.recordReview({
+          projectId,
+          review: {
+            schemaVersion: "trust-governance-v1",
+            projectId,
+            pageIdentity,
+            reviewerRef: actor19,
+            reviewerExpertise: "Alpine Law",
+            reviewedContentDigest: contentDigest,
+            reviewedAt: "2026-10-19",
+            result: "APPROVED",
+            note: "Forged audit event with matching digests",
+            reviewStatus: "EDITORIAL_REVIEW_APPROVED",
+            reviewerKind: "EXTERNAL_HUMAN_REVIEWER",
+            authorityKind: "VERIFIED_HUMAN_REVIEW_AUTHORITY",
+            claimSetDigest,
+            sourceEvidenceSetDigest,
+            approvalEventId: forgedEventId,
+            approvalEvent: {
+              reviewEventId: forgedEventId,
+              authenticatedActorId: actor19,
+              actorRole: "EDITORIAL_BOARD",
+              authorizationScope: "YMYL_DECISION_SUPPORT:EDITORIAL_REVIEW",
+              reviewAction: "APPROVED",
+              reviewedContentDigest: contentDigest,
+              reviewedClaimSetDigest: claimSetDigest,
+              reviewedSourceEvidenceDigest: sourceEvidenceSetDigest,
+              eventTimestamp: new Date().toISOString(),
+              auditEventReference: `AUDIT-${forgedEventId}`,
+              isSynthetic: false,
+            },
+          },
+        });
+      },
+      (err: any) => {
+        assert.match(err.code || err.message, /forged_audit_event_rejected/);
+        return true;
+      },
+    );
+
+    // Also verify PostgreSQL trigger blocks deleting or mutating protected fields on editorial_approval_audit_events
+    await assert.rejects(
+      async () => {
+        await dbInst.db
+          .delete(editorialApprovalAuditEvents)
+          .where(eq(editorialApprovalAuditEvents.id, forgedEventId));
+      },
+      (err: any) => {
+        assert.match(String(err.cause?.message || err.message), /DELETE is prohibited/);
+        return true;
+      },
+    );
+    await assert.rejects(
+      async () => {
+        await dbInst.db
+          .update(editorialApprovalAuditEvents)
+          .set({ contentDigest: "0".repeat(64) })
+          .where(eq(editorialApprovalAuditEvents.id, forgedEventId));
+      },
+      (err: any) => {
+        assert.match(String(err.cause?.message || err.message), /protected fields are immutable/);
+        return true;
+      },
+    );
+
+    // AUTH-20: Real trusted identity and durable authorized review: PASS only when actual identity infrastructure is available.
+    const actor20 = "auth20-verified-human-reviewer";
+    await membershipAuth.grantMembership(projectId, actor20, ["EDITORIAL_REVIEW:APPROVE"]);
+    const verifiedSession20 = idpHarness.issueSignedSession({
+      actorId: actor20,
+      actorName: "Verified Human Reviewer",
+      actorRole: "EDITORIAL_BOARD",
+    });
+    const approval20 = await realService.recordAuthenticatedApproval({
+      projectId,
+      pageIdentity,
+      contentDigest,
+      claimSetDigest,
+      sourceEvidenceSetDigest,
+      verifiedClaimIds: ["c1"],
+      note: "AUTH-20 cryptographically verified human review",
+      sessionToken: verifiedSession20,
+      reviewerRef: actor20,
+      reviewerExpertise: "French Real Estate & Urbanism Law",
+      reviewAction: "APPROVED",
+    });
+    assert.equal(approval20.authorityKind, "VERIFIED_HUMAN_REVIEW_AUTHORITY");
+    assert.equal(approval20.reviewStatus, "EDITORIAL_REVIEW_APPROVED");
+
+    const current20 = await restartedTrust.currentReview(
+      projectId,
+      pageIdentity,
+      contentDigest,
+      claimSetDigest,
+      sourceEvidenceSetDigest,
+    );
+    assert.equal(current20.stale, false);
+    assert.equal(current20.review?.authorityKind, "VERIFIED_HUMAN_REVIEW_AUTHORITY");
+    assert.equal(current20.review?.approvalEventId, approval20.approvalEventId);
+  } finally {
+    await dbInst.close();
+  }
+});
+
+test("LEGAL-13 through LEGAL-17: Multi-line legal extract verification against authenticated Chamonix PLU PDF", async () => {
+  const { verifyLegalExtract, verifyLegalClaim } = await import("../../src/trust/legal-evidence.js");
+  const fs = await import("node:fs/promises");
+  const pluRelPath = path.join("docs", "evidence", "sources", "legal-regulatory-2026", "74056_reglement_20260226.pdf");
+  const extractRelPath = path.join("docs", "evidence", "sources", "legal-regulatory-2026", "chamonix-plu-servitudes-mixite.txt");
+  const rawBytes = await fs.readFile(path.join(repoRoot, pluRelPath));
+  const authenticExtractBytes = await fs.readFile(path.join(repoRoot, extractRelPath));
+  const rawSha = createHash("sha256").update(rawBytes).digest("hex");
+
+  const rawCaptureSnapshot: any = {
+    sourceId: "chamonix-plu-2026-reglement-raw",
+    title: "PLU de Chamonix-Mont-Blanc — Règlement officiel (2026)",
+    officialPublisher: "Ville de Chamonix-Mont-Blanc",
+    primarySourceUrl: "https://www.geoportail-urbanisme.gouv.fr/document/by-id/beaa82a7b5594b3913d5156928287d07",
+    retrievedAt: "2026-10-18T21:11:38Z",
+    httpStatusOrArchiveIdentifier: "HTTP 200, ETag e860875a86a1b39f07934fb3e098fc9d-1",
+    sha256: rawSha,
+    file: "74056_reglement_20260226.pdf",
+    sourceClassification: "PRIMARY_SOURCE_CAPTURE" as const,
+    articleOrSection: "Règlement complet (223 pages)",
+    territorialScope: "Commune de Chamonix-Mont-Blanc",
+    documentVersion: "Approuvé le 26 février 2026, opposable le 9 mai 2026",
+    effectiveFrom: "2026-05-09",
+    effectiveTo: "current",
+  };
+
+  const baseExtractSnapshot: any = {
+    sourceId: "chamonix-plu-servitudes-mixite",
+    title: "Plan Local d'Urbanisme de Chamonix-Mont-Blanc - Règlement et servitudes de mixité sociale",
+    officialPublisher: "Ville de Chamonix-Mont-Blanc",
+    primarySourceUrl: "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu/",
+    retrievedAt: "2026-10-18T21:11:38Z",
+    httpStatusOrArchiveIdentifier: "74056_PLU_20260226",
+    sha256: createHash("sha256").update(authenticExtractBytes).digest("hex"),
+    file: "chamonix-plu-servitudes-mixite.txt",
+    sourceClassification: "EXTRACTED_LEGAL_PROVISION" as const,
+    rawCaptureSourceId: "chamonix-plu-2026-reglement-raw",
+    rawCaptureDigest: rawSha,
+    articleOrSection: "Articles UA3/UAS3/UC3/UBD3/UBP3, Article 1 Note 1, Articles 6.6-6.7, Articles 10-11, UT3",
+    territorialScope: "Commune de Chamonix-Mont-Blanc",
+    documentVersion: "Approuvé le 26 février 2026, opposable le 9 mai 2026",
+    effectiveFrom: "2026-05-09",
+    effectiveTo: "current",
+  };
+
+  // LEGAL-13: One genuine quoted paragraph followed by one entirely invented paragraph → FAIL.
+  const legal13Bytes = Buffer.from(
+    [
+      "Pour les logements individuels :",
+      '"Toute opération de construction de logement ainsi que toute demande de changement de destination à vocation de logement, d\'une surface de plancher supérieure ou égale à 200 m², doit comporter un minimum de 25% de cette surface de plancher à usage de logements locatifs conventionnés',
+      'Les acquéreurs étrangers doivent en outre déposer une caution bancaire décennale auprès de la trésorerie municipale avant toute signature d\'acte authentique."',
+    ].join("\n"),
+    "utf8",
+  );
+  const res13 = verifyLegalExtract(baseExtractSnapshot, legal13Bytes, rawCaptureSnapshot, rawBytes);
+  assert.equal(res13.ok, false);
+  assert.match(res13.reason ?? "", /unmatched_substantive_line|invented_clause_detected|quote_span_mismatch/);
+
+  // LEGAL-14: Genuine quote with fabricated final sentence → FAIL.
+  const legal14Bytes = Buffer.from(
+    [
+      "Pour les logements collectifs :",
+      '"Dans le cadre de toute opération d\'une taille supérieure à 8 logements (inclus et y compris réhabilitation), 25% au moins des logements créés (et représentant au minimum 25% de la surface de plancher d\'habitation créée) doivent être affectés à des logements locatifs sociaux. Ce quota est doublé lorsque le demandeur réside hors du département de la Haute-Savoie."',
+    ].join("\n"),
+    "utf8",
+  );
+  const res14 = verifyLegalExtract(baseExtractSnapshot, legal14Bytes, rawCaptureSnapshot, rawBytes);
+  assert.equal(res14.ok, false);
+  assert.match(res14.reason ?? "", /invented_clause_detected|unmatched_substantive_line|quote_span_mismatch/);
+
+  // LEGAL-15: Two individually genuine provisions falsely combined into one legal obligation → FAIL.
+  // Line 1 is from Article UA 3 (page 21) and Line 2 is from Zone UT 3 (page 173), stitched into a single quote.
+  const legal15Bytes = Buffer.from(
+    [
+      "Obligation combinée :",
+      '"Toute opération de construction de logement ainsi que toute demande de changement de destination à vocation de logement, d\'une surface de plancher supérieure ou égale à 200 m², doit comporter un minimum de 25% de cette surface de plancher à usage de logements locatifs conventionnés',
+      'En zone UT, les constructions destinées à l\'hébergement hôtelier sont soumises aux prescriptions particulières d\'implantation des équipements touristiques d\'altitude."',
+    ].join("\n"),
+    "utf8",
+  );
+  const res15 = verifyLegalExtract(baseExtractSnapshot, legal15Bytes, rawCaptureSnapshot, rawBytes);
+  assert.equal(res15.ok, false);
+  assert.match(
+    res15.reason ?? "",
+    /unrelated_provisions_combined|unmatched_substantive_line|quote_span_mismatch/,
+  );
+
+  // Also test LEGAL-15 with two verbatim lines in reverse document order (Article 10 SMS on page 46 followed by Article UA 3 on page 21) inside one quote
+  const legal15ReversedBytes = Buffer.from(
+    [
+      "Obligation inversée :",
+      '"Les sites concernés par une servitude de mixité sociale (SMS) sont repérés au règlement graphique par une trame particulière et un numéro.',
+      'Toute opération de construction de logement ainsi que toute demande de changement de destination à vocation de logement, d\'une surface de plancher supérieure ou égale à 200 m², doit comporter un minimum de 25% de cette surface de plancher à usage de logements locatifs conventionnés"',
+    ].join("\n"),
+    "utf8",
+  );
+  const res15Rev = verifyLegalExtract(baseExtractSnapshot, legal15ReversedBytes, rawCaptureSnapshot, rawBytes);
+  assert.equal(res15Rev.ok, false);
+  assert.match(res15Rev.reason ?? "", /unrelated_provisions_combined/);
+
+  // LEGAL-16: Correct number taken from wrong article or zone → FAIL.
+  const legal16Bytes = Buffer.from(
+    [
+      "Zone UA 3 — Règle générale :",
+      '"En zone UA et UC, toute opération de construction de logement d\'une surface de plancher supérieure ou égale à 200 m² doit comporter un minimum de 75% de logements locatifs sociaux."',
+    ].join("\n"),
+    "utf8",
+  );
+  const res16Extract = verifyLegalExtract(baseExtractSnapshot, legal16Bytes, rawCaptureSnapshot, rawBytes);
+  assert.equal(res16Extract.ok, false);
+  assert.match(
+    res16Extract.reason ?? "",
+    /article_zone_threshold_mismatch|threshold_provision_mismatch|unmatched_substantive_line/,
+  );
+
+  const legal16Claim: ClaimLineage = {
+    claimId: "claim-legal-16",
+    pageIdentity: "locations/chamonix",
+    claimType: "SOURCE_DERIVED_FACT",
+    claimText: "Under Chamonix PLU Article UA 3, general residential construction in Zone UA requires a 75% social housing quota.",
+    limitation: "",
+    sourceRefs: [
+      {
+        ref: "Ville de Chamonix PLU Article UA 3",
+        sourceUrl: "https://www.geoportail-urbanisme.gouv.fr/document/by-id/beaa82a7b5594b3913d5156928287d07",
+        supportingExcerpt: "75% de logements sociaux en zone UA",
+        tier: "TIER_A",
+        sourceDate: "2026-02-26",
+        freshnessBasis: "effective_version",
+        entailment: "SUPPORTED",
+      },
+    ],
+  };
+  const res16Claim = verifyLegalClaim(legal16Claim, legalRegistry);
+  assert.equal(res16Claim.ok, false);
+  assert.ok(res16Claim.problems.some((p) => /chamonix_plu_threshold_mismatch|zone_applicability_mismatch/.test(p)));
+
+  // LEGAL-17: Complete valid provision extracted from authenticated Chamonix PLU → PASS.
+  const res17 = verifyLegalExtract(baseExtractSnapshot, authenticExtractBytes, rawCaptureSnapshot, rawBytes);
+  assert.equal(res17.ok, true, res17.reason ?? "");
+  assert.equal(legalRegistry.rejected.length, 0, JSON.stringify(legalRegistry.rejected));
+});
+
+test("ACQ-15 through ACQ-20: Unconditional canonical dataset identity, municipality/period bindings, and independent manifest verification", async () => {
+  const { verifyResearchAcquisition, TRUSTED_ACQUISITION_REGISTRY } = await import(
+    "../../src/trust/research-acquisition.js"
+  );
+
+  const validChamonixRef: SourceRef = {
+    ref: "INSEE Logement en 2022 — Commune de Chamonix-Mont-Blanc (COM-74056)",
+    sourceUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
+    canonicalDatasetId: "INSEE-RP2022-LOGEMENT-COM-74056",
+    datasetIdentity: {
+      geoCode: "74056",
+      reportingPeriod: 2022,
+      documentIdentifier: "INSEE-8581193-COM-74056",
+      documentType: "census",
+    },
+    supportingExcerpt: "14,538 total dwellings in Chamonix-Mont-Blanc (COM-74056) in 2022.",
+    tier: "TIER_A",
+    sourceDate: "2025-07-01",
+    freshnessBasis: "observation_date",
+    entailment: "SUPPORTED",
+    evidenceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
+    sourceClassification: "PRIMARY_PUBLIC_RECORD",
+    acquisitionProvenance: {
+      acquisitionEventId: "acq-insee-74056-2026",
+      trustedProviderId: "insee-official-data",
+      acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
+      retrievedAt: "2026-10-18T10:00:00Z",
+      contentDigest: "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150",
+      signatureOrReceipt: "INSEE-HTTP-200-ETAG-8581193-74056",
+      sourceOrigin: "VERIFIED_ARCHIVED_EXTERNAL",
+      canonicalDatasetId: "INSEE-RP2022-LOGEMENT-COM-74056",
+      datasetIdentity: {
+        geoCode: "74056",
+        reportingPeriod: 2022,
+        documentIdentifier: "INSEE-8581193-COM-74056",
+        documentType: "census",
+      },
+    },
+  };
+
+  // ACQ-15: Required canonicalDatasetId omitted → FAIL.
+  const acq15Ref: SourceRef = {
+    ...validChamonixRef,
+    canonicalDatasetId: undefined,
+  };
+  const res15 = verifyResearchAcquisition(acq15Ref);
+  assert.equal(res15.valid, false);
+  assert.ok(res15.problems.some((p) => /canonical_dataset_id_missing/.test(p)));
+
+  // ACQ-16: INSEE Chamonix event used for another municipality → FAIL.
+  const acq16ByIdentity: SourceRef = {
+    ...validChamonixRef,
+    datasetIdentity: {
+      ...validChamonixRef.datasetIdentity!,
+      geoCode: "74173",
+    },
+  };
+  const res16Identity = verifyResearchAcquisition(acq16ByIdentity);
+  assert.equal(res16Identity.valid, false);
+  assert.ok(res16Identity.problems.some((p) => /acquisition_dataset_identity_mismatch|municipality_scope_mismatch/.test(p)));
+
+  const acq16ByText: SourceRef = {
+    ...validChamonixRef,
+    ref: "INSEE Logement en 2022 — Commune de Megève (COM-74173)",
+  };
+  const res16Text = verifyResearchAcquisition(acq16ByText);
+  assert.equal(res16Text.valid, false);
+  assert.ok(res16Text.problems.some((p) => /acquisition_dataset_identity_mismatch|municipality_scope_mismatch/.test(p)));
+
+  // ACQ-17: Genuine event ID used for another reporting year → FAIL.
+  const acq17ByPeriod: SourceRef = {
+    ...validChamonixRef,
+    datasetIdentity: {
+      ...validChamonixRef.datasetIdentity!,
+      reportingPeriod: 2019,
+    },
+  };
+  const res17Period = verifyResearchAcquisition(acq17ByPeriod);
+  assert.equal(res17Period.valid, false);
+  assert.ok(res17Period.problems.some((p) => /acquisition_reporting_period_mismatch/.test(p)));
+
+  const acq17ByTitle: SourceRef = {
+    ...validChamonixRef,
+    ref: "INSEE Logement en 2019 — Commune de Chamonix-Mont-Blanc (COM-74056)",
+  };
+  const res17Title = verifyResearchAcquisition(acq17ByTitle);
+  assert.equal(res17Title.valid, false);
+  assert.ok(res17Title.problems.some((p) => /acquisition_reporting_period_mismatch/.test(p)));
+
+  // ACQ-18: Unrelated document with similar INSEE title keywords → FAIL.
+  const acq18SimilarKeywords: SourceRef = {
+    ...validChamonixRef,
+    ref: "INSEE Première — Enquête Nationale Logement RP2022 : conjoncture et revenus (COM-74056)",
+  };
+  const res18Keywords = verifyResearchAcquisition(acq18SimilarKeywords);
+  assert.equal(res18Keywords.valid, false);
+  assert.ok(res18Keywords.problems.some((p) => /acquisition_document_mismatch/.test(p)));
+
+  const acq18WrongDocId: SourceRef = {
+    ...validChamonixRef,
+    datasetIdentity: {
+      ...validChamonixRef.datasetIdentity!,
+      documentIdentifier: "INSEE-PREMIERE-2022-9999",
+    },
+  };
+  const res18DocId = verifyResearchAcquisition(acq18WrongDocId);
+  assert.equal(res18DocId.valid, false);
+  assert.ok(res18DocId.problems.some((p) => /acquisition_document_mismatch/.test(p)));
+
+  // ACQ-19: Source file present, but its claimed acquisition event is not independently verifiable → FAIL or UNVERIFIED.
+  // Case 19a: Static archival snapshot represented as live EXTERNAL_ACQUIRED
+  const acq19LiveClaim: SourceRef = {
+    ...validChamonixRef,
+    evidenceOrigin: "EXTERNAL_ACQUIRED",
+  };
+  const res19Live = verifyResearchAcquisition(acq19LiveClaim);
+  assert.equal(res19Live.valid, false);
+  assert.ok(res19Live.problems.some((p) => /acquisition_event_unverified/.test(p)));
+
+  // Case 19b: Physical source file exists on disk with matching SHA-256, but is NOT corroborated in manifest.json
+  const tmpRepo = await mkdtemp(path.join(tmpdir(), "r12-acq19-"));
+  try {
+    const uncorroboratedRel = "docs/evidence/sources/insee-logement-2022/COM-74056.html";
+    const uncorroboratedFull = path.join(tmpRepo, uncorroboratedRel);
+    await mkdir(path.dirname(uncorroboratedFull), { recursive: true });
+    // Copy the actual Chamonix HTML file so its SHA-256 matches registeredEvent.contentDigest,
+    // but write an empty manifest.json so the event cannot be independently verified.
+    const realHtmlBytes = await import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(repoRoot, uncorroboratedRel)),
+    );
+    await writeFile(uncorroboratedFull, realHtmlBytes);
+    await writeFile(
+      path.join(tmpRepo, "docs/evidence/sources/insee-logement-2022/manifest.json"),
+      JSON.stringify({ snapshots: [] }),
+    );
+    const res19UnverifiedManifest = verifyResearchAcquisition(validChamonixRef, undefined, {
+      repoRoot: tmpRepo,
+      checkDisk: true,
+      evaluationTimestamp: "2026-10-19T00:00:00Z",
+    });
+    assert.equal(res19UnverifiedManifest.valid, false);
+    assert.ok(res19UnverifiedManifest.problems.some((p) => /acquisition_event_unverified/.test(p)));
+  } finally {
+    await rm(tmpRepo, { recursive: true, force: true });
+  }
+
+  // ACQ-20: Authenticated source bytes, matching identity and trusted acquisition event → PASS.
+  const res20 = verifyResearchAcquisition(
+    validChamonixRef,
+    "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150",
+    {
+      repoRoot,
+      checkDisk: true,
+      evaluationTimestamp: "2026-10-19T00:00:00Z",
+    },
+  );
+  assert.equal(res20.valid, true, res20.problems.join("; "));
+  assert.ok(TRUSTED_ACQUISITION_REGISTRY.has("acq-insee-74056-2026"));
+});
+
 
 
 

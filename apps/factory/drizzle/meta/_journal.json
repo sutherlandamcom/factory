@@ -253,6 +253,13 @@
       "when": 1789750000000,
       "tag": "0035_durable_editorial_governance",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1789760000000,
+      "tag": "0036_editorial_audit_immutability",
+      "breakpoints": true
     }
   ]
 }

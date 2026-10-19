@@ -278,15 +278,22 @@ Executed via `runSiteWideQa`, `runDesignDriftQa`, and `runTrustQa` (and enforced
 ## U. Real-Browser Playwright E2E, Responsive, Accessibility & Lighthouse QA (Blocks 42–46)
 
 - **Multi-Page E2E & Responsive QA (`sites/starter/tests/run12-multipage.e2e.spec.ts`)**:
-  - Executed against the real built 6-page Sutherland `dist` via `astro preview` on both `desktop` (`1280x800`) and `mobile` (`390x844`) Chromium projects.
-  - Verifies HTTP 200, unique title, single `<h1>`, accepted Sutherland copy, visible `[data-review-authority="Alistair Sutherland"]` and `data-reviewed-digest` on all YMYL decision-support routes, zero fixture leakage, canonical URL, JSON-LD, primary navigation, editorial related-pages navigation, zero horizontal overflow (`scrollWidth <= clientWidth`), readable typography, monotonic vertical section stacking, and full-page screenshot capture.
+  - Executed against the real built 6-page Sutherland `dist` via `astro preview` on both `desktop` (`1280x800`) and `mobile` (`390x844`) Chromium projects (`18 passed, 0 failed, 0 skipped` when invoked against the Sutherland build in `run12-sutherland-multipage.test.ts`).
+  - Verifies HTTP 200, unique title, single `<h1>`, accepted Sutherland copy, visible `[data-review-authority="org-sutherland-private-office-research-committee"]` and `data-reviewed-digest` on all YMYL decision-support routes, zero fixture leakage, canonical URL, JSON-LD, primary navigation, editorial related-pages navigation, zero horizontal overflow (`scrollWidth <= clientWidth`), readable typography, monotonic vertical section stacking, and full-page screenshot capture.
+- **Explicit Accounting of `35 passed, 31 skipped` in Default Workspace `pnpm qa`**:
+  - During default workspace `pnpm qa`, Playwright runs 33 test definitions across 2 projects (`desktop` and `mobile` = 66 total invocations) against the default starter fixture build (`sites/starter/tests/fixtures`):
+    1. `axe.production.spec.ts` (`8 skipped`): Defines a loop `for (const project of ["desktop", "mobile"])` with `test.skip(testInfo.project.name !== project)`. Because Playwright executes the file in both the `desktop` and `mobile` projects, the 4 `desktop`-tagged tests skip under the `mobile` runner (`4`) and the 4 `mobile`-tagged tests skip under the `desktop` runner (`4`), while all 8 `(route, viewport)` combinations execute and pass (`8 passed`).
+    2. `run12-multipage.e2e.spec.ts` (`18 skipped` in default fixture build; `18 passed` in Sutherland multi-page build): Guards with `test.skip(!isSutherlandDist)` so the 9 Sutherland-specific tests (`6` route journeys + `3` cross-page navigation journeys × `2` viewports = `18`) skip during the default 4-route starter fixture build, and execute 100% (`18 passed, 0 skipped`) when `run12-sutherland-multipage.test.ts` runs Playwright against the built 6-page Sutherland site.
+    3. `task-page.qa.spec.ts` (`2 skipped`): Legacy `SiteTask` parameterized spec (`1` test × `2` viewports) guarded by `test.skip(!configuredSpec)` unless `FACTORY_TASK_QA_SPEC` is set by a legacy single-page `SiteTask` worker.
+    4. `visual.production.spec.ts` (`3 skipped`): Desktop structural and pixel regression baselines (`3` tests) execute and pass in the `desktop` project (`3 passed`) and skip in the `mobile` project (`3 skipped` via `test.skip(testInfo.project.name !== "desktop")`).
+  - Total in default `pnpm qa`: `35 passed + (8 + 18 + 2 + 3 = 31) skipped = 66 invocations`. Against the built 6-page Sutherland artifact, `run12-multipage.e2e.spec.ts` executes all `18/18` journeys (`0 skipped`), `axe.production.spec.ts` executes all `12/12` content-page `(route, viewport)` checks (`0` critical/serious violations), and `keyboard.production.spec.ts` executes all `14/14` `(route, viewport)` keyboard traversal checks.
 - **Automated Accessibility (`sites/starter/tests/axe.production.spec.ts` & `keyboard.production.spec.ts`)**:
   - `0` critical/serious Axe violations across all built pages on desktop and mobile.
   - Complete keyboard `Tab` focus traversal in DOM order across all interactive elements.
 - **Visual Regression & Structural Oracle (`sites/starter/tests/visual.production.spec.ts`)**:
   - Passes both structural (`governed-service-fixture.structure.json`) and pixel (`governed-service-fixture.png`) regression oracles without modifying baselines.
 - **Lighthouse CI (`pnpm --filter @factory/site-starter run test:lhci`)**:
-  - Passes LAB performance (`>= 0.90`), SEO (`>= 0.95`), best-practices (`>= 0.95`), LCP (`<= 2500ms`), and CLS (`<= 0.1`).
+  - Passes LAB performance (`>= 0.90`), accessibility (`>= 0.95`), SEO (`>= 0.95`), best-practices (`>= 0.95`), LCP (`<= 2500ms`), and CLS (`<= 0.1`).
 
 ---
 

@@ -1156,13 +1156,37 @@ test("workflow: foreign project read returns not_found (no cross-project leak)",
 
 
 test("workflow: READY_FOR_DEPLOYMENT is a readiness label only — publicationEligible is machine-derived from QA provenance (fail closed)", async () => {
-  const cases: Array<{ label: string; provenance?: { trustMode: string; publicationEligible: boolean }; expected: boolean }> = [
-    { label: "historical run without provenance", expected: false },
-    { label: "SYNTHETIC_FIXTURE even when self-declared eligible", provenance: { trustMode: "SYNTHETIC_FIXTURE", publicationEligible: true }, expected: false },
-    { label: "STRICT_PRODUCTION but not declared eligible", provenance: { trustMode: "STRICT_PRODUCTION", publicationEligible: false }, expected: false },
-    { label: "STRICT_PRODUCTION and eligible", provenance: { trustMode: "STRICT_PRODUCTION", publicationEligible: true }, expected: true },
+  const negativeCases: Array<{
+    label: string;
+    provenance?: {
+      trustMode: string;
+      publicationEligible: boolean;
+      reviewAuthorityMode?: string;
+    };
+  }> = [
+    { label: "historical run without provenance" },
+    {
+      label: "SYNTHETIC_FIXTURE even when self-declared eligible",
+      provenance: { trustMode: "SYNTHETIC_FIXTURE", publicationEligible: true, reviewAuthorityMode: "VERIFIED_HUMAN" },
+    },
+    {
+      label: "STRICT_PRODUCTION but not declared eligible",
+      provenance: { trustMode: "STRICT_PRODUCTION", publicationEligible: false, reviewAuthorityMode: "VERIFIED_HUMAN" },
+    },
+    {
+      label: "legacy STRICT_PRODUCTION without reviewAuthorityMode (self-declared eligible)",
+      provenance: { trustMode: "STRICT_PRODUCTION", publicationEligible: true },
+    },
+    {
+      label: "STRICT_PRODUCTION with TEST_ONLY reviewAuthorityMode",
+      provenance: { trustMode: "STRICT_PRODUCTION", publicationEligible: true, reviewAuthorityMode: "TEST_ONLY" },
+    },
+    {
+      label: "STRICT_PRODUCTION with PENDING reviewAuthorityMode",
+      provenance: { trustMode: "STRICT_PRODUCTION", publicationEligible: true, reviewAuthorityMode: "PENDING" },
+    },
   ];
-  for (const c of cases) {
+  for (const c of negativeCases) {
     const { dbInst, store, intake, deps } = await setup();
     try {
       const p = await store.createProject({ key: `wf-pub-${Math.random().toString(36).slice(2, 7)}`, name: "Pub" });
@@ -1186,10 +1210,233 @@ test("workflow: READY_FOR_DEPLOYMENT is a readiness label only — publicationEl
       const wf = (await deriveProjectWorkflow(deps, p.id))!;
       // Run 11 historical label is preserved in every case...
       assert.equal(wf.deployment.state, "READY_FOR_DEPLOYMENT", c.label);
-      // ...but publication authority is separately and machine-readably derived.
-      assert.equal(wf.deployment.publicationEligible, c.expected, c.label);
+      // ...but publication authority fails closed for legacy/ineligible provenance.
+      assert.equal(wf.deployment.publicationEligible, false, c.label);
     } finally {
       await dbInst.close();
     }
   }
+
+  // Positive control: governed candidate evaluated through the trusted ProductionStore QA path.
+  const { dbInst, intake, deps } = await setup();
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  const { seedProjectWithAcceptedInputs } = await import("../fixtures/writer-seeds.js");
+  const { AssetService } = await import("../../src/assets/service.js");
+  const { AssetStore } = await import("../../src/assets/asset-store.js");
+  const { createAssetStorage } = await import("../../src/assets/storage.js");
+  const { VisualStore } = await import("../../src/visual/store.js");
+  const { ProductionStore } = await import("../../src/production/store.js");
+  const { REQUIRED_PRODUCTION_QA_GATES, TRUSTED_PRODUCTION_QA_GATES, bindQaCheck } = await import("../../src/production/qa/registry.js");
+  const sharp = (await import("sharp")).default;
+  const root = await mkdtemp(path.join(tmpdir(), "wf-pub-live-"));
+  try {
+    const key = `wf-pub-pos-${Math.random().toString(36).slice(2, 7)}`;
+    const { projectId } = await seedProjectWithAcceptedInputs(dbInst, key);
+    await acceptFixturePage(dbInst, projectId, "home");
+
+    const assets = new AssetService({
+      store: new AssetStore(dbInst.db),
+      storage: createAssetStorage(root),
+    });
+    const bytes = await sharp({ create: { width: 1600, height: 900, channels: 3, background: { r: 10, g: 20, b: 30 } } }).jpeg().toBuffer();
+    const upload = await assets.uploadAsset(projectId, {
+      filename: "hero.jpg",
+      kind: "photo",
+      title: "Hero",
+      rightsStatus: "operator_owned",
+      dataBase64: bytes.toString("base64"),
+    });
+    const approved = await assets.approveVersion(projectId, upload.version.id, upload.version.binaryDigest);
+
+    const designStore = new DesignStore(dbInst.db);
+    const designSnapshot = await designStore.deriveInputSnapshotDraft({ projectId, schemaVersion: "design-v1" });
+    const cData = parseDesignCandidateData({
+      schemaVersion: "design-v1",
+      provider: "google-stitch",
+      providerMode: "live",
+      providerProjectName: "projects/live",
+      designMdDigest: "d".repeat(64),
+      designMdToolVersion: "factory-design-md-lint-v1",
+      designMdLint: { errors: 0, warnings: 0, infos: 0 },
+      designSeed: {
+        colors: { primary: "#1A2E35" },
+        typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans" },
+        rationale: "Seed rationale",
+      },
+      providerEvidence: {},
+      tokens: {
+        colors: { primary: "#1A2E35" },
+        typography: { headingFont: "Source Serif 4", bodyFont: "Public Sans" },
+        spacing: { md: "16px" },
+        rounded: { md: "8px" },
+      },
+      screens: [
+        {
+          id: "screen-1",
+          providerScreenName: "projects/live/screens/home",
+          title: "Homepage",
+          deviceType: "DESKTOP",
+          archetype: "homepage",
+        },
+      ],
+      archetypes: [
+        {
+          kind: "homepage",
+          purpose: "Trust-first entry",
+          providerScreenNames: ["projects/live/screens/home"],
+          sectionPatterns: ["hero", "evidence", "cta"],
+          contentRequirements: ["Primary CTA visible"],
+          assetSlots: [
+            {
+              slot: "hero.primary",
+              requirement: "Hero placeholder",
+              pageSlug: "home",
+              role: "hero",
+              requiredRole: "hero",
+              providerConsumed: false,
+              placeholder: true,
+              unresolvedReason: "No approved asset assignment for hero.",
+            },
+          ],
+          primaryCta: "Request assessment",
+          secondaryCta: "",
+          responsiveBehavior: "Mobile-first stack",
+          trustPresentation: "Author/date areas visible",
+        },
+      ],
+      rationale: "Live rationale",
+    });
+    const designCand = await designStore.createCandidate({
+      projectId,
+      inputSnapshot: designSnapshot,
+      data: cData,
+    });
+    await dbInst.db.execute(sql`UPDATE design_candidates SET provider_mode = 'live' WHERE id = ${designCand.id}`);
+    const acceptedDesign = await designStore.acceptCandidate({
+      projectId,
+      candidateId: designCand.id,
+      expectedCandidateDigest: designCand.candidateDigest,
+      reviewNotes: "live acceptance (test-seeded production authority)",
+    });
+
+    const visualStore = new VisualStore(dbInst.db);
+    const planId = `vap-${key}`;
+    await dbInst.db.execute(sql`
+      INSERT INTO visual_asset_plans (id, project_id, version, design_artifact_id, design_artifact_version, design_candidate_digest, design_input_digest, design_provider_mode, slots, plan_digest)
+      VALUES (${planId}, ${projectId}, 1, ${acceptedDesign.id}, ${acceptedDesign.version}, ${acceptedDesign.candidateDigest}, ${acceptedDesign.inputDigest}, 'live', '[]'::jsonb, ${"c".repeat(64)})
+    `);
+    await visualStore.createAcceptedSetAtomic({
+      projectId,
+      planId,
+      providerMode: "live",
+      designArtifactId: acceptedDesign.id,
+      designArtifactVersion: acceptedDesign.version,
+      designCandidateDigest: acceptedDesign.candidateDigest,
+      designInputDigest: acceptedDesign.inputDigest,
+      slots: [
+        {
+          slot: "hero.primary",
+          pageSlug: "home",
+          role: "hero",
+          resolvedVersionId: approved.id,
+          binaryDigest: approved.binaryDigest,
+          governanceDigest: approved.governanceDigest!,
+          resolutionMode: "reuse_real",
+          truthClass: "illustrative",
+        },
+      ],
+    });
+
+    const prodStore = new ProductionStore(dbInst.db);
+    const siteIdentity = {
+      siteId: "site-fixture",
+      siteName: "Fixture Site",
+      canonicalOrigin: "https://example.com",
+      language: "en",
+      profileDigest: "4".repeat(64),
+    };
+    const prodInput = await prodStore.deriveProductionInput({
+      projectId,
+      pageSlug: "home",
+      siteIdentity,
+      rendererVersion: "astro-7.2.9",
+      rendererPolicyVersion: "production-policy-v1",
+    });
+    const repoSha = "1".repeat(40);
+    const lockfileDigest = "2".repeat(64);
+    const manifestSetDigest = "3".repeat(64);
+    const artifactDigest = "a".repeat(64);
+    const redirectSnapshotDigest = deterministicDigest({ projectId, rules: [] });
+    const candidate = await prodStore.createCandidate({
+      projectId,
+      productionInputId: prodInput.id,
+      currentEnvironment: {
+        siteProfileDigest: siteIdentity.profileDigest,
+        rendererVersion: "astro-7.2.9",
+        rendererPolicyVersion: "production-policy-v1",
+      },
+      repositorySha: repoSha,
+      lockfileDigest,
+    });
+    await prodStore.recordBuild({
+      projectId,
+      candidateId: candidate.id,
+      artifactDigest,
+      artifactRef: "/tmp/dist",
+      assetReferences: [],
+      manifestSetDigest,
+      candidateInputs: [
+        {
+          productionInputId: prodInput.id,
+          productionInputVersion: prodInput.version,
+          productionInputDigest: prodInput.inputDigest,
+          pageIdentity: prodInput.pageIdentity,
+          route: prodInput.route,
+          manifestDigest: "5".repeat(64),
+        },
+      ],
+      redirectRules: [],
+      redirectSnapshotDigest,
+    });
+    const checks = REQUIRED_PRODUCTION_QA_GATES.map((gate) => {
+      const subject = gate.scope === "page" ? prodInput.route : gate.scope === "site" ? manifestSetDigest : repoSha;
+      const group = gate.checkId.split(".")[0] as any;
+      return bindQaCheck(
+        { checkId: gate.checkId, group, verdict: "PASS", detail: "trusted test evidence", evidence: [] },
+        { scope: gate.scope, subject, tool: "test-runner", toolVersion: "1" },
+      );
+    });
+    for (const check of checks.filter((entry) => TRUSTED_PRODUCTION_QA_GATES.some((gate) => gate.checkId === entry.checkId))) {
+      await prodStore.recordTrustedQaEvidence({
+        projectId,
+        candidateId: candidate.id,
+        check,
+        artifactDigest: check.scope === "repository" ? undefined : artifactDigest,
+        repositorySha: check.scope === "repository" ? repoSha : undefined,
+        lockfileDigest: check.scope === "repository" ? lockfileDigest : undefined,
+      });
+    }
+    await prodStore.recordQaRun({
+      projectId,
+      candidateId: candidate.id,
+      checks,
+      evaluatedArtifactDigest: artifactDigest,
+      manifestSetDigest,
+      redirectSnapshotDigest,
+      repositorySha: repoSha,
+      lockfileDigest,
+      pageRoutes: [prodInput.route],
+      trustMode: "STRICT_PRODUCTION",
+    });
+
+    const wf = (await deriveProjectWorkflow(deps, projectId))!;
+    assert.equal(wf.deployment.state, "READY_FOR_DEPLOYMENT", "STRICT_PRODUCTION and eligible via trusted QA path");
+    assert.equal(wf.deployment.publicationEligible, true, "STRICT_PRODUCTION and eligible via trusted QA path");
+  } finally {
+    await dbInst.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });
+

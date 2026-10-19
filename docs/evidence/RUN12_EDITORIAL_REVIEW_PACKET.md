@@ -153,8 +153,11 @@
 ## 4. Human Reviewer Sign-Off Protocol & Review Authority Discipline
 
 ### Distinguishing Test Authority from Genuine Review
+- `EditorialReviewService` defaults to `FailClosedProductionIdentityProvider`, which rejects all unverified or synthetic sessions unless a configured production identity provider (`FACTORY_IDP_PUBLIC_KEY_PEM`) cryptographically verifies an upstream Ed25519-signed assertion (`ext-idp-v1.<payloadB64Url>.<signatureB64Url>`).
+- `TrustedSessionRegistry` (`SyntheticTestSessionRegistry`) unconditionally sets `isSynthetic: true` on every session it creates (`AUTH-13`), ignoring any caller-supplied `isSynthetic: false`, and `EditorialReviewService` rejects any request metadata attempting to upgrade a synthetic session (`AUTH-15`).
+- `ProjectMembershipAuthority` and `EditorialAuditStore` are strictly backed by PostgreSQL (`project_reviewer_memberships` and `editorial_approval_audit_events`) with zero in-memory fallback (`AUTH-16`), coordinated in a single atomic database transaction (`AUTH-17`), and protected by both a server-side HMAC-SHA256 `verification_seal` and the PostgreSQL `BEFORE UPDATE OR DELETE` trigger `editorial_approval_audit_events_immutable_trg` (`0036_editorial_audit_immutability.sql`, `AUTH-18`, `AUTH-19`).
 - `TEST_ONLY_REVIEW_AUTHORITY`: Used strictly in automated integration tests to exercise workflow mechanics. **Cannot** authorize production publication (`qaRunPublicationEligible(result) === false`).
-- `VERIFIED_HUMAN_REVIEW_AUTHORITY`: Requires an authentic human action captured as an `AuthenticatedApprovalEvent`, including:
+- `VERIFIED_HUMAN_REVIEW_AUTHORITY`: Requires an authentic human action verified by a configured external IdP and captured as an `AuthenticatedApprovalEvent`, including:
   - `reviewEventId`: Unique identifier for the review action.
   - `authenticatedActorId`: Verified ID of the human reviewer (e.g., `actor-sutherland-board-01`).
   - `actorRole`: Authorized role (e.g., `Managing Director & Head of Editorial Governance`).
@@ -166,7 +169,7 @@
 
 ### Current Candidate Status
 - **Candidate Status**: `EDITORIAL_REVIEW_PENDING` (`publicationEligible: false`).
-- **Terminal Status**: `TECHNICAL REMEDIATION COMPLETE — EDITORIAL REVIEW PENDING — INDEPENDENT QA PENDING — DO NOT MERGE`.
+- **Terminal Status**: `IMPLEMENTATION COMPLETE — PENDING INDEPENDENT QA` (Human Editorial Review: `PENDING`; PR `#46` remains open and unmerged).
 
 ### Human Reviewer Acceptance Steps
 1. **Verify Evidence Artifacts**:

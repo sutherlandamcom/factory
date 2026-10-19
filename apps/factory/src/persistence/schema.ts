@@ -2730,3 +2730,202 @@ export type NarrationTextSnapshotRecord = typeof narrationTextSnapshots.$inferSe
 export type AudioCandidateRecord = typeof audioCandidates.$inferSelect;
 export type AcceptedAudioArtifactRecord = typeof acceptedAudioArtifacts.$inferSelect;
 export type AcceptedDerivativeSetRecord = typeof acceptedDerivativeSets.$inferSelect;
+
+// ---------------------------------------------------------------------------
+// Run 12 trust governance tables
+// ---------------------------------------------------------------------------
+
+export const pageIntentAuthorities = pgTable(
+  "page_intent_authorities",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    version: integer("version").notNull(),
+    intentDigest: text("intent_digest").notNull(),
+    data: jsonb("data").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("page_intent_authorities_project_page_version_unique").on(
+      table.projectId,
+      table.pageIdentity,
+      table.version,
+    ),
+    check(
+      "page_intent_authorities_digest_shape",
+      sql`${table.intentDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+    index("page_intent_authorities_project_page_idx").on(table.projectId, table.pageIdentity, table.version),
+  ],
+);
+
+export const claimLineageRecords = pgTable(
+  "claim_lineage_records",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    claimId: text("claim_id").notNull(),
+    contentDigest: text("content_digest").notNull(),
+    data: jsonb("data").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check(
+      "claim_lineage_records_digest_shape",
+      sql`${table.contentDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+    index("claim_lineage_records_project_page_idx").on(table.projectId, table.pageIdentity, table.contentDigest),
+  ],
+);
+
+export const reviewAuthorities = pgTable(
+  "review_authorities",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    version: integer("version").notNull(),
+    reviewerRef: text("reviewer_ref").notNull(),
+    reviewedContentDigest: text("reviewed_content_digest").notNull(),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }).notNull(),
+    result: text("result").notNull(),
+    data: jsonb("data").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("review_authorities_project_page_version_unique").on(
+      table.projectId,
+      table.pageIdentity,
+      table.version,
+    ),
+    check(
+      "review_authorities_result_valid",
+      sql`${table.result} IN ('APPROVED', 'CHANGES_REQUESTED')`,
+    ),
+    check(
+      "review_authorities_digest_shape",
+      sql`${table.reviewedContentDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+    index("review_authorities_project_page_idx").on(table.projectId, table.pageIdentity, table.version),
+  ],
+);
+
+export const originalValueRecords = pgTable(
+  "original_value_records",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    data: jsonb("data").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("original_value_records_project_page_idx").on(table.projectId, table.pageIdentity),
+  ],
+);
+
+export const editorialApprovalAuditEvents = pgTable(
+  "editorial_approval_audit_events",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    actorId: text("actor_id").notNull(),
+    actorRole: text("actor_role").notNull(),
+    reviewAction: text("review_action").notNull(),
+    contentDigest: text("content_digest").notNull(),
+    claimSetDigest: text("claim_set_digest").notNull(),
+    sourceEvidenceSetDigest: text("source_evidence_set_digest").notNull(),
+    auditEventReference: text("audit_event_reference").notNull(),
+    isSynthetic: boolean("is_synthetic").notNull().default(false),
+    revoked: boolean("revoked").notNull().default(false),
+    verificationSeal: text("verification_seal"),
+    sealKeyId: text("seal_key_id").default("v1"),
+    sealStatus: text("seal_status").notNull().default("SEALED"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check(
+      "editorial_approval_audit_events_review_action_valid",
+      sql`${table.reviewAction} IN ('APPROVED', 'CHANGES_REQUESTED', 'REJECTED')`,
+    ),
+    check(
+      "editorial_approval_audit_events_content_digest_shape",
+      sql`${table.contentDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "editorial_approval_audit_events_claim_set_digest_shape",
+      sql`${table.claimSetDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "editorial_approval_audit_events_source_evidence_digest_shape",
+      sql`${table.sourceEvidenceSetDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "editorial_approval_audit_events_verification_seal_shape",
+      sql`(${table.sealStatus} = 'LEGACY_UNSEALED' AND ${table.verificationSeal} IS NULL AND ${table.sealKeyId} IS NULL) OR (${table.sealStatus} = 'SEALED' AND ${table.verificationSeal} IS NOT NULL AND ${table.verificationSeal} ~ '^[0-9a-f]{64}$' AND ${table.sealKeyId} IS NOT NULL AND length(btrim(${table.sealKeyId})) > 0)`,
+    ),
+    index("editorial_approval_audit_events_project_page_idx").on(
+      table.projectId,
+      table.pageIdentity,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const projectReviewerMemberships = pgTable(
+  "project_reviewer_memberships",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    actorId: text("actor_id").notNull(),
+    actorRole: text("actor_role").notNull(),
+    permissions: jsonb("permissions").notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("project_reviewer_memberships_project_actor_unique").on(
+      table.projectId,
+      table.actorId,
+    ),
+    index("project_reviewer_memberships_project_actor_idx").on(
+      table.projectId,
+      table.actorId,
+    ),
+  ],
+);
+
+export const editorialSessionRevocations = pgTable(
+  "editorial_session_revocations",
+  {
+    sessionId: text("session_id").primaryKey(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }).defaultNow().notNull(),
+    reason: text("reason"),
+  },
+);
+
+export type PageIntentAuthorityRecord = typeof pageIntentAuthorities.$inferSelect;
+export type ClaimLineageRecord = typeof claimLineageRecords.$inferSelect;
+export type ReviewAuthorityRecord = typeof reviewAuthorities.$inferSelect;
+export type OriginalValueRecordRow = typeof originalValueRecords.$inferSelect;
+export type EditorialApprovalAuditEventRecord = typeof editorialApprovalAuditEvents.$inferSelect;
+export type ProjectReviewerMembershipRecord = typeof projectReviewerMemberships.$inferSelect;
+export type EditorialSessionRevocationRecord = typeof editorialSessionRevocations.$inferSelect;
+

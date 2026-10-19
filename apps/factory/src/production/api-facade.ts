@@ -5,10 +5,14 @@ import { ProductionStore } from "./store.js";
 import { computeArtifactDigest, ProductionBuildService } from "./build-service.js";
 import { runSiteWideQa } from "./qa/site-wide.js";
 import { runDesignDriftQa } from "./qa/design-drift.js";
+import { runTrustQa } from "./qa/trust.js";
+import { loadInseeEvidenceRegistry } from "../trust/insee-evidence.js";
+import { loadLegalEvidenceRegistry } from "../trust/legal-evidence.js";
+import { TrustGovernanceStore } from "../trust/store.js";
 import { deterministicDigest } from "../intelligence/digest.js";
 import { qaOverallVerdict, type ProductionQaCheckResult } from "@factory/contracts";
 import { loadProductionBuildIdentity } from "./identity.js";
-import { assertCompleteProductionQa } from "./qa/registry.js";
+import { assertCompleteProductionQa, assertCompleteTrustQa } from "./qa/registry.js";
 
 /**
  * PRODUCTION API FACADE — Macro Run 9 operator surface.
@@ -53,9 +57,11 @@ export class ProductionApiFacade {
   constructor(
     private readonly db: FactoryDb,
     private readonly repoRoot: string,
+    /** Trusted backend policy only (see TrustQaInput.syntheticFixtureContent). */
+    private readonly trustPolicy: { syntheticFixtureContent?: boolean; evidenceRoot?: string } = {},
   ) {
-    this.store = new ProductionStore(db);
-    this.build = new ProductionBuildService(db, repoRoot);
+    this.store = new ProductionStore(db, { repoRoot, evidenceRoot: trustPolicy.evidenceRoot });
+    this.build = new ProductionBuildService(db, repoRoot, { evidenceRoot: trustPolicy.evidenceRoot });
   }
 
   async workspace(projectId: string): Promise<ProductionWorkspaceView> {
@@ -186,10 +192,38 @@ export class ProductionApiFacade {
       starterSrcDir: path.join(this.repoRoot, "sites", "starter", "src"),
       manifestSetDigest,
     })));
-    qa.overall = qaOverallVerdict(qa.checks);
+    const trustEvidenceRoot = this.trustPolicy.evidenceRoot ?? this.repoRoot;
+    const trust = new TrustGovernanceStore(this.db, {
+      repoRoot: this.repoRoot,
+      evidenceRoot: this.trustPolicy.evidenceRoot,
+    });
+    const contentDigests = new Map<string, string>();
+    for (const m of manifests) {
+      const bundle = await this.store.deriveAuthorityBundle({
+        projectId: input.projectId,
+        pageSlug: m.input.pageIdentity,
+      });
+      contentDigests.set(m.input.pageIdentity, bundle.content.digest);
+    }
+    const trustQa = await runTrustQa({
+      manifests,
+      distDir: candidate.artifactRef,
+      projectId: input.projectId,
+      trust,
+      contentDigests,
+      manifestSetDigest,
+      syntheticFixtureContent: this.trustPolicy.syntheticFixtureContent === true,
+      inseeEvidence: loadInseeEvidenceRegistry(trustEvidenceRoot),
+      legalEvidence: loadLegalEvidenceRegistry(trustEvidenceRoot),
+    });
+    qa.checks.push(...trustQa.checks);
     const pageRoutes = manifests.map((manifest) => manifest.input.route);
     const complete = assertCompleteProductionQa({ checks: qa.checks, pageRoutes, manifestSetDigest, repositorySha: candidate.repositorySha });
     if (!complete.complete) throw new FactoryError("production_qa_failed", `Required QA evidence missing or duplicated: ${complete.missing.join(", ")}`);
+    const trustComplete = assertCompleteTrustQa({ checks: qa.checks, pageRoutes, manifestSetDigest });
+    if (!trustComplete.complete) {
+      throw new FactoryError("production_qa_failed", `Required YMYL Trust QA evidence missing or duplicated: ${trustComplete.missing.join(", ")}`);
+    }
     const run = await this.store.recordQaRun({
       projectId: input.projectId,
       candidateId: candidate.id,
@@ -200,12 +234,13 @@ export class ProductionApiFacade {
       repositorySha: candidate.repositorySha,
       lockfileDigest: candidate.lockfileDigest,
       pageRoutes,
+      trustMode: this.trustPolicy.syntheticFixtureContent === true ? "SYNTHETIC_FIXTURE" : "STRICT_PRODUCTION",
     });
     return {
       qaRunId: run.id,
-      overall: qa.overall,
+      overall: run.overall,
       checks: qa.checks,
-      digest: deterministicDigest({ overall: qa.overall, checks: qa.checks.map((check) => ({ checkId: check.checkId, verdict: check.verdict })) }),
+      digest: deterministicDigest({ overall: run.overall, checks: qa.checks.map((check) => ({ checkId: check.checkId, verdict: check.verdict })) }),
     };
   }
 

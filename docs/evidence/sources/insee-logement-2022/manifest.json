@@ -1,0 +1,9 @@
+{
+  "publication": "INSEE, Logement en 2022 (RP2022 exploitation principale, géographie au 01/01/2025)",
+  "publicationUrlPattern": "https://www.insee.fr/fr/statistiques/8581193?geo=COM-{code}",
+  "acquiredAt": "2026-10-18",
+  "snapshots": [
+    { "geoCode": "74056", "reportingYear": 2022, "originalUrl": "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056", "file": "COM-74056.html", "sha256": "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150" },
+    { "geoCode": "74173", "reportingYear": 2022, "originalUrl": "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74173", "file": "COM-74173.html", "sha256": "929215205222683cff2563d2063692b8c87b33e5fffbb72940f84a64765015a4" }
+  ]
+}

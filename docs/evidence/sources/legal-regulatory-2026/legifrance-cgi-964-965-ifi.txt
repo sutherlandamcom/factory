@@ -1,0 +1,31 @@
+RÉPUBLIQUE FRANÇAISE
+Légifrance — Le service public de la diffusion du droit
+
+Code général des impôts
+Livre Ier : Assiette et liquidation de l'impôt
+Première partie : Impôts d'Etat
+Titre IV : Enregistrement, publicité foncière, impôt de solidarité sur la fortune, impôt sur la fortune immobilière, timbre
+Chapitre Ier bis : Impôt sur la fortune immobilière
+Articles 964, 965 et 977 (créés par Loi n° 2017-1337 du 30 décembre 2017 de finances pour 2018 - art. 31)
+Source URL: https://www.legifrance.gouv.fr/codes/section_lc/LEGITEXT000006069577/LEGISCTA000036385038/
+
+ARTICLE 964 DU CGI (Seuil d'assujettissement) :
+Il est institué un impôt annuel sur les actifs immobiliers désigné sous le nom d'impôt sur la fortune immobilière.
+Sont soumises à cet impôt, lorsque la valeur nette de leur patrimoine immobilier est supérieure à 1 300 000 € au 1er janvier de l'année d'imposition :
+1° Les personnes physiques ayant leur domicile fiscal en France, pour l'ensemble des biens et droits immobiliers et parts de sociétés immobilières situés en France ou hors de France ;
+2° Les personnes physiques n'ayant pas leur domicile fiscal en France, pour les seuls biens et droits immobiliers et parts de sociétés immobilières situés en France.
+
+ARTICLE 965 DU CGI (Assiette taxable) :
+L'assiette de l'impôt sur la fortune immobilière est constituée par la valeur nette au 1er janvier de l'année :
+1° De l'ensemble des biens et droits immobiliers appartenant au redevable et aux membres de son foyer fiscal ;
+2° Des parts ou actions de sociétés et organismes établis en France ou hors de France appartenant au redevable et aux membres de son foyer fiscal, à hauteur de la fraction de leur valeur représentative de biens ou droits immobiliers détenus directement ou indirectement par la société.
+
+ARTICLE 977 DU CGI (Barème d'imposition) :
+Bien que le seuil de déclenchement de l'assujettissement soit fixé à 1 300 000 € de patrimoine immobilier net taxable, la liquidation de l'impôt s'opère selon un barème progressif débutant dès 800 000 € :
+- Fraction de valeur nette taxable jusqu'à 800 000 € : 0 %
+- Fraction comprise entre 800 000 € et 1 300 000 € : 0,5 %
+- Fraction comprise entre 1 300 000 € et 2 570 000 € : 0,7 %
+- Fraction comprise entre 2 570 000 € et 5 000 000 € : 1,0 %
+- Fraction comprise entre 5 000 000 € et 10 000 000 € : 1,25 %
+- Fraction supérieure à 10 000 000 € : 1,5 %
+Une décote est prévue pour les patrimoines nets compris entre 1 300 000 € et 1 400 000 €.

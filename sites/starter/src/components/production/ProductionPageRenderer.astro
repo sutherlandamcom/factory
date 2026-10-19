@@ -80,7 +80,22 @@ const inlineAssets = isGoverned
   ? assets.filter((asset) => asset !== heroAsset && !composition?.some((entry) => entry.assetSlot === asset.slot))
   : assets.filter((asset) => asset !== heroAsset && asset.role !== "hero" && asset.role !== "background");
 
-const pageJsonLd = { "@context": "https://schema.org", "@type": "WebPage", name: content.title, description: manifest.seo.description, url: manifest.seo.canonicalUrl };
+// Truthful structured-data projection of VISIBLE page content (Run 12):
+// the site name is visible in header/footer, the canonical URL matches the
+// route, and the publisher is the operating organization shown on the site.
+// No field is emitted that visible content does not possess.
+const siteOrigin = manifest.input.siteIdentity.canonicalOrigin.replace(/\/$/, "");
+const publisherJsonLd = { "@type": "Organization", name: manifest.input.siteIdentity.siteName, url: `${siteOrigin}/` };
+const pageJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "WebPage",
+  name: content.title,
+  description: manifest.seo.description,
+  url: manifest.seo.canonicalUrl,
+  isPartOf: { "@type": "WebSite", name: manifest.input.siteIdentity.siteName, url: `${siteOrigin}/` },
+  publisher: publisherJsonLd,
+  author: publisherJsonLd,
+};
 const breadcrumbJsonLd = breadcrumbs.length === 0 ? null : { "@context": "https://schema.org", "@type": "BreadcrumbList", itemListElement: breadcrumbs.map((entry, index) => ({ "@type": "ListItem", position: index + 1, name: entry.name, ...(entry.url ? { item: entry.url } : {}) })) };
 const jsonLd = breadcrumbJsonLd ? [pageJsonLd, breadcrumbJsonLd] : [pageJsonLd];
 
@@ -91,6 +106,19 @@ const legacyLcp = assets.find((asset) => asset.isProbableLcp);
 <ProductionLayout manifest={manifest} jsonLd={jsonLd}>
   <article data-design-digest={design.acceptedDigest} data-archetype={design.archetype.kind} data-implementation-digest={design.designImplementation?.implementationContractDigest}>
     {breadcrumbs.length > 0 && <nav aria-label="Breadcrumb" class="px-[var(--spacing-page-x)] py-[var(--spacing-stack-md)]"><ol class="flex flex-wrap gap-2">{breadcrumbs.map((entry, index) => <li>{entry.url ? <a href={entry.url}>{entry.name}</a> : <span aria-current="page">{entry.name}</span>}{index < breadcrumbs.length - 1 && <span aria-hidden="true"> / </span>}</li>)}</ol></nav>}
+    {manifest.reviewAuthority && (
+      <aside
+        aria-label="Editorial Review Authority"
+        data-review-authority={manifest.reviewAuthority.reviewerRef}
+        data-reviewed-digest={manifest.reviewAuthority.reviewedContentDigest}
+        data-reviewed-at={manifest.reviewAuthority.reviewedAt}
+        class="mx-auto max-w-4xl px-[var(--spacing-page-x)] py-[var(--spacing-stack-md)] text-[var(--color-text-muted)]"
+      >
+        <div>
+          <strong>Reviewed by:</strong> <span>{manifest.reviewAuthority.reviewerRef} — {manifest.reviewAuthority.reviewerExpertise} (Reviewed {manifest.reviewAuthority.reviewedAt})</span>
+        </div>
+      </aside>
+    )}
     {isGoverned && composition ? composition.map((entry) => {
       if (entry.componentId === "page-hero") {
         return <PageHero variant={entry.variant as "split" | "stacked"} title={content.title} introduction={content.introduction} asset={heroAsset ? { publicPath: heroAsset.publicPath, alt: heroAsset.alt, width: heroAsset.width, height: heroAsset.height, versionId: heroAsset.versionId, binaryDigest: heroAsset.binaryDigest, governanceDigest: heroAsset.governanceDigest, truthClass: heroAsset.truthClass } : null} derivatives={heroDerivatives} />;

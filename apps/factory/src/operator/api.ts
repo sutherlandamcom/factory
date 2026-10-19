@@ -7,6 +7,8 @@ import {
 } from "@factory/contracts";
 import { FactoryError } from "../executor/errors.js";
 import { ProjectIntakeStore } from "./intake-store.js";
+import { TrustGovernanceStore } from "../trust/store.js";
+import { pageIntentAuthoritySchema } from "@factory/contracts";
 import { FactoryStore } from "../persistence/store.js";
 import { getProjectOperatorWorkspace } from "./workspace.js";
 import { deriveProjectWorkflow, deriveProjectVersions, deriveProjectCosts } from "./workflow.js";
@@ -1273,6 +1275,31 @@ export function createOperatorApi(deps: OperatorApiDeps) {
           return sendBytes(res, bytes.mediaType, bytes.bytes);
         }
 
+        return sendError(res, "not_found", "Unknown endpoint.");
+      }
+
+      // ------------------------------------------------------------------
+      // Trust governance (Macro Run 12): durable PageIntentAuthority.
+      // Thin surface over TrustGovernanceStore. This records planning-time
+      // strategy + YMYL classification only; it can never grant review,
+      // source verification or claim acceptance.
+      // ------------------------------------------------------------------
+      if (segments[2] === "trust" && segments[3] === "page-intents") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        const trust = new TrustGovernanceStore(deps.store.db);
+        if (req.method === "GET" && segments.length === 4) {
+          return sendJson(res, 200, { intents: await trust.listCurrentIntentAuthorities(project.id) });
+        }
+        if (req.method === "PUT" && segments.length === 4) {
+          const parsed = parseJsonBody(body);
+          const intent = parseOr400(
+            pageIntentAuthoritySchema,
+            { ...(parsed as Record<string, unknown>), schemaVersion: "trust-governance-v1", projectId: project.id },
+          );
+          const record = await trust.setPageIntentAuthority({ projectId: project.id, intent });
+          return sendJson(res, 200, { id: record.id, version: record.version, pageIdentity: intent.pageIdentity });
+        }
         return sendError(res, "not_found", "Unknown endpoint.");
       }
 

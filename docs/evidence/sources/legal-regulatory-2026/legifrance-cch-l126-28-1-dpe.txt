@@ -1,0 +1,28 @@
+RÉPUBLIQUE FRANÇAISE
+Légifrance — Le service public de la diffusion du droit
+
+Code de la construction et de l'habitation
+Livre Ier : Dispositions générales relatives à la construction et à l'habitation
+Titre II : Sécurité et protection des occupants
+Chapitre VI : Performance énergétique et environnementale
+Article L126-28-1 (créé par Loi n° 2021-1104 du 22 août 2021 - art. 158 et décret n° 2022-1143 du 9 août 2022)
+Source URL: https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000043977341/
+
+TEXTE DE L'ARTICLE L126-28-1 DU CCH (Audit énergétique avant-vente) :
+I. - La réalisation d'un audit énergétique est obligatoire pour la vente de bâtiments ou parties de bâtiment à usage d'habitation qui comprennent un seul logement ou qui sont constitués de plusieurs logements qui appartiennent à une même personne, lorsque ces logements relèvent des classes D, E, F ou G du diagnostic de performance énergétique prévu à l'article L. 126-26.
+L'audit énergétique est formulé dans les conditions prévues par décret en Conseil d'Etat. Il comporte notamment des propositions de travaux permettant d'atteindre une rénovation performante au sens du 17° bis de l'article L. 111-1.
+
+CALENDRIER D'ENTRÉE EN VIGUEUR DE L'AUDIT ÉNERGÉTIQUE AVANT VENTE (Décret n° 2022-1143) :
+1° Bâtiments de classes F et G : à compter du 1er avril 2023.
+2° Bâtiments de classe E : à compter du 1er janvier 2025.
+3° Bâtiments de classe D : à compter du 1er janvier 2034.
+
+CONDITION D'APPLICATION STRICTE :
+L'obligation d'audit énergétique avant-vente s'applique exclusivement aux maisons individuelles et aux immeubles collectifs détenus en monopropriété (un seul propriétaire pour l'ensemble des lots). Les lots d'habitation situés au sein d'une copropriété sont exclus de l'obligation d'audit énergétique individuel avant vente lors d'une mutation de lot.
+
+CALENDRIER DÉCENCE ÉNERGÉTIQUE ET INTERDICTION DE LOCATION (Article L173-1-1 du CCH et Décret n° 2023-796) :
+Le calendrier d'interdiction de mise en location des logements indignes au plan thermique (passoires thermiques) est distinct de l'audit de vente :
+- Classes G+ (consommation > 450 kWh/m²/an en énergie finale) : Interdiction effective depuis le 1er janvier 2023.
+- Classes G : Interdiction de mise en location au 1er janvier 2025.
+- Classes F : Interdiction de mise en location au 1er janvier 2028.
+- Classes E : Interdiction de mise en location au 1er janvier 2034.

@@ -7,8 +7,8 @@ import { runProcess } from "../executor/process.js";
 import { deterministicDigest } from "../intelligence/digest.js";
 import { parseAcceptedPageContentData } from "@factory/contracts";
 import { ProductionStore, candidateBuildStaleness } from "./store.js";
-import { ProductionRenderCompiler, type ProductionRenderManifest } from "./render-manifest.js";
-import { emitSitemapAndRobots } from "./seo-engine.js";
+import { ProductionRenderCompiler, type ProductionRenderManifest, type ProductionRenderCompilerOptions } from "./render-manifest.js";
+import { emitSitemapAndRobots , generateRootRedirectStub } from "./seo-engine.js";
 import { loadProductionBuildIdentity } from "./identity.js";
 import { PageAuthorityReader } from "../writer/page-authority.js";
 
@@ -27,13 +27,21 @@ export class ProductionBuildService {
   constructor(
     private readonly db: FactoryDb,
     private readonly repoRoot: string,
+    private readonly options: ProductionRenderCompilerOptions = {},
   ) {
-    this.compiler = new ProductionRenderCompiler(db, repoRoot);
+    this.compiler = new ProductionRenderCompiler(db, repoRoot, options);
   }
 
   async prepareCandidate(input: { projectId: string; pageSlug: string }) {
     const identity = await loadProductionBuildIdentity(this.repoRoot);
-    const store = new ProductionStore(this.db);
+    const store = new ProductionStore(this.db, {
+      repoRoot: this.repoRoot,
+      evidenceRoot: this.options.evidenceRoot,
+      inseeEvidence: this.options.inseeEvidence,
+      legalEvidence: this.options.legalEvidence,
+      sourceEvidenceSetDigest: this.options.sourceEvidenceSetDigest,
+      keyring: this.options.keyring,
+    });
     const productionInput = await store.deriveProductionInput({
       projectId: input.projectId,
       pageSlug: input.pageSlug,
@@ -63,7 +71,7 @@ export class ProductionBuildService {
 
   async buildCandidate(input: { projectId: string; candidateId: string }): Promise<ProductionBuildResult> {
     const startedAt = Date.now();
-    const store = new ProductionStore(this.db);
+    const store = new ProductionStore(this.db, { repoRoot: this.repoRoot });
     const candidate = await store.getCandidate(input.projectId, input.candidateId);
     if (!candidate) throw buildError("production_candidate_not_found", "Candidate not found.");
     if (candidate.state !== "pending") throw buildError("production_build_rejected", `Candidate ${candidate.id} is ${candidate.state}; only pending candidates can build.`);
@@ -141,6 +149,14 @@ export class ProductionBuildService {
       if (htmlRoutes.filter((route) => route !== "/404").join("\0") !== expectedRoutes.join("\0")) {
         throw buildError("production_build_rejected", `Astro route set differs from candidate snapshot: ${htmlRoutes.join(", ")}`);
       }
+      // Governed root redirect stub (Run 12): when the governed route set has
+      // no "/" route, emit a deterministic noindex redirect to the homepage
+      // route so the domain root serves users instead of a 404. Delivery
+      // concern (like 404.html); excluded from the sitemap by construction.
+      const rootStub = generateRootRedirectStub({ manifests });
+      if (rootStub) {
+        await writeFile(path.join(distDir, "index.html"), rootStub.html, "utf8");
+      }
       const artifactDigest = await computeArtifactDigest(distDir);
       const finalIdentity = await loadProductionBuildIdentity(this.repoRoot);
       const finalStaleness = candidateBuildStaleness(candidate, finalIdentity);
@@ -170,7 +186,7 @@ export class ProductionBuildService {
   }
 
   async loadManifests(input: { projectId: string; candidateId: string }): Promise<ProductionRenderManifest[]> {
-    const candidate = await new ProductionStore(this.db).getCandidate(input.projectId, input.candidateId);
+    const candidate = await new ProductionStore(this.db, { repoRoot: this.repoRoot }).getCandidate(input.projectId, input.candidateId);
     if (!candidate?.artifactRef) throw buildError("production_candidate_not_found", "Built candidate not found.");
     return await this.compiler.readAllManifests(path.join(path.dirname(candidate.artifactRef), "manifests"));
   }

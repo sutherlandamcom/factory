@@ -5,6 +5,10 @@
   "canonicalOrigin": "https://sutherlandam.com",
   "language": "en",
   "navigation": [
-    { "label": "Home", "targetSlug": "/" }
+    { "label": "Home", "targetSlug": "/home" },
+    { "label": "Advisory service", "targetSlug": "/services/buyer-side-advisory" },
+    { "label": "Chamonix", "targetSlug": "/locations/chamonix" },
+    { "label": "Decision framework", "targetSlug": "/advisory/investment-decision-framework" },
+    { "label": "Research", "targetSlug": "/research/alpine-decision-framework" }
   ]
 }

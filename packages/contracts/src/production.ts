@@ -405,6 +405,15 @@ export const productionQaCheckIdSchema = z.enum([
   "design.token_governance",
   "design.composition_valid",
   "design.drift_source_scan",
+  // Run 12 trust governance gates
+  "trust.page_intent_present",
+  "trust.cannibalization",
+  "trust.ymll_classification",
+  "trust.claim_lineage",
+  "trust.source_authority",
+  "trust.review_authority",
+  "trust.original_value",
+  "trust.fixture_leakage",
 ]);
 export type ProductionQaCheckId = z.infer<typeof productionQaCheckIdSchema>;
 
@@ -434,6 +443,14 @@ export const productionQaCheckResultSchema = z
   .strict();
 export type ProductionQaCheckResult = z.infer<typeof productionQaCheckResultSchema>;
 
+export const reviewAuthorityModeSchema = z.enum([
+  "VERIFIED_HUMAN",
+  "TEST_ONLY",
+  "PENDING",
+  "NOT_REQUIRED",
+]);
+export type ReviewAuthorityMode = z.infer<typeof reviewAuthorityModeSchema>;
+
 export const productionQaReportDataSchema = z
   .object({
     schemaVersion: z.literal(PRODUCTION_SCHEMA_VERSION),
@@ -441,12 +458,46 @@ export const productionQaReportDataSchema = z
     checks: z.array(productionQaCheckResultSchema).max(10_000),
     /** Overall verdict: FAIL if any FAIL; REVIEW if any REVIEW; else PASS. */
     overall: qaVerdictSchema,
+    /**
+     * Machine-readable trust provenance (Run 12 remediation). Absent on
+     * historical runs; absence is treated as NOT publication-eligible
+     * (fail closed). Synthetic fixture content can never be eligible.
+     */
+    provenance: z
+      .object({
+        trustMode: z.enum(["STRICT_PRODUCTION", "SYNTHETIC_FIXTURE"]),
+        publicationEligible: z.boolean(),
+        reviewAuthorityMode: reviewAuthorityModeSchema.optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type ProductionQaReportData = z.infer<typeof productionQaReportDataSchema>;
 
 export function parseProductionQaReportData(input: unknown): ProductionQaReportData {
   return productionQaReportDataSchema.parse(input);
+}
+
+/**
+ * Single publication-eligibility predicate (Run 12 remediation). Future
+ * deployment/publication (Run 13) MUST gate on this; READY_FOR_DEPLOYMENT is a
+ * readiness label only and never authorizes publication. Fail closed.
+ */
+export function qaRunPublicationEligible(data: unknown): boolean {
+  const parsed = productionQaReportDataSchema.safeParse(data);
+  if (!parsed.success) return false;
+  const d = parsed.data;
+  if (!d.provenance?.reviewAuthorityMode) {
+    return false;
+  }
+  return (
+    d.overall === "PASS" &&
+    d.provenance.trustMode === "STRICT_PRODUCTION" &&
+    d.provenance.publicationEligible === true &&
+    (d.provenance.reviewAuthorityMode === "VERIFIED_HUMAN" ||
+      d.provenance.reviewAuthorityMode === "NOT_REQUIRED")
+  );
 }
 
 /** Deterministic overall verdict from individual check results. */
@@ -625,6 +676,17 @@ export const renderManifestBodySchema = z
       .max(100),
     /** Run 10 derivative authority (production-v2/v3 manifests only). */
     derivatives: manifestDerivativesSchema.optional(),
+    /** Run 12 YMYL review authority (present when a current APPROVED ReviewAuthority binds the accepted content digest). */
+    reviewAuthority: z
+      .object({
+        reviewerRef: productionIdSchema,
+        reviewerExpertise: boundedText(500),
+        reviewedContentDigest: productionDigestSchema,
+        reviewedAt: boundedText(40),
+        result: z.literal("APPROVED"),
+      })
+      .strict()
+      .optional(),
     manifestDigest: productionDigestSchema,
   })
   .strict();

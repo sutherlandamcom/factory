@@ -239,6 +239,34 @@
       "when": 1789730000000,
       "tag": "0033_page_archetype_authority",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1789740000000,
+      "tag": "0034_trust_governance",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1789750000000,
+      "tag": "0035_durable_editorial_governance",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1789760000000,
+      "tag": "0036_editorial_audit_immutability",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1789770000000,
+      "tag": "0037_editorial_audit_seals_and_session_revocations",
+      "breakpoints": true
     }
   ]
 }

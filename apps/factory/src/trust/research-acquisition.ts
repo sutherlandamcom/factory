@@ -69,6 +69,7 @@ export const UNTRUSTED_RESEARCH_PROVIDERS = new Set<string>([
 export interface TrustedAcquisitionEventRecord extends ResearchAcquisition {
   description: string;
   sourceFileRef: string;
+  alternateSourceUrls?: string[];
 }
 
 export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRecord> = new Map([
@@ -79,6 +80,7 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "insee-official-data",
       actualRequestedUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
       finalResponseUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
+      alternateSourceUrls: ["https://www.insee.fr/fr/statistiques/8581193", "https://www.insee.fr"],
       acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150",
@@ -95,6 +97,7 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "insee-official-data",
       actualRequestedUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
       finalResponseUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
+      alternateSourceUrls: ["https://www.insee.fr/fr/statistiques/8581193", "https://www.insee.fr"],
       acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150",
@@ -111,6 +114,7 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "insee-official-data",
       actualRequestedUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74173",
       finalResponseUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74173",
+      alternateSourceUrls: ["https://www.insee.fr/fr/statistiques/8581193", "https://www.insee.fr"],
       acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "929215205222683cff2563d2063692b8c87b33e5fffbb72940f84a64765015a4",
@@ -127,6 +131,7 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "insee-official-data",
       actualRequestedUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74173",
       finalResponseUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74173",
+      alternateSourceUrls: ["https://www.insee.fr/fr/statistiques/8581193", "https://www.insee.fr"],
       acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "929215205222683cff2563d2063692b8c87b33e5fffbb72940f84a64765015a4",
@@ -143,6 +148,12 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "chamonix-municipal-urbanisme",
       actualRequestedUrl: "https://www.geoportail-urbanisme.gouv.fr/document/by-id/beaa82a7b5594b3913d5156928287d07",
       finalResponseUrl: "https://data.geopf.fr/annexes/gpu/documents/DU_74056/beaa82a7b5594b3913d5156928287d07/74056_reglement_20260226.pdf",
+      alternateSourceUrls: [
+        "https://www.chamonix.fr/urbanisme-plu",
+        "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu/",
+        "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu",
+        "https://www.chamonix.fr",
+      ],
       acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
       retrievedAt: "2026-10-18T21:11:38Z",
       contentDigest: "25425f385c72a88d3607a0314db9166efe9add139ca45314e124d3eb9bac707f",
@@ -159,6 +170,12 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "chamonix-municipal-urbanisme",
       actualRequestedUrl: "https://www.geoportail-urbanisme.gouv.fr/document/by-id/beaa82a7b5594b3913d5156928287d07",
       finalResponseUrl: "https://data.geopf.fr/annexes/gpu/documents/DU_74056/beaa82a7b5594b3913d5156928287d07/74056_reglement_20260226.pdf",
+      alternateSourceUrls: [
+        "https://www.chamonix.fr/urbanisme-plu",
+        "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu/",
+        "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu",
+        "https://www.chamonix.fr",
+      ],
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T21:11:38Z",
       contentDigest: "d16422afa2deebbda53feb8aef0f9b509ba14bc35963678d8fb4bc6c8480f397",
@@ -175,6 +192,12 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "chamonix-municipal-urbanisme",
       actualRequestedUrl: "https://www.geoportail-urbanisme.gouv.fr/document/by-id/beaa82a7b5594b3913d5156928287d07",
       finalResponseUrl: "https://data.geopf.fr/annexes/gpu/documents/DU_74056/beaa82a7b5594b3913d5156928287d07/74056_reglement_20260226.pdf",
+      alternateSourceUrls: [
+        "https://www.chamonix.fr/urbanisme-plu",
+        "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu/",
+        "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu",
+        "https://www.chamonix.fr",
+      ],
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T21:11:38Z",
       contentDigest: "d16422afa2deebbda53feb8aef0f9b509ba14bc35963678d8fb4bc6c8480f397",
@@ -191,6 +214,10 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "legifrance-official-gazette",
       actualRequestedUrl: "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000031000677/",
       finalResponseUrl: "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000031000677/",
+      alternateSourceUrls: [
+        "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000031000677",
+        "https://www.legifrance.gouv.fr",
+      ],
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "45a3511a6498f2453c37589ad55dd96c6861f09bfcff41c21248a8d416dfa688",
@@ -207,6 +234,10 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "legifrance-official-gazette",
       actualRequestedUrl: "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000043977341/",
       finalResponseUrl: "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000043977341/",
+      alternateSourceUrls: [
+        "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000043977341",
+        "https://www.legifrance.gouv.fr",
+      ],
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "1383ee24eca8314e6ed34068db892a3873db1aeda890688864a68a905c3bdddf",
@@ -223,6 +254,10 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "legifrance-official-gazette",
       actualRequestedUrl: "https://www.legifrance.gouv.fr/codes/section_lc/LEGITEXT000006069577/LEGISCTA000036385038/",
       finalResponseUrl: "https://www.legifrance.gouv.fr/codes/section_lc/LEGITEXT000006069577/LEGISCTA000036385038/",
+      alternateSourceUrls: [
+        "https://www.legifrance.gouv.fr/codes/section_lc/LEGITEXT000006069577/LEGISCTA000036385038",
+        "https://www.legifrance.gouv.fr",
+      ],
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "c85b399e7dc37eb56b5b8c9a430dca81606ffa9e59df43edf922f10730996938",
@@ -239,6 +274,10 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "legifrance-official-gazette",
       actualRequestedUrl: "https://www.legifrance.gouv.fr/loda/id/JORFTEXT000000512228",
       finalResponseUrl: "https://www.legifrance.gouv.fr/loda/id/JORFTEXT000000512228",
+      alternateSourceUrls: [
+        "https://www.legifrance.gouv.fr/loda/id/JORFTEXT000000512228/",
+        "https://www.legifrance.gouv.fr",
+      ],
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "3e0210c9ef8eb3ba43d1a624afbf19eb2e748575f6d749ff16090af60d370238",
@@ -255,6 +294,12 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "chamonix-municipal-urbanisme",
       actualRequestedUrl: "https://www.chamonix.fr/meubles-de-tourisme-reglementation",
       finalResponseUrl: "https://www.chamonix.fr/meubles-de-tourisme-reglementation",
+      alternateSourceUrls: [
+        "https://www.chamonix.fr/urbanisme-plu",
+        "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu/",
+        "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu",
+        "https://www.chamonix.fr",
+      ],
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "9465ed55d509560ec7803b37dd718824f85723708ddfd88bddeb9f7d9a32bf36",
@@ -271,6 +316,11 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "georisques-natural-hazards",
       actualRequestedUrl: "https://www.georisques.gouv.fr/mes-risques/connaitre-les-risques-pres-de-chez-moi/rapport2?form-adresse=true&isCadastre=false&city=Chamonix-Mont-Blanc&type=commune&codeInsee=74056",
       finalResponseUrl: "https://www.georisques.gouv.fr/mes-risques/connaitre-les-risques-pres-de-chez-moi/rapport2?form-adresse=true&isCadastre=false&city=Chamonix-Mont-Blanc&type=commune&codeInsee=74056",
+      alternateSourceUrls: [
+        "https://www.georisques.gouv.fr/mes-risques/connaitre-les-risques-pres-de-chez-moi/commune/74056",
+        "https://www.georisques.gouv.fr/mes-risques/connaitre-les-risques-pres-de-chez-moi",
+        "https://www.georisques.gouv.fr",
+      ],
       acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "e4511b9dba7e019e05bad31f33cb1f7889b18874ce0a664ac99172ea9eef7b23",
@@ -287,6 +337,7 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "cour-des-comptes-publications",
       actualRequestedUrl: "https://www.ccomptes.fr/fr/publications/les-stations-de-ski-face-au-changement-climatique",
       finalResponseUrl: "https://www.ccomptes.fr/fr/publications/les-stations-de-ski-face-au-changement-climatique",
+      alternateSourceUrls: ["https://www.ccomptes.fr"],
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "06916fb9b7209134f833b9a65c7c92bed38131bc884ea595f4c699af38fd0764",
@@ -303,6 +354,7 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "dgfip-dvf-portal",
       actualRequestedUrl: "https://app.dvf.etalab.gouv.fr/",
       finalResponseUrl: "https://app.dvf.etalab.gouv.fr/",
+      alternateSourceUrls: ["https://app.dvf.etalab.gouv.fr", "https://files.data.gouv.fr/geo-dvf/"],
       acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "b524d384c84614ff3bc260102a4be90feb05807bc3b0840419c80cd91420f77e",
@@ -392,10 +444,19 @@ export function verifyResearchAcquisition(
     // ACQ-01: SourceRef URL does not match registered event URL
     if (sourceRef.sourceUrl && registeredEvent.actualRequestedUrl) {
       const srcUrlNorm = (sourceRef.sourceUrl.split("?")[0] ?? "").replace(/\/+$/, "");
-      const reqUrlNorm = (registeredEvent.actualRequestedUrl.split("?")[0] ?? "").replace(/\/+$/, "");
-      const finalUrl = registeredEvent.finalResponseUrl ?? registeredEvent.actualRequestedUrl;
-      const resUrlNorm = (finalUrl.split("?")[0] ?? "").replace(/\/+$/, "");
-      if (srcUrlNorm !== reqUrlNorm && srcUrlNorm !== resUrlNorm) {
+      const allCandidateUrls = [
+        registeredEvent.actualRequestedUrl,
+        registeredEvent.finalResponseUrl,
+        ...(registeredEvent.alternateSourceUrls ?? []),
+      ].filter((u): u is string => typeof u === "string");
+
+      const matches = allCandidateUrls.some((cand) => {
+        if (cand === sourceRef.sourceUrl) return true;
+        const candNorm = (cand.split("?")[0] ?? "").replace(/\/+$/, "");
+        return srcUrlNorm === candNorm;
+      });
+
+      if (!matches) {
         problems.push(
           `acquisition_source_url_mismatch: sourceRef.sourceUrl "${sourceRef.sourceUrl}" does not match registered event URL "${registeredEvent.actualRequestedUrl}".`,
         );

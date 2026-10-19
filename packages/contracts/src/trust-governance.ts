@@ -264,6 +264,7 @@ export const researchAcquisitionSchema = z
     trustedProviderId: boundedText(100),
     actualRequestedUrl: boundedText(500).optional(),
     finalResponseUrl: boundedText(500).optional(),
+    alternateSourceUrls: z.array(boundedText(500)).max(20).optional(),
     retrievalTimestamp: boundedText(40).optional(),
     retrievedAt: boundedText(40).optional(),
     acquisitionMethod: boundedText(100).optional(),

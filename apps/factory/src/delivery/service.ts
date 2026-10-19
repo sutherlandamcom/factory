@@ -61,10 +61,19 @@ export class ProductionDelivery {
     private readonly runtime: DeliveryRuntime,
   ) {}
 
-  async execute(initial: DeploymentRecord): Promise<DeploymentRecord> {
+  /**
+   * Prepare and remotely QA a preview without changing production.
+   *
+   * Run 13 uses this existing delivery application service after supplying
+   * candidate-bound immutable bytes. Merely reaching preview_verified NEVER
+   * conveys human release authority or permission to call promote().
+   */
+  async preparePreview(initial: DeploymentRecord): Promise<DeploymentRecord> {
+    if (initial.status !== "preparing" || initial.versionId !== null || initial.previewVerified) {
+      throw new FactoryError("deployment_transition_invalid", "Preview preparation requires a fresh, unuploaded deployment.");
+    }
     let current = initial;
     try {
-      // Read-only target validation happens before the one and only build.
       await this.wrangler.assertTargetExists(initial.workerName);
 
       const dist = await this.runtime.build();
@@ -76,6 +85,9 @@ export class ProductionDelivery {
       });
 
       const uploaded = await this.wrangler.upload(initial.workerName);
+      if (uploaded.workerName !== initial.workerName) {
+        throw new FactoryError("provider_identity_mismatch", "Uploaded version belongs to another Worker.");
+      }
       current = await this.store.updateDeployment({
         id: initial.id,
         status: "uploaded",
@@ -92,48 +104,70 @@ export class ProductionDelivery {
           errorMessage: "Cloudflare version preview failed the existing Playwright quality oracle.",
         });
       }
-      current = await this.store.updateDeployment({
+      return await this.store.updateDeployment({
         id: initial.id,
         status: "preview_verified",
         previewVerified: true,
       });
+    } catch (error) {
+      const info = errorInfo(error);
+      return await this.store.updateDeployment({
+        id: initial.id,
+        status: "failed",
+        errorCode: info.code,
+        errorMessage: info.message,
+      });
+    }
+  }
 
-      const providerVersion = await this.wrangler.currentProductionVersion(initial.workerName);
+  /**
+   * Historic CLI one-shot delivery entrypoint. Governed sites MUST NOT
+   * reach this entrypoint until it is gated by Run 13 release authority.
+   * Never expose this method directly through the Dashboard.
+   */
+  async execute(initial: DeploymentRecord): Promise<DeploymentRecord> {
+    const preview = await this.preparePreview(initial);
+    if (preview.status !== "preview_verified") return preview;
+    return await this.promoteLegacyPreview(preview);
+  }
+
+  private async promoteLegacyPreview(preview: DeploymentRecord): Promise<DeploymentRecord> {
+    let current = preview;
+    try {
+      if (preview.status !== "preview_verified" || !preview.previewVerified || !preview.versionId) {
+        throw new FactoryError("deployment_transition_invalid", "Cannot promote an unverified preview.");
+      }
+      const providerVersion = await this.wrangler.currentProductionVersion(preview.workerName);
       const knownGood = knownGoodVersion(await this.store.findLatestKnownGoodDeployment(
-        initial.siteId,
-        initial.workerName,
-        initial.productionUrl,
+        preview.siteId,
+        preview.workerName,
+        preview.productionUrl,
       ));
       if (knownGood !== null && providerVersion !== knownGood) {
         throw new FactoryError(
           "deployment_drift",
-          `Cloudflare production version does not match Factory's latest known-good version.`,
+          "Cloudflare production version does not match Factory's latest known-good version.",
         );
       }
-      // On the first Factory-managed delivery, the version currently serving
-      // 100% of production is the only possible rollback candidate. It is not
-      // declared known-good until a rollback to it passes production QA.
       const previousVersionId = knownGood ?? providerVersion;
+      await this.runtime.assertSourceStillAccepted(preview.sourceCommit);
 
-      await this.runtime.assertSourceStillAccepted(initial.sourceCommit);
-
-      // Durable crash boundary: this write completes before the production mutation.
       current = await this.store.updateDeployment({
-        id: initial.id,
+        id: preview.id,
         status: "promoting",
         previousVersionId,
       });
-      await this.wrangler.promote(initial.workerName, uploaded.versionId);
+      await this.wrangler.promote(preview.workerName, preview.versionId);
       current = await this.store.updateDeployment({
-        id: initial.id,
+        id: preview.id,
         status: "promoted",
         promotedAt: new Date(),
       });
 
-      const productionQa = await this.runtime.qa(initial.productionUrl, "production");
+      const productionQa = await this.runtime.qa(preview.productionUrl, "production");
       if (productionQa.passed) {
         return await this.store.updateDeployment({
-          id: initial.id,
+          id: preview.id,
           status: "verified",
           verifiedAt: new Date(),
           productionVerified: true,
@@ -146,7 +180,7 @@ export class ProductionDelivery {
       const info = errorInfo(error);
       const dangerous = current.status === "promoting" || current.status === "promoted";
       return await this.store.updateDeployment({
-        id: initial.id,
+        id: preview.id,
         status: dangerous ? "needs_review" : "failed",
         errorCode: info.code,
         errorMessage: info.message,

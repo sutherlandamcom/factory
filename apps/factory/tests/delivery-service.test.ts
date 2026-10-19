@@ -208,3 +208,37 @@ test("stale state with an unrelated active version fails closed as drift", async
   assert.equal(result.status, "needs_review");
   assert.equal(result.errorCode, "deployment_drift");
 });
+
+test("Run 13 preparePreview uploads and verifies preview without production promotion", async () => {
+  const store = new MemoryStore(record());
+  const provider = new FakeWrangler("known-v1");
+  const rt = runtime([true]);
+  const result = await new ProductionDelivery(store, provider, rt).preparePreview(store.current);
+  assert.equal(rt.builds, 1);
+  assert.equal(result.status, "preview_verified");
+  assert.equal(result.previewVerified, true);
+  assert.equal(result.versionId, "candidate-v2");
+  assert.deepEqual(provider.promoted, []);
+  assert.equal(provider.current, "known-v1");
+});
+
+test("Run 13 preparePreview prevents production promotion on QA failure", async () => {
+  const store = new MemoryStore(record());
+  const provider = new FakeWrangler("known-v1");
+  const result = await new ProductionDelivery(store, provider, runtime([false])).preparePreview(store.current);
+  assert.equal(result.status, "failed");
+  assert.equal(result.errorCode, "preview_qa_failed");
+  assert.deepEqual(provider.promoted, []);
+});
+
+test("Run 13 preparePreview rejects replay of an already-uploaded deployment", async () => {
+  const prior = record({ status: "preview_verified", versionId: "candidate-v2", previewVerified: true });
+  const store = new MemoryStore(prior);
+  const provider = new FakeWrangler("known-v1");
+  await assert.rejects(
+    new ProductionDelivery(store, provider, runtime([true])).preparePreview(prior),
+    /fresh, unuploaded deployment/,
+  );
+  assert.deepEqual(store.updates, []);
+  assert.deepEqual(provider.promoted, []);
+});

@@ -419,7 +419,7 @@ export async function startOperatorServer(): Promise<http.Server> {
     const { ProductionQaEvidenceCollector, LocalTrustedQaEvidenceExecutor } = await import("../production/qa/collector.js");
     const { ProductionStore } = await import("../production/store.js");
     qaCollector = new ProductionQaEvidenceCollector(
-      new ProductionStore(dbInstance.db),
+      new ProductionStore(dbInstance.db, { repoRoot }),
       dbInstance.db,
       repoRoot,
       new LocalTrustedQaEvidenceExecutor(),

@@ -2852,7 +2852,9 @@ export const editorialApprovalAuditEvents = pgTable(
     auditEventReference: text("audit_event_reference").notNull(),
     isSynthetic: boolean("is_synthetic").notNull().default(false),
     revoked: boolean("revoked").notNull().default(false),
-    verificationSeal: text("verification_seal").notNull().default(""),
+    verificationSeal: text("verification_seal"),
+    sealKeyId: text("seal_key_id").default("v1"),
+    sealStatus: text("seal_status").notNull().default("SEALED"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
@@ -2874,7 +2876,7 @@ export const editorialApprovalAuditEvents = pgTable(
     ),
     check(
       "editorial_approval_audit_events_verification_seal_shape",
-      sql`${table.verificationSeal} ~ '^[0-9a-f]{64}$'`,
+      sql`(${table.sealStatus} = 'LEGACY_UNSEALED' AND ${table.verificationSeal} IS NULL AND ${table.sealKeyId} IS NULL) OR (${table.sealStatus} = 'SEALED' AND ${table.verificationSeal} IS NOT NULL AND ${table.verificationSeal} ~ '^[0-9a-f]{64}$' AND ${table.sealKeyId} IS NOT NULL AND length(btrim(${table.sealKeyId})) > 0)`,
     ),
     index("editorial_approval_audit_events_project_page_idx").on(
       table.projectId,

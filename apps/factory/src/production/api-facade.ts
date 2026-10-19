@@ -60,7 +60,7 @@ export class ProductionApiFacade {
     /** Trusted backend policy only (see TrustQaInput.syntheticFixtureContent). */
     private readonly trustPolicy: { syntheticFixtureContent?: boolean } = {},
   ) {
-    this.store = new ProductionStore(db);
+    this.store = new ProductionStore(db, { repoRoot });
     this.build = new ProductionBuildService(db, repoRoot);
   }
 
@@ -192,7 +192,7 @@ export class ProductionApiFacade {
       starterSrcDir: path.join(this.repoRoot, "sites", "starter", "src"),
       manifestSetDigest,
     })));
-    const trust = new TrustGovernanceStore(this.db);
+    const trust = new TrustGovernanceStore(this.db, { repoRoot: this.repoRoot });
     const contentDigests = new Map<string, string>();
     for (const m of manifests) {
       const bundle = await this.store.deriveAuthorityBundle({

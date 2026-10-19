@@ -33,7 +33,7 @@ export class ProductionBuildService {
 
   async prepareCandidate(input: { projectId: string; pageSlug: string }) {
     const identity = await loadProductionBuildIdentity(this.repoRoot);
-    const store = new ProductionStore(this.db);
+    const store = new ProductionStore(this.db, { repoRoot: this.repoRoot });
     const productionInput = await store.deriveProductionInput({
       projectId: input.projectId,
       pageSlug: input.pageSlug,
@@ -63,7 +63,7 @@ export class ProductionBuildService {
 
   async buildCandidate(input: { projectId: string; candidateId: string }): Promise<ProductionBuildResult> {
     const startedAt = Date.now();
-    const store = new ProductionStore(this.db);
+    const store = new ProductionStore(this.db, { repoRoot: this.repoRoot });
     const candidate = await store.getCandidate(input.projectId, input.candidateId);
     if (!candidate) throw buildError("production_candidate_not_found", "Candidate not found.");
     if (candidate.state !== "pending") throw buildError("production_build_rejected", `Candidate ${candidate.id} is ${candidate.state}; only pending candidates can build.`);
@@ -178,7 +178,7 @@ export class ProductionBuildService {
   }
 
   async loadManifests(input: { projectId: string; candidateId: string }): Promise<ProductionRenderManifest[]> {
-    const candidate = await new ProductionStore(this.db).getCandidate(input.projectId, input.candidateId);
+    const candidate = await new ProductionStore(this.db, { repoRoot: this.repoRoot }).getCandidate(input.projectId, input.candidateId);
     if (!candidate?.artifactRef) throw buildError("production_candidate_not_found", "Built candidate not found.");
     return await this.compiler.readAllManifests(path.join(path.dirname(candidate.artifactRef), "manifests"));
   }

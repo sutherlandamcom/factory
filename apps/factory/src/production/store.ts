@@ -38,7 +38,7 @@ import {
   type PageArchetypeAuthorityRef,
   type ReviewAuthorityMode,
 } from "@factory/contracts";
-import { TrustGovernanceStore } from "../trust/store.js";
+import { TrustGovernanceStore, type TrustEvidenceOptions } from "../trust/store.js";
 import { EditorialAuditStore, ProjectMembershipAuthority } from "../trust/editorial-review-boundary.js";
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
@@ -113,7 +113,10 @@ export interface CreateProductionCandidateInput {
 }
 
 export class ProductionStore {
-  constructor(private readonly db: FactoryDb) {}
+  constructor(
+    private readonly db: FactoryDb,
+    private readonly evidenceOptions: TrustEvidenceOptions = {},
+  ) {}
 
   // ---- Derivation (fail-closed authority binding) ----------------------------
 
@@ -263,7 +266,7 @@ export class ProductionStore {
   }): Promise<ProductionPageInputRecord> {
     return this.db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
-      return new ProductionStore(tx as unknown as FactoryDb).deriveProductionInputLocked(input);
+      return new ProductionStore(tx as unknown as FactoryDb, this.evidenceOptions).deriveProductionInputLocked(input);
     });
   }
 
@@ -274,7 +277,7 @@ export class ProductionStore {
     rendererVersion: string;
     rendererPolicyVersion: string;
   }): Promise<ProductionPageInputRecord> {
-    const bundle = await new ProductionStore(this.db).deriveAuthorityBundle({
+    const bundle = await new ProductionStore(this.db, this.evidenceOptions).deriveAuthorityBundle({
       projectId: input.projectId,
       pageSlug: input.pageSlug,
     });
@@ -701,18 +704,36 @@ export class ProductionStore {
       }
     }
 
-    // Trust review staleness: check if editorial review or source evidence changed
-    const trustStore = new TrustGovernanceStore(this.db);
+    // Trust chain staleness: authenticated source evidence -> claim lineage ->
+    // original work products -> editorial review. Unchanged HTML never implies
+    // unchanged evidentiary authority.
+    const trustStore = new TrustGovernanceStore(this.db, this.evidenceOptions);
+    const evidence = await trustStore.currentPageEvidence(input.projectId, input.pageIdentity, input.acceptedContentDigest);
+    if (evidence.pageSourceInfo.problems.length > 0) {
+      const latest = await trustStore.latestReview(input.projectId, input.pageIdentity);
+      if (latest) return { stale: true, reason: evidence.pageSourceInfo.problems[0]! };
+    }
     const currentRev = await trustStore.currentReview(
       input.projectId,
       input.pageIdentity,
       input.acceptedContentDigest,
+      evidence.claimSetDigest,
+      evidence.sourceEvidenceSetDigest,
+      evidence.pageSourceInfo.referencedCount > 0 ? evidence.pageSourceInfo.digest : undefined,
+      evidence.workProductSetDigest,
     );
     if (currentRev.stale) {
       return {
         stale: true,
         reason: currentRev.reason ?? "Trust review is stale against current content or source evidence.",
       };
+    }
+    if (currentRev.review?.verifiedClaimIds && evidence.claims.length > 0) {
+      const ids = new Set(evidence.claims.map((c) => c.claimId));
+      const v = currentRev.review.verifiedClaimIds;
+      if (v.length !== ids.size || v.some((id) => !ids.has(id))) {
+        return { stale: true, reason: "review_authority_stale: verifiedClaimIds do not match current page ClaimLineage set." };
+      }
     }
 
     return { stale: false, reason: null };
@@ -748,7 +769,7 @@ export class ProductionStore {
   async createCandidate(input: CreateProductionCandidateInput): Promise<ProductionCandidateRecord> {
     const result = await this.db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
-      return new ProductionStore(tx as unknown as FactoryDb).createCandidateLocked(input);
+      return new ProductionStore(tx as unknown as FactoryDb, this.evidenceOptions).createCandidateLocked(input);
     });
     return result;
   }
@@ -787,7 +808,7 @@ export class ProductionStore {
     if (!productionInput) {
       throw productionError("production_input_immutable", "ProductionPageInput not found for this project.");
     }
-    const staleness = await new ProductionStore(this.db).inputStaleness(productionInput, input.currentEnvironment);
+    const staleness = await new ProductionStore(this.db, this.evidenceOptions).inputStaleness(productionInput, input.currentEnvironment);
     if (staleness.stale) {
       throw productionError("production_authority_stale", staleness.reason ?? "Production input is stale.");
     }
@@ -901,7 +922,7 @@ export class ProductionStore {
       if (!productionInput || productionInput.inputDigest !== candidate.productionInputDigest) {
         throw productionError("production_authority_digest_mismatch", "Candidate input digest drifted.");
       }
-      const staleness = await new ProductionStore(tx as unknown as FactoryDb).inputStaleness(productionInput);
+      const staleness = await new ProductionStore(tx as unknown as FactoryDb, this.evidenceOptions).inputStaleness(productionInput);
       if (staleness.stale) {
         // Upstream changed between candidate creation and build completion.
         await tx
@@ -918,7 +939,7 @@ export class ProductionStore {
         if (!boundInput || boundInput.version !== binding.productionInputVersion || boundInput.inputDigest !== binding.productionInputDigest) {
           throw productionError("production_authority_digest_mismatch", `Candidate input ${binding.productionInputId} drifted.`);
         }
-        const boundStaleness = await new ProductionStore(tx as unknown as FactoryDb).inputStaleness(boundInput);
+        const boundStaleness = await new ProductionStore(tx as unknown as FactoryDb, this.evidenceOptions).inputStaleness(boundInput);
         if (boundStaleness.stale) {
           await tx.update(productionCandidates).set({ state: "stale" }).where(eq(productionCandidates.id, candidate.id));
           return { staleReason: boundStaleness.reason ?? "A site input changed during build." } as const;
@@ -1073,106 +1094,6 @@ export class ProductionStore {
   }): Promise<ProductionQaRunRecord> {
     const completeness = assertCompleteProductionQa({ checks: input.checks, pageRoutes: input.pageRoutes, manifestSetDigest: input.manifestSetDigest, repositorySha: input.repositorySha });
     if (!completeness.complete) throw productionError("production_qa_failed", `Required QA evidence missing or duplicated: ${completeness.missing.join(", ")}`);
-    const rawOverall = qaOverallVerdict(input.checks);
-    const hasUnresolvedTrustGate = input.checks.some((entry) => entry.checkId.startsWith("trust.") && entry.verdict !== "PASS");
-    let overall = rawOverall === "FAIL" || hasUnresolvedTrustGate ? ("FAIL" as const) : rawOverall;
-
-    // Structured Review Authority resolution (PUB-01..PUB-06 / Block 5)
-    // Never derive review authority mode from entry.detail strings
-    const trustStore = new TrustGovernanceStore(this.db);
-    const candidateInputs = await this.listCandidateInputs(input.projectId, input.candidateId);
-    const auditStore = EditorialAuditStore.getInstance(this.db);
-    const membershipAuthority = ProjectMembershipAuthority.getInstance(this.db);
-
-    const pageSlugs = candidateInputs.length > 0
-      ? candidateInputs.map((c) => c.pageIdentity)
-      : input.pageRoutes.map((r) => (r === "/" ? "index" : r.replace(/^\/|\/$/g, "")));
-
-    let reviewAuthorityMode: ReviewAuthorityMode = "NOT_REQUIRED";
-    let hasTestOnlyReview = false;
-    let hasPendingReview = false;
-    let hasHumanReview = false;
-    let auditInvalid = false;
-    let anyYmyl = false;
-
-    // Check review status for candidate pages
-    for (const slug of pageSlugs) {
-      const intent = await trustStore.getIntentAuthority(input.projectId, slug);
-      if (intent?.ymylClassification === "YMYL_DECISION_SUPPORT" || intent?.ymylClassification === "YMYL_HIGH_IMPACT") {
-        anyYmyl = true;
-      }
-      const review = await trustStore.latestReview(input.projectId, slug);
-      const kind = review?.reviewAuthorityKind ?? review?.authorityKind;
-      if (!review || review.reviewStatus === "EDITORIAL_REVIEW_PENDING" || !kind) {
-        if (intent?.ymylClassification === "YMYL_DECISION_SUPPORT" || intent?.ymylClassification === "YMYL_HIGH_IMPACT") {
-          hasPendingReview = true;
-        }
-      } else if (kind === "TEST_ONLY_REVIEW_AUTHORITY") {
-        hasTestOnlyReview = true;
-      } else if (kind === "VERIFIED_HUMAN_REVIEW_AUTHORITY") {
-        const eventId = review.approvalEvent?.reviewEventId;
-        const auditEvent = eventId ? await auditStore.getApprovalAuditEvent(eventId) : null;
-        if (
-          !auditEvent ||
-          !auditEvent.sealVerified ||
-          auditEvent.revoked ||
-          auditEvent.isSynthetic ||
-          auditEvent.projectId !== input.projectId ||
-          auditEvent.contentDigest !== review.reviewedContentDigest ||
-          auditEvent.claimSetDigest !== review.claimSetDigest ||
-          auditEvent.sourceEvidenceSetDigest !== review.sourceEvidenceSetDigest
-        ) {
-          auditInvalid = true;
-        } else {
-          const permissions = await membershipAuthority.getMemberPermissions(input.projectId, auditEvent.actorId);
-          if (!permissions.includes("EDITORIAL_REVIEW:APPROVE")) {
-            auditInvalid = true;
-          } else {
-            hasHumanReview = true;
-          }
-        }
-      }
-    }
-
-    if (hasTestOnlyReview) {
-      reviewAuthorityMode = "TEST_ONLY";
-    } else if (auditInvalid) {
-      reviewAuthorityMode = "PENDING";
-      overall = "FAIL";
-    } else if (hasPendingReview) {
-      reviewAuthorityMode = "PENDING";
-      overall = "FAIL";
-    } else if (hasHumanReview) {
-      reviewAuthorityMode = "VERIFIED_HUMAN";
-    } else if (anyYmyl) {
-      throw productionError(
-        "ymyl_not_required_rejected",
-        "YMYL pages require verified human review and cannot be classified as NOT_REQUIRED.",
-      );
-    } else {
-      reviewAuthorityMode = "NOT_REQUIRED";
-    }
-
-    const publicationEligible =
-      (input.trustMode ?? "STRICT_PRODUCTION") === "STRICT_PRODUCTION" &&
-      overall === "PASS" &&
-      !hasPendingReview &&
-      !hasTestOnlyReview &&
-      !auditInvalid &&
-      (reviewAuthorityMode === "VERIFIED_HUMAN" || (reviewAuthorityMode === "NOT_REQUIRED" && !anyYmyl));
-
-    const data = {
-      schemaVersion: "production-v1" as const,
-      candidateId: input.candidateId,
-      checks: input.checks,
-      overall,
-      provenance: {
-        trustMode: input.trustMode ?? ("STRICT_PRODUCTION" as const),
-        publicationEligible,
-        reviewAuthorityMode,
-      },
-    };
-    parseProductionQaReportData(data);
     const result = await this.db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
       const [candidate] = await tx.select().from(productionCandidates).where(and(eq(productionCandidates.projectId, input.projectId), eq(productionCandidates.id, input.candidateId)));
@@ -1210,12 +1131,123 @@ export class ProductionStore {
       for (const binding of bindings) {
         const [boundInput] = await tx.select().from(productionPageInputs).where(and(eq(productionPageInputs.projectId, input.projectId), eq(productionPageInputs.id, binding.productionInputId)));
         if (!boundInput || boundInput.version !== binding.productionInputVersion || boundInput.inputDigest !== binding.productionInputDigest) throw productionError("production_authority_digest_mismatch", `Candidate input ${binding.productionInputId} no longer matches its immutable binding.`);
-        const staleness = await new ProductionStore(tx as unknown as FactoryDb).inputStaleness(boundInput);
+        const staleness = await new ProductionStore(tx as unknown as FactoryDb, this.evidenceOptions).inputStaleness(boundInput);
         if (staleness.stale) {
           await tx.update(productionCandidates).set({ state: "stale" }).where(eq(productionCandidates.id, candidate.id));
           return { staleReason: staleness.reason ?? `Candidate input ${binding.productionInputId} is stale.` } as const;
         }
       }
+      // ---- Review authority: evaluated INSIDE the serialized transaction ----
+      // Every authority mutation (approval revocation, membership revocation,
+      // claim/source/work-product writes) takes the same project advisory
+      // lock, so this read is a consistent snapshot. Earlier in-memory check
+      // verdicts never override persisted authority observed here.
+      const txDb = tx as unknown as FactoryDb;
+      const trustStore = new TrustGovernanceStore(txDb, this.evidenceOptions);
+      const auditStore = EditorialAuditStore.getInstance();
+      const membershipAuthority = ProjectMembershipAuthority.getInstance();
+      const rawOverall = qaOverallVerdict(input.checks);
+      const hasUnresolvedTrustGate = input.checks.some((entry) => entry.checkId.startsWith("trust.") && entry.verdict !== "PASS");
+      let overall = rawOverall === "FAIL" || hasUnresolvedTrustGate ? ("FAIL" as const) : rawOverall;
+      let reviewAuthorityMode: ReviewAuthorityMode = "NOT_REQUIRED";
+      let hasTestOnlyReview = false;
+      let hasPendingReview = false;
+      let hasHumanReview = false;
+      let auditInvalid = false;
+      let anyYmyl = false;
+      const invalidRoutes = new Map<string, string>();
+      for (const binding of bindings) {
+        const slug = binding.pageIdentity;
+        const [pageInput] = await tx.select().from(productionPageInputs).where(eq(productionPageInputs.id, binding.productionInputId));
+        const contentDigest = pageInput!.acceptedContentDigest;
+        const intent = await trustStore.getIntentAuthority(input.projectId, slug);
+        const isYmyl = intent?.ymylClassification === "YMYL_DECISION_SUPPORT" || intent?.ymylClassification === "YMYL_HIGH_IMPACT";
+        if (isYmyl) anyYmyl = true;
+        const review = await trustStore.latestReview(input.projectId, slug);
+        const kind = review?.reviewAuthorityKind ?? review?.authorityKind;
+        if (!review || review.reviewStatus === "EDITORIAL_REVIEW_PENDING" || !kind) {
+          if (isYmyl) {
+            hasPendingReview = true;
+            invalidRoutes.set(binding.route, "No current editorial review is recorded.");
+          }
+        } else if (kind === "TEST_ONLY_REVIEW_AUTHORITY") {
+          hasTestOnlyReview = true;
+        } else if (kind === "VERIFIED_HUMAN_REVIEW_AUTHORITY") {
+          const eventId = review.approvalEvent?.reviewEventId;
+          const auditEvent = eventId ? await auditStore.getApprovalAuditEvent(eventId, txDb) : null;
+          let valid =
+            !!auditEvent &&
+            auditEvent.sealVerified &&
+            !auditEvent.revoked &&
+            !auditEvent.isSynthetic &&
+            auditEvent.projectId === input.projectId &&
+            auditEvent.contentDigest === review.reviewedContentDigest &&
+            auditEvent.contentDigest === contentDigest &&
+            auditEvent.claimSetDigest === review.claimSetDigest &&
+            auditEvent.sourceEvidenceSetDigest === review.sourceEvidenceSetDigest;
+          if (valid) {
+            const permissions = await membershipAuthority.getMemberPermissions(input.projectId, auditEvent!.actorId, txDb);
+            valid = permissions.includes("EDITORIAL_REVIEW:APPROVE");
+          }
+          if (valid) {
+            const ev = await trustStore.currentPageEvidence(input.projectId, slug, contentDigest, review);
+            const cur = await trustStore.currentReview(
+              input.projectId,
+              slug,
+              contentDigest,
+              ev.claimSetDigest,
+              ev.sourceEvidenceSetDigest,
+              ev.pageSourceInfo.referencedCount > 0 ? ev.pageSourceInfo.digest : undefined,
+              ev.workProductSetDigest,
+              true,
+            );
+            valid = !cur.stale && ev.pageSourceInfo.problems.length === 0;
+          }
+          if (valid) {
+            hasHumanReview = true;
+          } else {
+            auditInvalid = true;
+            invalidRoutes.set(binding.route, "Persisted editorial authority is revoked, stale or failed verification at commit time.");
+          }
+        }
+      }
+      if (hasTestOnlyReview) {
+        reviewAuthorityMode = "TEST_ONLY";
+      } else if (auditInvalid || hasPendingReview) {
+        reviewAuthorityMode = "PENDING";
+        overall = "FAIL";
+      } else if (hasHumanReview) {
+        reviewAuthorityMode = "VERIFIED_HUMAN";
+      } else if (anyYmyl) {
+        throw productionError(
+          "ymyl_not_required_rejected",
+          "YMYL pages require verified human review and cannot be classified as NOT_REQUIRED.",
+        );
+      }
+      const publicationEligible =
+        (input.trustMode ?? "STRICT_PRODUCTION") === "STRICT_PRODUCTION" &&
+        overall === "PASS" &&
+        !hasPendingReview &&
+        !hasTestOnlyReview &&
+        !auditInvalid &&
+        (reviewAuthorityMode === "VERIFIED_HUMAN" || (reviewAuthorityMode === "NOT_REQUIRED" && !anyYmyl));
+      const persistedChecks = input.checks.map((entry) =>
+        entry.checkId === "trust.review_authority" && entry.verdict === "PASS" && entry.subject && invalidRoutes.has(entry.subject)
+          ? { ...entry, verdict: "FAIL" as const, detail: `${entry.detail ?? ""} [commit-time revalidation: ${invalidRoutes.get(entry.subject)}]`.trim() }
+          : entry,
+      );
+      const data = {
+        schemaVersion: "production-v1" as const,
+        candidateId: input.candidateId,
+        checks: persistedChecks,
+        overall,
+        provenance: {
+          trustMode: input.trustMode ?? ("STRICT_PRODUCTION" as const),
+          publicationEligible,
+          reviewAuthorityMode,
+        },
+      };
+      parseProductionQaReportData(data);
       const trustedRows = await tx.select().from(productionQaEvidence).where(and(eq(productionQaEvidence.projectId, input.projectId), eq(productionQaEvidence.candidateId, candidate.id)));
       const trustedCheckIds = new Set<ProductionQaCheckResult["checkId"]>(TRUSTED_PRODUCTION_QA_GATES.map((entry) => entry.checkId));
       for (const check of input.checks.filter((entry) => trustedCheckIds.has(entry.checkId))) {
@@ -1230,7 +1262,7 @@ export class ProductionStore {
       }
       const id = `pqa-${randomUUID()}`;
       const [row] = await tx.insert(productionQaRuns).values({ id, projectId: input.projectId, candidateId: candidate.id, candidateArtifactDigest: candidate.artifactDigest, data, overall }).returning();
-      await tx.insert(productionQaRunChecks).values(input.checks.map((entry) => ({ qaRunId: id, checkId: entry.checkId, scope: entry.scope!, subject: entry.subject!, verdict: entry.verdict, data: entry })));
+      await tx.insert(productionQaRunChecks).values(persistedChecks.map((entry) => ({ qaRunId: id, checkId: entry.checkId, scope: entry.scope!, subject: entry.subject!, verdict: entry.verdict, data: entry })));
       const nextState = overall === "PASS" ? "qa_passed" : overall === "FAIL" ? "qa_failed" : "built";
       await tx.update(productionCandidates).set({ state: nextState }).where(eq(productionCandidates.id, candidate.id));
       return { row: row! } as const;

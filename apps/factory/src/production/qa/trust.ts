@@ -35,10 +35,12 @@ import {
   checkTopicExpertiseMatch,
   type ClaimLineage,
   type PageIntentAuthority,
+  type OriginalValueRecord,
   type OriginalWorkProduct,
   type OriginalWorkProductType,
   type SourceRef,
 } from "@factory/contracts";
+import { deterministicDigest } from "../../intelligence/digest.js";
 import { bindQaCheck } from "./registry.js";
 
 /**
@@ -132,14 +134,237 @@ export function computeSourceEvidenceSetDigest(input: {
 }
 
 export function computeClaimSetDigest(claims: ClaimLineage[]): string {
-  return createHash("sha256")
-    .update(
-      claims
-        .map((c) => `${c.claimId}:${c.claimType}:${c.claimText}:${c.sourceRefs.map((r) => r.ref).join(",")}`)
-        .sort()
-        .join(";"),
-    )
-    .digest("hex");
+  const canonicalClaims = claims
+    .map((c) => ({
+      claimId: c.claimId,
+      claimType: c.claimType,
+      claimText: c.claimText,
+      limitation: c.limitation ?? "",
+      calculationRef: c.calculationRef ?? null,
+      sourceRefs: c.sourceRefs.map((r) => ({
+        ref: r.ref,
+        tier: r.tier,
+        sourceDate: r.sourceDate,
+        freshnessBasis: r.freshnessBasis,
+        entailment: r.entailment ?? null,
+        sourceUrl: r.sourceUrl ?? null,
+        supportingExcerpt: r.supportingExcerpt ?? null,
+        evidenceOrigin: r.evidenceOrigin ?? null,
+        sourceClassification: r.sourceClassification ?? null,
+        acquisitionEventId: r.acquisitionEventId ?? null,
+        acquisitionDigest: r.acquisitionDigest ?? null,
+        canonicalDatasetId: r.canonicalDatasetId ?? null,
+        datasetIdentity: r.datasetIdentity ?? null,
+        evidenceBindings: r.evidenceBindings ?? null,
+        acquisitionProvenance: r.acquisitionProvenance
+          ? {
+              acquisitionEventId: r.acquisitionProvenance.acquisitionEventId,
+              trustedProviderId: r.acquisitionProvenance.trustedProviderId,
+              contentDigest: r.acquisitionProvenance.contentDigest,
+              actualRequestedUrl: r.acquisitionProvenance.actualRequestedUrl ?? null,
+              finalResponseUrl: r.acquisitionProvenance.finalResponseUrl ?? null,
+              canonicalDatasetId: r.acquisitionProvenance.canonicalDatasetId ?? null,
+              datasetIdentity: r.acquisitionProvenance.datasetIdentity ?? null,
+            }
+          : null,
+      })),
+    }))
+    .sort((a, b) => a.claimId.localeCompare(b.claimId));
+  return deterministicDigest(canonicalClaims);
+}
+
+export function computeWorkProductSetDigest(originals: OriginalValueRecord[]): string {
+  const byKey = new Map<string, OriginalValueRecord>();
+  for (const r of originals) {
+    const key = r.workProductId ?? r.lineageClaimId ?? r.kind;
+    byKey.set(key, r);
+  }
+  const canonical = Array.from(byKey.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([, r]) => ({
+      kind: r.kind,
+      description: r.description,
+      lineageClaimId: r.lineageClaimId ?? null,
+      verifiableAnchors: r.verifiableAnchors ?? null,
+      workProductId: r.workProductId ?? null,
+      workProduct: r.workProduct
+        ? {
+            workProductId: r.workProduct.workProductId,
+            productType: r.workProduct.productType,
+            inputDatasetDigests: [...r.workProduct.inputDatasetDigests].sort(),
+            transformationId: r.workProduct.transformationId ?? null,
+            transformationDigest: r.workProduct.transformationDigest,
+            executionHash: r.workProduct.executionHash,
+            outputArtifactRef: r.workProduct.outputArtifactRef,
+            title: r.workProduct.title,
+            description: r.workProduct.description,
+            reproducibleCommand: r.workProduct.reproducibleCommand,
+            provenance: r.workProduct.provenance,
+            verifiableAnchors: r.workProduct.verifiableAnchors,
+          }
+        : null,
+    }));
+  return deterministicDigest(canonical);
+}
+
+export function computePageSourceEvidenceDigest(input: {
+  claims: ClaimLineage[];
+  originals?: OriginalValueRecord[];
+  inseeEvidence?: InseeEvidenceRegistry;
+  legalEvidence?: LegalEvidenceRegistry;
+}): { digest: string; referencedCount: number; problems: string[] } {
+  const entries = new Set<string>();
+  const problems: string[] = [];
+
+  for (const claim of input.claims) {
+    for (const ref of claim.sourceRefs) {
+      if (ref.evidenceBindings && ref.evidenceBindings.length > 0) {
+        for (const b of ref.evidenceBindings) {
+          if (input.inseeEvidence) {
+            const snap = input.inseeEvidence.snapshots.find(
+              (s) => s.geoCode === b.geoCode && s.reportingYear === b.reportingYear,
+            );
+            const rejected = input.inseeEvidence.rejected.find((r) => r.geoCode === b.geoCode);
+            if (rejected) {
+              entries.add(`insee-rejected:${b.geoCode}:${b.reportingYear}:${rejected.reason}`);
+              problems.push(
+                `review_authority_stale: INSEE source snapshot for (${b.geoCode}, ${b.reportingYear}) failed verification (${rejected.reason}).`,
+              );
+            } else if (!snap) {
+              entries.add(`insee-missing:${b.geoCode}:${b.reportingYear}`);
+              problems.push(
+                `review_authority_stale: INSEE source snapshot for (${b.geoCode}, ${b.reportingYear}) is missing from current authenticated evidence registry.`,
+              );
+            } else {
+              entries.add(`insee:${snap.sourceId}:${snap.geoCode}:${snap.reportingYear}:${snap.rawContentDigest}`);
+              if (
+                ref.acquisitionProvenance?.contentDigest &&
+                snap.rawContentDigest !== ref.acquisitionProvenance.contentDigest
+              ) {
+                problems.push(
+                  `review_authority_stale: Authenticated INSEE source digest for (${b.geoCode}, ${b.reportingYear}) changed after review (claim "${claim.claimId}" binds ${ref.acquisitionProvenance.contentDigest.slice(0, 12)}…, registry has ${snap.rawContentDigest.slice(0, 12)}…).`,
+                );
+              }
+              if (ref.acquisitionDigest && snap.rawContentDigest !== ref.acquisitionDigest) {
+                problems.push(
+                  `review_authority_stale: Authenticated INSEE source digest for (${b.geoCode}, ${b.reportingYear}) changed after review.`,
+                );
+              }
+            }
+          }
+        }
+        if (input.inseeEvidence) {
+          const inseeCheck = verifyInseeClaim(claim, input.inseeEvidence);
+          if (!inseeCheck.ok) {
+            for (const p of inseeCheck.problems) {
+              entries.add(`insee-fact-problem:${claim.claimId}:${p}`);
+              problems.push(`review_authority_stale: Underlying INSEE evidence no longer entails claim "${claim.claimId}" (${p}).`);
+            }
+          }
+        }
+      } else if (input.legalEvidence) {
+        const snap = input.legalEvidence.snapshots.find(
+          (s) =>
+            s.sourceId === ref.acquisitionProvenance?.acquisitionEventId ||
+            s.sourceId === ref.acquisitionEventId ||
+            s.sourceId === ref.ref ||
+            (ref.sourceUrl &&
+              (s.originalUrl === ref.sourceUrl ||
+                s.canonicalDocumentUrl === ref.sourceUrl ||
+                s.retrievedUrl === ref.sourceUrl)),
+        );
+        if (snap) {
+          entries.add(
+            `legal:${snap.sourceId}:${snap.sha256}:${snap.rawCaptureDigest ?? ""}:${snap.documentVersion}:${snap.effectiveFrom}:${snap.effectiveTo ?? ""}`,
+          );
+          if (snap.rawCaptureSourceId) {
+            const parent = input.legalEvidence.snapshots.find((p) => p.sourceId === snap.rawCaptureSourceId);
+            if (!parent) {
+              entries.add(`legal-parent-missing:${snap.rawCaptureSourceId}`);
+              problems.push(
+                `review_authority_stale: Parent legal raw capture "${snap.rawCaptureSourceId}" for "${snap.sourceId}" is missing from current registry.`,
+              );
+            } else {
+              entries.add(
+                `legal-raw:${parent.sourceId}:${parent.sha256}:${parent.documentVersion}:${parent.effectiveFrom}:${parent.effectiveTo ?? ""}`,
+              );
+              if (snap.rawCaptureDigest && parent.sha256 !== snap.rawCaptureDigest) {
+                problems.push(
+                  `review_authority_stale: Authenticated legal raw capture "${parent.sourceId}" digest changed relative to extract "${snap.sourceId}".`,
+                );
+              }
+            }
+          }
+          if (
+            ref.acquisitionProvenance?.contentDigest &&
+            snap.sha256 !== ref.acquisitionProvenance.contentDigest &&
+            snap.rawCaptureDigest !== ref.acquisitionProvenance.contentDigest
+          ) {
+            problems.push(
+              `review_authority_stale: Authenticated legal source digest for "${snap.sourceId}" changed after review (claim "${claim.claimId}" binds ${ref.acquisitionProvenance.contentDigest.slice(0, 12)}…, registry has ${snap.sha256.slice(0, 12)}…).`,
+            );
+          }
+          if (
+            ref.acquisitionDigest &&
+            snap.sha256 !== ref.acquisitionDigest &&
+            snap.rawCaptureDigest !== ref.acquisitionDigest
+          ) {
+            problems.push(
+              `review_authority_stale: Authenticated legal source digest for "${snap.sourceId}" changed after review.`,
+            );
+          }
+        }
+      }
+    }
+  }
+
+  const availableDigests = new Set<string>();
+  if (input.inseeEvidence) {
+    for (const s of input.inseeEvidence.snapshots) {
+      availableDigests.add(s.rawContentDigest);
+    }
+  }
+  if (input.legalEvidence) {
+    for (const s of input.legalEvidence.snapshots) {
+      availableDigests.add(s.sha256);
+      if (s.rawCaptureDigest) availableDigests.add(s.rawCaptureDigest);
+    }
+  }
+
+  for (const orig of input.originals ?? []) {
+    if (!orig.workProduct) continue;
+    const wp = orig.workProduct;
+    for (const d of wp.inputDatasetDigests) {
+      if ((input.inseeEvidence || input.legalEvidence) && !availableDigests.has(d)) {
+        entries.add(`wp-input-stale:${wp.workProductId}:${d}`);
+        problems.push(
+          `review_authority_stale: OriginalWorkProduct "${wp.workProductId}" material input dataset digest ${d.slice(0, 12)}… changed or is no longer present in current authenticated source evidence.`,
+        );
+      } else {
+        entries.add(`wp-input:${wp.workProductId}:${d}`);
+      }
+    }
+    const expectedExecHash = computeWorkProductExecutionHash({
+      productType: wp.productType,
+      inputDatasetDigests: wp.inputDatasetDigests,
+      transformationDigest: wp.transformationDigest,
+    });
+    if (wp.executionHash !== expectedExecHash) {
+      entries.add(`wp-exec-mismatch:${wp.workProductId}:${wp.executionHash}:${expectedExecHash}`);
+      problems.push(
+        `review_authority_stale: OriginalWorkProduct "${wp.workProductId}" executionHash no longer matches its material inputs.`,
+      );
+    } else {
+      entries.add(`wp-exec:${wp.workProductId}:${wp.executionHash}`);
+    }
+  }
+
+  const sorted = Array.from(entries).sort();
+  return {
+    digest: createHash("sha256").update(sorted.join(";")).digest("hex"),
+    referencedCount: sorted.length,
+    problems,
+  };
 }
 
 export function computeWorkProductExecutionHash(input: {
@@ -838,7 +1063,10 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
               const storedDigest =
                 ref.evidenceBindings && ref.evidenceBindings.length > 0 && input.inseeEvidence
                   ? input.inseeEvidence.snapshots.find(
-                      (s) => s.geoCode === (ref.evidenceBindings![0] as any).geoCode,
+                      (s) =>
+                        s.geoCode === (ref.evidenceBindings![0] as any).geoCode &&
+                        ((ref.evidenceBindings![0] as any).reportingYear === undefined ||
+                          s.reportingYear === (ref.evidenceBindings![0] as any).reportingYear),
                     )?.rawContentDigest
                   : legalRegistry?.snapshots.find(
                       (s) =>
@@ -887,15 +1115,29 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
         ),
       );
     } else {
-      const claimSetDigest = createHash("sha256")
-        .update(claims.map((c) => `${c.claimId}:${c.claimType}:${c.claimText}:${c.sourceRefs.map((r) => r.ref).join(",")}`).sort().join(";"))
-        .digest("hex");
+      const claimSetDigest = computeClaimSetDigest(claims);
+      const originalsForReview = await input.trust.listOriginalValues(input.projectId, identity);
+      const workProductSetDigest =
+        originalsForReview.length > 0 ? computeWorkProductSetDigest(originalsForReview) : undefined;
+      const pageSourceInfo = computePageSourceEvidenceDigest({
+        claims,
+        originals: originalsForReview,
+        inseeEvidence: input.inseeEvidence,
+        legalEvidence: legalRegistry,
+      });
+      const globalSourceEvidenceSetDigest = computeSourceEvidenceSetDigest({
+        inseeEvidence: input.inseeEvidence,
+        legalEvidence: legalRegistry,
+      });
+      const latestRev = await input.trust.latestReview(input.projectId, identity);
       const currentSourceEvidenceSetDigest =
         input.sourceEvidenceSetDigest ??
-        computeSourceEvidenceSetDigest({
-          inseeEvidence: input.inseeEvidence,
-          legalEvidence: legalRegistry,
-        });
+        (pageSourceInfo.referencedCount > 0 &&
+        pageSourceInfo.problems.length === 0 &&
+        (!latestRev?.pageSourceEvidenceDigest || latestRev.pageSourceEvidenceDigest === pageSourceInfo.digest) &&
+        latestRev?.sourceEvidenceSetDigest
+          ? latestRev.sourceEvidenceSetDigest
+          : globalSourceEvidenceSetDigest);
 
       const current = await input.trust.currentReview(
         input.projectId,
@@ -903,7 +1145,14 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
         digest,
         claimSetDigest,
         currentSourceEvidenceSetDigest,
+        pageSourceInfo.referencedCount > 0 ? pageSourceInfo.digest : undefined,
+        workProductSetDigest,
+        true,
       );
+      if (!current.stale && pageSourceInfo.problems.length > 0) {
+        current.stale = true;
+        current.reason = pageSourceInfo.problems[0]!;
+      }
       const htmlHasReviewAttr = Boolean(html && /data-review-authority="([^"]+)"/i.test(html));
       const htmlReviewerMatch = html?.match(/data-review-authority="([^"]+)"/i);
       const htmlDigestMatch = html?.match(/data-reviewed-digest="([^"]+)"/i);

@@ -3,13 +3,13 @@ import {
   createPrivateKey,
   createPublicKey,
   generateKeyPairSync,
-  randomBytes,
   randomUUID,
   sign as cryptoSign,
+  timingSafeEqual,
   verify as cryptoVerify,
   type KeyObject,
 } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { ReviewAuthority, AuthenticatedApprovalEvent } from "@factory/contracts";
 import { TrustGovernanceStore, TrustGovernanceError } from "./store.js";
 import type { FactoryDb } from "../persistence/db.js";
@@ -18,8 +18,136 @@ import {
   projectReviewerMemberships,
 } from "../persistence/schema.js";
 
-const RUNTIME_AUDIT_SEAL_KEY = randomBytes(32);
 const INTERNAL_AUDIT_WRITE_CAPABILITY = Symbol("EditorialReviewServiceAuditWriteCapability");
+const MIN_AUDIT_SEAL_KEY_LENGTH = 32;
+
+export interface AuditSealKeyringConfig {
+  activeKeyId?: string;
+  keys: Record<string, string | Buffer>;
+}
+
+/**
+ * Cryptographic keyring for durable editorial approval audit event seals.
+ *
+ * Key material is obtained from explicit configuration or protected deployment
+ * environment variables (`FACTORY_AUDIT_SEAL_KEYS`, `FACTORY_AUDIT_SEAL_ACTIVE_KEY_ID`,
+ * `FACTORY_AUDIT_SEAL_KEY`, `FACTORY_AUDIT_SEAL_KEY_ID`).
+ *
+ * Never generates a process-random fallback key and never fabricates seals for
+ * unsealed historical records. Fails closed when required signing or
+ * verification keys are absent or invalid.
+ */
+export class AuditSealKeyring {
+  private readonly keys = new Map<string, Buffer>();
+  private readonly activeKeyId: string | null;
+
+  constructor(config?: AuditSealKeyringConfig) {
+    let candidateActiveId = config?.activeKeyId?.trim() || null;
+    if (config?.keys) {
+      for (const [rawId, rawSecret] of Object.entries(config.keys)) {
+        const keyId = rawId.trim();
+        if (!keyId) continue;
+        const normalized = AuditSealKeyring.normalizeSecret(rawSecret);
+        if (normalized) {
+          this.keys.set(keyId, normalized);
+        }
+      }
+    }
+    if (candidateActiveId && !this.keys.has(candidateActiveId)) {
+      candidateActiveId = null;
+    }
+    this.activeKeyId = candidateActiveId;
+  }
+
+  private static normalizeSecret(secret: string | Buffer | undefined | null): Buffer | null {
+    if (!secret) return null;
+    if (Buffer.isBuffer(secret)) {
+      return secret.byteLength >= MIN_AUDIT_SEAL_KEY_LENGTH ? Buffer.from(secret) : null;
+    }
+    if (typeof secret !== "string") return null;
+    const trimmed = secret.trim();
+    if (trimmed.length < MIN_AUDIT_SEAL_KEY_LENGTH) return null;
+    return Buffer.from(trimmed, "utf8");
+  }
+
+  static fromEnvironment(env: NodeJS.ProcessEnv = process.env): AuditSealKeyring {
+    const keysRecord: Record<string, string> = {};
+    const rawKeyring = env.FACTORY_AUDIT_SEAL_KEYS?.trim();
+    if (rawKeyring) {
+      if (rawKeyring.startsWith("{")) {
+        try {
+          const parsed = JSON.parse(rawKeyring) as Record<string, unknown>;
+          if (parsed && typeof parsed === "object") {
+            for (const [k, v] of Object.entries(parsed)) {
+              if (typeof v === "string") {
+                keysRecord[k.trim()] = v.trim();
+              }
+            }
+          }
+        } catch {
+          // Malformed JSON fails closed (leaves keysRecord empty)
+        }
+      } else {
+        for (const entry of rawKeyring.split(",")) {
+          const idx = entry.indexOf(":");
+          if (idx <= 0) continue;
+          const k = entry.slice(0, idx).trim();
+          const v = entry.slice(idx + 1).trim();
+          if (k && v) {
+            keysRecord[k] = v;
+          }
+        }
+      }
+    }
+
+    const singleKey = env.FACTORY_AUDIT_SEAL_KEY?.trim();
+    const singleKeyId = env.FACTORY_AUDIT_SEAL_KEY_ID?.trim() || "v1";
+    if (singleKey) {
+      keysRecord[singleKeyId] = singleKey;
+    }
+
+    const activeKeyId =
+      env.FACTORY_AUDIT_SEAL_ACTIVE_KEY_ID?.trim() ||
+      (singleKey ? singleKeyId : Object.keys(keysRecord)[0]);
+
+    return new AuditSealKeyring({
+      activeKeyId,
+      keys: keysRecord,
+    });
+  }
+
+  isConfigured(): boolean {
+    return this.activeKeyId !== null && this.keys.has(this.activeKeyId);
+  }
+
+  requireActiveKeyId(): string {
+    if (!this.activeKeyId || !this.keys.has(this.activeKeyId)) {
+      throw new TrustGovernanceError(
+        "audit_seal_key_not_configured_fail_closed",
+        "Explicit cryptographic audit seal key configuration (FACTORY_AUDIT_SEAL_KEY or FACTORY_AUDIT_SEAL_KEYS) is required for editorial approval operations.",
+      );
+    }
+    return this.activeKeyId;
+  }
+
+  requireSigningKey(keyId?: string): { keyId: string; key: Buffer } {
+    const resolvedId = keyId?.trim() || this.requireActiveKeyId();
+    const key = this.keys.get(resolvedId);
+    if (!key) {
+      throw new TrustGovernanceError(
+        "audit_seal_key_not_configured_fail_closed",
+        `Configured audit seal signing key "${resolvedId}" is unavailable.`,
+      );
+    }
+    return { keyId: resolvedId, key };
+  }
+
+  getVerificationKey(keyId: string): Buffer | null {
+    const trimmed = keyId.trim();
+    if (!trimmed) return null;
+    return this.keys.get(trimmed) ?? null;
+  }
+}
 
 export interface AuditSealFields {
   auditEventId: string;
@@ -35,8 +163,10 @@ export interface AuditSealFields {
   isSynthetic: boolean;
 }
 
-export function computeAuditEventSeal(fields: AuditSealFields): string {
-  const canonical = [
+function canonicalAuditSealPayload(fields: AuditSealFields, sealKeyId: string): string {
+  return [
+    "audit-seal-v2",
+    sealKeyId,
     fields.auditEventId,
     fields.projectId,
     fields.pageIdentity,
@@ -49,17 +179,62 @@ export function computeAuditEventSeal(fields: AuditSealFields): string {
     fields.auditEventReference,
     fields.isSynthetic ? "synthetic" : "verified_human",
   ].join("|");
-  return createHmac("sha256", RUNTIME_AUDIT_SEAL_KEY).update(canonical).digest("hex");
+}
+
+/**
+ * Capability-guarded internal seal computation.
+ * Application-level callers cannot invoke this function without the private
+ * `INTERNAL_AUDIT_WRITE_CAPABILITY` symbol (prevents arbitrary signing-oracle use).
+ */
+export function computeAuditEventSeal(
+  fields: AuditSealFields,
+  capability?: symbol,
+  keyring?: AuditSealKeyring,
+  sealKeyId?: string,
+): string {
+  if (capability !== INTERNAL_AUDIT_WRITE_CAPABILITY) {
+    throw new TrustGovernanceError(
+      "audit_seal_oracle_prohibited",
+      "Direct invocation of computeAuditEventSeal outside trusted EditorialReviewService audit persistence is prohibited.",
+    );
+  }
+  const activeKeyring = keyring ?? AuditSealKeyring.fromEnvironment();
+  const { keyId, key } = activeKeyring.requireSigningKey(sealKeyId);
+  const canonical = canonicalAuditSealPayload(fields, keyId);
+  return createHmac("sha256", key).update(canonical).digest("hex");
 }
 
 export function verifyAuditEventSeal(
-  fields: AuditSealFields & { verificationSeal?: string | null },
+  fields: AuditSealFields & {
+    verificationSeal?: string | null;
+    sealKeyId?: string | null;
+    sealStatus?: string | null;
+  },
+  keyring?: AuditSealKeyring,
 ): boolean {
+  if (fields.sealStatus !== undefined && fields.sealStatus !== null && fields.sealStatus !== "SEALED") {
+    return false;
+  }
   if (!fields.verificationSeal || !/^[0-9a-f]{64}$/.test(fields.verificationSeal)) {
     return false;
   }
-  const expected = computeAuditEventSeal(fields);
-  return expected === fields.verificationSeal;
+  const keyId = fields.sealKeyId?.trim();
+  if (!keyId) {
+    return false;
+  }
+  const activeKeyring = keyring ?? AuditSealKeyring.fromEnvironment();
+  const key = activeKeyring.getVerificationKey(keyId);
+  if (!key) {
+    return false;
+  }
+  const canonical = canonicalAuditSealPayload(fields, keyId);
+  const expected = createHmac("sha256", key).update(canonical).digest("hex");
+  const expectedBuf = Buffer.from(expected, "hex");
+  const actualBuf = Buffer.from(fields.verificationSeal, "hex");
+  if (expectedBuf.byteLength !== actualBuf.byteLength) {
+    return false;
+  }
+  return timingSafeEqual(expectedBuf, actualBuf);
 }
 
 export interface AuthenticatedSession {
@@ -448,8 +623,8 @@ export class ProjectMembershipAuthority {
     tx?: FactoryDb,
   ): Promise<void> {
     const dbClient = this.requireDb(tx);
-    try {
-      const [existing] = await dbClient
+    const run = async (client: FactoryDb) => {
+      const [existing] = await client
         .select()
         .from(projectReviewerMemberships)
         .where(
@@ -462,7 +637,7 @@ export class ProjectMembershipAuthority {
         const merged = existing.revokedAt
           ? Array.from(new Set(permissions))
           : Array.from(new Set([...((existing.permissions as string[]) ?? []), ...permissions]));
-        await dbClient
+        await client
           .update(projectReviewerMemberships)
           .set({
             actorRole,
@@ -472,7 +647,7 @@ export class ProjectMembershipAuthority {
           })
           .where(eq(projectReviewerMemberships.id, existing.id));
       } else {
-        await dbClient.insert(projectReviewerMemberships).values({
+        await client.insert(projectReviewerMemberships).values({
           id: `prm-${randomUUID()}`,
           projectId,
           actorId,
@@ -480,6 +655,16 @@ export class ProjectMembershipAuthority {
           permissions: Array.from(new Set(permissions)),
           revokedAt: null,
         });
+      }
+    };
+    try {
+      if (!tx && typeof dbClient.transaction === "function") {
+        await dbClient.transaction(async (innerTx) => {
+          await innerTx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${projectId}, 104))`);
+          await run(innerTx as unknown as FactoryDb);
+        });
+      } else {
+        await run(dbClient);
       }
     } catch (err) {
       if (err instanceof TrustGovernanceError) throw err;
@@ -492,8 +677,8 @@ export class ProjectMembershipAuthority {
 
   async revokeMembership(projectId: string, actorId: string, tx?: FactoryDb): Promise<void> {
     const dbClient = this.requireDb(tx);
-    try {
-      const [existing] = await dbClient
+    const run = async (client: FactoryDb) => {
+      const [existing] = await client
         .select()
         .from(projectReviewerMemberships)
         .where(
@@ -503,12 +688,12 @@ export class ProjectMembershipAuthority {
           ),
         );
       if (existing) {
-        await dbClient
+        await client
           .update(projectReviewerMemberships)
           .set({ revokedAt: new Date(), updatedAt: new Date(), permissions: [] })
           .where(eq(projectReviewerMemberships.id, existing.id));
       } else {
-        await dbClient.insert(projectReviewerMemberships).values({
+        await client.insert(projectReviewerMemberships).values({
           id: `prm-${randomUUID()}`,
           projectId,
           actorId,
@@ -516,6 +701,16 @@ export class ProjectMembershipAuthority {
           permissions: [],
           revokedAt: new Date(),
         });
+      }
+    };
+    try {
+      if (!tx && typeof dbClient.transaction === "function") {
+        await dbClient.transaction(async (innerTx) => {
+          await innerTx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${projectId}, 104))`);
+          await run(innerTx as unknown as FactoryDb);
+        });
+      } else {
+        await run(dbClient);
       }
     } catch (err) {
       if (err instanceof TrustGovernanceError) throw err;
@@ -565,6 +760,8 @@ export interface StoredApprovalAuditEvent {
   isSynthetic?: boolean;
   revoked?: boolean;
   verificationSeal?: string;
+  sealKeyId?: string;
+  sealStatus?: "SEALED" | "LEGACY_UNSEALED";
   sealVerified?: boolean;
 }
 
@@ -576,22 +773,37 @@ export interface StoredApprovalAuditEvent {
 export class EditorialAuditStore {
   private static instance: EditorialAuditStore;
   private db?: FactoryDb;
+  private keyring?: AuditSealKeyring;
 
-  static getInstance(db?: FactoryDb): EditorialAuditStore {
+  static getInstance(db?: FactoryDb, keyring?: AuditSealKeyring): EditorialAuditStore {
     if (!this.instance) {
-      this.instance = new EditorialAuditStore(db);
-    } else if (db) {
-      this.instance.db = db;
+      this.instance = new EditorialAuditStore(db, keyring);
+    } else {
+      if (db) {
+        this.instance.db = db;
+      }
+      if (keyring !== undefined) {
+        this.instance.keyring = keyring;
+      }
     }
     return this.instance;
   }
 
-  constructor(db?: FactoryDb) {
+  constructor(db?: FactoryDb, keyring?: AuditSealKeyring) {
     this.db = db;
+    this.keyring = keyring;
   }
 
   setDb(db: FactoryDb | undefined): void {
     this.db = db;
+  }
+
+  setKeyring(keyring: AuditSealKeyring | undefined): void {
+    this.keyring = keyring;
+  }
+
+  getKeyring(): AuditSealKeyring {
+    return this.keyring ?? AuditSealKeyring.fromEnvironment();
   }
 
   private requireDb(tx?: FactoryDb): FactoryDb {
@@ -618,19 +830,26 @@ export class EditorialAuditStore {
     }
     const dbClient = this.requireDb(tx);
     const isSynthetic = event.isSynthetic ?? false;
-    const seal = computeAuditEventSeal({
-      auditEventId: event.auditEventId,
-      projectId: event.projectId,
-      pageIdentity: event.pageIdentity,
-      actorId: event.actorId,
-      actorRole: event.actorRole,
-      reviewAction: event.reviewAction,
-      contentDigest: event.contentDigest,
-      claimSetDigest: event.claimSetDigest,
-      sourceEvidenceSetDigest: event.sourceEvidenceSetDigest,
-      auditEventReference: event.auditEventReference,
-      isSynthetic,
-    });
+    const activeKeyring = this.getKeyring();
+    const sealKeyId = activeKeyring.requireActiveKeyId();
+    const seal = computeAuditEventSeal(
+      {
+        auditEventId: event.auditEventId,
+        projectId: event.projectId,
+        pageIdentity: event.pageIdentity,
+        actorId: event.actorId,
+        actorRole: event.actorRole,
+        reviewAction: event.reviewAction,
+        contentDigest: event.contentDigest,
+        claimSetDigest: event.claimSetDigest,
+        sourceEvidenceSetDigest: event.sourceEvidenceSetDigest,
+        auditEventReference: event.auditEventReference,
+        isSynthetic,
+      },
+      INTERNAL_AUDIT_WRITE_CAPABILITY,
+      activeKeyring,
+      sealKeyId,
+    );
     try {
       await dbClient.insert(editorialApprovalAuditEvents).values({
         id: event.auditEventId,
@@ -646,6 +865,8 @@ export class EditorialAuditStore {
         isSynthetic,
         revoked: event.revoked ?? false,
         verificationSeal: seal,
+        sealKeyId,
+        sealStatus: "SEALED",
         createdAt: new Date(event.timestamp),
       });
     } catch (err) {
@@ -665,20 +886,25 @@ export class EditorialAuditStore {
         .from(editorialApprovalAuditEvents)
         .where(eq(editorialApprovalAuditEvents.id, eventId));
       if (!row) return null;
-      const sealVerified = verifyAuditEventSeal({
-        auditEventId: row.id,
-        projectId: row.projectId,
-        pageIdentity: row.pageIdentity,
-        actorId: row.actorId,
-        actorRole: row.actorRole,
-        reviewAction: row.reviewAction,
-        contentDigest: row.contentDigest,
-        claimSetDigest: row.claimSetDigest,
-        sourceEvidenceSetDigest: row.sourceEvidenceSetDigest,
-        auditEventReference: row.auditEventReference,
-        isSynthetic: row.isSynthetic,
-        verificationSeal: row.verificationSeal,
-      });
+      const sealVerified = verifyAuditEventSeal(
+        {
+          auditEventId: row.id,
+          projectId: row.projectId,
+          pageIdentity: row.pageIdentity,
+          actorId: row.actorId,
+          actorRole: row.actorRole,
+          reviewAction: row.reviewAction,
+          contentDigest: row.contentDigest,
+          claimSetDigest: row.claimSetDigest,
+          sourceEvidenceSetDigest: row.sourceEvidenceSetDigest,
+          auditEventReference: row.auditEventReference,
+          isSynthetic: row.isSynthetic,
+          verificationSeal: row.verificationSeal,
+          sealKeyId: row.sealKeyId,
+          sealStatus: row.sealStatus,
+        },
+        this.keyring,
+      );
       return {
         auditEventId: row.id,
         projectId: row.projectId,
@@ -693,7 +919,9 @@ export class EditorialAuditStore {
         auditEventReference: row.auditEventReference,
         isSynthetic: row.isSynthetic,
         revoked: row.revoked,
-        verificationSeal: row.verificationSeal,
+        verificationSeal: row.verificationSeal ?? undefined,
+        sealKeyId: row.sealKeyId ?? undefined,
+        sealStatus: (row.sealStatus as "SEALED" | "LEGACY_UNSEALED") ?? "LEGACY_UNSEALED",
         sealVerified,
       };
     } catch (err) {
@@ -707,11 +935,27 @@ export class EditorialAuditStore {
 
   async revokeApprovalAuditEvent(eventId: string, tx?: FactoryDb): Promise<void> {
     const dbClient = this.requireDb(tx);
-    try {
-      await dbClient
+    const run = async (client: FactoryDb) => {
+      const [row] = await client
+        .select({ projectId: editorialApprovalAuditEvents.projectId })
+        .from(editorialApprovalAuditEvents)
+        .where(eq(editorialApprovalAuditEvents.id, eventId));
+      if (row && !tx && typeof client.execute === "function") {
+        await client.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${row.projectId}, 104))`);
+      }
+      await client
         .update(editorialApprovalAuditEvents)
         .set({ revoked: true })
         .where(eq(editorialApprovalAuditEvents.id, eventId));
+    };
+    try {
+      if (!tx && typeof dbClient.transaction === "function") {
+        await dbClient.transaction(async (innerTx) => {
+          await run(innerTx as unknown as FactoryDb);
+        });
+      } else {
+        await run(dbClient);
+      }
     } catch (err) {
       if (err instanceof TrustGovernanceError) throw err;
       throw new TrustGovernanceError(
@@ -745,25 +989,31 @@ export class EditorialAuditStore {
             eq(editorialApprovalAuditEvents.sourceEvidenceSetDigest, criteria.sourceEvidenceSetDigest),
             eq(editorialApprovalAuditEvents.reviewAction, "APPROVED"),
             eq(editorialApprovalAuditEvents.revoked, false),
+            eq(editorialApprovalAuditEvents.sealStatus, "SEALED"),
           ),
         )
-        .orderBy(editorialApprovalAuditEvents.createdAt)
+        .orderBy(desc(editorialApprovalAuditEvents.createdAt))
         .limit(1);
       if (!row) return null;
-      const sealVerified = verifyAuditEventSeal({
-        auditEventId: row.id,
-        projectId: row.projectId,
-        pageIdentity: row.pageIdentity,
-        actorId: row.actorId,
-        actorRole: row.actorRole,
-        reviewAction: row.reviewAction,
-        contentDigest: row.contentDigest,
-        claimSetDigest: row.claimSetDigest,
-        sourceEvidenceSetDigest: row.sourceEvidenceSetDigest,
-        auditEventReference: row.auditEventReference,
-        isSynthetic: row.isSynthetic,
-        verificationSeal: row.verificationSeal,
-      });
+      const sealVerified = verifyAuditEventSeal(
+        {
+          auditEventId: row.id,
+          projectId: row.projectId,
+          pageIdentity: row.pageIdentity,
+          actorId: row.actorId,
+          actorRole: row.actorRole,
+          reviewAction: row.reviewAction,
+          contentDigest: row.contentDigest,
+          claimSetDigest: row.claimSetDigest,
+          sourceEvidenceSetDigest: row.sourceEvidenceSetDigest,
+          auditEventReference: row.auditEventReference,
+          isSynthetic: row.isSynthetic,
+          verificationSeal: row.verificationSeal,
+          sealKeyId: row.sealKeyId,
+          sealStatus: row.sealStatus,
+        },
+        this.keyring,
+      );
       if (!sealVerified) return null;
       return {
         auditEventId: row.id,
@@ -779,7 +1029,9 @@ export class EditorialAuditStore {
         auditEventReference: row.auditEventReference,
         isSynthetic: row.isSynthetic,
         revoked: row.revoked,
-        verificationSeal: row.verificationSeal,
+        verificationSeal: row.verificationSeal ?? undefined,
+        sealKeyId: row.sealKeyId ?? undefined,
+        sealStatus: "SEALED",
         sealVerified: true,
       };
     } catch (err) {
@@ -800,6 +1052,8 @@ export interface AuthenticatedReviewApprovalRequest {
   contentDigest: string;
   claimSetDigest: string;
   sourceEvidenceSetDigest: string;
+  pageSourceEvidenceDigest?: string;
+  workProductSetDigest?: string;
   reviewAction: "APPROVED" | "CHANGES_REQUESTED" | "REJECTED";
   reviewerRef: string;
   reviewerExpertise: string;
@@ -819,11 +1073,15 @@ export class EditorialReviewService {
     sessionRegistry: TrustedIdentityProvider = new FailClosedProductionIdentityProvider(),
     membershipAuthority?: ProjectMembershipAuthority,
     auditStore?: EditorialAuditStore,
+    keyring?: AuditSealKeyring,
   ) {
     this.sessionRegistry = sessionRegistry;
     const db = this.trustStore?.getDb?.();
     this.membershipAuthority = membershipAuthority ?? ProjectMembershipAuthority.getInstance(db);
-    this.auditStore = auditStore ?? EditorialAuditStore.getInstance(db);
+    this.auditStore = auditStore ?? EditorialAuditStore.getInstance(db, keyring);
+    if (keyring !== undefined) {
+      this.auditStore.setKeyring(keyring);
+    }
     if (db) {
       this.membershipAuthority.setDb(db);
       this.auditStore.setDb(db);
@@ -946,6 +1204,8 @@ export class EditorialReviewService {
       authorityKind: "VERIFIED_HUMAN_REVIEW_AUTHORITY",
       claimSetDigest: request.claimSetDigest,
       sourceEvidenceSetDigest: request.sourceEvidenceSetDigest,
+      pageSourceEvidenceDigest: request.pageSourceEvidenceDigest,
+      workProductSetDigest: request.workProductSetDigest,
       approvalEventId: reviewEventId,
       approvalEventProvenance: `Authenticated human approval by ${session.actorRole} (${session.actorId}) at ${eventTimestamp}`,
       approvalEvent,

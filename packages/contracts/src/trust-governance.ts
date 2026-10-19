@@ -855,6 +855,10 @@ export const reviewAuthoritySchema = z
     claimSetDigest: digestSchema.optional(),
     /** Optional digest of the underlying SourceEvidence snapshots verified during review (invalidates review on source snapshot mutation). */
     sourceEvidenceSetDigest: digestSchema.optional(),
+    /** Optional digest of the page-scoped SourceEvidence snapshots verified during review. */
+    pageSourceEvidenceDigest: digestSchema.optional(),
+    /** Optional digest of the OriginalValueRecord / OriginalWorkProduct set verified during review. */
+    workProductSetDigest: digestSchema.optional(),
     /** Approval event ID from audit/auth ledger. */
     approvalEventId: boundedText(100).optional(),
     /** Approval event provenance statement. */
@@ -869,18 +873,40 @@ export function parseReviewAuthority(input: unknown): ReviewAuthority {
   return reviewAuthoritySchema.parse(input);
 }
 
-/** A review is stale when the reviewed content digest, bound claim-set digest, or source evidence digest no longer matches. */
+/** A review is stale when the reviewed content digest, bound claim-set digest, source evidence digest, or work-product digest no longer matches. */
 export function reviewStaleness(
   review: ReviewAuthority,
   currentContentDigest: string,
   currentClaimSetDigest?: string,
   currentSourceEvidenceSetDigest?: string,
+  currentPageSourceEvidenceDigest?: string,
+  currentWorkProductSetDigest?: string,
 ): { stale: boolean; reason: string | null } {
   if (review.reviewedContentDigest !== currentContentDigest) {
     return { stale: true, reason: "review_authority_stale: Reviewed content changed materially after review; the review is stale." };
   }
   if (review.claimSetDigest && currentClaimSetDigest && review.claimSetDigest !== currentClaimSetDigest) {
     return { stale: true, reason: "review_authority_stale: Underlying claim lineage, source evidence, or calculation changed after review." };
+  }
+  if (
+    review.pageSourceEvidenceDigest &&
+    currentPageSourceEvidenceDigest &&
+    review.pageSourceEvidenceDigest !== currentPageSourceEvidenceDigest
+  ) {
+    return {
+      stale: true,
+      reason: "review_authority_stale: Underlying page-bound source evidence snapshot bytes, version, or effective period changed after review.",
+    };
+  }
+  if (
+    review.workProductSetDigest &&
+    currentWorkProductSetDigest &&
+    review.workProductSetDigest !== currentWorkProductSetDigest
+  ) {
+    return {
+      stale: true,
+      reason: "review_authority_stale: Underlying numerical analysis / OriginalWorkProduct inputs or execution hash changed after review.",
+    };
   }
   if (
     review.sourceEvidenceSetDigest &&

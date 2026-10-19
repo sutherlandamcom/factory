@@ -1,7 +1,33 @@
-ALTER TABLE "editorial_approval_audit_events" ADD COLUMN IF NOT EXISTS "verification_seal" text DEFAULT '' NOT NULL;
+DROP TRIGGER IF EXISTS "editorial_approval_audit_events_immutable_trg" ON "editorial_approval_audit_events";
+--> statement-breakpoint
+ALTER TABLE "editorial_approval_audit_events" ADD COLUMN IF NOT EXISTS "verification_seal" text;
+--> statement-breakpoint
+ALTER TABLE "editorial_approval_audit_events" ALTER COLUMN "verification_seal" DROP NOT NULL;
+--> statement-breakpoint
+ALTER TABLE "editorial_approval_audit_events" ALTER COLUMN "verification_seal" DROP DEFAULT;
+--> statement-breakpoint
+ALTER TABLE "editorial_approval_audit_events" ADD COLUMN IF NOT EXISTS "seal_key_id" text;
+--> statement-breakpoint
+ALTER TABLE "editorial_approval_audit_events" ADD COLUMN IF NOT EXISTS "seal_status" text DEFAULT 'LEGACY_UNSEALED' NOT NULL;
+--> statement-breakpoint
+UPDATE "editorial_approval_audit_events"
+SET "verification_seal" = NULL,
+    "seal_key_id" = NULL,
+    "seal_status" = 'LEGACY_UNSEALED'
+WHERE "verification_seal" IS NULL OR "verification_seal" = '';
+--> statement-breakpoint
+ALTER TABLE "editorial_approval_audit_events" ALTER COLUMN "seal_status" SET DEFAULT 'SEALED';
+--> statement-breakpoint
+ALTER TABLE "editorial_approval_audit_events" ALTER COLUMN "seal_key_id" SET DEFAULT 'v1';
+--> statement-breakpoint
+ALTER TABLE "editorial_approval_audit_events" DROP CONSTRAINT IF EXISTS "editorial_approval_audit_events_verification_seal_shape";
 --> statement-breakpoint
 DO $$ BEGIN
- ALTER TABLE "editorial_approval_audit_events" ADD CONSTRAINT "editorial_approval_audit_events_verification_seal_shape" CHECK ("verification_seal" ~ '^[0-9a-f]{64}$');
+ ALTER TABLE "editorial_approval_audit_events" ADD CONSTRAINT "editorial_approval_audit_events_verification_seal_shape" CHECK (
+   ("seal_status" = 'LEGACY_UNSEALED' AND "verification_seal" IS NULL AND "seal_key_id" IS NULL)
+   OR
+   ("seal_status" = 'SEALED' AND "verification_seal" IS NOT NULL AND "verification_seal" ~ '^[0-9a-f]{64}$' AND "seal_key_id" IS NOT NULL AND length(btrim("seal_key_id")) > 0)
+ );
 EXCEPTION
  WHEN duplicate_object THEN null;
 END $$;
@@ -27,6 +53,8 @@ BEGIN
        OR NEW.audit_event_reference IS DISTINCT FROM OLD.audit_event_reference
        OR NEW.is_synthetic IS DISTINCT FROM OLD.is_synthetic
        OR NEW.verification_seal IS DISTINCT FROM OLD.verification_seal
+       OR NEW.seal_key_id IS DISTINCT FROM OLD.seal_key_id
+       OR NEW.seal_status IS DISTINCT FROM OLD.seal_status
        OR NEW.created_at IS DISTINCT FROM OLD.created_at
     THEN
       RAISE EXCEPTION 'editorial_approval_audit_events protected fields are immutable (event_id=%)', OLD.id
@@ -43,8 +71,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 --> statement-breakpoint
-DROP TRIGGER IF EXISTS "editorial_approval_audit_events_immutable_trg" ON "editorial_approval_audit_events";
---> statement-breakpoint
 CREATE TRIGGER "editorial_approval_audit_events_immutable_trg"
 BEFORE UPDATE OR DELETE ON "editorial_approval_audit_events"
 FOR EACH ROW EXECUTE FUNCTION enforce_editorial_audit_event_immutability();
+

@@ -28,6 +28,14 @@ import {
 } from "@factory/contracts";
 import { normalizePageIdentity } from "../page-authority/store.js";
 import { EditorialAuditStore, ProjectMembershipAuthority } from "./editorial-review-boundary.js";
+import { loadInseeEvidenceRegistry, type InseeEvidenceRegistry } from "./insee-evidence.js";
+import { loadLegalEvidenceRegistry, type LegalEvidenceRegistry } from "./legal-evidence.js";
+import {
+  computeClaimSetDigest,
+  computePageSourceEvidenceDigest,
+  computeSourceEvidenceSetDigest,
+  computeWorkProductSetDigest,
+} from "../production/qa/trust.js";
 
 /**
  * TRUST GOVERNANCE STORE — Macro Run 12.
@@ -56,8 +64,66 @@ function trustError(code: string, message: string): TrustGovernanceError {
   return new TrustGovernanceError(code, message);
 }
 
+/** Authenticated source-evidence inputs used to verify review freshness. */
+export interface TrustEvidenceOptions {
+  repoRoot?: string;
+  inseeEvidence?: InseeEvidenceRegistry;
+  legalEvidence?: LegalEvidenceRegistry;
+  /** Optional explicit override of the global source-evidence-set digest. */
+  sourceEvidenceSetDigest?: string;
+}
+
 export class TrustGovernanceStore {
-  constructor(private readonly db: FactoryDb) {}
+  constructor(
+    private readonly db: FactoryDb,
+    private readonly evidenceOptions: TrustEvidenceOptions = {},
+  ) {}
+
+  private resolveEvidence(): { inseeEvidence?: InseeEvidenceRegistry; legalEvidence?: LegalEvidenceRegistry } {
+    const root = this.evidenceOptions.repoRoot;
+    return {
+      inseeEvidence: this.evidenceOptions.inseeEvidence ?? (root ? loadInseeEvidenceRegistry(root) : undefined),
+      legalEvidence: this.evidenceOptions.legalEvidence ?? (root ? loadLegalEvidenceRegistry(root) : undefined),
+    };
+  }
+
+  /**
+   * Pure read: the CURRENT evidentiary state of one page (claim lineage,
+   * work products, authenticated source evidence) as digests. Used by every
+   * freshness decision so unchanged HTML never implies unchanged authority.
+   */
+  async currentPageEvidence(
+    projectId: string,
+    pageIdentity: string,
+    contentDigest: string,
+    latestReview?: ReviewAuthority | null,
+  ) {
+    const claims = await this.listClaimLineage(projectId, pageIdentity, contentDigest);
+    const originals = await this.listOriginalValues(projectId, pageIdentity);
+    const { inseeEvidence, legalEvidence } = this.resolveEvidence();
+    const pageSourceInfo = computePageSourceEvidenceDigest({ claims, originals, inseeEvidence, legalEvidence });
+    const claimSetDigest = claims.length > 0 ? computeClaimSetDigest(claims) : undefined;
+    const workProductSetDigest = originals.length > 0 ? computeWorkProductSetDigest(originals) : undefined;
+    const rev = latestReview === undefined ? await this.latestReview(projectId, pageIdentity) : latestReview;
+    const globalDigest = computeSourceEvidenceSetDigest({ inseeEvidence, legalEvidence });
+    const sourceEvidenceSetDigest =
+      this.evidenceOptions.sourceEvidenceSetDigest ??
+      (pageSourceInfo.referencedCount > 0 &&
+      pageSourceInfo.problems.length === 0 &&
+      (!rev?.pageSourceEvidenceDigest || rev.pageSourceEvidenceDigest === pageSourceInfo.digest) &&
+      rev?.sourceEvidenceSetDigest
+        ? rev.sourceEvidenceSetDigest
+        : globalDigest);
+    return {
+      claims,
+      originals,
+      claimSetDigest,
+      workProductSetDigest,
+      pageSourceInfo,
+      sourceEvidenceSetDigest,
+      registriesAvailable: Boolean(inseeEvidence && legalEvidence),
+    };
+  }
 
   getDb(): FactoryDb {
     return this.db;
@@ -197,6 +263,16 @@ export class TrustGovernanceStore {
             `Claim ${parsed.claimId} fails lineage validation: ${claimLineageProblems(parsed).join("; ")}`,
           );
         }
+        await tx
+          .delete(claimLineageRecords)
+          .where(
+            and(
+              eq(claimLineageRecords.projectId, input.projectId),
+              eq(claimLineageRecords.pageIdentity, pageIdentity),
+              eq(claimLineageRecords.contentDigest, input.contentDigest),
+              eq(claimLineageRecords.claimId, parsed.claimId),
+            ),
+          );
         const id = `clm-${randomUUID()}`;
         const [inserted] = await tx
           .insert(claimLineageRecords)
@@ -265,7 +341,7 @@ export class TrustGovernanceStore {
           "Direct submission of VERIFIED_HUMAN_REVIEW_AUTHORITY without a validated authenticated approval event is rejected. Approvals must originate from an authorized editorial action.",
         );
       }
-      const auditStore = EditorialAuditStore.getInstance(tx);
+      const auditStore = EditorialAuditStore.getInstance();
       const auditEvent = await auditStore.getApprovalAuditEvent(appEvt.reviewEventId, tx);
       if (!auditEvent) {
         throw trustError(
@@ -297,7 +373,7 @@ export class TrustGovernanceStore {
           `Audit event "${appEvt.reviewEventId}" was recorded for project "${auditEvent.projectId}", not "${input.projectId}". Cross-project approvals are rejected.`,
         );
       }
-      const membershipAuthority = ProjectMembershipAuthority.getInstance(tx);
+      const membershipAuthority = ProjectMembershipAuthority.getInstance();
       const permissions = await membershipAuthority.getMemberPermissions(input.projectId, auditEvent.actorId, tx);
       if (!permissions.includes("EDITORIAL_REVIEW:APPROVE")) {
         throw trustError(
@@ -338,6 +414,20 @@ export class TrustGovernanceStore {
         );
       }
     }
+    const bound = await new TrustGovernanceStore(tx, this.evidenceOptions).currentPageEvidence(
+      input.projectId,
+      pageIdentity,
+      review.reviewedContentDigest,
+      null,
+    );
+    const storedReview: ReviewAuthority = {
+      ...review,
+      claimSetDigest: review.claimSetDigest ?? bound.claimSetDigest,
+      pageSourceEvidenceDigest:
+        review.pageSourceEvidenceDigest ??
+        (bound.registriesAvailable && bound.pageSourceInfo.referencedCount > 0 ? bound.pageSourceInfo.digest : undefined),
+      workProductSetDigest: review.workProductSetDigest ?? bound.workProductSetDigest,
+    };
     const [latest] = await tx
       .select()
       .from(reviewAuthorities)
@@ -362,7 +452,7 @@ export class TrustGovernanceStore {
         reviewedContentDigest: review.reviewedContentDigest,
         reviewedAt: new Date(review.reviewedAt),
         result: review.result,
-        data: { ...review, pageIdentity },
+        data: { ...storedReview, pageIdentity },
       })
       .returning();
     return inserted!;
@@ -378,6 +468,9 @@ export class TrustGovernanceStore {
     currentContentDigest: string,
     currentClaimSetDigest?: string,
     currentSourceEvidenceSetDigest?: string,
+    currentPageSourceEvidenceDigest?: string,
+    currentWorkProductSetDigest?: string,
+    verifyBackingAuthority = false,
   ): Promise<{ review: ReviewAuthority | null; stale: boolean; reason: string | null }> {
     const norm = normalizePageIdentity(pageIdentity);
     const [row] = await this.db
@@ -398,8 +491,39 @@ export class TrustGovernanceStore {
       currentContentDigest,
       currentClaimSetDigest,
       currentSourceEvidenceSetDigest,
+      currentPageSourceEvidenceDigest,
+      currentWorkProductSetDigest,
     );
-    return { review, stale: staleness.stale, reason: staleness.reason };
+    if (staleness.stale) return { review, stale: true, reason: staleness.reason };
+    if (
+      verifyBackingAuthority &&
+      (review.authorityKind === "VERIFIED_HUMAN_REVIEW_AUTHORITY" ||
+        review.reviewAuthorityKind === "VERIFIED_HUMAN_REVIEW_AUTHORITY")
+    ) {
+      const eventId = review.approvalEvent?.reviewEventId;
+      const auditEvent = eventId
+        ? await EditorialAuditStore.getInstance().getApprovalAuditEvent(eventId, this.db)
+        : null;
+      const permissions = auditEvent
+        ? await ProjectMembershipAuthority.getInstance().getMemberPermissions(projectId, auditEvent.actorId, this.db)
+        : [];
+      if (
+        !auditEvent ||
+        !auditEvent.sealVerified ||
+        auditEvent.revoked ||
+        auditEvent.isSynthetic ||
+        auditEvent.projectId !== projectId ||
+        !permissions.includes("EDITORIAL_REVIEW:APPROVE")
+      ) {
+        return {
+          review,
+          stale: true,
+          reason:
+            "review_authority_stale: Backing editorial approval audit event or reviewer membership has been revoked or failed cryptographic seal verification.",
+        };
+      }
+    }
+    return { review, stale: false, reason: null };
   }
 
   /**
@@ -429,11 +553,14 @@ export class TrustGovernanceStore {
   async saveOriginalValue(input: { projectId: string; record: OriginalValueRecord }): Promise<void> {
     const parsed = originalValueRecordSchema.parse(input.record);
     const pageIdentity = normalizePageIdentity(parsed.pageIdentity);
-    await this.db.insert(originalValueRecords).values({
-      id: `ovr-${randomUUID()}`,
-      projectId: input.projectId,
-      pageIdentity,
-      data: { ...parsed, pageIdentity },
+    await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`);
+      await tx.insert(originalValueRecords).values({
+        id: `ovr-${randomUUID()}`,
+        projectId: input.projectId,
+        pageIdentity,
+        data: { ...parsed, pageIdentity },
+      });
     });
   }
 
@@ -447,7 +574,20 @@ export class TrustGovernanceStore {
           eq(originalValueRecords.projectId, projectId),
           eq(originalValueRecords.pageIdentity, norm),
         ),
-      );
-    return rows.map((row) => row.data as OriginalValueRecord);
+      )
+      .orderBy(originalValueRecords.createdAt);
+    // Latest record per work product / claim / kind is the active state.
+    const active = new Map<string, OriginalValueRecord>();
+    for (const row of rows) {
+      const rec = row.data as OriginalValueRecord;
+      const key = rec.workProductId
+        ? `wp:${rec.workProductId}`
+        : rec.lineageClaimId
+          ? `claim:${rec.kind}:${rec.lineageClaimId}`
+          : `kind:${rec.kind}:${rec.description}`;
+      active.delete(key);
+      active.set(key, rec);
+    }
+    return [...active.values()];
   }
 }

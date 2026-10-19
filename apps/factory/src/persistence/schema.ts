@@ -2835,7 +2835,79 @@ export const originalValueRecords = pgTable(
   ],
 );
 
+export const editorialApprovalAuditEvents = pgTable(
+  "editorial_approval_audit_events",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    pageIdentity: text("page_identity").notNull(),
+    actorId: text("actor_id").notNull(),
+    actorRole: text("actor_role").notNull(),
+    reviewAction: text("review_action").notNull(),
+    contentDigest: text("content_digest").notNull(),
+    claimSetDigest: text("claim_set_digest").notNull(),
+    sourceEvidenceSetDigest: text("source_evidence_set_digest").notNull(),
+    auditEventReference: text("audit_event_reference").notNull(),
+    isSynthetic: boolean("is_synthetic").notNull().default(false),
+    revoked: boolean("revoked").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check(
+      "editorial_approval_audit_events_review_action_valid",
+      sql`${table.reviewAction} IN ('APPROVED', 'CHANGES_REQUESTED', 'REJECTED')`,
+    ),
+    check(
+      "editorial_approval_audit_events_content_digest_shape",
+      sql`${table.contentDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "editorial_approval_audit_events_claim_set_digest_shape",
+      sql`${table.claimSetDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "editorial_approval_audit_events_source_evidence_digest_shape",
+      sql`${table.sourceEvidenceSetDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+    index("editorial_approval_audit_events_project_page_idx").on(
+      table.projectId,
+      table.pageIdentity,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const projectReviewerMemberships = pgTable(
+  "project_reviewer_memberships",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    actorId: text("actor_id").notNull(),
+    actorRole: text("actor_role").notNull(),
+    permissions: jsonb("permissions").notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("project_reviewer_memberships_project_actor_unique").on(
+      table.projectId,
+      table.actorId,
+    ),
+    index("project_reviewer_memberships_project_actor_idx").on(
+      table.projectId,
+      table.actorId,
+    ),
+  ],
+);
+
 export type PageIntentAuthorityRecord = typeof pageIntentAuthorities.$inferSelect;
 export type ClaimLineageRecord = typeof claimLineageRecords.$inferSelect;
 export type ReviewAuthorityRecord = typeof reviewAuthorities.$inferSelect;
 export type OriginalValueRecordRow = typeof originalValueRecords.$inferSelect;
+export type EditorialApprovalAuditEventRecord = typeof editorialApprovalAuditEvents.$inferSelect;
+export type ProjectReviewerMembershipRecord = typeof projectReviewerMemberships.$inferSelect;

@@ -70,6 +70,14 @@ export interface TrustedAcquisitionEventRecord extends ResearchAcquisition {
   description: string;
   sourceFileRef: string;
   alternateSourceUrls?: string[];
+  canonicalDatasetId?: string;
+  datasetIdentity?: {
+    geoCode?: string;
+    reportingPeriod?: number;
+    tableId?: string;
+    documentType?: string;
+  };
+  trustedRedirects?: Array<{ from: string; to: string; status?: number }>;
 }
 
 export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRecord> = new Map([
@@ -80,7 +88,24 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "insee-official-data",
       actualRequestedUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
       finalResponseUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
-      alternateSourceUrls: ["https://www.insee.fr/fr/statistiques/8581193", "https://www.insee.fr"],
+      alternateSourceUrls: [
+        "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
+        "https://statistiques-locales.insee.fr/#c=indicator&i=rp.pop_1&s=2022&geo=COM-74056",
+      ],
+      trustedRedirects: [
+        {
+          from: "https://insee.fr/fr/statistiques/8581193?geo=COM-74056",
+          to: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
+          status: 301,
+        },
+        {
+          from: "https://statistiques-locales.insee.fr/#c=indicator&i=rp.pop_1&s=2022&geo=COM-74056",
+          to: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
+          status: 301,
+        },
+      ],
+      canonicalDatasetId: "INSEE-RP2022-LOGEMENT-COM-74056",
+      datasetIdentity: { geoCode: "74056", reportingPeriod: 2022, documentType: "census" },
       acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150",
@@ -97,7 +122,24 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "insee-official-data",
       actualRequestedUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
       finalResponseUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
-      alternateSourceUrls: ["https://www.insee.fr/fr/statistiques/8581193", "https://www.insee.fr"],
+      alternateSourceUrls: [
+        "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
+        "https://statistiques-locales.insee.fr/#c=indicator&i=rp.pop_1&s=2022&geo=COM-74056",
+      ],
+      trustedRedirects: [
+        {
+          from: "https://insee.fr/fr/statistiques/8581193?geo=COM-74056",
+          to: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
+          status: 301,
+        },
+        {
+          from: "https://statistiques-locales.insee.fr/#c=indicator&i=rp.pop_1&s=2022&geo=COM-74056",
+          to: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
+          status: 301,
+        },
+      ],
+      canonicalDatasetId: "INSEE-RP2022-LOGEMENT-COM-74056",
+      datasetIdentity: { geoCode: "74056", reportingPeriod: 2022, documentType: "census" },
       acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150",
@@ -114,7 +156,9 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "insee-official-data",
       actualRequestedUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74173",
       finalResponseUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74173",
-      alternateSourceUrls: ["https://www.insee.fr/fr/statistiques/8581193", "https://www.insee.fr"],
+      alternateSourceUrls: ["https://www.insee.fr/fr/statistiques/8581193?geo=COM-74173"],
+      canonicalDatasetId: "INSEE-RP2022-LOGEMENT-COM-74173",
+      datasetIdentity: { geoCode: "74173", reportingPeriod: 2022, documentType: "census" },
       acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "929215205222683cff2563d2063692b8c87b33e5fffbb72940f84a64765015a4",
@@ -131,7 +175,9 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "insee-official-data",
       actualRequestedUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74173",
       finalResponseUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74173",
-      alternateSourceUrls: ["https://www.insee.fr/fr/statistiques/8581193", "https://www.insee.fr"],
+      alternateSourceUrls: ["https://www.insee.fr/fr/statistiques/8581193?geo=COM-74173"],
+      canonicalDatasetId: "INSEE-RP2022-LOGEMENT-COM-74173",
+      datasetIdentity: { geoCode: "74173", reportingPeriod: 2022, documentType: "census" },
       acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "929215205222683cff2563d2063692b8c87b33e5fffbb72940f84a64765015a4",
@@ -152,8 +198,10 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
         "https://www.chamonix.fr/urbanisme-plu",
         "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu/",
         "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu",
-        "https://www.chamonix.fr",
+        "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu/reglement-20260226.pdf",
       ],
+      canonicalDatasetId: "CHAMONIX-PLU-REGLEMENT-20260226",
+      datasetIdentity: { geoCode: "74056", reportingPeriod: 2026, documentType: "regulatory_plu" },
       acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
       retrievedAt: "2026-10-18T21:11:38Z",
       contentDigest: "25425f385c72a88d3607a0314db9166efe9add139ca45314e124d3eb9bac707f",
@@ -174,8 +222,10 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
         "https://www.chamonix.fr/urbanisme-plu",
         "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu/",
         "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu",
-        "https://www.chamonix.fr",
+        "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu/reglement-20260226.pdf",
       ],
+      canonicalDatasetId: "CHAMONIX-PLU-REGLEMENT-20260226",
+      datasetIdentity: { geoCode: "74056", reportingPeriod: 2026, documentType: "regulatory_plu" },
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T21:11:38Z",
       contentDigest: "d16422afa2deebbda53feb8aef0f9b509ba14bc35963678d8fb4bc6c8480f397",
@@ -196,8 +246,10 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
         "https://www.chamonix.fr/urbanisme-plu",
         "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu/",
         "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu",
-        "https://www.chamonix.fr",
+        "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu/reglement-20260226.pdf",
       ],
+      canonicalDatasetId: "CHAMONIX-PLU-REGLEMENT-20260226",
+      datasetIdentity: { geoCode: "74056", reportingPeriod: 2026, documentType: "regulatory_plu" },
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T21:11:38Z",
       contentDigest: "d16422afa2deebbda53feb8aef0f9b509ba14bc35963678d8fb4bc6c8480f397",
@@ -216,8 +268,9 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       finalResponseUrl: "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000031000677/",
       alternateSourceUrls: [
         "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000031000677",
-        "https://www.legifrance.gouv.fr",
       ],
+      canonicalDatasetId: "LEGIFRANCE-CCH-L271-1",
+      datasetIdentity: { documentType: "statute" },
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "45a3511a6498f2453c37589ad55dd96c6861f09bfcff41c21248a8d416dfa688",
@@ -236,8 +289,9 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       finalResponseUrl: "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000043977341/",
       alternateSourceUrls: [
         "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000043977341",
-        "https://www.legifrance.gouv.fr",
       ],
+      canonicalDatasetId: "LEGIFRANCE-CCH-L126-28-1",
+      datasetIdentity: { documentType: "statute" },
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "1383ee24eca8314e6ed34068db892a3873db1aeda890688864a68a905c3bdddf",
@@ -256,8 +310,9 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       finalResponseUrl: "https://www.legifrance.gouv.fr/codes/section_lc/LEGITEXT000006069577/LEGISCTA000036385038/",
       alternateSourceUrls: [
         "https://www.legifrance.gouv.fr/codes/section_lc/LEGITEXT000006069577/LEGISCTA000036385038",
-        "https://www.legifrance.gouv.fr",
       ],
+      canonicalDatasetId: "LEGIFRANCE-CGI-IFI",
+      datasetIdentity: { documentType: "statute" },
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "c85b399e7dc37eb56b5b8c9a430dca81606ffa9e59df43edf922f10730996938",
@@ -276,8 +331,9 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       finalResponseUrl: "https://www.legifrance.gouv.fr/loda/id/JORFTEXT000000512228",
       alternateSourceUrls: [
         "https://www.legifrance.gouv.fr/loda/id/JORFTEXT000000512228/",
-        "https://www.legifrance.gouv.fr",
       ],
+      canonicalDatasetId: "LEGIFRANCE-LOI-HOGUET",
+      datasetIdentity: { documentType: "statute" },
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "3e0210c9ef8eb3ba43d1a624afbf19eb2e748575f6d749ff16090af60d370238",
@@ -295,11 +351,10 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       actualRequestedUrl: "https://www.chamonix.fr/meubles-de-tourisme-reglementation",
       finalResponseUrl: "https://www.chamonix.fr/meubles-de-tourisme-reglementation",
       alternateSourceUrls: [
-        "https://www.chamonix.fr/urbanisme-plu",
-        "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu/",
-        "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu",
-        "https://www.chamonix.fr",
+        "https://www.chamonix.fr/demarches/urbanisme/documents-opposables/plu/deliberation-meubles-2025.txt",
       ],
+      canonicalDatasetId: "CHAMONIX-MEUBLES-TOURISME-2025",
+      datasetIdentity: { geoCode: "74056", reportingPeriod: 2025, documentType: "municipal_deliberation" },
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "9465ed55d509560ec7803b37dd718824f85723708ddfd88bddeb9f7d9a32bf36",
@@ -318,9 +373,9 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       finalResponseUrl: "https://www.georisques.gouv.fr/mes-risques/connaitre-les-risques-pres-de-chez-moi/rapport2?form-adresse=true&isCadastre=false&city=Chamonix-Mont-Blanc&type=commune&codeInsee=74056",
       alternateSourceUrls: [
         "https://www.georisques.gouv.fr/mes-risques/connaitre-les-risques-pres-de-chez-moi/commune/74056",
-        "https://www.georisques.gouv.fr/mes-risques/connaitre-les-risques-pres-de-chez-moi",
-        "https://www.georisques.gouv.fr",
       ],
+      canonicalDatasetId: "GEORISQUES-PPRN-74056",
+      datasetIdentity: { geoCode: "74056", documentType: "risk_plan" },
       acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "e4511b9dba7e019e05bad31f33cb1f7889b18874ce0a664ac99172ea9eef7b23",
@@ -337,7 +392,11 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       trustedProviderId: "cour-des-comptes-publications",
       actualRequestedUrl: "https://www.ccomptes.fr/fr/publications/les-stations-de-ski-face-au-changement-climatique",
       finalResponseUrl: "https://www.ccomptes.fr/fr/publications/les-stations-de-ski-face-au-changement-climatique",
-      alternateSourceUrls: ["https://www.ccomptes.fr"],
+      alternateSourceUrls: [
+        "https://www.ccomptes.fr/fr/publications/les-stations-de-ski-face-au-changement-climatique/",
+      ],
+      canonicalDatasetId: "CCOMPTES-STATIONS-SKI-2024",
+      datasetIdentity: { reportingPeriod: 2024, documentType: "audit_report" },
       acquisitionMethod: "VERIFIED_ARCHIVAL_FETCH",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "06916fb9b7209134f833b9a65c7c92bed38131bc884ea595f4c699af38fd0764",
@@ -355,6 +414,8 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
       actualRequestedUrl: "https://app.dvf.etalab.gouv.fr/",
       finalResponseUrl: "https://app.dvf.etalab.gouv.fr/",
       alternateSourceUrls: ["https://app.dvf.etalab.gouv.fr", "https://files.data.gouv.fr/geo-dvf/"],
+      canonicalDatasetId: "DGFIP-DVF-CONSOLIDATED",
+      datasetIdentity: { documentType: "dvf" },
       acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
       retrievedAt: "2026-10-18T10:00:00Z",
       contentDigest: "b524d384c84614ff3bc260102a4be90feb05807bc3b0840419c80cd91420f77e",
@@ -441,31 +502,123 @@ export function verifyResearchAcquisition(
       );
     }
 
-    // ACQ-01: SourceRef URL does not match registered event URL
+    // Generic homepage rejection (ACQ-10)
+    const isGenericHomepage = (urlStr: string) => {
+      try {
+        const u = new URL(urlStr);
+        const host = u.hostname.toLowerCase();
+        const pathNorm = u.pathname.replace(/\/+$/, "");
+        const isTopPublisher = /^(?:www\.)?(?:insee\.fr|georisques\.gouv\.fr|chamonix\.fr|ccomptes\.fr|legifrance\.gouv\.fr|etalab\.gouv\.fr)$/.test(host);
+        return isTopPublisher && (pathNorm === "" || pathNorm === "/fr") && !u.search;
+      } catch {
+        return false;
+      }
+    };
+
+    if (sourceRef.sourceUrl && isGenericHomepage(sourceRef.sourceUrl)) {
+      problems.push(
+        `homepage_source_url_rejected: A generic publisher homepage ("${sourceRef.sourceUrl}") cannot establish the identity of a specific dataset or regulatory extract.`,
+      );
+    }
+
+    // ACQ-01 / ACQ-09 / ACQ-13: Exact URL and query parameter check (no query stripping)
     if (sourceRef.sourceUrl && registeredEvent.actualRequestedUrl) {
-      const srcUrlNorm = (sourceRef.sourceUrl.split("?")[0] ?? "").replace(/\/+$/, "");
+      let srcParsed: URL | null = null;
+      let regParsed: URL | null = null;
+      try {
+        srcParsed = new URL(sourceRef.sourceUrl);
+      } catch {}
+      try {
+        regParsed = new URL(registeredEvent.actualRequestedUrl);
+      } catch {}
+
+      if (srcParsed && regParsed) {
+        // Source-specific checks for INSEE commune codes and reporting periods (ACQ-09, ACQ-13)
+        if (registeredEvent.trustedProviderId === "insee-official-data") {
+          const materialParams = ["geo", "codeInsee", "commune", "table", "year", "period"];
+          for (const p of materialParams) {
+            const srcVal = srcParsed.searchParams.get(p);
+            const regVal = regParsed.searchParams.get(p);
+            if (regVal && srcVal && srcVal !== regVal) {
+              problems.push(
+                `material_query_parameter_mismatch: Query parameter "${p}" expected "${regVal}", got "${srcVal}".`,
+              );
+            } else if (regVal && !srcVal) {
+              problems.push(
+                `acquisition_parameter_missing: sourceRef is missing required query parameter "${p}=${regVal}" for dataset identity.`,
+              );
+            }
+          }
+        }
+      }
+
       const allCandidateUrls = [
         registeredEvent.actualRequestedUrl,
         registeredEvent.finalResponseUrl,
         ...(registeredEvent.alternateSourceUrls ?? []),
       ].filter((u): u is string => typeof u === "string");
 
-      const matches = allCandidateUrls.some((cand) => {
+      const hasExactMatch = allCandidateUrls.some((cand) => {
         if (cand === sourceRef.sourceUrl) return true;
-        const candNorm = (cand.split("?")[0] ?? "").replace(/\/+$/, "");
-        return srcUrlNorm === candNorm;
+        if (!cand.includes("?") && !sourceRef.sourceUrl!.includes("?")) {
+          return cand.replace(/\/+$/, "") === sourceRef.sourceUrl!.replace(/\/+$/, "");
+        }
+        return false;
       });
 
-      if (!matches) {
+      const hasTrustedRedirect = (registeredEvent.trustedRedirects ?? []).some(
+        (red) => red.from === sourceRef.sourceUrl || red.to === sourceRef.sourceUrl,
+      );
+
+      if (!hasExactMatch && !hasTrustedRedirect) {
         problems.push(
           `acquisition_source_url_mismatch: sourceRef.sourceUrl "${sourceRef.sourceUrl}" does not match registered event URL "${registeredEvent.actualRequestedUrl}".`,
         );
       }
     }
 
-    // ACQ-06: Legitimate event ID reused for a different research document
+    // ACQ-11 / ACQ-12: Canonical dataset ID and dataset identity checks
+    if (sourceRef.canonicalDatasetId && registeredEvent.canonicalDatasetId) {
+      if (sourceRef.canonicalDatasetId !== registeredEvent.canonicalDatasetId) {
+        problems.push(
+          `acquisition_canonical_dataset_mismatch: declared canonicalDatasetId "${sourceRef.canonicalDatasetId}" does not match registered event "${registeredEvent.canonicalDatasetId}".`,
+        );
+      }
+    }
+
+    if (registeredEvent.datasetIdentity) {
+      if (sourceRef.evidenceBindings) {
+        for (const b of sourceRef.evidenceBindings) {
+          if (b.geoCode && registeredEvent.datasetIdentity.geoCode && b.geoCode !== registeredEvent.datasetIdentity.geoCode) {
+            problems.push(
+              `acquisition_dataset_identity_mismatch: evidence binding geoCode "${b.geoCode}" does not match registered event geoCode "${registeredEvent.datasetIdentity.geoCode}".`,
+            );
+          }
+          if (b.reportingYear && registeredEvent.datasetIdentity.reportingPeriod && b.reportingYear !== registeredEvent.datasetIdentity.reportingPeriod) {
+            problems.push(
+              `acquisition_reporting_period_mismatch: evidence binding reportingYear "${b.reportingYear}" does not match registered event reportingPeriod "${registeredEvent.datasetIdentity.reportingPeriod}".`,
+            );
+          }
+        }
+      }
+      if (sourceRef.datasetIdentity) {
+        if (sourceRef.datasetIdentity.geoCode && registeredEvent.datasetIdentity.geoCode && sourceRef.datasetIdentity.geoCode !== registeredEvent.datasetIdentity.geoCode) {
+          problems.push(
+            `acquisition_dataset_identity_mismatch: declared geoCode "${sourceRef.datasetIdentity.geoCode}" does not match registered event geoCode "${registeredEvent.datasetIdentity.geoCode}".`,
+          );
+        }
+        if (sourceRef.datasetIdentity.reportingPeriod && registeredEvent.datasetIdentity.reportingPeriod && sourceRef.datasetIdentity.reportingPeriod !== registeredEvent.datasetIdentity.reportingPeriod) {
+          problems.push(
+            `acquisition_reporting_period_mismatch: declared reportingPeriod "${sourceRef.datasetIdentity.reportingPeriod}" does not match registered event reportingPeriod "${registeredEvent.datasetIdentity.reportingPeriod}".`,
+          );
+        }
+      }
+    }
+
+    // ACQ-06: Document mismatch for registered events
     if (
       registeredEvent.trustedProviderId === "insee-official-data" &&
+      sourceRef.ref &&
       !/insee|census|rp2022|logement/i.test(sourceRef.ref)
     ) {
       problems.push(

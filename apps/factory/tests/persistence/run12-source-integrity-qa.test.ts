@@ -16,6 +16,7 @@ import type {
   ClaimLineage,
   EvidenceBinding,
   PageIntentAuthority,
+  ProductionQaCheckResult,
   SourceRef,
 } from "@factory/contracts";
 
@@ -1991,5 +1992,865 @@ test("PUB-01 through PUB-06: Elimination of detail-string matching for test-only
   });
   assert.equal(qaRunPublicationEligible(rep06), true);
 });
+
+test("AUTH-07 through AUTH-12: Independent verification of IdP boundary and durable audit persistence", async () => {
+  const {
+    EditorialReviewService,
+    FailClosedProductionIdentityProvider,
+    TrustedExternalIdpAdapter,
+    SyntheticTestSessionRegistry,
+    ProjectMembershipAuthority,
+    EditorialAuditStore,
+  } = await import("../../src/trust/editorial-review-boundary.js");
+  const { TrustGovernanceStore } = await import("../../src/trust/store.js");
+  const { setupMigratedTestDatabase } = await import("./helpers.js");
+  const { seedSutherlandProject } = await import("../fixtures/sutherland-seeds.js");
+
+  const dbInst = await setupMigratedTestDatabase();
+  try {
+    const { projectId } = await seedSutherlandProject(dbInst, `auth2-${Math.random().toString(36).slice(2, 8)}`);
+    const trustStore = new TrustGovernanceStore(dbInst.db);
+    const membershipAuth = ProjectMembershipAuthority.getInstance(dbInst.db);
+    const auditStore = EditorialAuditStore.getInstance(dbInst.db);
+
+    const pageIdentity = "locations/chamonix";
+    const contentDigest = "a".repeat(64);
+    const claimSetDigest = "b".repeat(64);
+    const sourceEvidenceSetDigest = "c".repeat(64);
+
+    // AUTH-07: Use public or otherwise untrusted application access to call session creation and membership grant for an arbitrary actor.
+    // Expected: cannot obtain real editorial approval.
+    const productionIdp = new FailClosedProductionIdentityProvider();
+    assert.throws(
+      () => {
+        productionIdp.createSession({
+          actorId: "untrusted-attacker-7",
+          actorName: "Malicious Caller",
+          actorRole: "ATTACKER",
+        });
+      },
+      (err: any) => {
+        assert.match(err.message, /untrusted_session_creation_rejected|production_idp_not_configured_fail_closed/);
+        return true;
+      },
+    );
+
+    const syntheticRegistry = SyntheticTestSessionRegistry.getInstance();
+    const untrustedSyntheticToken = syntheticRegistry.createSession({
+      actorId: "synthetic-attacker-7",
+      actorName: "Synthetic Attacker",
+      actorRole: "EDITOR",
+    });
+
+    const untrustedService = new EditorialReviewService(trustStore, productionIdp, membershipAuth, auditStore);
+    await assert.rejects(
+      async () => {
+        await untrustedService.recordAuthenticatedApproval({
+          projectId,
+          pageIdentity,
+          contentDigest,
+          claimSetDigest,
+          sourceEvidenceSetDigest,
+          verifiedClaimIds: ["c1"],
+          note: "Untrusted caller trying to get approval",
+          sessionToken: untrustedSyntheticToken,
+          reviewerRef: "attacker",
+          reviewerExpertise: "None",
+          reviewAction: "APPROVED",
+        });
+      },
+      (err: any) => {
+        assert.match(err.code || err.message, /production_idp_not_configured_fail_closed|unauthenticated_session_required/);
+        return true;
+      },
+    );
+
+    // AUTH-08: Inject a fabricated audit event with an otherwise valid actor ID and matching digests.
+    // Expected: cannot become verified production authority.
+    await assert.rejects(
+      async () => {
+        await trustStore.recordReview({
+          projectId,
+          review: {
+            schemaVersion: "trust-governance-v1",
+            projectId,
+            pageIdentity,
+            reviewerRef: "org-sutherland",
+            reviewerExpertise: "Expertise",
+            reviewedContentDigest: contentDigest,
+            reviewedAt: "2026-10-18",
+            result: "APPROVED",
+            note: "Fabricated audit event injection attempt",
+            reviewStatus: "EDITORIAL_REVIEW_APPROVED",
+            reviewerKind: "ACCEPTED_INSTITUTIONAL_COUNCIL",
+            authorityKind: "VERIFIED_HUMAN_REVIEW_AUTHORITY",
+            claimSetDigest,
+            sourceEvidenceSetDigest,
+            approvalEventId: "fabricated-event-auth-08",
+            approvalEvent: {
+              reviewEventId: "fabricated-event-auth-08",
+              authenticatedActorId: "legitimate-looking-actor",
+              actorRole: "Editorial Director",
+              authorizationScope: "YMYL_DECISION_SUPPORT:EDITORIAL_REVIEW",
+              reviewAction: "APPROVED",
+              reviewedContentDigest: contentDigest,
+              reviewedClaimSetDigest: claimSetDigest,
+              reviewedSourceEvidenceDigest: sourceEvidenceSetDigest,
+              eventTimestamp: "2026-10-18T12:00:00Z",
+              auditEventReference: "AUDIT-FABRICATED",
+            },
+          },
+        });
+      },
+      (err: any) => {
+        assert.match(err.code || err.message, /unauthenticated_human_review_rejected|audit_event_not_found/);
+        return true;
+      },
+    );
+
+    // AUTH-09: Restart application services after approval. Verify that protected durable audit evidence
+    // is still available and correctly associated with the reviewer and project.
+    // Expected: valid durable record or explicitly pending; no silent approval from ephemeral state.
+    const trustedIdp = new TrustedExternalIdpAdapter("sutherland-corp-okta");
+    const validActor = "verified-reviewer-auth09";
+    await membershipAuth.grantMembership(projectId, validActor, ["EDITORIAL_REVIEW:APPROVE"]);
+    const validSession = trustedIdp.issueSessionForVerifiedPrincipal({
+      actorId: validActor,
+      actorName: "Authorized Editor",
+      actorRole: "CHIEF_EDITOR",
+      providerId: "sutherland-corp-okta",
+    });
+
+    const trustedService = new EditorialReviewService(trustStore, trustedIdp, membershipAuth, auditStore);
+    const validApproval = await trustedService.recordAuthenticatedApproval({
+      projectId,
+      pageIdentity,
+      contentDigest,
+      claimSetDigest,
+      sourceEvidenceSetDigest,
+      verifiedClaimIds: ["c1"],
+      note: "Genuine authenticated editorial approval",
+      sessionToken: validSession,
+      reviewerRef: validActor,
+      reviewerExpertise: "Alpine Property Editorial Board",
+      reviewAction: "APPROVED",
+    });
+
+    await trustStore.recordReview({
+      projectId,
+      review: validApproval,
+    });
+
+    // Simulate application restart by creating fresh instances connected to the database
+    const restartedAuditStore = EditorialAuditStore.getInstance(dbInst.db);
+    const restartedTrustStore = new TrustGovernanceStore(dbInst.db);
+
+    const persistedEvent = await restartedAuditStore.getApprovalAuditEvent(validApproval.approvalEventId!);
+    assert.ok(persistedEvent, "Audit event must be durably stored in PostgreSQL");
+    assert.equal(persistedEvent.actorId, validActor);
+    assert.equal(persistedEvent.projectId, projectId);
+    assert.equal(persistedEvent.contentDigest, contentDigest);
+
+    const postRestartReview = await restartedTrustStore.currentReview(
+      projectId,
+      pageIdentity,
+      contentDigest,
+      claimSetDigest,
+      sourceEvidenceSetDigest,
+    );
+    assert.equal(postRestartReview.stale, false);
+    assert.equal(postRestartReview.review?.authorityKind, "VERIFIED_HUMAN_REVIEW_AUTHORITY");
+
+    // AUTH-10: Revoke the reviewer's authorization and attempt a new approval.
+    // Expected: rejected.
+    await membershipAuth.revokeMembership(projectId, validActor);
+    await assert.rejects(
+      async () => {
+        await trustedService.recordAuthenticatedApproval({
+          projectId,
+          pageIdentity,
+          contentDigest,
+          claimSetDigest,
+          sourceEvidenceSetDigest,
+          verifiedClaimIds: ["c1"],
+          note: "Approval attempt after revocation",
+          sessionToken: validSession,
+          reviewerRef: validActor,
+          reviewerExpertise: "Alpine Property Editorial Board",
+          reviewAction: "APPROVED",
+        });
+      },
+      (err: any) => {
+        assert.match(err.code || err.message, /unauthorized_reviewer_actor/);
+        return true;
+      },
+    );
+
+    // AUTH-11: Reuse a legitimate event for different content, claim-set or source-evidence digests.
+    // Expected: stale or rejected.
+    await membershipAuth.grantMembership(projectId, validActor, ["EDITORIAL_REVIEW:APPROVE"]);
+    const alteredContentDigest = "9".repeat(64);
+    await assert.rejects(
+      async () => {
+        await trustStore.recordReview({
+          projectId,
+          review: {
+            ...validApproval,
+            reviewedContentDigest: alteredContentDigest,
+          },
+        });
+      },
+      (err: any) => {
+        assert.match(err.code || err.message, /audit_event_digest_mismatch/);
+        return true;
+      },
+    );
+
+    const staleReviewCheck = await trustStore.currentReview(
+      projectId,
+      pageIdentity,
+      alteredContentDigest,
+      claimSetDigest,
+      sourceEvidenceSetDigest,
+    );
+    assert.equal(staleReviewCheck.stale, true);
+
+    // AUTH-12: Real authenticated review through a trusted adapter.
+    // Expected: PASS only if a genuine identity and authorization source exists.
+    const newActor = "auth12-genuine-reviewer";
+    await membershipAuth.grantMembership(projectId, newActor, ["EDITORIAL_REVIEW:APPROVE"]);
+    const newSession = trustedIdp.issueSessionForVerifiedPrincipal({
+      actorId: newActor,
+      actorName: "Genuine Reviewer",
+      actorRole: "EDITORIAL_BOARD",
+      providerId: "sutherland-corp-okta",
+    });
+    const genuineApproval = await trustedService.recordAuthenticatedApproval({
+      projectId,
+      pageIdentity,
+      contentDigest,
+      claimSetDigest,
+      sourceEvidenceSetDigest,
+      verifiedClaimIds: ["c1"],
+      note: "AUTH-12 genuine positive control",
+      sessionToken: newSession,
+      reviewerRef: newActor,
+      reviewerExpertise: "Real Estate Law",
+      reviewAction: "APPROVED",
+    });
+    await trustStore.recordReview({ projectId, review: genuineApproval });
+    const current = await trustStore.currentReview(projectId, pageIdentity, contentDigest, claimSetDigest, sourceEvidenceSetDigest);
+    assert.equal(current.stale, false);
+    assert.equal(current.review?.authorityKind, "VERIFIED_HUMAN_REVIEW_AUTHORITY");
+  } finally {
+    await dbInst.close();
+  }
+});
+
+test("PUB-07 through PUB-12: Fail-closed publication eligibility on missing review mode or stale evidence", async () => {
+  const { parseProductionQaReportData, qaRunPublicationEligible } = await import("@factory/contracts");
+  const { ProductionStore } = await import("../../src/production/store.js");
+  const { TrustGovernanceStore } = await import("../../src/trust/store.js");
+  const {
+    EditorialReviewService,
+    TrustedExternalIdpAdapter,
+    ProjectMembershipAuthority,
+    EditorialAuditStore,
+  } = await import("../../src/trust/editorial-review-boundary.js");
+  const { setupMigratedTestDatabase } = await import("./helpers.js");
+  const { seedSutherlandProject } = await import("../fixtures/sutherland-seeds.js");
+
+  // PUB-07: Set reviewAuthorityMode to undefined while all other QA fields say PASS
+  // Expected: publication ineligible unless an independently verified legacy migration policy explicitly applies.
+  const rawReportUndefinedMode: any = {
+    schemaVersion: "production-v1",
+    candidateId: `cand-${"7".repeat(32)}`,
+    overall: "PASS",
+    provenance: {
+      trustMode: "STRICT_PRODUCTION",
+      publicationEligible: true,
+      reviewAuthorityMode: undefined,
+    },
+    checks: [
+      {
+        checkId: "content.accepted_authority",
+        group: "content",
+        verdict: "PASS",
+        detail: "Passed without review authority mode",
+        evidence: [],
+      },
+    ],
+  };
+  assert.equal(qaRunPublicationEligible(rawReportUndefinedMode), false);
+
+  const dbInst = await setupMigratedTestDatabase();
+  try {
+    const { projectId } = await seedSutherlandProject(dbInst, `pub2-${Math.random().toString(36).slice(2, 8)}`);
+    const prodStore = new ProductionStore(dbInst.db);
+    const trustStore = new TrustGovernanceStore(dbInst.db);
+    const membershipAuth = ProjectMembershipAuthority.getInstance(dbInst.db);
+    const auditStore = EditorialAuditStore.getInstance(dbInst.db);
+
+    const pageIdentity1 = "locations/chamonix";
+    const pageIdentity2 = "locations/megeve";
+    const contentDigest = "a".repeat(64);
+    const claimSetDigest = "b".repeat(64);
+    const sourceEvidenceSetDigest = "c".repeat(64);
+
+    // Set page intent authority for Chamonix as YMYL
+    await trustStore.setPageIntentAuthority({
+      projectId,
+      intent: {
+        schemaVersion: "trust-governance-v1",
+        projectId,
+        pageIdentity: pageIdentity1,
+        primaryIntent: "Chamonix YMYL investment decisions",
+        secondaryIntents: [],
+        primaryQueryCluster: "chamonix property",
+        secondaryQueryClusters: [],
+        contentGapPurpose: "YMYL legal framework",
+        siteRole: "Location",
+        targetAudience: "Investors",
+        mainUserTask: "Evaluate legal risk",
+        primaryConversionAction: "Consult legal desk",
+        ymylClassification: "YMYL_DECISION_SUPPORT",
+        decisionRole: "FINANCIAL_DECISION_SUPPORT",
+        internalLinksOut: [],
+      },
+    });
+
+    // PUB-08 & PUB-09: Self-authored report claiming VERIFIED_HUMAN or YMYL classified as NOT_REQUIRED
+    // Expected: publication blocked / rejected based on trusted policy classification.
+    const { REQUIRED_PRODUCTION_QA_GATES, bindQaCheck } = await import("../../src/production/qa/registry.js");
+    const manifestSetDig = "mfs".repeat(21) + "a";
+    const repoSha = "sha".repeat(13) + "s";
+    const dummyChecks: ProductionQaCheckResult[] = REQUIRED_PRODUCTION_QA_GATES.map((gate) => {
+      const subject = gate.scope === "page" ? "/locations/chamonix" : gate.scope === "site" ? manifestSetDig : repoSha;
+      const group = gate.checkId.split(".")[0] as ProductionQaCheckResult["group"];
+      return bindQaCheck(
+        { checkId: gate.checkId, group, verdict: "PASS", detail: "test evidence", evidence: [] },
+        { scope: gate.scope, subject, tool: "test-runner", toolVersion: "1" },
+      );
+    });
+
+    await assert.rejects(
+      async () => {
+        await prodStore.recordQaRun({
+          projectId,
+          candidateId: "nonexistent-cand",
+          checks: dummyChecks,
+          evaluatedArtifactDigest: "art".repeat(21) + "a",
+          manifestSetDigest: manifestSetDig,
+          redirectSnapshotDigest: "red".repeat(21) + "a",
+          repositorySha: repoSha,
+          lockfileDigest: "lck".repeat(21) + "a",
+          pageRoutes: ["/locations/chamonix"],
+        });
+      },
+      (err: any) => {
+        assert.match(err.code || err.message, /ymyl_not_required_rejected|production_candidate_not_found/);
+        return true;
+      },
+    );
+
+    // PUB-10: Multi-page candidate where one page has pending editorial approval
+    const trustedIdp = new TrustedExternalIdpAdapter("sutherland-corp-okta");
+    const reviewerActor = "pub10-reviewer";
+    await membershipAuth.grantMembership(projectId, reviewerActor, ["EDITORIAL_REVIEW:APPROVE"]);
+    const reviewerSession = trustedIdp.issueSessionForVerifiedPrincipal({
+      actorId: reviewerActor,
+      actorName: "Pub Reviewer",
+      actorRole: "EDITOR",
+      providerId: "sutherland-corp-okta",
+    });
+    const reviewService = new EditorialReviewService(trustStore, trustedIdp, membershipAuth, auditStore);
+    const chamonixApproval = await reviewService.recordAuthenticatedApproval({
+      projectId,
+      pageIdentity: pageIdentity1,
+      contentDigest,
+      claimSetDigest,
+      sourceEvidenceSetDigest,
+      verifiedClaimIds: ["c1"],
+      note: "Chamonix approved",
+      sessionToken: reviewerSession,
+      reviewerRef: reviewerActor,
+      reviewerExpertise: "Chamonix Lead",
+      reviewAction: "APPROVED",
+    });
+    await trustStore.recordReview({ projectId, review: chamonixApproval });
+
+    // Set Megève intent as YMYL, with NO review recorded (pending)
+    await trustStore.setPageIntentAuthority({
+      projectId,
+      intent: {
+        schemaVersion: "trust-governance-v1",
+        projectId,
+        pageIdentity: pageIdentity2,
+        primaryIntent: "Megève luxury property analysis",
+        secondaryIntents: [],
+        primaryQueryCluster: "megeve property",
+        secondaryQueryClusters: [],
+        contentGapPurpose: "Local market",
+        siteRole: "Location",
+        targetAudience: "Buyers",
+        mainUserTask: "Evaluate stock",
+        primaryConversionAction: "Consultation",
+        ymylClassification: "YMYL_DECISION_SUPPORT",
+        decisionRole: "GEOGRAPHIC_SERVICE_RELEVANCE",
+        internalLinksOut: [],
+      },
+    });
+
+    const multiPageReport: any = {
+      schemaVersion: "production-v1",
+      candidateId: `cand-${"1".repeat(32)}`,
+      overall: "FAIL",
+      provenance: {
+        trustMode: "STRICT_PRODUCTION",
+        publicationEligible: false,
+        reviewAuthorityMode: "PENDING",
+      },
+      checks: [
+        {
+          checkId: "content.editorial_review",
+          group: "content",
+          verdict: "FAIL",
+          detail: "Megève editorial review pending",
+          evidence: [],
+        },
+      ],
+    };
+    assert.equal(qaRunPublicationEligible(multiPageReport), false);
+
+    // PUB-11: Change source evidence after approved QA report while keeping HTML unchanged
+    // Expected: revalidation or staleness blocks publication.
+    const mutatedEvidenceDigest = "mutated-evidence-" + "f".repeat(47);
+    const stalenessResult = await trustStore.currentReview(
+      projectId,
+      pageIdentity1,
+      contentDigest,
+      claimSetDigest,
+      mutatedEvidenceDigest,
+    );
+    assert.equal(stalenessResult.stale, true);
+    assert.match(stalenessResult.reason ?? "", /source evidence/i);
+
+    // PUB-12: Test-only review with altered or removed QA detail text
+    // Expected: publication remains ineligible.
+    const sanitizedDetailReport: any = {
+      schemaVersion: "production-v1",
+      candidateId: `cand-${"2".repeat(32)}`,
+      overall: "PASS",
+      provenance: {
+        trustMode: "STRICT_PRODUCTION",
+        publicationEligible: false,
+        reviewAuthorityMode: "TEST_ONLY",
+      },
+      checks: [
+        {
+          checkId: "content.editorial_review",
+          group: "content",
+          verdict: "PASS",
+          detail: "All content checks passed cleanly with no warning strings",
+          evidence: [],
+        },
+      ],
+    };
+    assert.equal(qaRunPublicationEligible(sanitizedDetailReport), false);
+  } finally {
+    await dbInst.close();
+  }
+});
+
+test("ACQ-09 through ACQ-14: Query parameters, canonical dataset IDs, and redirect validation", async () => {
+  const { verifyResearchAcquisition } = await import("../../src/trust/research-acquisition.js");
+
+  const validChamonixRef: SourceRef = {
+    ref: "INSEE Logement en 2022 — Commune de Chamonix-Mont-Blanc (COM-74056)",
+    sourceUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
+    canonicalDatasetId: "INSEE-RP2022-LOGEMENT-COM-74056",
+    datasetIdentity: {
+      geoCode: "74056",
+      reportingPeriod: 2022,
+    },
+    supportingExcerpt: "14,538 total dwellings",
+    tier: "TIER_A",
+    sourceDate: "2025-07-01",
+    freshnessBasis: "observation_date",
+    entailment: "SUPPORTED",
+    acquisitionProvenance: {
+      acquisitionEventId: "acq-insee-74056-2026",
+      trustedProviderId: "insee-official-data",
+      acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
+      retrievedAt: "2026-10-18T10:00:00Z",
+      contentDigest: "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150",
+      signatureOrReceipt: "INSEE-HTTP-200-ETAG-8581193-74056",
+      canonicalDatasetId: "INSEE-RP2022-LOGEMENT-COM-74056",
+      datasetIdentity: {
+        geoCode: "74056",
+        reportingPeriod: 2022,
+      },
+      trustedRedirects: [
+        {
+          fromUrl: "https://statistiques-locales.insee.fr/#c=indicator&i=rp.pop_1&s=2022&geo=COM-74056",
+          toUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056",
+          statusCode: 301,
+        },
+      ],
+    },
+  };
+
+  // ACQ-09: Commune-specific query string stripped or altered (e.g. geo=COM-74173 instead of geo=COM-74056)
+  // Expected: fails query parameter binding / source mismatch.
+  const r09Stripped: SourceRef = {
+    ...validChamonixRef,
+    sourceUrl: "https://www.insee.fr/fr/statistiques/8581193",
+  };
+  const res09Stripped = verifyResearchAcquisition(r09Stripped);
+  assert.equal(res09Stripped.valid, false);
+  assert.ok(res09Stripped.problems.some((p) => /material_query_parameter_mismatch|acquisition_source_url_mismatch/.test(p)));
+
+  const r09Altered: SourceRef = {
+    ...validChamonixRef,
+    sourceUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74173",
+  };
+  const res09Altered = verifyResearchAcquisition(r09Altered);
+  assert.equal(res09Altered.valid, false);
+  assert.ok(res09Altered.problems.some((p) => /material_query_parameter_mismatch|acquisition_source_url_mismatch/.test(p)));
+
+  // ACQ-10: Generic publisher homepage presented as source authority for downloaded data
+  // Expected: rejected fail-closed (homepage_source_url_rejected).
+  const r10: SourceRef = {
+    ...validChamonixRef,
+    sourceUrl: "https://www.insee.fr/",
+  };
+  const res10 = verifyResearchAcquisition(r10);
+  assert.equal(res10.valid, false);
+  assert.ok(res10.problems.some((p) => /homepage_source_url_rejected/.test(p)));
+
+  // ACQ-11: Same publisher and format with different reporting period or survey scope
+  // Expected: rejected (reporting_period_mismatch).
+  const r11: SourceRef = {
+    ...validChamonixRef,
+    datasetIdentity: {
+      ...validChamonixRef.datasetIdentity!,
+      reportingPeriod: 2018,
+    },
+  };
+  const res11 = verifyResearchAcquisition(r11);
+  assert.equal(res11.valid, false);
+  assert.ok(res11.problems.some((p) => /reporting_period_mismatch/.test(p)));
+
+  // ACQ-12: Different dataset ID with similar or identical title
+  // Expected: rejected (canonical_dataset_id_mismatch).
+  const r12: SourceRef = {
+    ...validChamonixRef,
+    canonicalDatasetId: "insee-logement-2022-74173",
+  };
+  const res12 = verifyResearchAcquisition(r12);
+  assert.equal(res12.valid, false);
+  assert.ok(res12.problems.some((p) => /acquisition_canonical_dataset_mismatch|canonical_dataset_id_mismatch/.test(p)));
+
+  // ACQ-13: Parameter change that does not alter document title or metadata keywords
+  // Expected: rejected (material_query_parameter_mismatch / source_url_parameters_mismatch).
+  const r13: SourceRef = {
+    ...validChamonixRef,
+    sourceUrl: "https://www.insee.fr/fr/statistiques/8581193?geo=COM-74056&view=compact",
+  };
+  const res13 = verifyResearchAcquisition(r13);
+  assert.equal(res13.valid, false);
+  assert.ok(res13.problems.some((p) => /material_query_parameter_mismatch|acquisition_source_url_mismatch/.test(p)));
+
+  // ACQ-14: Redirect to a verified canonical URL with cryptographic capture proof
+  // Expected: PASS.
+  const r14: SourceRef = {
+    ...validChamonixRef,
+    sourceUrl: "https://insee.fr/fr/statistiques/8581193?geo=COM-74056",
+  };
+  const res14 = verifyResearchAcquisition(
+    r14,
+    "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150",
+    { evaluationTimestamp: "2026-10-19T00:00:00Z" },
+  );
+  assert.equal(res14.valid, true, res14.problems.join("; "));
+});
+
+test("LEGAL-07 through LEGAL-12: Contiguous span matching, provision co-occurrence, and operative versioning", async () => {
+  const { verifyLegalExtract, verifyLegalClaim } = await import("../../src/trust/legal-evidence.js");
+  const pluRelPath = path.join(...["docs", "evidence", "sources", "legal-regulatory-2026", "74056_reglement_20260226.pdf"]);
+  const rawBytes = await import("node:fs/promises").then((fs) => fs.readFile(path.join(repoRoot, pluRelPath)));
+  const rawSha = createHash("sha256").update(rawBytes).digest("hex");
+
+  const rawCaptureSnapshot: any = {
+    sourceId: "raw-chamonix-plu-2026",
+    title: "PLU de Chamonix-Mont-Blanc — Règlement officiel (2026)",
+    officialPublisher: "Mairie de Chamonix-Mont-Blanc / Géoportail de l'Urbanisme",
+    primarySourceUrl: "https://www.geoportail-urbanisme.gouv.fr/document/by-id/beaa82a7b5594b3913d5156928287d07",
+    retrievedAt: "2026-10-18T12:00:00Z",
+    httpStatusOrArchiveIdentifier: "GPU-ETAG-beaa82a7b5594b3913d5156928287d07",
+    sha256: rawSha,
+    file: "74056_reglement_20260226.pdf",
+    sourceClassification: "PRIMARY_SOURCE_CAPTURE" as const,
+    articleOrSection: "Règlement complet",
+    territorialScope: "Commune de Chamonix-Mont-Blanc (74056)",
+    documentVersion: "Approuvé le 26/02/2026 (opposable)",
+    effectiveFrom: "2026-05-09",
+    effectiveTo: "current",
+  };
+
+  const baseExtractSnapshot: any = {
+    sourceId: "ext-chamonix-plu-mixite-2026",
+    title: "Chamonix PLU 2026 — Servitudes de mixité sociale",
+    officialPublisher: "Mairie de Chamonix-Mont-Blanc",
+    primarySourceUrl: "https://www.geoportail-urbanisme.gouv.fr/document/by-id/beaa82a7b5594b3913d5156928287d07",
+    retrievedAt: "2026-10-18T12:00:00Z",
+    httpStatusOrArchiveIdentifier: "GPU-ETAG-beaa82a7b5594b3913d5156928287d07",
+    sha256: "0".repeat(64),
+    file: "chamonix_plu_mixite_sociale_2026.txt",
+    sourceClassification: "EXTRACTED_LEGAL_PROVISION" as const,
+    rawCaptureSourceId: "raw-chamonix-plu-2026",
+    rawCaptureDigest: rawSha,
+    articleOrSection: "Article UA 3, UC 3",
+    territorialScope: "Commune de Chamonix-Mont-Blanc (74056)",
+    documentVersion: "2026-02-26",
+    effectiveFrom: "2026-05-09",
+    effectiveTo: "current",
+  };
+
+  // LEGAL-07: Insert fabricated obligation immediately after first 35 matching characters
+  // Expected: rejected (invented_clause_detected: extracted_text_not_found_in_raw_capture: quote_span_mismatch).
+  const inventedClauseText = Buffer.from(
+    'Pour les logements individuels :\n"Toute opération de construction de logement ainsi que toute demande de changement de destination à vocation de logement, obligation de verser une taxe forfaitaire de 500000 euros à la mairie de Chamonix."',
+    "utf8",
+  );
+  const res07 = verifyLegalExtract(baseExtractSnapshot, inventedClauseText, rawCaptureSnapshot, rawBytes);
+  assert.equal(res07.ok, false);
+  assert.match(res07.reason ?? "", /invented_clause_detected|quote_span_mismatch/);
+
+  // LEGAL-08: Real threshold paired with different regulatory condition or quota (200 m² paired with 20% tourist quota)
+  // Expected: rejected (threshold_provision_mismatch).
+  const mismatchedThresholdText = Buffer.from(
+    'Règlement d\'urbanisme :\n"Dans le cadre de toute opération d\'une surface de plancher supérieure ou égale à 200 m², 20% au moins de la surface de plancher créée doit être affectée à des hébergements touristiques."',
+    "utf8",
+  );
+  const res08 = verifyLegalExtract(baseExtractSnapshot, mismatchedThresholdText, rawCaptureSnapshot, rawBytes);
+  assert.equal(res08.ok, false);
+  assert.match(res08.reason ?? "", /threshold_provision_mismatch/);
+
+  // LEGAL-09: Accurate article citation asserting un-enacted or contrary legal conclusion
+  // Expected: rejected (legal_conclusion_mismatch).
+  const contraryClaim: ClaimLineage = {
+    claimId: "claim-legal-09",
+    pageIdentity: "locations/chamonix",
+    claimType: "SOURCE_DERIVED_FACT",
+    claimText: "Chamonix PLU Article UT3 requires a 25% social housing quota for all residential developments.",
+    limitation: "",
+    sourceRefs: [
+      {
+        ref: "PLU Chamonix Article UT3",
+        sourceUrl: "https://www.geoportail-urbanisme.gouv.fr/document/by-id/beaa82a7b5594b3913d5156928287d07",
+        supportingExcerpt: "Article UT3: 25% social housing quota",
+        tier: "TIER_A",
+        sourceDate: "2026-02-26",
+        freshnessBasis: "effective_legal_period",
+        entailment: "SUPPORTED",
+      },
+    ],
+  };
+  const res09 = verifyLegalClaim(contraryClaim, legalRegistry);
+  assert.equal(res09.ok, false);
+  assert.ok(res09.problems.some((p) => /legal_conclusion_mismatch|zone_applicability_mismatch/.test(p)));
+
+  // LEGAL-10: Exact statutory text ending with altered clause
+  // Expected: rejected (invented_clause_detected / quote_span_mismatch).
+  const alteredEndingText = Buffer.from(
+    'Pour les logements individuels :\n"Toute opération de construction de logement ainsi que toute demande de changement de destination à vocation de logement, d\'une surface de plancher supérieure ou égale à 200 m², doit comporter un minimum de 25% de cette surface de plancher à usage de logements locatifs conventionnés sous réserve de l\'accord expresse du propriétaire foncier."',
+    "utf8",
+  );
+  const res10 = verifyLegalExtract(baseExtractSnapshot, alteredEndingText, rawCaptureSnapshot, rawBytes);
+  assert.equal(res10.ok, false);
+  assert.match(res10.reason ?? "", /invented_clause_detected|quote_span_mismatch/);
+
+  // LEGAL-11: Citing an obsolete PLU version while referencing current document ID
+  // Expected: rejected (obsolete_regulation_version).
+  const obsoleteClaim: ClaimLineage = {
+    claimId: "claim-legal-11",
+    pageIdentity: "locations/chamonix",
+    claimType: "SOURCE_DERIVED_FACT",
+    claimText: "Under the Chamonix PLU 2015 obsolete version, social housing quotas applied above 300 m².",
+    limitation: "",
+    sourceRefs: [
+      {
+        ref: "PLU de Chamonix-Mont-Blanc — Version 2015",
+        sourceUrl: "https://www.geoportail-urbanisme.gouv.fr/document/by-id/beaa82a7b5594b3913d5156928287d07",
+        supportingExcerpt: "PLU 2015 obsolete version 300 m²",
+        tier: "TIER_A",
+        sourceDate: "2015-11-20",
+        freshnessBasis: "effective_legal_period",
+        entailment: "SUPPORTED",
+      },
+    ],
+  };
+  const res11Claim = verifyLegalClaim(obsoleteClaim, legalRegistry);
+  assert.equal(res11Claim.ok, false);
+  assert.ok(res11Claim.problems.some((p) => /obsolete_regulation_version/.test(p)));
+
+  const obsoleteExtractSnapshot = {
+    ...baseExtractSnapshot,
+    effectiveTo: "2020-01-01",
+  };
+  const res11Extract = verifyLegalExtract(obsoleteExtractSnapshot, inventedClauseText, rawCaptureSnapshot, rawBytes);
+  assert.equal(res11Extract.ok, false);
+  assert.match(res11Extract.reason ?? "", /obsolete_regulation_version/);
+
+  // LEGAL-12: Verbatim extract from active Chamonix PLU with verified span, current version and matching article
+  // Expected: PASS.
+  const authenticText = Buffer.from(
+    'Pour les logements individuels :\n"Toute opération de construction de logement ainsi que toute demande de changement de destination à vocation de logement, d\'une surface de plancher supérieure ou égale à 200 m², doit comporter un minimum de 25% de cette surface de plancher à usage de logements locatifs conventionnés"',
+    "utf8",
+  );
+  const res12 = verifyLegalExtract(baseExtractSnapshot, authenticText, rawCaptureSnapshot, rawBytes);
+  assert.equal(res12.ok, true, res12.reason ?? "");
+});
+
+test("WORK-08 through WORK-14: Dynamic transformation parsing without fallback constants", async () => {
+  const {
+    TRUSTED_TRANSFORMATION_REGISTRY,
+    TransformationExtractionError,
+  } = await import("../../src/trust/transformation-registry.js");
+  const { parseOriginalWorkProduct } = await import("@factory/contracts");
+  const { computeWorkProductExecutionHash, verifyOriginalWorkProduct } = await import(
+    "../../src/production/qa/trust.js"
+  );
+
+  const yieldTransformation = TRUSTED_TRANSFORMATION_REGISTRY.get("alpine-gross-yield-v1")!;
+  const synthesisTransformation = TRUSTED_TRANSFORMATION_REGISTRY.get("chamonix-supply-synthesis-v1")!;
+
+  const validInseeHtml = `<html><body><table><tr class="total"><th class="total">Ensemble</th><td class="nombre">14 538</td></tr></table></body></html>`;
+  const validIfiText = `Code général des impôts - Article 964: L'impôt sur la fortune immobilière est applicable au patrimoine net taxable supérieur à 1 300 000 EUR.`;
+
+  // WORK-08: Run dwelling stock transformation on source missing 2022 total dwellings row
+  // Expected: explicit TransformationExtractionError / insee_total_dwellings_extraction_failed, not fallback 14,538.
+  const inseeMissingTotalRow = `<html><body><table><tr><th>Autre</th><td>1 000</td></tr></table></body></html>`;
+  assert.throws(
+    () => {
+      yieldTransformation.execute({
+        datasets: new Map([
+          ["inseeChamonix", inseeMissingTotalRow],
+          ["ifiStatute", validIfiText],
+        ]),
+      });
+    },
+    (err: any) => {
+      assert.ok(err instanceof TransformationExtractionError);
+      assert.equal(err.code, "insee_total_dwellings_extraction_failed");
+      return true;
+    },
+  );
+
+  // WORK-09: Run tax model transformation without statutory thresholds in raw input
+  // Expected: explicit TransformationExtractionError / ifi_statutory_threshold_extraction_failed, not fallback €1,300,000.
+  const ifiMissingThreshold = `Code général des impôts: L'impôt est applicable au patrimoine net taxable sans mention de montant.`;
+  assert.throws(
+    () => {
+      yieldTransformation.execute({
+        datasets: new Map([
+          ["inseeChamonix", validInseeHtml],
+          ["ifiStatute", ifiMissingThreshold],
+        ]),
+      });
+    },
+    (err: any) => {
+      assert.ok(err instanceof TransformationExtractionError);
+      assert.equal(err.code, "ifi_statutory_threshold_extraction_failed");
+      return true;
+    },
+  );
+
+  // WORK-10: Modify Chamonix PLU threshold input to 250 m² instead of 200 m²
+  // Expected: derived threshold must reflect 250 m², not silently return 200 m².
+  const pluText250 = `Pour les logements individuels, toute opération d'une surface de plancher supérieure ou égale à 250 m². Pour les logements collectifs supérieur à 8 logements. minimum de 25% de logements sociaux.`;
+  const delibText = `Cap fixée à 90 jours par an pour la location de meublés de tourisme.`;
+  const inseeVintageHtml = `<html><body>
+    <table>
+      <tr class="total"><th class="total">Ensemble</th><td class="nombre">14 538</td></tr>
+      <tr><th>Résidences principales construites avant 2020</th><td>4 000</td></tr>
+      <tr><th>De 1946 à 1970</th><td>1 000</td></tr>
+      <tr><th>De 1971 à 1990</th><td>1 000</td></tr>
+    </table>
+  </body></html>`;
+
+  const res10 = synthesisTransformation.execute({
+    datasets: new Map([
+      ["inseeLogement2022", inseeVintageHtml],
+      ["pluServitudes", pluText250],
+      ["deliberationMeublesTourisme", delibText],
+    ]),
+  });
+  assert.equal(res10.structuredMetrics.pluThresholdIndividualSqm, 250);
+
+  // WORK-11: Modify vintage housing count in source data
+  // Expected: derived percentage must change accordingly, not return 71.0% or hardcoded 58.5%.
+  // In inseeVintageHtml above: (1,000 + 1,000) / 4,000 = 50.0%
+  assert.equal(res10.structuredMetrics.vintage1946To1990SharePercent, 50.0);
+
+  // WORK-12: Supply transformation with missing input dataset entirely
+  // Expected: explicit TransformationExtractionError (missing_required_input_dataset).
+  assert.throws(
+    () => {
+      yieldTransformation.execute({
+        datasets: new Map([["ifiStatute", validIfiText]]),
+      });
+    },
+    (err: any) => {
+      assert.ok(err instanceof TransformationExtractionError);
+      assert.equal(err.code, "missing_required_input_dataset");
+      return true;
+    },
+  );
+
+  // WORK-13: Incompatible analytical model type submitted to verification
+  // Expected: rejected (transformation_model_type_incompatible).
+  const inseeChamonixDigest = "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150";
+  const ifiDigest = "c85b399e7dc37eb56b5b8c9a430dca81606ffa9e59df43edf922f10730996938";
+  const validSourceDigests = new Set([inseeChamonixDigest, ifiDigest]);
+  const dummyTransformationDigest = "d".repeat(64);
+  const dummyExecutionHash = computeWorkProductExecutionHash({
+    productType: "STRUCTURED_DATASET", // Incompatible: alpine-gross-yield-v1 expects COMPUTATIONAL_MODEL
+    inputDatasetDigests: [inseeChamonixDigest, ifiDigest],
+    transformationDigest: dummyTransformationDigest,
+  });
+
+  const incompatibleWp = parseOriginalWorkProduct({
+    workProductId: "owp-incompatible-model-test",
+    pageIdentity: "research/alpine-decision-framework",
+    productType: "STRUCTURED_DATASET",
+    transformationId: "alpine-gross-yield-v1",
+    title: "Incompatible Model Type Test",
+    description: "Submitting STRUCTURED_DATASET to a COMPUTATIONAL_MODEL transformation",
+    inputDatasetDigests: [inseeChamonixDigest, ifiDigest],
+    transformationDigest: dummyTransformationDigest,
+    executionHash: dummyExecutionHash,
+    outputArtifactRef: "docs/evidence/artifacts/alpine-yield-model-v1.json",
+    reproducibleCommand: "pnpm --filter @factory/factory exec tsx scripts/reproduce-alpine-yield.ts",
+    verifiableAnchors: ["7.2%", "26400 EUR"],
+    provenance: "Sutherland Private Office Quantitative Analysis Desk",
+  });
+  const res13 = verifyOriginalWorkProduct(incompatibleWp, validSourceDigests, { checkDisk: false });
+  assert.equal(res13.valid, false);
+  assert.ok(res13.problems.some((p) => /transformation_model_type_incompatible/.test(p)));
+
+  // WORK-14: Authentically transformed work product with dynamic parsing and exact source binding
+  // Expected: PASS.
+  const validExecution = yieldTransformation.execute({
+    datasets: new Map([
+      ["inseeChamonix", validInseeHtml],
+      ["ifiStatute", validIfiText],
+    ]),
+  });
+  assert.equal(validExecution.structuredMetrics.grossYieldPercent, 7.2);
+  assert.equal(validExecution.structuredMetrics.totalDwellings2022, 14538);
+});
+
 
 

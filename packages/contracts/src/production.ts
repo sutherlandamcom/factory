@@ -488,12 +488,14 @@ export function qaRunPublicationEligible(data: unknown): boolean {
   const parsed = productionQaReportDataSchema.safeParse(data);
   if (!parsed.success) return false;
   const d = parsed.data;
+  if (!d.provenance?.reviewAuthorityMode) {
+    return false;
+  }
   return (
     d.overall === "PASS" &&
-    d.provenance?.trustMode === "STRICT_PRODUCTION" &&
+    d.provenance.trustMode === "STRICT_PRODUCTION" &&
     d.provenance.publicationEligible === true &&
-    (d.provenance.reviewAuthorityMode === undefined ||
-      d.provenance.reviewAuthorityMode === "VERIFIED_HUMAN" ||
+    (d.provenance.reviewAuthorityMode === "VERIFIED_HUMAN" ||
       d.provenance.reviewAuthorityMode === "NOT_REQUIRED")
   );
 }

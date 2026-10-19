@@ -27,7 +27,7 @@ import {
   type OriginalValueRecord,
 } from "@factory/contracts";
 import { normalizePageIdentity } from "../page-authority/store.js";
-import { EditorialAuditStore } from "./editorial-review-boundary.js";
+import { EditorialAuditStore, ProjectMembershipAuthority } from "./editorial-review-boundary.js";
 
 /**
  * TRUST GOVERNANCE STORE — Macro Run 12.
@@ -261,18 +261,38 @@ export class TrustGovernanceStore {
           "Direct submission of VERIFIED_HUMAN_REVIEW_AUTHORITY without a validated authenticated approval event is rejected. Approvals must originate from an authorized editorial action.",
         );
       }
-      const auditStore = EditorialAuditStore.getInstance();
-      const auditEvent = auditStore.getApprovalAuditEvent(appEvt.reviewEventId);
+      const auditStore = EditorialAuditStore.getInstance(this.db);
+      const auditEvent = await auditStore.getApprovalAuditEvent(appEvt.reviewEventId);
       if (!auditEvent) {
         throw trustError(
           "unauthenticated_human_review_rejected",
           `No verified server audit event found for review event "${appEvt.reviewEventId}". Direct store insertion of VERIFIED_HUMAN_REVIEW_AUTHORITY is rejected.`,
         );
       }
+      if (auditEvent.revoked || appEvt.revoked) {
+        throw trustError(
+          "revoked_approval_rejected",
+          `Audit event "${appEvt.reviewEventId}" has been revoked. Revoked approvals cannot be recorded or used.`,
+        );
+      }
+      if (auditEvent.isSynthetic || appEvt.isSynthetic) {
+        throw trustError(
+          "synthetic_approval_not_production_authority",
+          `Audit event "${appEvt.reviewEventId}" was created with synthetic test credentials and cannot certify production content as human-approved.`,
+        );
+      }
       if (auditEvent.projectId !== input.projectId) {
         throw trustError(
           "cross_project_audit_event_rejected",
           `Audit event "${appEvt.reviewEventId}" was recorded for project "${auditEvent.projectId}", not "${input.projectId}". Cross-project approvals are rejected.`,
+        );
+      }
+      const membershipAuthority = ProjectMembershipAuthority.getInstance(this.db);
+      const permissions = await membershipAuthority.getMemberPermissions(input.projectId, auditEvent.actorId);
+      if (!permissions.includes("EDITORIAL_REVIEW:APPROVE")) {
+        throw trustError(
+          "unauthorized_reviewer_actor",
+          `Actor "${auditEvent.actorId}" lacks active "EDITORIAL_REVIEW:APPROVE" permission for project "${input.projectId}". Revoked or missing authorization rejects approval.`,
         );
       }
       if (
@@ -298,8 +318,9 @@ export class TrustGovernanceStore {
         );
       }
       if (
-        /fake|mock|dummy/i.test(appEvt.auditEventReference) ||
-        /fake|mock|dummy/i.test(review.approvalEventProvenance ?? "")
+        /fake|mock|dummy|injected|fabricated/i.test(appEvt.auditEventReference) ||
+        /fake|mock|dummy|injected|fabricated/i.test(review.approvalEventProvenance ?? "") ||
+        /fake|mock|dummy|injected|fabricated/i.test(auditEvent.auditEventReference)
       ) {
         throw trustError(
           "fake_audit_event_rejected",

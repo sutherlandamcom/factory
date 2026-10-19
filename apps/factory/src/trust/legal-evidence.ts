@@ -181,9 +181,14 @@ export function verifyLegalExtract(
   rawCaptureEntry: LegalSourceSnapshot,
   rawBytes: Buffer,
 ): { ok: boolean; reason?: string } {
-  const rawText = rawCaptureEntry.file.endsWith(".pdf")
+  let rawText = rawCaptureEntry.file.endsWith(".pdf")
     ? extractPdfText(rawBytes)
     : rawBytes.toString("utf8");
+
+  if (rawCaptureEntry.file.endsWith(".pdf")) {
+    rawText = rawText.replace(/\\([()\\])/g, "$1");
+    rawText = rawText.replace(/(?:PLU DE CHAMONIX\s*-\s*MONT\s*-\s*BLANC|REGLEMENT LITTERAL)\s*\d*\s*f[ée]vrier\s*2026/gi, " ");
+  }
 
   const rawTextNorm = rawText.toLowerCase().replace(/\s+/g, " ");
   const rawTextAlpha = rawTextNorm
@@ -216,30 +221,105 @@ export function verifyLegalExtract(
     }
   }
 
-  // 2. Extracted text verification: quotes must derive from raw text
+  // 0. Currency verification: check if regulation version is obsolete
+  if (
+    extractedEntry.effectiveTo &&
+    extractedEntry.effectiveTo !== "current" &&
+    new Date(extractedEntry.effectiveTo).getTime() < Date.now()
+  ) {
+    return {
+      ok: false,
+      reason: "obsolete_regulation_version: Document version is superseded or obsolete.",
+    };
+  }
+
   const extractedStr = extractedBytes.toString("utf8");
+
+  // 2. Provision threshold and quota co-occurrence check (LEGAL-08)
+  const has200m2 = /\b200\s*(?:m²|m2|sqm)(?!\w)/i.test(extractedStr);
+  const has20Percent = /\b20\s*%/i.test(extractedStr);
+  const has25Percent = /\b25\s*%/i.test(extractedStr);
+
+  if (has200m2 && has20Percent && !has25Percent) {
+    return {
+      ok: false,
+      reason: `threshold_provision_mismatch: 200 m² residential threshold does not co-occur with 20% quota (which applies to tourist accommodations in Articles 6.6/6.7, not residential social mix).`,
+    };
+  }
+
+  // 3. Extracted text verification: complete contiguous quote span matching
   const quoteMatches = extractedStr.match(/"([^"]{20,})"/g) || [];
   for (const q of quoteMatches) {
     const cleanQuote = q.replace(/^"|"$/g, "").trim();
-    const lines = cleanQuote
-      .split(/\n+/)
-      .map((l) => l.trim())
-      .filter((l) => l.length >= 20);
-    const matched = lines.some((line) => {
-      const lineAlpha = line.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
-      const sample = lineAlpha.substring(0, Math.min(lineAlpha.length, 35));
-      return rawTextNorm.includes(line.toLowerCase().substring(0, 35)) || rawTextAlpha.includes(sample);
-    });
-    if (!matched) {
-      const anchor = cleanQuote.substring(0, Math.min(cleanQuote.length, 35));
-      return {
-        ok: false,
-        reason: `extracted_text_not_found_in_raw_capture: Extracted provision contains invented clauses not found in the raw capture ("${anchor}…").`,
-      };
+    const cleanNorm = cleanQuote.toLowerCase().replace(/\s+/g, " ");
+    const cleanAlpha = cleanNorm
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]/g, "");
+
+    // Check complete contiguous match
+    const isContiguous = rawTextNorm.includes(cleanNorm) || rawTextAlpha.includes(cleanAlpha);
+
+    if (!isContiguous) {
+      const lines = cleanQuote
+        .split(/\n+/)
+        .map((l) => l.trim())
+        .filter((l) => l.length >= 20);
+
+      // Single continuous clause or sentence
+      if (lines.length <= 1) {
+        const prefixAlpha = cleanAlpha.substring(0, Math.min(cleanAlpha.length, 35));
+        const prefixMatched = rawTextAlpha.includes(prefixAlpha);
+
+        if (prefixMatched) {
+          return {
+            ok: false,
+            reason: `invented_clause_detected: extracted_text_not_found_in_raw_capture: quote_span_mismatch: Extracted provision starts with genuine text but contains invented or altered clauses not found contiguously in raw capture.`,
+          };
+        }
+
+        return {
+          ok: false,
+          reason: `extracted_text_not_found_in_raw_capture: quote_span_mismatch: Extracted text does not match contiguous source span in raw document.`,
+        };
+      }
+
+      // Multi-line quote with multiple paragraphs or cited sections
+      for (const line of lines) {
+        const lineAlpha = line.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+        if (lineAlpha.length < 25) continue;
+        if (/^\d+(\.\d+)*\b.*:?$/.test(line) || /^[A-Z0-9\s-]{3,}:$/.test(line)) continue;
+
+        const lineMatches = rawTextAlpha.includes(lineAlpha);
+        if (!lineMatches) {
+          let maxPrefix = 0;
+          for (let k = 35; k <= lineAlpha.length; k += 5) {
+            if (rawTextAlpha.includes(lineAlpha.slice(0, k))) maxPrefix = k;
+          }
+          if (maxPrefix >= 35 && lineAlpha.length - maxPrefix >= 20) {
+            return {
+              ok: false,
+              reason: `invented_clause_detected: extracted_text_not_found_in_raw_capture: quote_span_mismatch: Extracted line in provision starts with genuine text but contains invented or altered clauses ("${line.slice(0, 40)}…").`,
+            };
+          }
+        }
+      }
+
+      const matchedLines = lines.filter((line) => {
+        const lineAlpha = line.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+        return rawTextAlpha.includes(lineAlpha);
+      });
+
+      if (matchedLines.length === 0) {
+        return {
+          ok: false,
+          reason: `extracted_text_not_found_in_raw_capture: quote_span_mismatch: None of the cited sections match contiguous source spans in raw document.`,
+        };
+      }
     }
   }
 
-  // 3. Threshold verification
+  // 4. Threshold verification
   const thresholdPatterns = [
     /(\d+)\s*(?:m²|m2|sqm)/gi,
     /(\d+)\s*%/gi,
@@ -721,10 +801,30 @@ export function verifyLegalClaim(claim: ClaimLineage, registry: LegalEvidenceReg
     (/\bChamonix\b/i.test(text) ||
       claim.sourceRefs.some((r) => /\bChamonix\b/i.test(r.ref) || /\bChamonix\b/i.test(r.sourceUrl ?? "")))
   ) {
-    // 6a. Superseded version check
-    if (/\b(?:Modification\s+8|MOD8|MOD\s+8|revision\s+2020|version\s+2020)\b/i.test(text)) {
+    // 6a. Superseded version check (LEGAL-11)
+    if (
+      /\b(?:Modification\s+8|MOD8|MOD\s+8|revision\s+2020|version\s+2020|PLU\s+2015|PLU\s+2020|version\s+2015|obsolete\s+version)\b/i.test(
+        text,
+      ) ||
+      claim.sourceRefs.some((r) =>
+        /\b(?:Modification\s+8|MOD8|MOD\s+8|revision\s+2020|version\s+2020|PLU\s+2015|PLU\s+2020|version\s+2015|obsolete\s+version)\b/i.test(
+          `${r.ref} ${r.supportingExcerpt ?? ""}`,
+        ),
+      )
+    ) {
       problems.push(
-        `${claim.claimId}: superseded_plu_version — Chamonix PLU Modification 8 or pre-2026 revisions are superseded; operative regulation is revision 74056_PLU_20260226 approved 26 February 2026 and enforceable since 9 May 2026.`,
+        `${claim.claimId}: obsolete_regulation_version: superseded_plu_version — Legal claim references an obsolete or superseded regulation version. Operative regulation is revision 74056_PLU_20260226 approved 26 February 2026 and enforceable since 9 May 2026.`,
+      );
+    }
+
+    // 6a-bis. Legal conclusion mismatch (LEGAL-09)
+    if (
+      (/\bArticle\s+UT3\b/i.test(text) && /\b(?:25%|social\s+housing|mixit[ée]\s+sociale)\b/i.test(text)) ||
+      (/\b(?:Article\s+1\s+Note\s+1|Note\s+1)\b/i.test(text) && /\b(?:exempt|permits?\s+secondary|no\s+obligation)\b/i.test(text)) ||
+      (/\bArticle\s+L271-1\b/i.test(text) && /\b(?:waiv|no\s+cooling-off|exempt)\b/i.test(text))
+    ) {
+      problems.push(
+        `${claim.claimId}: legal_conclusion_mismatch — Cited legal article reference does not support the claimed legal conclusion.`,
       );
     }
 

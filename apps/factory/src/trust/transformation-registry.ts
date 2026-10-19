@@ -21,6 +21,13 @@ export interface TransformationDefinition {
 
 export const TRUSTED_TRANSFORMATION_REGISTRY: Map<string, TransformationDefinition> = new Map();
 
+export class TransformationExtractionError extends Error {
+  constructor(public readonly code: string, message: string) {
+    super(`${code}: ${message}`);
+    this.name = "TransformationExtractionError";
+  }
+}
+
 function sha256(content: string | Buffer): string {
   return createHash("sha256").update(content).digest("hex");
 }
@@ -34,26 +41,42 @@ function parseInseeTotalDwellings2022(html: string): number {
       const lastCell = tds[tds.length - 1];
       if (lastCell && lastCell[1]) {
         const last = lastCell[1].replace(/\s+/g, "");
-        return Number(last);
+        const val = Number(last);
+        if (!isNaN(val) && val > 0) return val;
       }
     }
   }
-  return 14538;
+  throw new TransformationExtractionError(
+    "insee_total_dwellings_extraction_failed",
+    "Failed to extract 2022 total dwellings from INSEE table LOG T1; no silent fallback permitted.",
+  );
 }
 
 function parseInseeMainResidencesPre2020(html: string): number {
   const norm = html.replace(/&nbsp;|\u00A0|\u202F/g, " ");
   const m = norm.match(/Résidences principales construites avant 2020<\/th>\s*<td[^>]*>([\d\s]+)<\/td>/i);
-  if (m && m[1]) return Number(m[1].replace(/\s+/g, ""));
-  return 4231;
+  if (m && m[1]) {
+    const val = Number(m[1].replace(/\s+/g, ""));
+    if (!isNaN(val) && val > 0) return val;
+  }
+  throw new TransformationExtractionError(
+    "insee_main_residences_pre2020_extraction_failed",
+    "Failed to extract pre-2020 main residences count from INSEE source; no silent fallback permitted.",
+  );
 }
 
-function parseInseeVintage(html: string, vintageLabel: string): number | null {
+function parseInseeVintage(html: string, vintageLabel: string): number {
   const norm = html.replace(/&nbsp;|\u00A0|\u202F/g, " ");
   const regex = new RegExp(vintageLabel + "<\\/th>\\s*<td[^>]*>([\\d\\s]+)<\\/td>", "i");
   const m = norm.match(regex);
-  if (m && m[1]) return Number(m[1].replace(/\s+/g, ""));
-  return null;
+  if (m && m[1]) {
+    const val = Number(m[1].replace(/\s+/g, ""));
+    if (!isNaN(val) && val > 0) return val;
+  }
+  throw new TransformationExtractionError(
+    "insee_vintage_extraction_failed",
+    `Failed to extract vintage count for "${vintageLabel}" from INSEE source; no silent fallback permitted.`,
+  );
 }
 
 function parsePluMixite(text: string): {
@@ -62,20 +85,44 @@ function parsePluMixite(text: string): {
   pluSocialMixQuotaPercent: number;
 } {
   const indMatch = text.match(/logements individuels[\s\S]*?(?:supérieure ou égale à|>=)\s*(\d+)\s*m/i);
-  const pluThresholdIndividualSqm = indMatch ? Number(indMatch[1]) : 200;
+  if (!indMatch || !indMatch[1]) {
+    throw new TransformationExtractionError(
+      "plu_individual_threshold_extraction_failed",
+      "Failed to extract PLU individual housing floor area threshold; no silent fallback permitted.",
+    );
+  }
+  const pluThresholdIndividualSqm = Number(indMatch[1]);
 
   const collMatch = text.match(/logements collectifs[\s\S]*?(?:supérieur à|>)\s*(\d+)\s*logements/i);
-  const pluThresholdCollectiveUnits = collMatch ? Number(collMatch[1]) : 8;
+  if (!collMatch || !collMatch[1]) {
+    throw new TransformationExtractionError(
+      "plu_collective_threshold_extraction_failed",
+      "Failed to extract PLU collective housing dwelling threshold; no silent fallback permitted.",
+    );
+  }
+  const pluThresholdCollectiveUnits = Number(collMatch[1]);
 
   const quotaMatch = text.match(/minimum de\s*(\d+)%/i);
-  const pluSocialMixQuotaPercent = quotaMatch ? Number(quotaMatch[1]) : 25;
+  if (!quotaMatch || !quotaMatch[1]) {
+    throw new TransformationExtractionError(
+      "plu_social_mix_quota_extraction_failed",
+      "Failed to extract PLU social mix quota percentage; no silent fallback permitted.",
+    );
+  }
+  const pluSocialMixQuotaPercent = Number(quotaMatch[1]);
 
   return { pluThresholdIndividualSqm, pluThresholdCollectiveUnits, pluSocialMixQuotaPercent };
 }
 
 function parseMeublesTourismeCap(text: string): number {
   const capMatch = text.match(/(\d+)\s*jours/i);
-  return capMatch ? Number(capMatch[1]) : 90;
+  if (!capMatch || !capMatch[1]) {
+    throw new TransformationExtractionError(
+      "str_cap_extraction_failed",
+      "Failed to extract short-term rental cap days from municipal deliberation text; no silent fallback permitted.",
+    );
+  }
+  return Number(capMatch[1]);
 }
 
 // 1. alpine-gross-yield-v1
@@ -89,19 +136,31 @@ TRUSTED_TRANSFORMATION_REGISTRY.set("alpine-gross-yield-v1", {
 
     const inseeData = inputs.datasets.get(inseeDigest) ?? inputs.datasets.get("inseeChamonix");
     if (!inseeData) {
-      throw new Error("missing_required_input_dataset: inseeChamonix is required for alpine-gross-yield-v1");
+      throw new TransformationExtractionError(
+        "missing_required_input_dataset",
+        "inseeChamonix is required for alpine-gross-yield-v1",
+      );
     }
     const ifiData = inputs.datasets.get(ifiDigest) ?? inputs.datasets.get("ifiStatute");
     if (!ifiData) {
-      throw new Error("missing_required_input_dataset: ifiStatute is required for alpine-gross-yield-v1");
+      throw new TransformationExtractionError(
+        "missing_required_input_dataset",
+        "ifiStatute is required for alpine-gross-yield-v1",
+      );
     }
 
     const inseeHtml = inseeData.toString("utf8");
     const totalDwellings2022 = parseInseeTotalDwellings2022(inseeHtml);
 
     const ifiText = ifiData.toString("utf8");
-    const ifiMatch = ifiText.match(/1[\s.,]300[\s.,]000\s*(?:€|EUR)/i);
-    const ifiThresholdStr = ifiMatch ? "1,300,000 EUR" : "1,300,000 EUR";
+    const ifiMatch = ifiText.match(/1[\s.,]300[\s.,]000\s*(?:€|EUR)?/i);
+    if (!ifiMatch) {
+      throw new TransformationExtractionError(
+        "ifi_statutory_threshold_extraction_failed",
+        "Statutory IFI entry threshold (1,300,000 EUR) not found in statute text; no silent fallback permitted.",
+      );
+    }
+    const ifiThresholdStr = "1,300,000 EUR";
 
     const annualRentEur = Number(inputs.params?.annualRentEur ?? 26400);
     const purchasePriceEur = Number(inputs.params?.purchasePriceEur ?? 366000);
@@ -164,6 +223,7 @@ TRUSTED_TRANSFORMATION_REGISTRY.set("alpine-gross-yield-v1", {
       outputContent,
       outputDigest: sha256(outputContent),
       structuredMetrics: {
+        totalDwellings2022,
         annualRentEur,
         purchasePriceEur,
         grossYieldPercent,
@@ -188,22 +248,31 @@ TRUSTED_TRANSFORMATION_REGISTRY.set("chamonix-supply-synthesis-v1", {
 
     const inseeData = inputs.datasets.get(inseeDigest) ?? inputs.datasets.get("inseeLogement2022");
     if (!inseeData) {
-      throw new Error("missing_required_input_dataset: inseeLogement2022 is required for chamonix-supply-synthesis-v1");
+      throw new TransformationExtractionError(
+        "missing_required_input_dataset",
+        "inseeLogement2022 is required for chamonix-supply-synthesis-v1",
+      );
     }
     const pluData = inputs.datasets.get(pluDigest) ?? inputs.datasets.get("pluServitudes");
     if (!pluData) {
-      throw new Error("missing_required_input_dataset: pluServitudes is required for chamonix-supply-synthesis-v1");
+      throw new TransformationExtractionError(
+        "missing_required_input_dataset",
+        "pluServitudes is required for chamonix-supply-synthesis-v1",
+      );
     }
     const delibData = inputs.datasets.get(delibDigest) ?? inputs.datasets.get("deliberationMeublesTourisme");
     if (!delibData) {
-      throw new Error("missing_required_input_dataset: deliberationMeublesTourisme is required for chamonix-supply-synthesis-v1");
+      throw new TransformationExtractionError(
+        "missing_required_input_dataset",
+        "deliberationMeublesTourisme is required for chamonix-supply-synthesis-v1",
+      );
     }
 
     const inseeHtml = inseeData.toString("utf8");
     const totalDwellings2022 = parseInseeTotalDwellings2022(inseeHtml);
     const mainResidencesPre2020 = parseInseeMainResidencesPre2020(inseeHtml);
-    const v1 = parseInseeVintage(inseeHtml, "De 1946 à 1970") ?? 1024;
-    const v2 = parseInseeVintage(inseeHtml, "De 1971 à 1990") ?? 1451;
+    const v1 = parseInseeVintage(inseeHtml, "De 1946 à 1970");
+    const v2 = parseInseeVintage(inseeHtml, "De 1971 à 1990");
     const vintage1946To1990Count = v1 + v2;
     const vintage1946To1990SharePercent = Number(((vintage1946To1990Count / mainResidencesPre2020) * 100).toFixed(1)); // 58.5%
 
@@ -248,6 +317,7 @@ TRUSTED_TRANSFORMATION_REGISTRY.set("chamonix-supply-synthesis-v1", {
       structuredMetrics: {
         totalDwellings2022,
         mainResidencesPre2020,
+        vintage1946To1990Count,
         vintage1946To1990SharePercent,
         pluSocialMixQuotaPercent,
         pluThresholdIndividualSqm,
@@ -270,20 +340,35 @@ TRUSTED_TRANSFORMATION_REGISTRY.set("alpine-investment-matrix-v1", {
 
     const ifiData = inputs.datasets.get(ifiDigest) ?? inputs.datasets.get("ifiStatute");
     if (!ifiData) {
-      throw new Error("missing_required_input_dataset: ifiStatute is required for alpine-investment-matrix-v1");
+      throw new TransformationExtractionError(
+        "missing_required_input_dataset",
+        "ifiStatute is required for alpine-investment-matrix-v1",
+      );
     }
     const pluData = inputs.datasets.get(pluDigest) ?? inputs.datasets.get("pluServitudes");
     if (!pluData) {
-      throw new Error("missing_required_input_dataset: pluServitudes is required for alpine-investment-matrix-v1");
+      throw new TransformationExtractionError(
+        "missing_required_input_dataset",
+        "pluServitudes is required for alpine-investment-matrix-v1",
+      );
     }
     const loiData = inputs.datasets.get(loiDigest) ?? inputs.datasets.get("loiHoguet");
     if (!loiData) {
-      throw new Error("missing_required_input_dataset: loiHoguet is required for alpine-investment-matrix-v1");
+      throw new TransformationExtractionError(
+        "missing_required_input_dataset",
+        "loiHoguet is required for alpine-investment-matrix-v1",
+      );
     }
 
     const ifiText = ifiData.toString("utf8");
     const ifiMatch = ifiText.match(/1[\s.,]300[\s.,]000/);
-    const ifiThresholdEur = ifiMatch ? 1300000 : 1300000;
+    if (!ifiMatch) {
+      throw new TransformationExtractionError(
+        "ifi_statutory_threshold_extraction_failed",
+        "Statutory IFI entry threshold (1,300,000 EUR) not found in statute text; no silent fallback permitted.",
+      );
+    }
+    const ifiThresholdEur = 1300000;
 
     const pluText = pluData.toString("utf8");
     const { pluThresholdIndividualSqm, pluThresholdCollectiveUnits } = parsePluMixite(pluText);

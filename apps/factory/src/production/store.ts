@@ -39,7 +39,7 @@ import {
   type ReviewAuthorityMode,
 } from "@factory/contracts";
 import { TrustGovernanceStore } from "../trust/store.js";
-import { EditorialAuditStore } from "../trust/editorial-review-boundary.js";
+import { EditorialAuditStore, ProjectMembershipAuthority } from "../trust/editorial-review-boundary.js";
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
 import { acceptedDerivativeSets } from "../persistence/schema.js";
@@ -701,6 +701,20 @@ export class ProductionStore {
       }
     }
 
+    // Trust review staleness: check if editorial review or source evidence changed
+    const trustStore = new TrustGovernanceStore(this.db);
+    const currentRev = await trustStore.currentReview(
+      input.projectId,
+      input.pageIdentity,
+      input.acceptedContentDigest,
+    );
+    if (currentRev.stale) {
+      return {
+        stale: true,
+        reason: currentRev.reason ?? "Trust review is stale against current content or source evidence.",
+      };
+    }
+
     return { stale: false, reason: null };
   }
 
@@ -1067,7 +1081,8 @@ export class ProductionStore {
     // Never derive review authority mode from entry.detail strings
     const trustStore = new TrustGovernanceStore(this.db);
     const candidateInputs = await this.listCandidateInputs(input.projectId, input.candidateId);
-    const auditStore = EditorialAuditStore.getInstance();
+    const auditStore = EditorialAuditStore.getInstance(this.db);
+    const membershipAuthority = ProjectMembershipAuthority.getInstance(this.db);
 
     const pageSlugs = candidateInputs.length > 0
       ? candidateInputs.map((c) => c.pageIdentity)
@@ -1078,46 +1093,61 @@ export class ProductionStore {
     let hasPendingReview = false;
     let hasHumanReview = false;
     let auditInvalid = false;
+    let anyYmyl = false;
 
     // Check review status for candidate pages
-    const hasTrustGates = input.checks.some((c) => c.checkId.startsWith("trust."));
-    if (hasTrustGates) {
-      for (const slug of pageSlugs) {
-        const review = await trustStore.latestReview(input.projectId, slug);
-        const kind = review?.reviewAuthorityKind ?? review?.authorityKind;
-        if (!review || review.reviewStatus === "EDITORIAL_REVIEW_PENDING" || !kind) {
+    for (const slug of pageSlugs) {
+      const intent = await trustStore.getIntentAuthority(input.projectId, slug);
+      if (intent?.ymylClassification === "YMYL_DECISION_SUPPORT" || intent?.ymylClassification === "YMYL_HIGH_IMPACT") {
+        anyYmyl = true;
+      }
+      const review = await trustStore.latestReview(input.projectId, slug);
+      const kind = review?.reviewAuthorityKind ?? review?.authorityKind;
+      if (!review || review.reviewStatus === "EDITORIAL_REVIEW_PENDING" || !kind) {
+        if (intent?.ymylClassification === "YMYL_DECISION_SUPPORT" || intent?.ymylClassification === "YMYL_HIGH_IMPACT") {
           hasPendingReview = true;
-        } else if (kind === "TEST_ONLY_REVIEW_AUTHORITY") {
-          hasTestOnlyReview = true;
-        } else if (kind === "VERIFIED_HUMAN_REVIEW_AUTHORITY") {
-          const eventId = review.approvalEvent?.reviewEventId;
-          const auditEvent = eventId ? auditStore.getApprovalAuditEvent(eventId) : null;
-          if (
-            !auditEvent ||
-            auditEvent.projectId !== input.projectId ||
-            auditEvent.contentDigest !== review.reviewedContentDigest ||
-            auditEvent.claimSetDigest !== review.claimSetDigest ||
-            auditEvent.sourceEvidenceSetDigest !== review.sourceEvidenceSetDigest
-          ) {
+        }
+      } else if (kind === "TEST_ONLY_REVIEW_AUTHORITY") {
+        hasTestOnlyReview = true;
+      } else if (kind === "VERIFIED_HUMAN_REVIEW_AUTHORITY") {
+        const eventId = review.approvalEvent?.reviewEventId;
+        const auditEvent = eventId ? await auditStore.getApprovalAuditEvent(eventId) : null;
+        if (
+          !auditEvent ||
+          auditEvent.revoked ||
+          auditEvent.isSynthetic ||
+          auditEvent.projectId !== input.projectId ||
+          auditEvent.contentDigest !== review.reviewedContentDigest ||
+          auditEvent.claimSetDigest !== review.claimSetDigest ||
+          auditEvent.sourceEvidenceSetDigest !== review.sourceEvidenceSetDigest
+        ) {
+          auditInvalid = true;
+        } else {
+          const permissions = await membershipAuthority.getMemberPermissions(input.projectId, auditEvent.actorId);
+          if (!permissions.includes("EDITORIAL_REVIEW:APPROVE")) {
             auditInvalid = true;
           } else {
             hasHumanReview = true;
           }
         }
       }
+    }
 
-      if (hasTestOnlyReview) {
-        reviewAuthorityMode = "TEST_ONLY";
-      } else if (auditInvalid) {
-        reviewAuthorityMode = "PENDING";
-        overall = "FAIL";
-      } else if (hasPendingReview) {
-        reviewAuthorityMode = "PENDING";
-      } else if (hasHumanReview) {
-        reviewAuthorityMode = "VERIFIED_HUMAN";
-      } else {
-        reviewAuthorityMode = "NOT_REQUIRED";
-      }
+    if (hasTestOnlyReview) {
+      reviewAuthorityMode = "TEST_ONLY";
+    } else if (auditInvalid) {
+      reviewAuthorityMode = "PENDING";
+      overall = "FAIL";
+    } else if (hasPendingReview) {
+      reviewAuthorityMode = "PENDING";
+      overall = "FAIL";
+    } else if (hasHumanReview) {
+      reviewAuthorityMode = "VERIFIED_HUMAN";
+    } else if (anyYmyl) {
+      throw productionError(
+        "ymyl_not_required_rejected",
+        "YMYL pages require verified human review and cannot be classified as NOT_REQUIRED.",
+      );
     } else {
       reviewAuthorityMode = "NOT_REQUIRED";
     }
@@ -1125,7 +1155,10 @@ export class ProductionStore {
     const publicationEligible =
       (input.trustMode ?? "STRICT_PRODUCTION") === "STRICT_PRODUCTION" &&
       overall === "PASS" &&
-      (reviewAuthorityMode === "VERIFIED_HUMAN" || reviewAuthorityMode === "NOT_REQUIRED");
+      !hasPendingReview &&
+      !hasTestOnlyReview &&
+      !auditInvalid &&
+      (reviewAuthorityMode === "VERIFIED_HUMAN" || (reviewAuthorityMode === "NOT_REQUIRED" && !anyYmyl));
 
     const data = {
       schemaVersion: "production-v1" as const,

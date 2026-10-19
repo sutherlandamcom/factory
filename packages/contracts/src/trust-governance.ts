@@ -282,6 +282,33 @@ export const researchAcquisitionSchema = z
     archiveEvidenceRef: boundedText(500).optional(),
     description: boundedText(500).optional(),
     sourceFileRef: boundedText(500).optional(),
+    canonicalDatasetId: boundedText(200).optional(),
+    datasetIdentity: z
+      .object({
+        communeCode: boundedText(20).optional(),
+        geoCode: boundedText(40).optional(),
+        reportingPeriod: z.number().int().optional(),
+        tableId: boundedText(100).optional(),
+        documentIdentifier: boundedText(200).optional(),
+        documentType: boundedText(100).optional(),
+      })
+      .strict()
+      .optional(),
+    trustedRedirects: z
+      .array(
+        z
+          .object({
+            fromUrl: boundedText(500).optional(),
+            toUrl: boundedText(500).optional(),
+            from: boundedText(500).optional(),
+            to: boundedText(500).optional(),
+            statusCode: z.number().int().min(300).max(399).optional(),
+            status: z.number().int().min(300).max(399).optional(),
+          })
+          .passthrough(),
+      )
+      .max(10)
+      .optional(),
   })
   .strict();
 export type ResearchAcquisition = z.infer<typeof researchAcquisitionSchema>;
@@ -327,6 +354,20 @@ export const sourceRefSchema = z
     acquisitionEventId: idSchema.optional(),
     /** Expected digest of acquired content (Block 4). */
     acquisitionDigest: digestSchema.optional(),
+    /** Canonical dataset ID bound to the verified source (Run 12 QA remediation). */
+    canonicalDatasetId: boundedText(200).optional(),
+    /** Dataset identity for verified statistical/governmental dataset (Run 12 QA remediation). */
+    datasetIdentity: z
+      .object({
+        communeCode: boundedText(20).optional(),
+        geoCode: boundedText(40).optional(),
+        reportingPeriod: z.number().int().optional(),
+        tableId: boundedText(100).optional(),
+        documentIdentifier: boundedText(200).optional(),
+        documentType: boundedText(100).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type SourceRef = z.infer<typeof sourceRefSchema>;
@@ -774,6 +815,8 @@ export const authenticatedApprovalEventSchema = z
     reviewedSourceEvidenceDigest: digestSchema,
     eventTimestamp: boundedText(40),
     auditEventReference: boundedText(500),
+    revoked: z.boolean().optional(),
+    isSynthetic: z.boolean().optional(),
   })
   .strict();
 export type AuthenticatedApprovalEvent = z.infer<typeof authenticatedApprovalEventSchema>;

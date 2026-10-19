@@ -28,6 +28,7 @@
 | G9 | Dashboard and API incomplete | Candidate/preview/approve/publish/verify/history/rollback actions, state-controlled and backend-enforced |
 | G10 | Remote QA must cover six-page candidate | Check route set, SEO metadata, current Cloudflare version, rollback result |
 | G11 | Existing CLI can bypass candidate-bound publishing | Block or route governed sites through the same release authority; preserve scoped legacy compatibility |
+| G12 | Legacy `sites/starter/tests/qa.spec.ts` remote oracle hardcodes fixture sitemap and single-link shell; cannot validate six real routes | Candidate-only remote Playwright QA with trusted immutable route snapshot; retain legacy fixture oracle unchanged |
 
 ## Minimal architecture
 

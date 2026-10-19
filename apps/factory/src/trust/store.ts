@@ -27,6 +27,7 @@ import {
   type OriginalValueRecord,
 } from "@factory/contracts";
 import { normalizePageIdentity } from "../page-authority/store.js";
+import { EditorialAuditStore } from "./editorial-review-boundary.js";
 
 /**
  * TRUST GOVERNANCE STORE — Macro Run 12.
@@ -254,16 +255,40 @@ export class TrustGovernanceStore {
       review.reviewAuthorityKind === "VERIFIED_HUMAN_REVIEW_AUTHORITY"
     ) {
       const appEvt = review.approvalEvent;
-      if (!appEvt || !appEvt.authenticatedActorId || !appEvt.reviewAction || !appEvt.eventTimestamp) {
+      if (!appEvt || !appEvt.reviewEventId || !appEvt.authenticatedActorId || !appEvt.reviewAction || !appEvt.eventTimestamp) {
         throw trustError(
           "unauthenticated_human_review_rejected",
           "Direct submission of VERIFIED_HUMAN_REVIEW_AUTHORITY without a validated authenticated approval event is rejected. Approvals must originate from an authorized editorial action.",
         );
       }
-      if (/^(?:anonymous|unauthenticated|guest|mock|bot|actor-sutherland-council-lead)$/i.test(appEvt.authenticatedActorId)) {
+      const auditStore = EditorialAuditStore.getInstance();
+      const auditEvent = auditStore.getApprovalAuditEvent(appEvt.reviewEventId);
+      if (!auditEvent) {
+        throw trustError(
+          "unauthenticated_human_review_rejected",
+          `No verified server audit event found for review event "${appEvt.reviewEventId}". Direct store insertion of VERIFIED_HUMAN_REVIEW_AUTHORITY is rejected.`,
+        );
+      }
+      if (auditEvent.projectId !== input.projectId) {
+        throw trustError(
+          "cross_project_audit_event_rejected",
+          `Audit event "${appEvt.reviewEventId}" was recorded for project "${auditEvent.projectId}", not "${input.projectId}". Cross-project approvals are rejected.`,
+        );
+      }
+      if (
+        auditEvent.contentDigest !== review.reviewedContentDigest ||
+        auditEvent.claimSetDigest !== review.claimSetDigest ||
+        auditEvent.sourceEvidenceSetDigest !== review.sourceEvidenceSetDigest
+      ) {
+        throw trustError(
+          "audit_event_digest_mismatch",
+          "Audit event digests do not match the submitted review authority digests. Replayed or tampered approvals are rejected.",
+        );
+      }
+      if (auditEvent.actorId !== appEvt.authenticatedActorId) {
         throw trustError(
           "unauthenticated_principal_rejected",
-          `Actor "${appEvt.authenticatedActorId}" cannot self-certify as an authentic human principal.`,
+          "Approval event actorId does not match server audit record.",
         );
       }
       if (appEvt.actorRole === "UNAUTHORIZED_ACTOR" || /unauthorized/i.test(appEvt.actorRole)) {
@@ -344,6 +369,28 @@ export class TrustGovernanceStore {
       currentSourceEvidenceSetDigest,
     );
     return { review, stale: staleness.stale, reason: staleness.reason };
+  }
+
+  /**
+   * Pure read: the latest recorded review for a page, regardless of current digest staleness.
+   */
+  async latestReview(
+    projectId: string,
+    pageIdentity: string,
+  ): Promise<ReviewAuthority | null> {
+    const norm = normalizePageIdentity(pageIdentity);
+    const [row] = await this.db
+      .select()
+      .from(reviewAuthorities)
+      .where(
+        and(
+          eq(reviewAuthorities.projectId, projectId),
+          eq(reviewAuthorities.pageIdentity, norm),
+        ),
+      )
+      .orderBy(desc(reviewAuthorities.version))
+      .limit(1);
+    return row ? (row.data as ReviewAuthority) : null;
   }
 
   // ---- OriginalValueRecord ------------------------------------------------------

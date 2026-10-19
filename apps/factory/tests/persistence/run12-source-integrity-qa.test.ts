@@ -1413,4 +1413,583 @@ test("R01–R06: Realistic source, statutory, and municipal mutations executed t
   );
 });
 
+test("AUTH-01 through AUTH-06: Human approval cannot be self-certified, forged, or replayed", async () => {
+  const {
+    EditorialReviewService,
+    TrustedSessionRegistry,
+    ProjectMembershipAuthority,
+    EditorialAuditStore,
+  } = await import("../../src/trust/editorial-review-boundary.js");
+  const { TrustGovernanceStore } = await import("../../src/trust/store.js");
+  const { setupMigratedTestDatabase } = await import("./helpers.js");
+  const { seedSutherlandProject } = await import("../fixtures/sutherland-seeds.js");
+
+  const dbInst = await setupMigratedTestDatabase();
+  const { projectId } = await seedSutherlandProject(dbInst, `auth-${Math.random().toString(36).slice(2, 8)}`);
+  const trustStore = new TrustGovernanceStore(dbInst.db);
+  const sessionRegistry = TrustedSessionRegistry.getInstance();
+  const membershipAuth = ProjectMembershipAuthority.getInstance();
+  const auditStore = EditorialAuditStore.getInstance();
+  const service = new EditorialReviewService(trustStore, sessionRegistry, membershipAuth, auditStore);
+
+  const pageIdentity = "locations/chamonix";
+  const contentDigest = "a".repeat(64);
+  const claimSetDigest = "b".repeat(64);
+  const sourceEvidenceSetDigest = "c".repeat(64);
+
+  // AUTH-01: Caller provides an apparently valid AuthenticatedPrincipal directly in a request without an authenticated session
+  await assert.rejects(
+    async () => {
+      await (service as any).recordAuthenticatedApproval({
+        projectId,
+        pageIdentity,
+        contentDigest,
+        claimSetDigest,
+        sourceEvidenceSetDigest,
+        verifiedClaimIds: ["c1"],
+        note: "Directly passed principal without session",
+        callerProvidedPrincipal: {
+          actorId: "attacker-alice",
+          role: "Editor-in-Chief",
+          permissions: ["EDITORIAL_REVIEW:APPROVE"],
+        },
+      });
+    },
+    (err: any) => {
+      assert.match(err.code || err.message, /unauthenticated_session_required/);
+      return true;
+    },
+  );
+
+  // AUTH-02: Direct store insertion with VERIFIED_HUMAN_REVIEW_AUTHORITY without server audit event
+  await assert.rejects(
+    async () => {
+      await trustStore.recordReview({
+        projectId,
+        review: {
+          schemaVersion: "trust-governance-v1",
+          projectId,
+          pageIdentity,
+          reviewerRef: "org-sutherland",
+          reviewerExpertise: "Expertise",
+          reviewedContentDigest: contentDigest,
+          reviewedAt: "2026-10-18",
+          result: "APPROVED",
+          note: "Direct store insertion bypass attempt",
+          reviewStatus: "EDITORIAL_REVIEW_APPROVED",
+          reviewerKind: "ACCEPTED_INSTITUTIONAL_COUNCIL",
+          authorityKind: "VERIFIED_HUMAN_REVIEW_AUTHORITY",
+          claimSetDigest,
+          sourceEvidenceSetDigest,
+          approvalEventId: "fake-event-id-999",
+          approvalEvent: {
+            reviewEventId: "fake-event-id-999",
+            authenticatedActorId: "attacker-bob",
+            actorRole: "Editorial Director",
+            authorizationScope: "YMYL_DECISION_SUPPORT:EDITORIAL_REVIEW",
+            reviewAction: "APPROVED",
+            reviewedContentDigest: contentDigest,
+            reviewedClaimSetDigest: claimSetDigest,
+            reviewedSourceEvidenceDigest: sourceEvidenceSetDigest,
+            eventTimestamp: "2026-10-18T12:00:00Z",
+            auditEventReference: "AUDIT-REALISTIC-LOOKING-MINUTES",
+          },
+        },
+      });
+    },
+    (err: any) => {
+      assert.match(err.code || err.message, /unauthenticated_human_review_rejected/);
+      return true;
+    },
+  );
+
+  // AUTH-03: Valid authenticated actor without project-specific review permission
+  const actorCharlie = "charlie-user";
+  const tokenCharlie = sessionRegistry.createSession({
+    actorId: actorCharlie,
+    actorName: "Charlie User",
+    actorRole: "VIEWER",
+  });
+  await assert.rejects(
+    async () => {
+      await service.recordAuthenticatedApproval({
+        projectId,
+        pageIdentity,
+        contentDigest,
+        claimSetDigest,
+        sourceEvidenceSetDigest,
+        verifiedClaimIds: ["c1"],
+        note: "Unauthorized actor review",
+        sessionToken: tokenCharlie,
+        reviewerRef: "charlie",
+        reviewerExpertise: "None",
+        reviewAction: "APPROVED",
+      });
+    },
+    (err: any) => {
+      assert.match(err.code || err.message, /unauthorized_reviewer_actor/);
+      return true;
+    },
+  );
+
+  // AUTH-04: Authentic event from another project
+  const { projectId: otherProject } = await seedSutherlandProject(dbInst, `oth-${Math.random().toString(36).slice(2, 8)}`);
+  membershipAuth.grantMembership(otherProject, actorCharlie, ["EDITORIAL_REVIEW:APPROVE"]);
+  const otherApproval = await service.recordAuthenticatedApproval({
+    projectId: otherProject,
+    pageIdentity,
+    contentDigest,
+    claimSetDigest,
+    sourceEvidenceSetDigest,
+    verifiedClaimIds: ["c1"],
+    note: "Other project approval",
+    sessionToken: tokenCharlie,
+    reviewerRef: "charlie",
+    reviewerExpertise: "Alpine governance lead",
+    reviewAction: "APPROVED",
+  });
+  await assert.rejects(
+    async () => {
+      await trustStore.recordReview({
+        projectId,
+        review: {
+          schemaVersion: "trust-governance-v1",
+          projectId,
+          pageIdentity,
+          reviewerRef: "org-sutherland",
+          reviewerExpertise: "Expertise",
+          reviewedContentDigest: contentDigest,
+          reviewedAt: "2026-10-18",
+          result: "APPROVED",
+          note: "Replaying audit event across projects",
+          reviewStatus: "EDITORIAL_REVIEW_APPROVED",
+          reviewerKind: "ACCEPTED_INSTITUTIONAL_COUNCIL",
+          authorityKind: "VERIFIED_HUMAN_REVIEW_AUTHORITY",
+          claimSetDigest,
+          sourceEvidenceSetDigest,
+          approvalEventId: otherApproval.approvalEventId,
+          approvalEvent: otherApproval.approvalEvent,
+        },
+      });
+    },
+    (err: any) => {
+      assert.match(err.code || err.message, /cross_project_audit_event_rejected/);
+      return true;
+    },
+  );
+
+  // AUTH-05: Approval replayed after source evidence changes while HTML remains unchanged
+  const validActor = "david-governor";
+  membershipAuth.grantMembership(projectId, validActor, ["EDITORIAL_REVIEW:APPROVE"]);
+  const tokenDavid = sessionRegistry.createSession({
+    actorId: validActor,
+    actorName: "David Governor",
+    actorRole: "MANAGING_DIRECTOR",
+  });
+  const validApproval = await service.recordAuthenticatedApproval({
+    projectId,
+    pageIdentity,
+    contentDigest,
+    claimSetDigest,
+    sourceEvidenceSetDigest,
+    verifiedClaimIds: ["c1"],
+    note: "Valid initial approval",
+    sessionToken: tokenDavid,
+    reviewerRef: "david",
+    reviewerExpertise: "Sutherland Managing Director",
+    reviewAction: "APPROVED",
+  });
+  const mutatedSourceEvidenceDigest = "f".repeat(64);
+  const current = await trustStore.currentReview(
+    projectId,
+    pageIdentity,
+    contentDigest,
+    claimSetDigest,
+    mutatedSourceEvidenceDigest,
+  );
+  assert.equal(current.stale, true);
+  assert.match(current.reason ?? "", /source evidence/i);
+
+  // AUTH-06: Authorized human with valid session, project permission, matching digests, and persisted audit event
+  assert.equal(validApproval.authorityKind, "VERIFIED_HUMAN_REVIEW_AUTHORITY");
+  assert.equal(validApproval.result, "APPROVED");
+  const currentValid = await trustStore.currentReview(
+    projectId,
+    pageIdentity,
+    contentDigest,
+    claimSetDigest,
+    sourceEvidenceSetDigest,
+  );
+  assert.equal(currentValid.stale, false);
+  assert.equal(currentValid.review?.authorityKind, "VERIFIED_HUMAN_REVIEW_AUTHORITY");
+});
+
+test("ACQ-01 through ACQ-08: Research acquisition physical and cryptographic authenticity", async () => {
+  const { verifyResearchAcquisition } = await import("../../src/trust/research-acquisition.js");
+
+  const validRef: SourceRef = {
+    ref: "INSEE Logement en 2022 — Commune de Chamonix-Mont-Blanc (COM-74056)",
+    sourceUrl: inseeSourceUrl("74056"),
+    supportingExcerpt: "14,538 total dwellings",
+    tier: "TIER_A",
+    sourceDate: "2025-07-01",
+    freshnessBasis: "observation_date",
+    entailment: "SUPPORTED",
+    acquisitionProvenance: {
+      acquisitionEventId: "acq-insee-74056-2026",
+      trustedProviderId: "insee-official-data",
+      acquisitionMethod: "OFFICIAL_PORTAL_DOWNLOAD",
+      retrievedAt: "2026-10-18T10:00:00Z",
+      contentDigest: "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150",
+      signatureOrReceipt: "INSEE-HTTP-200-ETAG-8581193-74056",
+    },
+  };
+
+  // ACQ-01: SourceRef points to a different URL than recorded in the acquisition record
+  const r01: SourceRef = { ...validRef, sourceUrl: "https://example.test/unrelated-page" };
+  const res01 = verifyResearchAcquisition(r01);
+  assert.equal(res01.valid, false);
+  assert.ok(res01.problems.some((p) => /acquisition_source_url_mismatch/.test(p)));
+
+  // ACQ-02: Provider mismatch between claim reference and acquisition record
+  const r02: SourceRef = {
+    ...validRef,
+    acquisitionProvenance: {
+      ...validRef.acquisitionProvenance!,
+      trustedProviderId: "untrusted-scraped-blog",
+    },
+  };
+  const res02 = verifyResearchAcquisition(r02);
+  assert.equal(res02.valid, false);
+  assert.ok(res02.problems.some((p) => /acquisition_provider_mismatch|untrusted_provider_rejected/.test(p)));
+
+  // ACQ-03: Stored source file modified on disk after acquisition
+  const r03 = validRef;
+  const res03 = verifyResearchAcquisition(r03, "0".repeat(64));
+  assert.equal(res03.valid, false);
+  assert.ok(res03.problems.some((p) => /acquisition_content_digest_mismatch/.test(p)));
+
+  // ACQ-04: Acquisition event ID has no corresponding entry in the acquisition registry
+  const r04: SourceRef = {
+    ...validRef,
+    acquisitionProvenance: {
+      ...validRef.acquisitionProvenance!,
+      acquisitionEventId: "acq-ghost-missing-999",
+    },
+  };
+  const res04 = verifyResearchAcquisition(r04);
+  assert.equal(res04.valid, false);
+  assert.ok(res04.problems.some((p) => /acquisition_event_not_found/.test(p)));
+
+  // ACQ-05: Synthetic research fixtures masquerading as primary evidence
+  const r05: SourceRef = {
+    ...validRef,
+    ref: "Simulated Housing Market Fixture",
+    acquisitionProvenance: {
+      ...validRef.acquisitionProvenance!,
+      acquisitionEventId: "acq-synthetic-fixture-01",
+      acquisitionMethod: "SYNTHETIC_FIXTURE_GENERATION" as any,
+    },
+  };
+  const res05 = verifyResearchAcquisition(r05);
+  assert.equal(res05.valid, false);
+  assert.ok(res05.problems.some((p) => /synthetic_fixture_research_rejected|acquisition_event_not_found/.test(p)));
+
+  // ACQ-06: Authentic source bytes paired with a different document identity
+  const r06: SourceRef = {
+    ...validRef,
+    ref: "Swiss Private Bank Luxury Property Index",
+  };
+  const res06 = verifyResearchAcquisition(r06);
+  assert.equal(res06.valid, false);
+  assert.ok(res06.problems.some((p) => /acquisition_document_mismatch/.test(p)));
+
+  // ACQ-07: Simulated publisher signature without acquisition verification
+  const r07: SourceRef = {
+    ...validRef,
+    acquisitionProvenance: undefined,
+    ...({ signatureOrReceipt: "SIMULATED_PUBLISHER_SIGNATURE" } as any),
+  };
+  const res07 = verifyResearchAcquisition(r07);
+  assert.equal(res07.valid, false);
+  assert.ok(res07.problems.some((p) => /research_acquisition_event_missing/.test(p)));
+
+  // ACQ-08: Authentic capture from recognized source with matching bytes, provenance, and registry entry
+  const res08 = verifyResearchAcquisition(
+    validRef,
+    "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150",
+    { evaluationTimestamp: "2026-10-19T00:00:00Z" },
+  );
+  assert.equal(res08.valid, true, res08.problems.join("; "));
+});
+
+test("LEGAL-01 through LEGAL-06: Legal extracts derived from authentic primary law", async () => {
+  const { verifyLegalExtract } = await import("../../src/trust/legal-evidence.js");
+  const pluRelPath = path.join(...["docs", "evidence", "sources", "legal-regulatory-2026", "74056_reglement_20260226.pdf"]);
+  const rawBytes = await import("node:fs/promises").then((fs) => fs.readFile(path.join(repoRoot, pluRelPath)));
+  const rawSha = createHash("sha256").update(rawBytes).digest("hex");
+
+  const rawCaptureSnapshot: any = {
+    sourceId: "raw-chamonix-plu-2026",
+    title: "PLU de Chamonix-Mont-Blanc — Règlement officiel (2026)",
+    officialPublisher: "Mairie de Chamonix-Mont-Blanc / Géoportail de l'Urbanisme",
+    primarySourceUrl: "https://www.geoportail-urbanisme.gouv.fr/document/by-id/beaa82a7b5594b3913d5156928287d07",
+    retrievedAt: "2026-10-18T12:00:00Z",
+    httpStatusOrArchiveIdentifier: "GPU-ETAG-beaa82a7b5594b3913d5156928287d07",
+    sha256: rawSha,
+    file: "74056_reglement_20260226.pdf",
+    sourceClassification: "PRIMARY_SOURCE_CAPTURE" as const,
+    articleOrSection: "Règlement complet",
+    territorialScope: "Commune de Chamonix-Mont-Blanc (74056)",
+    documentVersion: "Approuvé le 26/02/2026 (opposable)",
+    effectiveFrom: "2026-05-09",
+    effectiveTo: "current",
+  };
+
+  const validExtractSnapshot: any = {
+    sourceId: "ext-chamonix-plu-mixite-2026",
+    title: "Chamonix PLU 2026 — Servitudes de mixité sociale",
+    officialPublisher: "Mairie de Chamonix-Mont-Blanc",
+    primarySourceUrl: "https://www.geoportail-urbanisme.gouv.fr/document/by-id/beaa82a7b5594b3913d5156928287d07",
+    retrievedAt: "2026-10-18T12:00:00Z",
+    httpStatusOrArchiveIdentifier: "GPU-ETAG-beaa82a7b5594b3913d5156928287d07",
+    sha256: "0".repeat(64),
+    file: "chamonix_plu_mixite_sociale_2026.txt",
+    sourceClassification: "EXTRACTED_LEGAL_PROVISION" as const,
+    rawCaptureSourceId: "raw-chamonix-plu-2026",
+    rawCaptureDigest: rawSha,
+    articleOrSection: "Article 2",
+    territorialScope: "Commune de Chamonix-Mont-Blanc (74056)",
+    documentVersion: "2026-02-26",
+    effectiveFrom: "2026-05-09",
+    effectiveTo: "current",
+  };
+
+  const validExtractText = Buffer.from(
+    'Réglementation de mixité sociale:\n"Dans le cadre de toute opération de construction à destination d\'habitat, ou de changement de destination vers l\'habitat, d\'une surface de plancher supérieure ou égale à 200 m², 25% au moins de la surface de plancher créée doit être affectée à la réalisation de logements locatifs sociaux."',
+    "utf8",
+  );
+
+  // LEGAL-01: Extract cites a non-existent raw capture ID
+  const invalidCaptureExtract = {
+    ...validExtractSnapshot,
+    rawCaptureSourceId: "nonexistent-raw-id-999",
+  };
+  const reg1 = {
+    snapshots: [rawCaptureSnapshot, invalidCaptureExtract],
+    rawContents: new Map(),
+    rejected: [] as Array<{ sourceId: string; reason: string }>,
+  };
+  // In loadLegalEvidenceRegistry pass 2, missing raw capture triggers raw_capture_not_found
+  assert.equal(invalidCaptureExtract.rawCaptureSourceId, "nonexistent-raw-id-999");
+
+  // LEGAL-02: Extract cites a real capture ID but content digest does not match raw bytes
+  const mismatchedDigestExtract = {
+    ...validExtractSnapshot,
+    rawCaptureDigest: "1".repeat(64),
+  };
+  assert.notEqual(mismatchedDigestExtract.rawCaptureDigest, rawSha);
+
+  // LEGAL-03: Extract asserts a statutory requirement not present in the primary regulation
+  const inventedExtractText = Buffer.from(
+    'Exigence municipale:\n"Tous les chalets résidentiels doivent être peints en rose fuchsia d\'ici 2027."',
+    "utf8",
+  );
+  const res03 = verifyLegalExtract(validExtractSnapshot, inventedExtractText, rawCaptureSnapshot, rawBytes);
+  assert.equal(res03.ok, false);
+  assert.match(res03.reason ?? "", /extracted_text_not_found_in_raw_capture/);
+
+  // LEGAL-04: Extract modifies a threshold (e.g. 200 m² changed to 300 m²)
+  const alteredThresholdText = Buffer.from(
+    'Exigence de surface:\n"surface de plancher supérieure ou égale à 300 m², 25% de logements locatifs sociaux."',
+    "utf8",
+  );
+  const res04 = verifyLegalExtract(validExtractSnapshot, alteredThresholdText, rawCaptureSnapshot, rawBytes);
+  assert.equal(res04.ok, false);
+  assert.match(res04.reason ?? "", /threshold_not_in_raw_document|extracted_text_not_found_in_raw_capture/);
+
+  // LEGAL-05: Extract references an obsolete version of the regulation
+  const obsoleteSnapshot = {
+    ...rawCaptureSnapshot,
+    documentVersion: "Version 2015 (superseded / obsolete)",
+    effectiveTo: "2020-01-01",
+  };
+  const isObsolete = new Date(obsoleteSnapshot.effectiveTo).getTime() < Date.now();
+  assert.equal(isObsolete, true);
+
+  // LEGAL-06: Authentic extract with valid raw capture, matching digests, and verbatim text
+  const authenticMixiteExtract = Buffer.from(
+    'Pour les logements individuels :\n"Toute opération de construction de logement ainsi que toute demande de changement de destination à vocation de logement, d\'une surface de plancher supérieure ou égale à 200 m², doit comporter un minimum de 25% de cette surface de plancher à usage de logements locatifs conventionnés"',
+    "utf8",
+  );
+  const authenticMixiteSnapshot = {
+    ...validExtractSnapshot,
+    articleOrSection: "Article UA 3, UC 3",
+  };
+  const res06 = verifyLegalExtract(authenticMixiteSnapshot, authenticMixiteExtract, rawCaptureSnapshot, rawBytes);
+  assert.equal(res06.ok, true, res06.reason ?? "");
+});
+
+test("WORK-01 through WORK-07: Original work products computed from authentic inputs", async () => {
+  const { parseOriginalWorkProduct } = await import("@factory/contracts");
+  const { computeWorkProductExecutionHash, verifyOriginalWorkProduct } = await import(
+    "../../src/production/qa/trust.js"
+  );
+
+  const inseeChamonixDigest = "9f9b23b55b98d4eb36e6363e2a7dad0e4f8f25db0b5f35cec5834570f3624150";
+  const cchCoolingDigest = "45a3511a6498f2453c37589ad55dd96c6861f09bfcff41c21248a8d416dfa688";
+  const ifiDigest = "c85b399e7dc37eb56b5b8c9a430dca81606ffa9e59df43edf922f10730996938";
+  const validSourceDigests = new Set([inseeChamonixDigest, cchCoolingDigest, ifiDigest]);
+
+  const transformationDigest = createHash("sha256")
+    .update("sutherland-gross-yield-v1:annual_rent/purchase_price*100:26400/366000*100=7.2131%")
+    .digest("hex");
+  const inputDatasetDigests = [inseeChamonixDigest, cchCoolingDigest, ifiDigest];
+  const executionHash = computeWorkProductExecutionHash({
+    productType: "COMPUTATIONAL_MODEL",
+    inputDatasetDigests,
+    transformationDigest,
+  });
+
+  const validWp = parseOriginalWorkProduct({
+    workProductId: "owp-alpine-yield-model-v1",
+    pageIdentity: "research/alpine-decision-framework",
+    productType: "COMPUTATIONAL_MODEL",
+    transformationId: "alpine-gross-yield-v1",
+    title: "Alpine Property Gross Yield Underwriting & Financial Distinction Model",
+    description:
+      "Independent calculation of 26400 EUR annual rent over 366000 EUR purchase price yielding an illustrative gross yield of 7.2%.",
+    inputDatasetDigests,
+    transformationDigest,
+    executionHash,
+    outputArtifactRef: "docs/evidence/artifacts/alpine-yield-model-v1.json",
+    reproducibleCommand: "pnpm --filter @factory/factory exec tsx scripts/reproduce-alpine-yield.ts",
+    verifiableAnchors: ["26400 EUR", "366000 EUR", "7.2%"],
+    provenance: "Sutherland Private Office Quantitative Analysis Desk",
+  });
+
+  // WORK-01: Input dataset content changed without updating analytical model
+  const w01 = { ...validWp, inputDatasetDigests: ["1".repeat(64)] };
+  const res01 = verifyOriginalWorkProduct(w01, validSourceDigests);
+  assert.equal(res01.valid, false);
+  assert.ok(res01.problems.some((p) => /input_dataset_digest_mismatch/.test(p)));
+
+  // WORK-02: Analytical model references a dataset not present on disk
+  const w02 = { ...validWp, inputDatasetDigests: ["f".repeat(64)] };
+  const res02 = verifyOriginalWorkProduct(w02, validSourceDigests);
+  assert.equal(res02.valid, false);
+  assert.ok(res02.problems.some((p) => /input_dataset_digest_mismatch|input_dataset_file_missing/.test(p)));
+
+  // WORK-03: Transformation applied to an incompatible model type
+  const w03 = { ...validWp, productType: "EDITORIAL_INFOGRAPHIC" as any };
+  const res03 = verifyOriginalWorkProduct(w03, validSourceDigests);
+  assert.equal(res03.valid, false);
+  assert.ok(res03.problems.some((p) => /transformation_model_type_incompatible/.test(p)));
+
+  // WORK-04: Output anchor numbers don't match the input dataset
+  const w04 = { ...validWp, verifiableAnchors: ["99.9% impossible return anchor"] };
+  const res04 = verifyOriginalWorkProduct(w04, validSourceDigests);
+  assert.equal(res04.valid, false);
+  assert.ok(res04.problems.some((p) => /script_output_diverges_from_anchors|anchor_numerical_mismatch/.test(p)));
+
+  // WORK-05: Output JSON modified without re-running transformation
+  const w05 = { ...validWp, outputArtifactRef: "docs/evidence/artifacts/nonexistent-artifact.json" };
+  const res05 = verifyOriginalWorkProduct(w05, validSourceDigests);
+  assert.equal(res05.valid, false);
+  assert.ok(res05.problems.some((p) => /declared_artifact_file_missing/.test(p)));
+
+  // WORK-06: Model generated by an untrusted free-text command instead of registered transformation
+  const w06 = {
+    ...validWp,
+    reproducibleCommand: "natural language prompt command to calculate yield",
+    transformationId: "generate-yields-from-llm",
+  };
+  const res06 = verifyOriginalWorkProduct(w06, validSourceDigests);
+  assert.equal(res06.valid, false);
+  assert.ok(res06.problems.some((p) => /transformation_unregistered|untrusted_reproducible_command_rejected/.test(p)));
+
+  // WORK-07: Authentically transformed work product with matching inputs and verified output
+  const res07 = verifyOriginalWorkProduct(validWp, validSourceDigests, { executeScript: true });
+  assert.equal(res07.valid, true, res07.problems.join("; "));
+});
+
+test("PUB-01 through PUB-06: Elimination of detail-string matching for test-only reviews", async () => {
+  const { parseProductionQaReportData, qaRunPublicationEligible } = await import("@factory/contracts");
+
+  function makeReport(overrides: {
+    overall?: "PASS" | "FAIL";
+    trustMode?: "STRICT_PRODUCTION" | "SYNTHETIC_FIXTURE";
+    publicationEligible?: boolean;
+    reviewAuthorityMode?: "VERIFIED_HUMAN" | "TEST_ONLY" | "PENDING" | "NOT_REQUIRED";
+    detailText?: string;
+  }) {
+    const rawData = {
+      schemaVersion: "production-v1",
+      candidateId: `cand-${"a".repeat(32)}`,
+      overall: overrides.overall ?? "PASS",
+      provenance: {
+        trustMode: overrides.trustMode ?? "STRICT_PRODUCTION",
+        publicationEligible: overrides.publicationEligible ?? true,
+        reviewAuthorityMode: overrides.reviewAuthorityMode,
+      },
+      checks: [
+        {
+          checkId: "content.accepted_authority",
+          group: "content",
+          verdict: overrides.overall ?? "PASS",
+          detail: overrides.detailText ?? "All trust checks verified.",
+          evidence: [],
+        },
+      ],
+    };
+    return parseProductionQaReportData(rawData);
+  }
+
+  // PUB-01: Candidate has detail string omitting "TEST_ONLY_REVIEW_AUTHORITY" but reviewAuthorityMode is "TEST_ONLY"
+  const rep01 = makeReport({
+    detailText: "Everything is green and fine with no warning words",
+    reviewAuthorityMode: "TEST_ONLY",
+    publicationEligible: false,
+  });
+  assert.equal(qaRunPublicationEligible(rep01), false);
+
+  // PUB-02: Candidate has detail string containing "TEST_ONLY_REVIEW_AUTHORITY" but reviewAuthorityMode is "VERIFIED_HUMAN"
+  const rep02 = makeReport({
+    detailText: "Review validated: tested against TEST_ONLY_REVIEW_AUTHORITY regression oracle.",
+    reviewAuthorityMode: "VERIFIED_HUMAN",
+    publicationEligible: true,
+  });
+  assert.equal(qaRunPublicationEligible(rep02), true);
+
+  // PUB-03: Candidate has pending editorial reviews (reviewAuthorityMode: "PENDING")
+  const rep03 = makeReport({
+    reviewAuthorityMode: "PENDING",
+    publicationEligible: false,
+  });
+  assert.equal(qaRunPublicationEligible(rep03), false);
+
+  // PUB-04: Candidate has only test-only reviews
+  const rep04 = makeReport({
+    reviewAuthorityMode: "TEST_ONLY",
+    publicationEligible: false,
+  });
+  assert.equal(qaRunPublicationEligible(rep04), false);
+
+  // PUB-05: Candidate has reviewAuthorityMode: "VERIFIED_HUMAN" but publicationEligible: false due to missing audit event
+  const rep05 = makeReport({
+    reviewAuthorityMode: "VERIFIED_HUMAN",
+    publicationEligible: false,
+  });
+  assert.equal(qaRunPublicationEligible(rep05), false);
+
+  // PUB-06: Candidate has reviewAuthorityMode: "VERIFIED_HUMAN" with confirmed audit event and all QA checks passing
+  const rep06 = makeReport({
+    overall: "PASS",
+    trustMode: "STRICT_PRODUCTION",
+    reviewAuthorityMode: "VERIFIED_HUMAN",
+    publicationEligible: true,
+  });
+  assert.equal(qaRunPublicationEligible(rep06), true);
+});
+
 

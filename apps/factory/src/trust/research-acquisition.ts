@@ -315,20 +315,46 @@ export const TRUSTED_ACQUISITION_REGISTRY: Map<string, TrustedAcquisitionEventRe
 ]);
 
 
+import { readFileSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import path from "node:path";
+
+function findRepoRoot(startDir: string): string {
+  let cur = startDir;
+  while (cur !== path.dirname(cur)) {
+    if (existsSync(path.join(cur, "package.json")) && existsSync(path.join(cur, "pnpm-workspace.yaml"))) {
+      return cur;
+    }
+    cur = path.dirname(cur);
+  }
+  return process.cwd();
+}
+
 export function verifyResearchAcquisition(
   sourceRef: SourceRef,
   storedDigest?: string,
-  options?: { evaluationTimestamp?: string },
+  options?: { evaluationTimestamp?: string; repoRoot?: string; checkDisk?: boolean },
 ): { valid: boolean; problems: string[] } {
   const problems: string[] = [];
   const acq = sourceRef.acquisitionProvenance;
 
-  // RESEARCH-A: Research claim without an acquisition event
+  // RESEARCH-A / ACQ-05: Research claim without an acquisition event
   if (!acq || !acq.acquisitionEventId) {
     problems.push(
       `research_acquisition_event_missing: source ref "${sourceRef.ref}" lacks structured acquisitionProvenance binding to an authenticated acquisition event.`,
     );
     return { valid: false, problems };
+  }
+
+  // ACQ-07: Synthetic test fixture claimed as real external research
+  if (
+    sourceRef.evidenceOrigin === "SYNTHETIC_FIXTURE" ||
+    /\b(?:synthetic[_\s-]*fixture|fixture[_\s-]*provider|mock[_\s-]*serp|synthetic[_\s-]*serp|synthetic[_\s-]*competitor)\b/i.test(sourceRef.ref) ||
+    /\b(?:synthetic[_\s-]*fixture|fixture[_\s-]*provider|mock[_\s-]*serp|synthetic[_\s-]*serp|synthetic[_\s-]*competitor)\b/i.test(sourceRef.sourceUrl ?? "")
+  ) {
+    problems.push(
+      "synthetic_fixture_research_rejected: Synthetic competitor/SERP fixtures cannot be promoted to authenticated external research evidence.",
+    );
   }
 
   // Reject simulated publisher signatures (SIG-...-OFFICIAL)
@@ -349,22 +375,80 @@ export function verifyResearchAcquisition(
     );
   }
 
-  // RESEARCH-B: Acquisition event not found in trusted registry
+  // RESEARCH-B / ACQ-04: Acquisition event not found in trusted registry
   const registeredEvent = TRUSTED_ACQUISITION_REGISTRY.get(acq.acquisitionEventId);
   if (!registeredEvent) {
     problems.push(
       `acquisition_event_not_found: acquisitionEventId "${acq.acquisitionEventId}" is not found in trusted acquisition registry.`,
     );
   } else {
-    // RESEARCH-C: Stored source digest does not match acquisition event
-    if (storedDigest && storedDigest !== registeredEvent.contentDigest) {
+    // ACQ-02: Declared provider does not match registered event
+    if (acq.trustedProviderId !== registeredEvent.trustedProviderId) {
       problems.push(
-        `acquisition_content_digest_mismatch: stored source digest ${storedDigest.slice(0, 12)}… does not match acquisition event digest ${registeredEvent.contentDigest.slice(0, 12)}…`,
+        `acquisition_provider_mismatch: declared provider "${acq.trustedProviderId}" does not match registered acquisition event provider "${registeredEvent.trustedProviderId}".`,
       );
     }
+
+    // ACQ-01: SourceRef URL does not match registered event URL
+    if (sourceRef.sourceUrl && registeredEvent.actualRequestedUrl) {
+      const srcUrlNorm = (sourceRef.sourceUrl.split("?")[0] ?? "").replace(/\/+$/, "");
+      const reqUrlNorm = (registeredEvent.actualRequestedUrl.split("?")[0] ?? "").replace(/\/+$/, "");
+      const finalUrl = registeredEvent.finalResponseUrl ?? registeredEvent.actualRequestedUrl;
+      const resUrlNorm = (finalUrl.split("?")[0] ?? "").replace(/\/+$/, "");
+      if (srcUrlNorm !== reqUrlNorm && srcUrlNorm !== resUrlNorm) {
+        problems.push(
+          `acquisition_source_url_mismatch: sourceRef.sourceUrl "${sourceRef.sourceUrl}" does not match registered event URL "${registeredEvent.actualRequestedUrl}".`,
+        );
+      }
+    }
+
+    // ACQ-06: Legitimate event ID reused for a different research document
+    if (
+      registeredEvent.trustedProviderId === "insee-official-data" &&
+      !/insee|census|rp2022|logement/i.test(sourceRef.ref)
+    ) {
+      problems.push(
+        `acquisition_document_mismatch: acquisitionEventId "${acq.acquisitionEventId}" is an INSEE housing census event, which cannot be reused for unrelated source "${sourceRef.ref}".`,
+      );
+    } else if (
+      /competitor|luxury|swiss|private\s+bank/i.test(sourceRef.ref) &&
+      !/competitor|luxury|swiss|private\s+bank/i.test(registeredEvent.description)
+    ) {
+      problems.push(
+        `acquisition_document_mismatch: acquisitionEventId "${acq.acquisitionEventId}" is bound to "${registeredEvent.description}", which cannot be reused for "${sourceRef.ref}".`,
+      );
+    }
+
+    // RESEARCH-C: Declared provenance digest vs registered event digest
     if (acq.contentDigest !== registeredEvent.contentDigest) {
       problems.push(
         `acquisition_content_digest_mismatch: declared provenance contentDigest ${acq.contentDigest.slice(0, 12)}… does not match registered event digest ${registeredEvent.contentDigest.slice(0, 12)}…`,
+      );
+    }
+
+    // ACQ-03: Stored source bytes verification on disk
+    if (options?.checkDisk !== false && registeredEvent.sourceFileRef) {
+      const root = options?.repoRoot ?? findRepoRoot(process.cwd());
+      const diskPath = path.resolve(root, registeredEvent.sourceFileRef);
+      if (!existsSync(diskPath)) {
+        problems.push(
+          `stored_source_file_missing: physical source file "${registeredEvent.sourceFileRef}" is missing from disk.`,
+        );
+      } else {
+        const diskBytes = readFileSync(diskPath);
+        const diskDigest = createHash("sha256").update(diskBytes).digest("hex");
+        if (diskDigest !== registeredEvent.contentDigest) {
+          problems.push(
+            `stored_source_bytes_digest_mismatch: physical source file "${registeredEvent.sourceFileRef}" on disk has digest ${diskDigest.slice(0, 12)}…, which does not match trusted acquisition event digest ${registeredEvent.contentDigest.slice(0, 12)}….`,
+          );
+        }
+      }
+    }
+
+    // Digest comparison against supplied storedDigest
+    if (storedDigest && storedDigest !== registeredEvent.contentDigest) {
+      problems.push(
+        `acquisition_content_digest_mismatch: stored source digest ${storedDigest.slice(0, 12)}… does not match acquisition event digest ${registeredEvent.contentDigest.slice(0, 12)}…`,
       );
     }
   }

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import zlib from "node:zlib";
 import type { ClaimLineage, SourceRef } from "@factory/contracts";
 
 /**
@@ -51,6 +52,218 @@ export interface LegalEvidenceRegistry {
 
 export function sha256Hex(bytes: Buffer | string): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+export function extractPdfText(buf: Buffer): string {
+  const cMap = new Map<number, string>();
+  let offset = 0;
+  while (true) {
+    const streamIdx = buf.indexOf("stream\r\n", offset);
+    const altStreamIdx = buf.indexOf("stream\n", offset);
+    const sIdx = streamIdx !== -1 && altStreamIdx !== -1 ? Math.min(streamIdx, altStreamIdx) : Math.max(streamIdx, altStreamIdx);
+    if (sIdx === -1) break;
+    const start = buf[sIdx + 6] === 0x0a ? sIdx + 7 : sIdx + 8;
+    const end = buf.indexOf("endstream", start);
+    if (end === -1) break;
+    const slice = buf.subarray(start, end);
+    try {
+      const uncompressed = zlib.inflateSync(slice).toString("latin1");
+      if (uncompressed.includes("beginbfchar")) {
+        const bfcharBlocks = uncompressed.match(/beginbfchar([\s\S]*?)endbfchar/g) || [];
+        for (const block of bfcharBlocks) {
+          const lines = block.split("\n");
+          for (const line of lines) {
+            const m = line.match(/<([0-9a-fA-F]+)>\s+<([0-9a-fA-F]+)>/);
+            if (m && m[1] && m[2]) {
+              const src = parseInt(m[1], 16);
+              let dst = "";
+              for (let i = 0; i + 4 <= m[2].length; i += 4) {
+                dst += String.fromCharCode(parseInt(m[2].substring(i, i + 4), 16));
+              }
+              cMap.set(src, dst);
+            }
+          }
+        }
+      }
+      if (uncompressed.includes("beginbfrange")) {
+        const bfrangeBlocks = uncompressed.match(/beginbfrange([\s\S]*?)endbfrange/g) || [];
+        for (const block of bfrangeBlocks) {
+          const lines = block.split("\n");
+          for (const line of lines) {
+            const mArr = line.match(/<([0-9a-fA-F]+)>\s+<([0-9a-fA-F]+)>\s+\[([^\]]+)\]/);
+            if (mArr && mArr[1] && mArr[2] && mArr[3]) {
+              const s = parseInt(mArr[1], 16);
+              const e = parseInt(mArr[2], 16);
+              const list = mArr[3].match(/<([0-9a-fA-F]+)>/g) || [];
+              for (let i = 0; i <= e - s && i < list.length; i++) {
+                const item = list[i];
+                if (!item) continue;
+                const hex = item.replace(/[<>]/g, "");
+                let dst = "";
+                for (let j = 0; j + 4 <= hex.length; j += 4) {
+                  dst += String.fromCharCode(parseInt(hex.substring(j, j + 4), 16));
+                }
+                cMap.set(s + i, dst);
+              }
+              continue;
+            }
+            const mSeq = line.match(/<([0-9a-fA-F]+)>\s+<([0-9a-fA-F]+)>\s+<([0-9a-fA-F]+)>/);
+            if (mSeq && mSeq[1] && mSeq[2] && mSeq[3]) {
+              const s = parseInt(mSeq[1], 16);
+              const e = parseInt(mSeq[2], 16);
+              const dstBase = parseInt(mSeq[3], 16);
+              for (let i = 0; i <= e - s; i++) {
+                cMap.set(s + i, String.fromCharCode(dstBase + i));
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // not a deflate stream
+    }
+    offset = end + 9;
+  }
+
+  function decodeHex(hexStr: string): string {
+    let out = "";
+    for (let i = 0; i + 4 <= hexStr.length; i += 4) {
+      const code = parseInt(hexStr.substring(i, i + 4), 16);
+      out += cMap.get(code) || "";
+    }
+    return out;
+  }
+
+  let allText = "";
+  offset = 0;
+  while (true) {
+    const streamIdx = buf.indexOf("stream\r\n", offset);
+    const altStreamIdx = buf.indexOf("stream\n", offset);
+    const sIdx = streamIdx !== -1 && altStreamIdx !== -1 ? Math.min(streamIdx, altStreamIdx) : Math.max(streamIdx, altStreamIdx);
+    if (sIdx === -1) break;
+    const start = buf[sIdx + 6] === 0x0a ? sIdx + 7 : sIdx + 8;
+    const end = buf.indexOf("endstream", start);
+    if (end === -1) break;
+    const slice = buf.subarray(start, end);
+    try {
+      const uncompressed = zlib.inflateSync(slice).toString("latin1");
+      const tjArray = /\[([^\]]+)\]\s*TJ/g;
+      let m: RegExpExecArray | null;
+      while ((m = tjArray.exec(uncompressed)) !== null) {
+        const inner = m[1];
+        if (inner) {
+          const tokenRegex = /<([0-9a-fA-F]+)>|\(([^)]*)\)/g;
+          let tm: RegExpExecArray | null;
+          while ((tm = tokenRegex.exec(inner)) !== null) {
+            if (tm[1]) allText += decodeHex(tm[1]);
+            else if (tm[2]) allText += tm[2];
+          }
+          allText += " ";
+        }
+      }
+      const tjSingle = /\(([^)]+)\)\s*Tj|<([0-9a-fA-F]+)>\s*Tj/g;
+      while ((m = tjSingle.exec(uncompressed)) !== null) {
+        if (m[1]) allText += m[1] + " ";
+        if (m[2]) allText += decodeHex(m[2]) + " ";
+      }
+    } catch {
+      // ignore
+    }
+    offset = end + 9;
+  }
+
+  return allText.replace(/\\([()\\])/g, "$1").replace(/\s+/g, " ");
+}
+
+export function verifyLegalExtract(
+  extractedEntry: LegalSourceSnapshot,
+  extractedBytes: Buffer,
+  rawCaptureEntry: LegalSourceSnapshot,
+  rawBytes: Buffer,
+): { ok: boolean; reason?: string } {
+  const rawText = rawCaptureEntry.file.endsWith(".pdf")
+    ? extractPdfText(rawBytes)
+    : rawBytes.toString("utf8");
+
+  const rawTextNorm = rawText.toLowerCase().replace(/\s+/g, " ");
+  const rawTextAlpha = rawTextNorm
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/g, "");
+
+  // 1. Article references verification
+  if (extractedEntry.articleOrSection) {
+    const articleTokens = extractedEntry.articleOrSection
+      .replace(/Articles?|Paragraphe|\bde\s+chaque\s+zone\s+urbaine\b/gi, "")
+      .split(/[/,\s\-]+/)
+      .map((t) => t.trim().toLowerCase())
+      .filter((t) => t.length > 1 && !/^(?:and|ou|note|\d+)$/i.test(t));
+
+    for (const art of articleTokens) {
+      const artWithSpace = art.replace(/([a-zA-Z]+)(\d+)/g, "$1 $2");
+      const artAlpha = art.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+      if (
+        !rawTextNorm.includes(art) &&
+        !rawTextNorm.includes(artWithSpace) &&
+        !rawTextAlpha.includes("article" + artAlpha) &&
+        !rawTextAlpha.includes(artAlpha)
+      ) {
+        return {
+          ok: false,
+          reason: `article_not_in_raw_document: Cited article "${art}" does not exist in the captured raw document.`,
+        };
+      }
+    }
+  }
+
+  // 2. Extracted text verification: quotes must derive from raw text
+  const extractedStr = extractedBytes.toString("utf8");
+  const quoteMatches = extractedStr.match(/"([^"]{20,})"/g) || [];
+  for (const q of quoteMatches) {
+    const cleanQuote = q.replace(/^"|"$/g, "").trim();
+    const lines = cleanQuote
+      .split(/\n+/)
+      .map((l) => l.trim())
+      .filter((l) => l.length >= 20);
+    const matched = lines.some((line) => {
+      const lineAlpha = line.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+      const sample = lineAlpha.substring(0, Math.min(lineAlpha.length, 35));
+      return rawTextNorm.includes(line.toLowerCase().substring(0, 35)) || rawTextAlpha.includes(sample);
+    });
+    if (!matched) {
+      const anchor = cleanQuote.substring(0, Math.min(cleanQuote.length, 35));
+      return {
+        ok: false,
+        reason: `extracted_text_not_found_in_raw_capture: Extracted provision contains invented clauses not found in the raw capture ("${anchor}…").`,
+      };
+    }
+  }
+
+  // 3. Threshold verification
+  const thresholdPatterns = [
+    /(\d+)\s*(?:m²|m2|sqm)/gi,
+    /(\d+)\s*%/gi,
+    /(\d+)\s*logements?/gi,
+  ];
+  for (const pat of thresholdPatterns) {
+    let tm: RegExpExecArray | null;
+    while ((tm = pat.exec(extractedStr)) !== null) {
+      const val = tm[1];
+      if (!val) continue;
+      if (Number(val) > 1900 && Number(val) < 2050) continue; // skip years
+      const unit = tm[0].toLowerCase().replace(/\s+/g, " ");
+      const unitNoSpace = tm[0].toLowerCase().replace(/\s+/g, "");
+      const unitWithSpace = tm[0].toLowerCase().replace(/(\d+)\s*(%|m²|m2|sqm|logements?)/i, "$1 $2");
+      if (!rawTextNorm.includes(unit) && !rawTextNorm.includes(unitNoSpace) && !rawTextNorm.includes(unitWithSpace)) {
+        return {
+          ok: false,
+          reason: `threshold_not_in_raw_document: Extracted threshold "${tm[0]}" is not present in the captured raw document.`,
+        };
+      }
+    }
+  }
+
+  return { ok: true };
 }
 
 export const LEGAL_EVIDENCE_DIR = ["docs", "evidence", "sources", "legal-regulatory-2026"];
@@ -149,23 +362,64 @@ export function loadLegalEvidenceRegistry(repoRoot: string): LegalEvidenceRegist
     }
 
     if (entry.sourceClassification === "EXTRACTED_LEGAL_PROVISION") {
-      // Must link to a verified raw capture or have authentic acquisition
-      const rawCapture = entry.rawCaptureSourceId ? rawCapturesById.get(entry.rawCaptureSourceId) : undefined;
-      const hasAcq = TRUSTED_ACQUISITION_REGISTRY.has(entry.sourceId) ||
-        (entry.rawCaptureSourceId && TRUSTED_ACQUISITION_REGISTRY.has(entry.rawCaptureSourceId)) ||
-        Array.from(TRUSTED_ACQUISITION_REGISTRY.values()).some((a) => a.contentDigest === entry.sha256 || a.contentDigest === entry.rawCaptureDigest);
-
-      if (!hasAcq) {
+      if (!entry.rawCaptureSourceId) {
         registry.rejected.push({
           sourceId: entry.sourceId,
-          reason: "LEGAL_SOURCE_UNVERIFIED: No trusted acquisition from genuine publisher exists in trusted acquisition registry",
+          reason: "raw_capture_not_found: Extracted legal provision must link to a rawCaptureSourceId.",
         });
         continue;
       }
-      if (entry.rawCaptureSourceId && !rawCapture && !hasAcq) {
+      const rawCapture = rawCapturesById.get(entry.rawCaptureSourceId);
+      if (!rawCapture) {
         registry.rejected.push({
           sourceId: entry.sourceId,
-          reason: `raw_capture_unverified: Linked raw capture "${entry.rawCaptureSourceId}" is missing or unverified.`,
+          reason: `raw_capture_not_found: Linked raw capture "${entry.rawCaptureSourceId}" is missing or unverified.`,
+        });
+        continue;
+      }
+      if (entry.rawCaptureDigest && entry.rawCaptureDigest !== rawCapture.sha256) {
+        registry.rejected.push({
+          sourceId: entry.sourceId,
+          reason: `raw_capture_digest_mismatch: declared rawCaptureDigest ${entry.rawCaptureDigest.slice(0, 12)}… does not match raw capture digest ${rawCapture.sha256.slice(0, 12)}…`,
+        });
+        continue;
+      }
+      const rawFilePath = path.join(dir, rawCapture.file);
+      if (!existsSync(rawFilePath)) {
+        registry.rejected.push({
+          sourceId: entry.sourceId,
+          reason: `raw_capture_not_found: Raw capture file "${rawCapture.file}" is missing from disk.`,
+        });
+        continue;
+      }
+      const rawBytes = readFileSync(rawFilePath);
+      const rawDigest = sha256Hex(rawBytes);
+      if (rawDigest !== rawCapture.sha256) {
+        registry.rejected.push({
+          sourceId: entry.sourceId,
+          reason: `raw_capture_digest_mismatch: actual raw capture file digest ${rawDigest.slice(0, 12)}… does not match declared ${rawCapture.sha256.slice(0, 12)}…`,
+        });
+        continue;
+      }
+
+      // Check obsolete regulation version (LEGAL-05)
+      if (
+        (rawCapture.effectiveTo && rawCapture.effectiveTo !== "current" && new Date(rawCapture.effectiveTo).getTime() < Date.now()) ||
+        (/superseded|obsolete/i.test(rawCapture.documentVersion) && !/current|opposable/i.test(rawCapture.documentVersion))
+      ) {
+        registry.rejected.push({
+          sourceId: entry.sourceId,
+          reason: `obsolete_regulation_version: Document version "${rawCapture.documentVersion}" represents an obsolete regulation version.`,
+        });
+        continue;
+      }
+
+      // Check extracted text derivation against raw capture bytes (LEGAL-03, LEGAL-04, LEGAL-06)
+      const extractResult = verifyLegalExtract(entry, bytes, rawCapture, rawBytes);
+      if (!extractResult.ok) {
+        registry.rejected.push({
+          sourceId: entry.sourceId,
+          reason: extractResult.reason!,
         });
         continue;
       }

@@ -443,6 +443,14 @@ export const productionQaCheckResultSchema = z
   .strict();
 export type ProductionQaCheckResult = z.infer<typeof productionQaCheckResultSchema>;
 
+export const reviewAuthorityModeSchema = z.enum([
+  "VERIFIED_HUMAN",
+  "TEST_ONLY",
+  "PENDING",
+  "NOT_REQUIRED",
+]);
+export type ReviewAuthorityMode = z.infer<typeof reviewAuthorityModeSchema>;
+
 export const productionQaReportDataSchema = z
   .object({
     schemaVersion: z.literal(PRODUCTION_SCHEMA_VERSION),
@@ -459,6 +467,7 @@ export const productionQaReportDataSchema = z
       .object({
         trustMode: z.enum(["STRICT_PRODUCTION", "SYNTHETIC_FIXTURE"]),
         publicationEligible: z.boolean(),
+        reviewAuthorityMode: reviewAuthorityModeSchema.optional(),
       })
       .strict()
       .optional(),
@@ -479,7 +488,14 @@ export function qaRunPublicationEligible(data: unknown): boolean {
   const parsed = productionQaReportDataSchema.safeParse(data);
   if (!parsed.success) return false;
   const d = parsed.data;
-  return d.overall === "PASS" && d.provenance?.trustMode === "STRICT_PRODUCTION" && d.provenance.publicationEligible === true;
+  return (
+    d.overall === "PASS" &&
+    d.provenance?.trustMode === "STRICT_PRODUCTION" &&
+    d.provenance.publicationEligible === true &&
+    (d.provenance.reviewAuthorityMode === undefined ||
+      d.provenance.reviewAuthorityMode === "VERIFIED_HUMAN" ||
+      d.provenance.reviewAuthorityMode === "NOT_REQUIRED")
+  );
 }
 
 /** Deterministic overall verdict from individual check results. */

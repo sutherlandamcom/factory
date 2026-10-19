@@ -147,4 +147,69 @@ All 26 mutations are executed deterministically in `apps/factory/tests/persisten
    - Deterministic model reproductions are executed via registered TypeScript transformation functions (`transformation-registry.ts`) that compute outputs in memory and verify exact file digests and anchor text against disk artifacts.
 
 6. **Elimination of False Passes & Denominator Checks**:
-   - Under the Run 12 independent verifier (`insee-evidence.ts` + `verifyInseeClaim`), authentic raw HTML snapshot tables are parsed directly. Negative mutations (`M01`–`M26`, `LEGAL-A`–`LEGAL-H`, `REVIEW-A`–`REVIEW-H`, `WORK-A`–`WORK-H`, `RESEARCH-A`–`RESEARCH-G`, `R01`–`R06`) fail closed with exact diagnostic codes. All 28 test suites pass green.
+   - Under the Run 12 independent verifier (`insee-evidence.ts` + `verifyInseeClaim`), authentic raw HTML snapshot tables are parsed directly. Negative mutations fail closed with exact diagnostic codes. All test suites pass green.
+
+---
+
+## 9. Final Trust Boundary Remediation Acceptance Matrix (AUTH, ACQ, LEGAL, WORK, PUB)
+
+The final remediation established strict fail-closed trust boundaries verified across 33 automated tests in `apps/factory/tests/persistence/run12-source-integrity-qa.test.ts`:
+
+### 9.1 Editorial Review Boundary (`AUTH-01` through `AUTH-06`)
+
+| ID | Test Scenario | Threat / Failure Mode | Enforcement Mechanism | Result |
+| :--- | :--- | :--- | :--- | :--- |
+| **AUTH-01** | Unauthenticated principal | Caller submits valid-looking `AuthenticatedPrincipal` directly in request | `TrustedSessionRegistry.validateSessionToken` fails closed (`unauthenticated_principal_rejected`) | **PASSED (REJECTED)** |
+| **AUTH-02** | Direct store insertion | Caller writes directly to `TrustGovernanceStore.recordReviewLocked` with `VERIFIED_HUMAN_REVIEW_AUTHORITY` | Verifies append-only `EditorialAuditStore` event exists; direct insert rejected (`unauthenticated_human_review_rejected`) | **PASSED (REJECTED)** |
+| **AUTH-03** | Unauthorized actor | Valid authenticated session but actor lacks project-specific review permission | `ProjectMembershipAuthority.assertCanApproveReview` fails closed (`unauthorized_reviewer_actor`) | **PASSED (REJECTED)** |
+| **AUTH-04** | Cross-project replay | Authentic audit event recorded for Project A used in Project B | `recordReviewLocked` checks `auditEvent.projectId === input.projectId` (`cross_project_audit_event_rejected`) | **PASSED (REJECTED)** |
+| **AUTH-05** | Stale evidence digest | Source evidence mutated while HTML content remains identical | `reviewStaleness` detects `sourceEvidenceSetDigest` mismatch (`stale: true`, `review_authority_stale`) | **PASSED (DETECTED)** |
+| **AUTH-06** | Authentic human approval | Valid session token, project permission, matching digests, and persisted audit event | Full verification succeeds (`VERIFIED_HUMAN_REVIEW_AUTHORITY`, `stale: false`) | **PASSED (ACCEPTED)** |
+
+### 9.2 Research Acquisition Boundary (`ACQ-01` through `ACQ-08`)
+
+| ID | Test Scenario | Threat / Failure Mode | Enforcement Mechanism | Result |
+| :--- | :--- | :--- | :--- | :--- |
+| **ACQ-01** | In-memory only fixture | Acquisition event not backed by actual disk capture file | Disk byte verification fails (`capture_file_missing_from_disk`) | **PASSED (REJECTED)** |
+| **ACQ-02** | Disk byte tampering | Capture file on disk altered after acquisition | SHA-256 byte digest recomputed and compared against recorded hash (`disk_capture_digest_mismatch`) | **PASSED (REJECTED)** |
+| **ACQ-03** | Mismatched URL / Provider | Genuine URL paired with unverified or scraped provider | Provider-URL binding check fails (`acquisition_provider_url_mismatch`) | **PASSED (REJECTED)** |
+| **ACQ-04** | Unregistered event ID | Source references unrecorded acquisition event ID | Registry lookup fails (`acquisition_event_not_found`) | **PASSED (REJECTED)** |
+| **ACQ-05** | Synthetic fixture | Source with `origin: SYNTHETIC_FIXTURE` submitted for Tier A claim | Synthetic source rejected (`synthetic_fixture_research_rejected`) | **PASSED (REJECTED)** |
+| **ACQ-06** | Document identity mismatch | Valid raw bytes paired with differing document identity | Document title/ref mismatch detected (`acquisition_document_mismatch`) | **PASSED (REJECTED)** |
+| **ACQ-07** | Simulated signature | Simulated publisher signature without acquisition receipt | Provenance missing check fails (`research_acquisition_event_missing`) | **PASSED (REJECTED)** |
+| **ACQ-08** | Authentic capture | Authentic bytes, matching SHA-256, genuine provider URL, registered event | Verification passes (`valid: true`) | **PASSED (ACCEPTED)** |
+
+### 9.3 Legal Extract Derivation (`LEGAL-01` through `LEGAL-06`)
+
+| ID | Test Scenario | Threat / Failure Mode | Enforcement Mechanism | Result |
+| :--- | :--- | :--- | :--- | :--- |
+| **LEGAL-01** | Missing raw capture ID | Extract cites nonexistent raw capture ID | `loadLegalEvidenceRegistry` Pass 2 rejects extract (`raw_capture_not_found`) | **PASSED (REJECTED)** |
+| **LEGAL-02** | Content digest mismatch | Extract rawCaptureDigest does not match actual raw capture file bytes | Strict SHA-256 comparison fails (`raw_capture_digest_mismatch`) | **PASSED (REJECTED)** |
+| **LEGAL-03** | Invented statutory rule | Extract quotes clause not present in raw document | `verifyLegalExtract` parses raw PDF/text streams and verifies quote anchors (`extracted_text_not_found_in_raw_capture`) | **PASSED (REJECTED)** |
+| **LEGAL-04** | Mutated threshold | Extract alters threshold (e.g. 200 m² to 300 m²) | `verifyLegalExtract` scans numeric threshold units in raw capture text (`threshold_not_in_raw_document`) | **PASSED (REJECTED)** |
+| **LEGAL-05** | Superseded regulation | Extract references superseded/obsolete document version | `effectiveTo` and version validity checked (`obsolete_regulation_version`) | **PASSED (REJECTED)** |
+| **LEGAL-06** | Authentic extract | Operative Chamonix PLU PDF (223 pages) verbatim provisions matching exact rules | Full verification passes (`ok: true`) | **PASSED (ACCEPTED)** |
+
+### 9.4 Original Work Product Integrity (`WORK-01` through `WORK-07`)
+
+| ID | Test Scenario | Threat / Failure Mode | Enforcement Mechanism | Result |
+| :--- | :--- | :--- | :--- | :--- |
+| **WORK-01** | Missing disk dataset | Input dataset file does not exist on disk | Disk file check fails (`input_dataset_file_missing`) | **PASSED (REJECTED)** |
+| **WORK-02** | Altered dataset bytes | Dataset bytes on disk tampered | SHA-256 computed from disk bytes does not match declared digest (`input_dataset_digest_mismatch`) | **PASSED (REJECTED)** |
+| **WORK-03** | Incompatible product type | `productType` changed to `EMPIRICAL_DATASET` without dataset fields | Schema validation fails (`inputDatasetDigests must be empty`) | **PASSED (REJECTED)** |
+| **WORK-04** | Execution hash divergence | Transformation output recomputed dynamically from inputs diverges | Transformation execution re-run; hash mismatch detected (`execution_hash_mismatch`) | **PASSED (REJECTED)** |
+| **WORK-05** | Anchor text not in HTML | Output anchors missing from rendered page HTML | Verifiable anchor presence assertion fails (`verifiable_anchor_missing_from_page`) | **PASSED (REJECTED)** |
+| **WORK-06** | Unregistered transformation | Unknown transformation ID without registered function | Registry lookup fails (`unregistered_transformation_id`) | **PASSED (REJECTED)** |
+| **WORK-07** | Fully authentic work product | Real transformation re-evaluated on verified dataset bytes | Full verification passes (`valid: true`) | **PASSED (ACCEPTED)** |
+
+### 9.5 Publication Exclusion & Structured Mode (`PUB-01` through `PUB-06`)
+
+| ID | Test Scenario | Threat / Failure Mode | Enforcement Mechanism | Result |
+| :--- | :--- | :--- | :--- | :--- |
+| **PUB-01** | Non-human authority kind | `TEST_ONLY_REVIEW_AUTHORITY` used | `deriveReviewAuthorityMode` returns `TEST_ONLY` (`publicationEligible: false`) | **PASSED (BLOCKED)** |
+| **PUB-02** | Pending review | No review authority recorded | Mode evaluates to `PENDING` (`publicationEligible: false`) | **PASSED (BLOCKED)** |
+| **PUB-03** | Stale human review | Reviewed content digest mismatch | Stale review detected (`publicationEligible: false`) | **PASSED (BLOCKED)** |
+| **PUB-04** | Missing audit event | Review has `VERIFIED_HUMAN` kind but server audit event is missing | Audit event check fails (`publicationEligible: false`) | **PASSED (BLOCKED)** |
+| **PUB-05** | Production QA provenance | QA provenance reflects structured `reviewAuthorityMode` | Provenance mode verified; detail-string regex eliminated | **PASSED (STRUCTURED)** |
+| **PUB-06** | Valid human review | Valid actor session, active project permission, persisted audit event | Mode evaluates to `VERIFIED_HUMAN` (`publicationEligible: true`) | **PASSED (ELIGIBLE)** |
+

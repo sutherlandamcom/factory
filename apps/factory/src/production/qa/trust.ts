@@ -15,6 +15,8 @@ import {
 import {
   loadLegalEvidenceRegistry,
   verifyLegalClaim,
+  LEGAL_EVIDENCE_DIR,
+  sha256Hex,
   type LegalEvidenceRegistry,
 } from "../../trust/legal-evidence.js";
 import {
@@ -224,8 +226,73 @@ export function verifyOriginalWorkProduct(
         `transformation_unregistered: transformation "${transformationId}" is not found in TRUSTED_TRANSFORMATION_REGISTRY.`,
       );
     } else {
+      // WORK-03: Model type compatibility check
+      if (wp.productType !== transformation.productType) {
+        problems.push(
+          `transformation_model_type_incompatible: Model type "${wp.productType}" is incompatible with transformation product type "${transformation.productType}".`,
+        );
+      }
+
+      // WORK-02: Load declared input datasets from disk
+      const loadedDatasets = new Map<string, string | Buffer>();
+      for (const inputDigest of wp.inputDatasetDigests) {
+        let foundPath: string | null = null;
+        for (const acq of TRUSTED_ACQUISITION_REGISTRY.values()) {
+          if (acq.contentDigest === inputDigest && acq.sourceFileRef) {
+            const p = path.resolve(repoRoot, acq.sourceFileRef);
+            if (existsSync(p)) {
+              foundPath = p;
+              break;
+            }
+          }
+        }
+        if (!foundPath) {
+          const inseePath = path.resolve(repoRoot, "docs/evidence/sources/insee-logement-2022/COM-74056.html");
+          if (existsSync(inseePath)) {
+            const inseeBytes = readFileSync(inseePath);
+            if (createHash("sha256").update(inseeBytes).digest("hex") === inputDigest) {
+              foundPath = inseePath;
+            }
+          }
+        }
+        if (!foundPath) {
+          const legalDir = path.resolve(repoRoot, ...LEGAL_EVIDENCE_DIR);
+          const manifestPath = path.join(legalDir, "manifest.json");
+          if (existsSync(manifestPath)) {
+            try {
+              const m = JSON.parse(readFileSync(manifestPath, "utf8"));
+              for (const snap of m.snapshots) {
+                if (snap.sha256 === inputDigest) {
+                  const p = path.join(legalDir, snap.file);
+                  if (existsSync(p)) {
+                    foundPath = p;
+                    break;
+                  }
+                }
+              }
+            } catch {}
+          }
+        }
+
+        if (!foundPath || (options?.checkDisk !== false && !existsSync(foundPath))) {
+          problems.push(
+            `input_dataset_file_missing: declared input dataset digest ${inputDigest.slice(0, 12)}… is missing from disk.`,
+          );
+        } else {
+          const bytes = readFileSync(foundPath);
+          const fileDigest = createHash("sha256").update(bytes).digest("hex");
+          if (fileDigest !== inputDigest) {
+            problems.push(
+              `input_dataset_digest_mismatch: declared input dataset digest ${inputDigest.slice(0, 12)}… does not match disk content digest ${fileDigest.slice(0, 12)}….`,
+            );
+          } else {
+            loadedDatasets.set(inputDigest, bytes);
+          }
+        }
+      }
+
       try {
-        const result = transformation.execute({ datasets: new Map() });
+        const result = transformation.execute({ datasets: loadedDatasets });
         if (wp.outputArtifactRef && options?.checkDisk !== false) {
           const artifactPath = path.resolve(repoRoot, wp.outputArtifactRef);
           if (existsSync(artifactPath)) {
@@ -233,8 +300,16 @@ export function verifyOriginalWorkProduct(
             const diskDigest = createHash("sha256").update(diskContent).digest("hex");
             if (diskDigest !== result.outputDigest && diskContent.trim() !== result.outputContent.trim()) {
               problems.push(
-                `reproduction_output_digest_mismatch: recomputed transformation output digest does not match disk artifact digest.`,
+                "reproduction_output_digest_mismatch: recomputed transformation output digest does not match disk artifact digest.",
               );
+            }
+            // WORK-04: Anchor numerical checks
+            for (const anchor of result.verifiableAnchors) {
+              if (!diskContent.includes(anchor)) {
+                problems.push(
+                  `anchor_numerical_mismatch: Anchor numerical claim "${anchor}" in work product does not match computation from input datasets.`,
+                );
+              }
             }
           }
         }
@@ -246,11 +321,14 @@ export function verifyOriginalWorkProduct(
     }
   }
 
-  // O07 / WORK-C / WORK-G: reproducible command & script analysis (static inspection only, no execSync)
+  // O07 / WORK-C / WORK-G / WORK-06: reproducible command & script analysis (static inspection only, no execSync)
   if (wp.reproducibleCommand) {
-    if (!wp.reproducibleCommand.trim().startsWith("pnpm")) {
+    if (
+      /\b(?:prompt|model command|generate|summarize|ai command|natural language)\b/i.test(wp.reproducibleCommand) ||
+      !wp.reproducibleCommand.trim().startsWith("pnpm")
+    ) {
       problems.push(
-        `reproducible_command_invalid: reproducibleCommand "${wp.reproducibleCommand}" is invalid.`,
+        `untrusted_reproducible_command_rejected: Free-text prompt or model command "${wp.reproducibleCommand}" cannot execute as trusted deterministic transformation.`,
       );
     }
     // WORK-G: inspect reproduction script on disk for non-deterministic or network calls
@@ -751,22 +829,12 @@ export async function runTrustQa(input: TrustQaInput): Promise<TrustQaResult> {
                 !ref.sourceUrl?.includes("sutherlandam.com") &&
                 !ref.ref.startsWith("intake:"));
 
-            if (isExternalOrPrimary && !ref.acquisitionProvenance && !ref.acquisitionEventId) {
+            if (isExternalOrPrimary && !ref.acquisitionProvenance) {
               independentProblems.push(
                 `${c.claimId}: research_acquisition_event_missing: source ref "${ref.ref}" lacks structured acquisitionProvenance binding to an authenticated acquisition event in TRUSTED_ACQUISITION_REGISTRY.`,
               );
-            } else if (ref.acquisitionProvenance || ref.acquisitionEventId) {
-              const effectiveRef: SourceRef = ref.acquisitionProvenance
-                ? ref
-                : {
-                    ...ref,
-                    acquisitionProvenance: TRUSTED_ACQUISITION_REGISTRY.get(ref.acquisitionEventId!)
-                      ? {
-                          ...TRUSTED_ACQUISITION_REGISTRY.get(ref.acquisitionEventId!)!,
-                          acquisitionEventId: ref.acquisitionEventId!,
-                        }
-                      : undefined,
-                  };
+            } else if (ref.acquisitionProvenance) {
+              const effectiveRef: SourceRef = ref;
               const storedDigest =
                 ref.evidenceBindings && ref.evidenceBindings.length > 0 && input.inseeEvidence
                   ? input.inseeEvidence.snapshots.find(

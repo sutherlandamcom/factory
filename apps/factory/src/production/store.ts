@@ -36,7 +36,10 @@ import {
   type ProductionSiteIdentity,
   type DesignArchetypeKind,
   type PageArchetypeAuthorityRef,
+  type ReviewAuthorityMode,
 } from "@factory/contracts";
+import { TrustGovernanceStore } from "../trust/store.js";
+import { EditorialAuditStore } from "../trust/editorial-review-boundary.js";
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
 import { acceptedDerivativeSets } from "../persistence/schema.js";
@@ -1058,12 +1061,72 @@ export class ProductionStore {
     if (!completeness.complete) throw productionError("production_qa_failed", `Required QA evidence missing or duplicated: ${completeness.missing.join(", ")}`);
     const rawOverall = qaOverallVerdict(input.checks);
     const hasUnresolvedTrustGate = input.checks.some((entry) => entry.checkId.startsWith("trust.") && entry.verdict !== "PASS");
-    const overall = rawOverall === "FAIL" || hasUnresolvedTrustGate ? ("FAIL" as const) : rawOverall;
-    const hasTestOnlyReview = input.checks.some(
-      (entry) =>
-        entry.checkId === "trust.review_authority" &&
-        entry.detail.includes("TEST_ONLY_REVIEW_AUTHORITY"),
-    );
+    let overall = rawOverall === "FAIL" || hasUnresolvedTrustGate ? ("FAIL" as const) : rawOverall;
+
+    // Structured Review Authority resolution (PUB-01..PUB-06 / Block 5)
+    // Never derive review authority mode from entry.detail strings
+    const trustStore = new TrustGovernanceStore(this.db);
+    const candidateInputs = await this.listCandidateInputs(input.projectId, input.candidateId);
+    const auditStore = EditorialAuditStore.getInstance();
+
+    const pageSlugs = candidateInputs.length > 0
+      ? candidateInputs.map((c) => c.pageIdentity)
+      : input.pageRoutes.map((r) => (r === "/" ? "index" : r.replace(/^\/|\/$/g, "")));
+
+    let reviewAuthorityMode: ReviewAuthorityMode = "NOT_REQUIRED";
+    let hasTestOnlyReview = false;
+    let hasPendingReview = false;
+    let hasHumanReview = false;
+    let auditInvalid = false;
+
+    // Check review status for candidate pages
+    const hasTrustGates = input.checks.some((c) => c.checkId.startsWith("trust."));
+    if (hasTrustGates) {
+      for (const slug of pageSlugs) {
+        const review = await trustStore.latestReview(input.projectId, slug);
+        const kind = review?.reviewAuthorityKind ?? review?.authorityKind;
+        if (!review || review.reviewStatus === "EDITORIAL_REVIEW_PENDING" || !kind) {
+          hasPendingReview = true;
+        } else if (kind === "TEST_ONLY_REVIEW_AUTHORITY") {
+          hasTestOnlyReview = true;
+        } else if (kind === "VERIFIED_HUMAN_REVIEW_AUTHORITY") {
+          const eventId = review.approvalEvent?.reviewEventId;
+          const auditEvent = eventId ? auditStore.getApprovalAuditEvent(eventId) : null;
+          if (
+            !auditEvent ||
+            auditEvent.projectId !== input.projectId ||
+            auditEvent.contentDigest !== review.reviewedContentDigest ||
+            auditEvent.claimSetDigest !== review.claimSetDigest ||
+            auditEvent.sourceEvidenceSetDigest !== review.sourceEvidenceSetDigest
+          ) {
+            auditInvalid = true;
+          } else {
+            hasHumanReview = true;
+          }
+        }
+      }
+
+      if (hasTestOnlyReview) {
+        reviewAuthorityMode = "TEST_ONLY";
+      } else if (auditInvalid) {
+        reviewAuthorityMode = "PENDING";
+        overall = "FAIL";
+      } else if (hasPendingReview) {
+        reviewAuthorityMode = "PENDING";
+      } else if (hasHumanReview) {
+        reviewAuthorityMode = "VERIFIED_HUMAN";
+      } else {
+        reviewAuthorityMode = "NOT_REQUIRED";
+      }
+    } else {
+      reviewAuthorityMode = "NOT_REQUIRED";
+    }
+
+    const publicationEligible =
+      (input.trustMode ?? "STRICT_PRODUCTION") === "STRICT_PRODUCTION" &&
+      overall === "PASS" &&
+      (reviewAuthorityMode === "VERIFIED_HUMAN" || reviewAuthorityMode === "NOT_REQUIRED");
+
     const data = {
       schemaVersion: "production-v1" as const,
       candidateId: input.candidateId,
@@ -1071,10 +1134,8 @@ export class ProductionStore {
       overall,
       provenance: {
         trustMode: input.trustMode ?? ("STRICT_PRODUCTION" as const),
-        publicationEligible:
-          (input.trustMode ?? "STRICT_PRODUCTION") === "STRICT_PRODUCTION" &&
-          overall === "PASS" &&
-          !hasTestOnlyReview,
+        publicationEligible,
+        reviewAuthorityMode,
       },
     };
     parseProductionQaReportData(data);

@@ -735,6 +735,8 @@ export {
   parseProductionQaReportData,
   qaRunPublicationEligible,
   qaOverallVerdict,
+  reviewAuthorityModeSchema,
+  type ReviewAuthorityMode,
   redirectRuleSchema,
   redirectAuthorityDataSchema,
   parseRedirectAuthorityData,

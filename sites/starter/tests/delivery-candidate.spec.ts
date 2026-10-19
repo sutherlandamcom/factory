@@ -58,9 +58,11 @@ test.describe("exact ProductionCandidate remote delivery QA", () => {
         titles.push(title);
         descriptions.push(description!);
 
-        const robotTags = await page.locator('meta[name="robots"]').allTextContents();
-        const robotContent = await page.locator('meta[name="robots"]').first().getAttribute("content").catch(() => null);
-        if (!(robotContent ?? robotTags.join(" ")).toLowerCase().includes("noindex")) {
+        const robots = page.locator('meta[name="robots"]');
+        const robotContent = (await robots.count()) > 0
+          ? await robots.first().getAttribute("content")
+          : null;
+        if (!(robotContent ?? "").toLowerCase().includes("noindex")) {
           indexableRoutes.push(route);
         }
 

@@ -7,7 +7,7 @@ import { runProcess } from "../executor/process.js";
 import { deterministicDigest } from "../intelligence/digest.js";
 import { parseAcceptedPageContentData } from "@factory/contracts";
 import { ProductionStore, candidateBuildStaleness } from "./store.js";
-import { ProductionRenderCompiler, type ProductionRenderManifest } from "./render-manifest.js";
+import { ProductionRenderCompiler, type ProductionRenderManifest, type ProductionRenderCompilerOptions } from "./render-manifest.js";
 import { emitSitemapAndRobots , generateRootRedirectStub } from "./seo-engine.js";
 import { loadProductionBuildIdentity } from "./identity.js";
 import { PageAuthorityReader } from "../writer/page-authority.js";
@@ -27,13 +27,21 @@ export class ProductionBuildService {
   constructor(
     private readonly db: FactoryDb,
     private readonly repoRoot: string,
+    private readonly options: ProductionRenderCompilerOptions = {},
   ) {
-    this.compiler = new ProductionRenderCompiler(db, repoRoot);
+    this.compiler = new ProductionRenderCompiler(db, repoRoot, options);
   }
 
   async prepareCandidate(input: { projectId: string; pageSlug: string }) {
     const identity = await loadProductionBuildIdentity(this.repoRoot);
-    const store = new ProductionStore(this.db, { repoRoot: this.repoRoot });
+    const store = new ProductionStore(this.db, {
+      repoRoot: this.repoRoot,
+      evidenceRoot: this.options.evidenceRoot,
+      inseeEvidence: this.options.inseeEvidence,
+      legalEvidence: this.options.legalEvidence,
+      sourceEvidenceSetDigest: this.options.sourceEvidenceSetDigest,
+      keyring: this.options.keyring,
+    });
     const productionInput = await store.deriveProductionInput({
       projectId: input.projectId,
       pageSlug: input.pageSlug,

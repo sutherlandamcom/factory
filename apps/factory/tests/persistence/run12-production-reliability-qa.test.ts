@@ -5,18 +5,20 @@ import { mkdtemp, cp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { sql, eq } from "drizzle-orm";
 import { setupMigratedTestDatabase, createTestDatabase, TEST_DATABASE_URL } from "./helpers.js";
 import type { FactoryDb } from "../../src/persistence/db.js";
 import { seedSutherlandProject } from "../fixtures/sutherland-seeds.js";
-import { TrustGovernanceStore } from "../../src/trust/store.js";
+import { TrustGovernanceStore, classifyPageEvidenceRequirements } from "../../src/trust/store.js";
 import { ProductionStore } from "../../src/production/store.js";
+import { ProductionRenderCompiler } from "../../src/production/render-manifest.js";
 import {
   EditorialAuditStore,
   EditorialReviewService,
   ProjectMembershipAuthority,
   TrustedExternalIdpAdapter,
+  SyntheticTestSessionRegistry,
   AuditSealKeyring,
   computeAuditEventSeal,
 } from "../../src/trust/editorial-review-boundary.js";
@@ -2932,3 +2934,668 @@ test("RACE-06 through RACE-10: Genuine concurrency with independent PostgreSQL c
     await dbInstB.close();
   }
 });
+
+// ===========================================================================
+// REMEDIATION: SESSION-04..06 & EVIDENCE-01..09
+// ===========================================================================
+
+test("SESSION-04: Production adapter with public key but no durable revocation configuration fails closed", () => {
+  const { publicKey } = generateKeyPairSync("ed25519");
+  const pem = publicKey.export({ type: "spki", format: "pem" }).toString();
+  assert.throws(
+    () => new TrustedExternalIdpAdapter({ publicKeyPem: pem }),
+    (err: any) => {
+      assert.equal(err.code, "durable_session_revocation_required");
+      return true;
+    },
+    "SESSION-04: Production adapter without durable revocation store must throw durable_session_revocation_required",
+  );
+});
+
+test("SESSION-05: Revocation database unavailable fails closed without approval authorization", async () => {
+  const dbInst = await createTestDatabase();
+  try {
+    const { adapter, signPrincipalAssertion } = TrustedExternalIdpAdapter.createTestHarness("trusted-external-idp", dbInst.db);
+    await dbInst.close();
+    const token = signPrincipalAssertion({
+      actorId: "rev-actor-1",
+      actorName: "Test Reviewer",
+      actorRole: "EDITORIAL_REVIEWER",
+    });
+    await assert.rejects(
+      () => adapter.verifySession(token),
+      (err: any) => {
+        assert.equal(err.code, "trust_database_unavailable");
+        return true;
+      },
+      "SESSION-05: Session verification must fail closed when revocation database is unavailable",
+    );
+  } finally {
+    // closed
+  }
+});
+
+test("SESSION-06: Explicit synthetic test harness works in isolation but cannot confer production authority", async () => {
+  const dbInst = await createTestDatabase();
+  try {
+    const harness = TrustedExternalIdpAdapter.createTestHarness("test-harness-idp");
+    const token = harness.signPrincipalAssertion({
+      actorId: "test-actor-1",
+      actorName: "Synthetic Reviewer",
+      actorRole: "EDITORIAL_REVIEWER",
+    });
+    const verified = await harness.adapter.verifySession(token);
+    assert.ok(verified, "SESSION-06: Test harness verifies sessions in memory");
+    assert.equal(verified?.actorId, "test-actor-1");
+
+    const syntheticRegistry = SyntheticTestSessionRegistry.getInstance();
+    const synthToken = syntheticRegistry.createSession({
+      actorId: "synth-actor",
+      actorName: "Synth Actor",
+      actorRole: "EDITORIAL_REVIEWER",
+    });
+    const trustStore = new TrustGovernanceStore(dbInst.db);
+    const service = new EditorialReviewService(trustStore, syntheticRegistry);
+    await assert.rejects(
+      () => service.recordAuthenticatedApproval({
+        projectId: "test-proj",
+        pageIdentity: "test-page",
+        contentDigest: "c".repeat(64),
+        claimSetDigest: "d".repeat(64),
+        sourceEvidenceSetDigest: "e".repeat(64),
+        sessionToken: synthToken,
+        reviewerRef: "synth-actor",
+        reviewerExpertise: "Synthetic",
+        reviewAction: "APPROVED",
+      }),
+      (err: any) => {
+        assert.equal(err.code, "synthetic_approval_not_production_authority");
+        return true;
+      },
+      "SESSION-06: Synthetic approvals must never confer real production authority",
+    );
+  } finally {
+    await dbInst.close();
+  }
+});
+
+function makeInseeClaim(pageSlug: string, claimId: string, geoCode = "74056"): ClaimLineage {
+  const isMegeve = geoCode === "74173";
+  const name = isMegeve ? "Megève" : "Chamonix-Mont-Blanc";
+  const val = isMegeve ? 9354 : 14538;
+  const valFormatted = isMegeve ? "9,354" : "14,538";
+  return {
+    claimId,
+    pageIdentity: pageSlug,
+    claimType: "SOURCE_DERIVED_FACT",
+    claimText: `In 2022, ${name} contained ${valFormatted} total housing units according to official INSEE census records.`,
+    limitation: "Limited to census housing count.",
+    sourceRefs: [
+      {
+        ref: `INSEE RP2022 ${name}`,
+        sourceUrl: `https://www.insee.fr/fr/statistiques/8581193?geo=COM-${geoCode}`,
+        canonicalDatasetId: "INSEE-LOGEMENT-2022",
+        datasetIdentity: { geoCode, reportingPeriod: 2022 },
+        supportingExcerpt: `In 2022, ${name} contained ${valFormatted} total housing units according to official INSEE census records.`,
+        tier: "TIER_A",
+        sourceDate: "2025-07-01",
+        freshnessBasis: "observation_date",
+        entailment: "SUPPORTED",
+        evidenceOrigin: "EXTERNAL_ACQUIRED",
+        evidenceBindings: [
+          {
+            kind: "table_fact",
+            geoCode,
+            reportingYear: 2022,
+            tableId: "LOG T1",
+            rowKey: "Ensemble",
+            columnKey: "2022",
+            value: val,
+            unit: "dwellings",
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function makeLegalClaim(pageSlug: string, claimId: string): ClaimLineage {
+  return {
+    claimId,
+    pageIdentity: pageSlug,
+    claimType: "SOURCE_DERIVED_FACT",
+    claimText: "Selon le PLU de Chamonix-Mont-Blanc, tout programme de construction de logement supérieur à 8 logements doit comporter un minimum de 25% de cette surface de plancher à usage de logements locatifs conventionnés.",
+    limitation: "Limited to municipal planning boundaries.",
+    sourceRefs: [
+      {
+        ref: "chamonix-plu-servitudes-mixite",
+        sourceUrl: "https://www.geoportail-urbanisme.gouv.fr/document/by-id/beaa82a7b5594b3913d5156928287d07",
+        supportingExcerpt: "Tout programme de construction de logement supérieur à 8 logements doit comporter un minimum de 25% de cette surface de plancher à usage de logements locatifs conventionnés.",
+        tier: "TIER_A",
+        sourceDate: "2026-02-26",
+        freshnessBasis: "effective_legal_period",
+        entailment: "SUPPORTED",
+        sourceClassification: "EXTRACTED_LEGAL_PROVISION",
+        canonicalDatasetId: "PLU-CHAMONIX-2026",
+        acquisitionEventId: "chamonix-plu-servitudes-mixite",
+      },
+    ],
+  };
+}
+
+function makeAnalyticalClaim(pageSlug: string, claimId: string): ClaimLineage {
+  return {
+    claimId,
+    pageIdentity: pageSlug,
+    claimType: "CALCULATION",
+    claimText: "Our comparative advisory portfolio analysis projects an estimated yield differential of 1.4% between central Chamonix and valley perimeter.",
+    limitation: "First-party analytical projection.",
+    calculationRef: {
+      modelId: "model-yield-diff-v1",
+      inputs: [
+        { name: "numerator", value: "14", unit: "points" },
+        { name: "denominator", value: "1000", unit: "points" },
+      ],
+      assumptionRefs: ["assump-1"],
+      output: { value: "1.4", unit: "%" },
+      calculatedAt: "2026-01-15T00:00:00Z",
+    },
+    sourceRefs: [
+      {
+        ref: "First-party portfolio analysis",
+        sourceUrl: "intake:sutherland-research",
+        supportingExcerpt: "Advisory portfolio analysis projects an estimated yield differential of 1.4% between central Chamonix and valley perimeter.",
+        tier: "TIER_A",
+        sourceDate: "2026-01-15",
+        freshnessBasis: "model_as_of_date",
+        entailment: "SUPPORTED",
+        evidenceOrigin: "ACCEPTED_FIRST_PARTY",
+      },
+    ],
+  };
+}
+
+function makeWorkProductRecord(
+  pageSlug: string,
+  claimId: string,
+  workProductId: string,
+  inputDatasetDigests = ["1".repeat(64)],
+  anchors = ["1.4% yield differential", "2026 advisory benchmark model"],
+): OriginalValueRecord {
+  const transformationDigest = createHash("sha256").update(`${workProductId}-transform`).digest("hex");
+  const executionHash = computeWorkProductExecutionHash({
+    productType: "COMPUTATIONAL_MODEL",
+    inputDatasetDigests,
+    transformationDigest,
+  });
+  return {
+    schemaVersion: "trust-governance-v1",
+    pageIdentity: pageSlug,
+    kind: "original_calculation",
+    description: "Portfolio yield differential calculation",
+    lineageClaimId: claimId,
+    verifiableAnchors: anchors,
+    workProductId,
+    workProduct: {
+      workProductId,
+      pageIdentity: pageSlug,
+      productType: "COMPUTATIONAL_MODEL",
+      title: "Advisory Differential Model",
+      description: "Deterministic yield model",
+      inputDatasetDigests,
+      transformationId: "model-v1",
+      transformationDigest,
+      executionHash,
+      outputArtifactRef: "models/diff.json",
+      reproducibleCommand: "tsx models/diff.ts",
+      verifiableAnchors: anchors,
+      provenance: "Sutherland Advisory Research",
+    },
+  };
+}
+
+test("EVIDENCE-01: NO_EXTERNAL_EVIDENCE_REQUIRED: Page with zero external/legal source references validates without requiring evidence registries", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const seeded = await seedSutherlandProject(dbInst, `ev01-${Date.now()}`);
+  const tempWorkspace = await mkdtemp(path.join(tmpdir(), "ev01-render-"));
+  const emptyEvidenceDir = path.join(tempWorkspace, "empty-evidence");
+  await mkdtemp(emptyEvidenceDir);
+
+  try {
+    const pageSlug = "services/advisory";
+    const acceptedPage = await acceptFixturePage(dbInst, seeded.projectId, pageSlug);
+    const contentDigest = acceptedPage.contentDigest;
+
+    // Zero external claims on this page
+    const reqs = classifyPageEvidenceRequirements([]);
+    assert.equal(reqs.category, "NO_EXTERNAL_EVIDENCE_REQUIRED");
+    assert.equal(reqs.needsInsee, false);
+    assert.equal(reqs.needsLegal, false);
+    assert.equal(reqs.needsOtherExternal, false);
+
+    // TrustGovernanceStore configured with completely empty evidence directory and temp workspace
+    const trustStore = new TrustGovernanceStore(dbInst.db, {
+      evidenceRoot: emptyEvidenceDir,
+      repoRoot: tempWorkspace,
+    });
+
+    const evidence = await trustStore.currentPageEvidence(seeded.projectId, pageSlug, contentDigest);
+    assert.equal(evidence.pageSourceInfo.problems.length, 0, "EVIDENCE-01: No problems when no external evidence is required");
+    assert.equal(evidence.registriesAvailable, true, "EVIDENCE-01: Registries marked available since none required");
+    assert.equal(evidence.pageSourceInfo.referencedCount, 0);
+  } finally {
+    await rm(tempWorkspace, { recursive: true, force: true });
+    await dbInst.close();
+  }
+});
+
+test("EVIDENCE-02: INSEE_EVIDENCE_REQUIRED: Page with only INSEE statistical claims resolves against evidenceRoot when configured", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const seeded = await seedSutherlandProject(dbInst, `ev02-${Date.now()}`);
+  const tempWorkspace = await mkdtemp(path.join(tmpdir(), "ev02-render-"));
+
+  try {
+    const pageSlug = "locations/chamonix";
+    const acceptedPage = await acceptFixturePage(dbInst, seeded.projectId, pageSlug);
+    const contentDigest = acceptedPage.contentDigest;
+
+    const inseeClaim = makeInseeClaim(pageSlug, "claim-insee-02");
+
+    const reqs = classifyPageEvidenceRequirements([inseeClaim]);
+    assert.equal(reqs.category, "INSEE_EVIDENCE_REQUIRED");
+    assert.equal(reqs.needsInsee, true);
+    assert.equal(reqs.needsLegal, false);
+
+    // Configured with repoRoot as evidenceRoot, while tempWorkspace is separate
+    const trustStore = new TrustGovernanceStore(dbInst.db, {
+      evidenceRoot: repoRoot,
+      repoRoot: tempWorkspace,
+    });
+
+    await trustStore.saveClaimLineage({
+      projectId: seeded.projectId,
+      pageIdentity: pageSlug,
+      contentDigest,
+      claims: [inseeClaim],
+    });
+
+    const evidence = await trustStore.currentPageEvidence(seeded.projectId, pageSlug, contentDigest);
+    assert.equal(evidence.pageSourceInfo.problems.length, 0, "EVIDENCE-02: Must resolve without problems when evidenceRoot is configured");
+    assert.equal(evidence.registriesAvailable, true);
+    assert.equal(evidence.pageSourceInfo.referencedCount, 1);
+    assert.ok(evidence.pageSourceInfo.digest);
+    assert.ok(evidence.sourceEvidenceSetDigest);
+  } finally {
+    await rm(tempWorkspace, { recursive: true, force: true });
+    await dbInst.close();
+  }
+});
+
+test("EVIDENCE-03: INSEE missing fails closed with clear diagnostic rather than crashing with ENOENT", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const seeded = await seedSutherlandProject(dbInst, `ev03-${Date.now()}`);
+  const tempWorkspace = await mkdtemp(path.join(tmpdir(), "ev03-render-"));
+  const emptyEvidenceDir = path.join(tempWorkspace, "empty-evidence");
+  await mkdtemp(emptyEvidenceDir);
+
+  try {
+    const pageSlug = "locations/chamonix";
+    const acceptedPage = await acceptFixturePage(dbInst, seeded.projectId, pageSlug);
+    const contentDigest = acceptedPage.contentDigest;
+
+    const inseeClaim = makeInseeClaim(pageSlug, "claim-insee-03");
+
+    // emptyEvidenceDir has NO insee manifest or files
+    const trustStore = new TrustGovernanceStore(dbInst.db, {
+      evidenceRoot: emptyEvidenceDir,
+      repoRoot: tempWorkspace,
+    });
+
+    await trustStore.saveClaimLineage({
+      projectId: seeded.projectId,
+      pageIdentity: pageSlug,
+      contentDigest,
+      claims: [inseeClaim],
+    });
+
+    // Pure read of evidence: must not throw unhandled ENOENT, must return clean problem
+    const evidence = await trustStore.currentPageEvidence(seeded.projectId, pageSlug, contentDigest);
+    assert.ok(evidence.pageSourceInfo.problems.length > 0, "EVIDENCE-03: Must report problems when INSEE evidence is missing");
+    assert.match(
+      evidence.pageSourceInfo.problems[0]!,
+      /(?:Required INSEE evidence registry is unavailable|INSEE source snapshot.*is missing)/,
+      "EVIDENCE-03: Diagnostic must explain INSEE registry unavailability",
+    );
+  } finally {
+    await rm(tempWorkspace, { recursive: true, force: true });
+    await dbInst.close();
+  }
+});
+
+test("EVIDENCE-04: LEGAL_EVIDENCE_REQUIRED: Page with only municipal/PLU claims resolves legal evidence, does NOT require INSEE", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const seeded = await seedSutherlandProject(dbInst, `ev04-${Date.now()}`);
+
+  try {
+    const pageSlug = "locations/chamonix";
+    const acceptedPage = await acceptFixturePage(dbInst, seeded.projectId, pageSlug);
+    const contentDigest = acceptedPage.contentDigest;
+
+    const legalClaim = makeLegalClaim(pageSlug, "claim-legal-04");
+
+    const reqs = classifyPageEvidenceRequirements([legalClaim]);
+    assert.equal(reqs.category, "LEGAL_EVIDENCE_REQUIRED");
+    assert.equal(reqs.needsInsee, false, "EVIDENCE-04: INSEE must NOT be needed");
+    assert.equal(reqs.needsLegal, true, "EVIDENCE-04: Legal must be needed");
+
+    const trustStore = new TrustGovernanceStore(dbInst.db, { evidenceRoot: repoRoot });
+    await trustStore.saveClaimLineage({
+      projectId: seeded.projectId,
+      pageIdentity: pageSlug,
+      contentDigest,
+      claims: [legalClaim],
+    });
+
+    const evidence = await trustStore.currentPageEvidence(seeded.projectId, pageSlug, contentDigest);
+    assert.equal(evidence.registriesAvailable, true);
+    assert.equal(evidence.pageSourceInfo.problems.length, 0, "EVIDENCE-04: Legal evidence resolves with 0 problems");
+    assert.equal(evidence.pageSourceInfo.referencedCount, 1);
+    assert.ok(evidence.pageSourceInfo.digest);
+  } finally {
+    await dbInst.close();
+  }
+});
+
+test("EVIDENCE-05: FIRST_PARTY_WORK_REQUIRED: Page with only first-party calculations resolves without external sources", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const seeded = await seedSutherlandProject(dbInst, `ev05-${Date.now()}`);
+  const tempWorkspace = await mkdtemp(path.join(tmpdir(), "ev05-render-"));
+  const emptyEvidenceDir = path.join(tempWorkspace, "empty-evidence");
+  await mkdtemp(emptyEvidenceDir);
+
+  try {
+    const pageSlug = "services/advisory";
+    const acceptedPage = await acceptFixturePage(dbInst, seeded.projectId, pageSlug);
+    const contentDigest = acceptedPage.contentDigest;
+
+    const analyticalClaim = makeAnalyticalClaim(pageSlug, "claim-calc-05");
+    const workProductRecord = makeWorkProductRecord(pageSlug, "claim-calc-05", "wp-first-party-1");
+
+    const reqs = classifyPageEvidenceRequirements([analyticalClaim], [workProductRecord]);
+    assert.equal(reqs.category, "FIRST_PARTY_WORK_REQUIRED");
+    assert.equal(reqs.needsInsee, false);
+    assert.equal(reqs.needsLegal, false);
+    assert.equal(reqs.needsFirstParty, true);
+
+    // Even with empty evidenceRoot (no external data at all)
+    const trustStore = new TrustGovernanceStore(dbInst.db, {
+      evidenceRoot: emptyEvidenceDir,
+      repoRoot: tempWorkspace,
+    });
+
+    await trustStore.saveOriginalValue({
+      projectId: seeded.projectId,
+      record: workProductRecord,
+    });
+    await trustStore.saveClaimLineage({
+      projectId: seeded.projectId,
+      pageIdentity: pageSlug,
+      contentDigest,
+      claims: [analyticalClaim],
+    });
+
+    const evidence = await trustStore.currentPageEvidence(seeded.projectId, pageSlug, contentDigest);
+    assert.equal(evidence.pageSourceInfo.problems.length, 0, "EVIDENCE-05: First-party work does not fail on absent external sources");
+    assert.ok(evidence.workProductSetDigest, "EVIDENCE-05: Work product digest must be computed");
+  } finally {
+    await rm(tempWorkspace, { recursive: true, force: true });
+    await dbInst.close();
+  }
+});
+
+test("EVIDENCE-06: EVIDENCE_SOURCE_UNAVAILABLE: External claim referencing absent dataset generates clear diagnostic problem", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const seeded = await seedSutherlandProject(dbInst, `ev06-${Date.now()}`);
+  const tempWorkspace = await mkdtemp(path.join(tmpdir(), "ev06-render-"));
+  const emptyEvidenceDir = path.join(tempWorkspace, "empty-evidence");
+  await mkdtemp(emptyEvidenceDir);
+
+  try {
+    const pageSlug = "locations/chamonix";
+    const acceptedPage = await acceptFixturePage(dbInst, seeded.projectId, pageSlug);
+    const contentDigest = acceptedPage.contentDigest;
+
+    const inseeClaim = makeInseeClaim(pageSlug, "claim-insee-06");
+
+    const trustStore = new TrustGovernanceStore(dbInst.db, {
+      evidenceRoot: emptyEvidenceDir,
+      repoRoot: tempWorkspace,
+    });
+
+    await trustStore.saveClaimLineage({
+      projectId: seeded.projectId,
+      pageIdentity: pageSlug,
+      contentDigest,
+      claims: [inseeClaim],
+    });
+
+    const evidence = await trustStore.currentPageEvidence(seeded.projectId, pageSlug, contentDigest);
+    assert.ok(evidence.pageSourceInfo.problems.length > 0, "EVIDENCE-06: Missing source evidence must generate problems");
+    assert.match(
+      evidence.pageSourceInfo.problems[0]!,
+      /(?:Required INSEE evidence registry is unavailable|INSEE source snapshot.*is missing)/,
+      "EVIDENCE-06: Missing source evidence must generate problems",
+    );
+  } finally {
+    await rm(tempWorkspace, { recursive: true, force: true });
+    await dbInst.close();
+  }
+});
+
+test("EVIDENCE-07: MULTIPLE_EVIDENCE_TYPES_REQUIRED: Page with both INSEE and PLU evidence resolves both, fails if either is missing", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const seeded = await seedSutherlandProject(dbInst, `ev07-${Date.now()}`);
+  const tempWorkspace = await mkdtemp(path.join(tmpdir(), "ev07-render-"));
+  const emptyEvidenceDir = path.join(tempWorkspace, "empty-evidence");
+  await mkdtemp(emptyEvidenceDir);
+
+  try {
+    const pageSlug = "locations/chamonix";
+    const acceptedPage = await acceptFixturePage(dbInst, seeded.projectId, pageSlug);
+    const contentDigest = acceptedPage.contentDigest;
+
+    const inseeClaim = makeInseeClaim(pageSlug, "claim-insee-07");
+    const legalClaim = makeLegalClaim(pageSlug, "claim-legal-07");
+
+    const reqs = classifyPageEvidenceRequirements([inseeClaim, legalClaim]);
+    assert.equal(reqs.category, "MULTIPLE_EVIDENCE_TYPES_REQUIRED");
+    assert.equal(reqs.needsInsee, true);
+    assert.equal(reqs.needsLegal, true);
+
+    // Case 1: Valid evidenceRoot -> PASS with 0 problems
+    const trustStoreValid = new TrustGovernanceStore(dbInst.db, { evidenceRoot: repoRoot });
+    await trustStoreValid.saveClaimLineage({
+      projectId: seeded.projectId,
+      pageIdentity: pageSlug,
+      contentDigest,
+      claims: [inseeClaim, legalClaim],
+    });
+    const evidenceValid = await trustStoreValid.currentPageEvidence(seeded.projectId, pageSlug, contentDigest);
+    assert.equal(evidenceValid.registriesAvailable, true);
+    assert.equal(evidenceValid.pageSourceInfo.problems.length, 0, "EVIDENCE-07: Valid multi-source page must have 0 problems");
+
+    // Case 2: Missing evidenceRoot -> FAILS closed with diagnostic problem
+    const trustStoreMissing = new TrustGovernanceStore(dbInst.db, { evidenceRoot: emptyEvidenceDir });
+    const evidenceMissing = await trustStoreMissing.currentPageEvidence(seeded.projectId, pageSlug, contentDigest);
+    assert.ok(evidenceMissing.pageSourceInfo.problems.length > 0, "EVIDENCE-07: Missing evidence must produce problems");
+    assert.match(
+      evidenceMissing.pageSourceInfo.problems[0]!,
+      /(?:Required INSEE evidence registry is unavailable|INSEE source snapshot.*is missing)/,
+      "EVIDENCE-07: Missing evidence must produce problems",
+    );
+  } finally {
+    await rm(tempWorkspace, { recursive: true, force: true });
+    await dbInst.close();
+  }
+});
+
+test("EVIDENCE-08: Cross-project isolation: Two projects with different evidence configurations run concurrently without leakage", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const seededA = await seedSutherlandProject(dbInst, `ev08a-${Date.now()}`);
+  const seededB = await seedSutherlandProject(dbInst, `ev08b-${Date.now()}`);
+  const tempWorkspaceB = await mkdtemp(path.join(tmpdir(), "ev08b-render-"));
+  const emptyEvidenceDir = path.join(tempWorkspaceB, "empty-evidence");
+  await mkdtemp(emptyEvidenceDir);
+
+  try {
+    const pageSlug = "locations/chamonix";
+    const pageA = await acceptFixturePage(dbInst, seededA.projectId, pageSlug);
+    const pageB = await acceptFixturePage(dbInst, seededB.projectId, pageSlug);
+
+    const inseeClaimA = makeInseeClaim(pageSlug, "claim-08a");
+    const inseeClaimB = makeInseeClaim(pageSlug, "claim-08b");
+
+    const trustStoreA = new TrustGovernanceStore(dbInst.db, { evidenceRoot: repoRoot });
+    const trustStoreB = new TrustGovernanceStore(dbInst.db, { evidenceRoot: emptyEvidenceDir, repoRoot: tempWorkspaceB });
+
+    await trustStoreA.saveClaimLineage({
+      projectId: seededA.projectId,
+      pageIdentity: pageSlug,
+      contentDigest: pageA.contentDigest,
+      claims: [inseeClaimA],
+    });
+    await trustStoreB.saveClaimLineage({
+      projectId: seededB.projectId,
+      pageIdentity: pageSlug,
+      contentDigest: pageB.contentDigest,
+      claims: [inseeClaimB],
+    });
+
+    const [evA, evB] = await Promise.all([
+      trustStoreA.currentPageEvidence(seededA.projectId, pageSlug, pageA.contentDigest),
+      trustStoreB.currentPageEvidence(seededB.projectId, pageSlug, pageB.contentDigest),
+    ]);
+
+    assert.equal(evA.pageSourceInfo.problems.length, 0, "EVIDENCE-08: Project A with valid evidence must pass");
+    assert.ok(evB.pageSourceInfo.problems.length > 0, "EVIDENCE-08: Project B with empty evidence must fail closed");
+    assert.match(
+      evB.pageSourceInfo.problems[0]!,
+      /(?:Required INSEE evidence registry is unavailable|INSEE source snapshot.*is missing)/,
+      "EVIDENCE-08: Project B with empty evidence must fail closed",
+    );
+  } finally {
+    await rm(tempWorkspaceB, { recursive: true, force: true });
+    await dbInst.close();
+  }
+});
+
+test("EVIDENCE-09: Six-page Sutherland verification: each page resolves only its required evidence types and all pass", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  const seeded = await seedSutherlandProject(dbInst, `ev09-${Date.now()}`);
+
+  try {
+    const trustStore = new TrustGovernanceStore(dbInst.db, { evidenceRoot: repoRoot });
+    const inseeRegistry = loadInseeEvidenceRegistry(repoRoot);
+    const snapMeg = inseeRegistry.snapshots.find((s) => s.geoCode === "74173")!;
+
+    const sutherlandPagesConfig = [
+      {
+        slug: "home",
+        expectedCategory: "NO_EXTERNAL_EVIDENCE_REQUIRED",
+        claims: [] as ClaimLineage[],
+        originals: [] as OriginalValueRecord[],
+      },
+      {
+        slug: "services/buyer-side-advisory",
+        expectedCategory: "NO_EXTERNAL_EVIDENCE_REQUIRED",
+        claims: [] as ClaimLineage[],
+        originals: [] as OriginalValueRecord[],
+      },
+      {
+        slug: "locations/chamonix",
+        expectedCategory: "MULTIPLE_EVIDENCE_TYPES_REQUIRED",
+        claims: [
+          makeInseeClaim("locations/chamonix", "claim-cham-insee", "74056"),
+          makeLegalClaim("locations/chamonix", "claim-cham-plu"),
+        ],
+        originals: [] as OriginalValueRecord[],
+      },
+      {
+        slug: "advisory/investment-decision-framework",
+        expectedCategory: "FIRST_PARTY_WORK_REQUIRED",
+        claims: [
+          makeAnalyticalClaim("advisory/investment-decision-framework", "claim-inv-calc"),
+        ],
+        originals: [
+          makeWorkProductRecord("advisory/investment-decision-framework", "claim-inv-calc", "wp-inv-1"),
+        ],
+      },
+      {
+        slug: "research/alpine-decision-framework",
+        expectedCategory: "MULTIPLE_EVIDENCE_TYPES_REQUIRED",
+        claims: [
+          makeInseeClaim("research/alpine-decision-framework", "claim-res-insee", "74173"),
+        ],
+        originals: [
+          makeWorkProductRecord(
+            "research/alpine-decision-framework",
+            "claim-res-insee",
+            "wp-res-1",
+            [snapMeg.rawContentDigest],
+            ["9,354 dwellings in Megève", "INSEE RP2022 COM-74173"],
+          ),
+        ],
+      },
+      {
+        slug: "research/chamonix-supply-notes",
+        expectedCategory: "MULTIPLE_EVIDENCE_TYPES_REQUIRED",
+        claims: [
+          makeInseeClaim("research/chamonix-supply-notes", "claim-sup-insee", "74056"),
+          makeLegalClaim("research/chamonix-supply-notes", "claim-sup-plu"),
+        ],
+        originals: [] as OriginalValueRecord[],
+      },
+    ];
+
+    assert.equal(sutherlandPagesConfig.length, 6, "EVIDENCE-09: Exactly 6 Sutherland pages defined");
+
+    for (const pageConfig of sutherlandPagesConfig) {
+      const page = await acceptFixturePage(dbInst, seeded.projectId, pageConfig.slug);
+      const contentDigest = page.contentDigest;
+
+      for (const orig of pageConfig.originals) {
+        await trustStore.saveOriginalValue({
+          projectId: seeded.projectId,
+          record: orig,
+        });
+      }
+
+      if (pageConfig.claims.length > 0) {
+        await trustStore.saveClaimLineage({
+          projectId: seeded.projectId,
+          pageIdentity: pageConfig.slug,
+          contentDigest,
+          claims: pageConfig.claims,
+        });
+      }
+
+      const reqs = classifyPageEvidenceRequirements(pageConfig.claims, pageConfig.originals);
+      assert.equal(
+        reqs.category,
+        pageConfig.expectedCategory,
+        `EVIDENCE-09: Page ${pageConfig.slug} classified as ${pageConfig.expectedCategory}`,
+      );
+
+      const evidence = await trustStore.currentPageEvidence(seeded.projectId, pageConfig.slug, contentDigest);
+      assert.equal(
+        evidence.pageSourceInfo.problems.length,
+        0,
+        `EVIDENCE-09: Page "${pageConfig.slug}" must have 0 evidence problems (found: ${evidence.pageSourceInfo.problems.join("; ")})`,
+      );
+      assert.equal(evidence.registriesAvailable, true, `EVIDENCE-09: Page "${pageConfig.slug}" registries available`);
+    }
+  } finally {
+    await dbInst.close();
+  }
+});
+

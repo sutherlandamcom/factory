@@ -626,7 +626,7 @@ export function verifyOriginalWorkProduct(
   return { valid: problems.length === 0, problems };
 }
 
-function findRepoRoot(startDir: string): string {
+export function findRepoRoot(startDir: string): string {
   let curr = path.resolve(startDir);
   for (let i = 0; i < 10; i++) {
     if (existsSync(path.join(curr, "package.json")) && existsSync(path.join(curr, "docs"))) {

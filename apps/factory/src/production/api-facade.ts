@@ -58,10 +58,10 @@ export class ProductionApiFacade {
     private readonly db: FactoryDb,
     private readonly repoRoot: string,
     /** Trusted backend policy only (see TrustQaInput.syntheticFixtureContent). */
-    private readonly trustPolicy: { syntheticFixtureContent?: boolean } = {},
+    private readonly trustPolicy: { syntheticFixtureContent?: boolean; evidenceRoot?: string } = {},
   ) {
-    this.store = new ProductionStore(db, { repoRoot });
-    this.build = new ProductionBuildService(db, repoRoot);
+    this.store = new ProductionStore(db, { repoRoot, evidenceRoot: trustPolicy.evidenceRoot });
+    this.build = new ProductionBuildService(db, repoRoot, { evidenceRoot: trustPolicy.evidenceRoot });
   }
 
   async workspace(projectId: string): Promise<ProductionWorkspaceView> {
@@ -192,7 +192,11 @@ export class ProductionApiFacade {
       starterSrcDir: path.join(this.repoRoot, "sites", "starter", "src"),
       manifestSetDigest,
     })));
-    const trust = new TrustGovernanceStore(this.db, { repoRoot: this.repoRoot });
+    const trustEvidenceRoot = this.trustPolicy.evidenceRoot ?? this.repoRoot;
+    const trust = new TrustGovernanceStore(this.db, {
+      repoRoot: this.repoRoot,
+      evidenceRoot: this.trustPolicy.evidenceRoot,
+    });
     const contentDigests = new Map<string, string>();
     for (const m of manifests) {
       const bundle = await this.store.deriveAuthorityBundle({
@@ -209,8 +213,8 @@ export class ProductionApiFacade {
       contentDigests,
       manifestSetDigest,
       syntheticFixtureContent: this.trustPolicy.syntheticFixtureContent === true,
-      inseeEvidence: loadInseeEvidenceRegistry(this.repoRoot),
-      legalEvidence: loadLegalEvidenceRegistry(this.repoRoot),
+      inseeEvidence: loadInseeEvidenceRegistry(trustEvidenceRoot),
+      legalEvidence: loadLegalEvidenceRegistry(trustEvidenceRoot),
     });
     qa.checks.push(...trustQa.checks);
     const pageRoutes = manifests.map((manifest) => manifest.input.route);

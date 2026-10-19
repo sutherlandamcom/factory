@@ -215,7 +215,7 @@ export function derivedSharePercent(numerator: number, denominator: number): num
 // Production integration: registry + claim-level independent verification.
 // ---------------------------------------------------------------------------
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { ClaimLineage, EvidenceBinding, SourceRef } from "@factory/contracts";
 
@@ -245,7 +245,15 @@ interface ManifestEntry {
 /** Load the stored snapshots listed in the evidence manifest; verify every digest. */
 export function loadInseeEvidenceRegistry(repoRoot: string): InseeEvidenceRegistry {
   const dir = path.join(repoRoot, ...INSEE_EVIDENCE_DIR);
-  const manifest = JSON.parse(readFileSync(path.join(dir, "manifest.json"), "utf8")) as { snapshots: ManifestEntry[] };
+  const manifestPath = path.join(dir, "manifest.json");
+  if (!existsSync(manifestPath)) {
+    return {
+      facts: [],
+      rejected: [{ geoCode: "*", reason: `insee_manifest_not_found: ${manifestPath}` }],
+      snapshots: [],
+    };
+  }
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { snapshots: ManifestEntry[] };
   const registry: InseeEvidenceRegistry = { facts: [], rejected: [], snapshots: [] };
   for (const entry of manifest.snapshots) {
     const snapshot: SourceEvidenceSnapshot = {
@@ -262,7 +270,11 @@ export function loadInseeEvidenceRegistry(repoRoot: string): InseeEvidenceRegist
     };
     try {
       if (entry.originalUrl !== inseeSourceUrl(entry.geoCode)) throw new Error("insee_manifest_url_mismatch");
-      registry.facts.push(...extractInseeFacts(snapshot, readFileSync(path.join(dir, entry.file))));
+      const filePath = path.join(dir, entry.file);
+      if (!existsSync(filePath)) {
+        throw new Error(`insee_snapshot_file_not_found: ${entry.file}`);
+      }
+      registry.facts.push(...extractInseeFacts(snapshot, readFileSync(filePath)));
       registry.snapshots.push(snapshot);
     } catch (error) {
       registry.rejected.push({ geoCode: entry.geoCode, reason: error instanceof Error ? error.message : String(error) });

@@ -358,6 +358,7 @@ export interface TrustedExternalIdpConfig {
   publicKeyPem?: string;
   db?: FactoryDb;
   revocationStore?: SessionRevocationStore;
+  isTestHarness?: boolean;
 }
 
 /**
@@ -387,6 +388,7 @@ export class TrustedExternalIdpAdapter implements TrustedIdentityProvider {
   ) {
     let resolvedDb = db;
     let customStore: SessionRevocationStore | undefined;
+    let isTestHarness = false;
     if (typeof configOrProviderId === "string") {
       this.providerId = configOrProviderId;
       const envPem = process.env.FACTORY_IDP_PUBLIC_KEY_PEM?.trim();
@@ -397,12 +399,18 @@ export class TrustedExternalIdpAdapter implements TrustedIdentityProvider {
       this.publicKey = pem ? createPublicKey(pem) : null;
       resolvedDb = configOrProviderId.db ?? db;
       customStore = configOrProviderId.revocationStore;
+      isTestHarness = configOrProviderId.isTestHarness === true;
     }
 
     if (customStore) {
       this.revocationStore = customStore;
     } else if (resolvedDb) {
       this.revocationStore = new PostgreSqlSessionRevocationStore(resolvedDb);
+    } else if (this.publicKey && !isTestHarness) {
+      throw new TrustGovernanceError(
+        "durable_session_revocation_required",
+        "Production identity provider requires durable shared session revocation storage (PostgreSQL). Process-local revocation is prohibited.",
+      );
     } else {
       this.revocationStore = new InMemorySessionRevocationStore();
     }
@@ -435,7 +443,12 @@ export class TrustedExternalIdpAdapter implements TrustedIdentityProvider {
     const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
     const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
     const privKeyObj = createPrivateKey(privateKeyPem);
-    const adapter = new TrustedExternalIdpAdapter({ providerId, publicKeyPem, db });
+    const adapter = new TrustedExternalIdpAdapter({
+      providerId,
+      publicKeyPem,
+      db,
+      isTestHarness: true,
+    });
 
     const signPrincipalAssertion = (params: {
       actorId: string;

@@ -27,18 +27,31 @@ import {
   type OriginalValueRecord,
 } from "@factory/contracts";
 import { normalizePageIdentity } from "../page-authority/store.js";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import {
   EditorialAuditStore,
   ProjectMembershipAuthority,
   AuditSealKeyring,
 } from "./editorial-review-boundary.js";
-import { loadInseeEvidenceRegistry, type InseeEvidenceRegistry } from "./insee-evidence.js";
-import { loadLegalEvidenceRegistry, type LegalEvidenceRegistry } from "./legal-evidence.js";
+import {
+  loadInseeEvidenceRegistry,
+  INSEE_EVIDENCE_DIR,
+  isInseeSourceRef,
+  type InseeEvidenceRegistry,
+} from "./insee-evidence.js";
+import {
+  loadLegalEvidenceRegistry,
+  LEGAL_EVIDENCE_DIR,
+  isLegalOrRegulatoryClaim,
+  type LegalEvidenceRegistry,
+} from "./legal-evidence.js";
 import {
   computeClaimSetDigest,
   computePageSourceEvidenceDigest,
   computeSourceEvidenceSetDigest,
   computeWorkProductSetDigest,
+  findRepoRoot,
 } from "../production/qa/trust.js";
 
 /**
@@ -71,6 +84,7 @@ function trustError(code: string, message: string): TrustGovernanceError {
 /** Authenticated source-evidence inputs used to verify review freshness. */
 export interface TrustEvidenceOptions {
   repoRoot?: string;
+  evidenceRoot?: string;
   inseeEvidence?: InseeEvidenceRegistry;
   legalEvidence?: LegalEvidenceRegistry;
   /** Optional explicit override of the global source-evidence-set digest. */
@@ -81,6 +95,98 @@ export interface TrustEvidenceOptions {
 export interface TrustGovernanceStoreOptions extends TrustEvidenceOptions {
   auditStore?: EditorialAuditStore;
   membershipAuthority?: ProjectMembershipAuthority;
+}
+
+export type PageEvidenceRequirementType =
+  | "NO_EXTERNAL_EVIDENCE_REQUIRED"
+  | "INSEE_EVIDENCE_REQUIRED"
+  | "LEGAL_EVIDENCE_REQUIRED"
+  | "OTHER_EXTERNAL_EVIDENCE_REQUIRED"
+  | "FIRST_PARTY_WORK_REQUIRED"
+  | "MULTIPLE_EVIDENCE_TYPES_REQUIRED";
+
+export interface PageEvidenceRequirements {
+  category: PageEvidenceRequirementType;
+  needsInsee: boolean;
+  needsLegal: boolean;
+  needsFirstParty: boolean;
+  needsOtherExternal: boolean;
+}
+
+/**
+ * Dependency-aware evidence requirements classification.
+ * Inspects accepted page claims and original-value records to determine
+ * exactly which source registries are required, avoiding unnecessary
+ * evidence loads or false failures on unrelated registries.
+ */
+export function classifyPageEvidenceRequirements(
+  claims: ClaimLineage[],
+  originals: OriginalValueRecord[] = [],
+): PageEvidenceRequirements {
+  const needsInsee = claims.some((c) =>
+    c.sourceRefs.some(
+      (r) =>
+        (r.evidenceBindings && r.evidenceBindings.length > 0) ||
+        isInseeSourceRef(r) ||
+        r.canonicalDatasetId?.startsWith("INSEE-") ||
+        r.acquisitionProvenance?.trustedProviderId === "insee",
+    ),
+  );
+
+  const needsLegal = claims.some(
+    (c) =>
+      isLegalOrRegulatoryClaim(c) ||
+      c.sourceRefs.some(
+        (r) =>
+          r.sourceClassification === "PRIMARY_SOURCE_CAPTURE" ||
+          r.sourceClassification === "PRIMARY_PUBLIC_RECORD" ||
+          r.sourceClassification === "VERIFIED_OFFICIAL_ARCHIVE" ||
+          r.sourceClassification === "EXTRACTED_LEGAL_PROVISION" ||
+          r.canonicalDatasetId?.startsWith("LEGAL-") ||
+          r.canonicalDatasetId?.startsWith("PLU-") ||
+          r.canonicalDatasetId?.startsWith("CGI-"),
+      ),
+  );
+
+  const needsFirstParty =
+    originals.length > 0 ||
+    claims.some(
+      (c) =>
+        Boolean(c.calculationRef) ||
+        c.sourceRefs.some((r) => r.evidenceOrigin === "ACCEPTED_FIRST_PARTY"),
+    );
+
+  const needsOtherExternal = claims.some((c) =>
+    c.sourceRefs.some(
+      (r) =>
+        (r.evidenceOrigin === "EXTERNAL_ACQUIRED" || r.evidenceOrigin === "VERIFIED_ARCHIVED_EXTERNAL") &&
+        !isInseeSourceRef(r) &&
+        !isLegalOrRegulatoryClaim(c),
+    ),
+  );
+
+  const count =
+    (needsInsee ? 1 : 0) +
+    (needsLegal ? 1 : 0) +
+    (needsFirstParty ? 1 : 0) +
+    (needsOtherExternal ? 1 : 0);
+
+  let category: PageEvidenceRequirementType;
+  if (count > 1) {
+    category = "MULTIPLE_EVIDENCE_TYPES_REQUIRED";
+  } else if (needsInsee) {
+    category = "INSEE_EVIDENCE_REQUIRED";
+  } else if (needsLegal) {
+    category = "LEGAL_EVIDENCE_REQUIRED";
+  } else if (needsFirstParty) {
+    category = "FIRST_PARTY_WORK_REQUIRED";
+  } else if (needsOtherExternal) {
+    category = "OTHER_EXTERNAL_EVIDENCE_REQUIRED";
+  } else {
+    category = "NO_EXTERNAL_EVIDENCE_REQUIRED";
+  }
+
+  return { category, needsInsee, needsLegal, needsFirstParty, needsOtherExternal };
 }
 
 export class TrustGovernanceStore {
@@ -103,12 +209,56 @@ export class TrustGovernanceStore {
     return this.membershipAuthority;
   }
 
-  private resolveEvidence(): { inseeEvidence?: InseeEvidenceRegistry; legalEvidence?: LegalEvidenceRegistry } {
-    const root = this.evidenceOptions.repoRoot;
-    return {
-      inseeEvidence: this.evidenceOptions.inseeEvidence ?? (root ? loadInseeEvidenceRegistry(root) : undefined),
-      legalEvidence: this.evidenceOptions.legalEvidence ?? (root ? loadLegalEvidenceRegistry(root) : undefined),
-    };
+  private resolveEvidenceRoot(): string | undefined {
+    if (this.evidenceOptions.evidenceRoot) {
+      return this.evidenceOptions.evidenceRoot;
+    }
+    if (this.evidenceOptions.repoRoot) {
+      const inseeManifest = path.join(this.evidenceOptions.repoRoot, ...INSEE_EVIDENCE_DIR, "manifest.json");
+      const legalManifest = path.join(this.evidenceOptions.repoRoot, ...LEGAL_EVIDENCE_DIR, "manifest.json");
+      if (existsSync(inseeManifest) || existsSync(legalManifest)) {
+        return this.evidenceOptions.repoRoot;
+      }
+    }
+    const discovered = findRepoRoot(process.cwd());
+    const discoveredInsee = path.join(discovered, ...INSEE_EVIDENCE_DIR, "manifest.json");
+    const discoveredLegal = path.join(discovered, ...LEGAL_EVIDENCE_DIR, "manifest.json");
+    if (existsSync(discoveredInsee) || existsSync(discoveredLegal)) {
+      return discovered;
+    }
+    return this.evidenceOptions.repoRoot ?? discovered;
+  }
+
+  private resolveEvidence(
+    needsInsee = true,
+    needsLegal = true,
+  ): { inseeEvidence?: InseeEvidenceRegistry; legalEvidence?: LegalEvidenceRegistry } {
+    let inseeEvidence = this.evidenceOptions.inseeEvidence;
+    let legalEvidence = this.evidenceOptions.legalEvidence;
+
+    if (!needsInsee && !needsLegal) {
+      return { inseeEvidence, legalEvidence };
+    }
+
+    const resolvedRoot = this.resolveEvidenceRoot();
+
+    if (needsInsee && !inseeEvidence && resolvedRoot) {
+      try {
+        inseeEvidence = loadInseeEvidenceRegistry(resolvedRoot);
+      } catch {
+        inseeEvidence = undefined;
+      }
+    }
+
+    if (needsLegal && !legalEvidence && resolvedRoot) {
+      try {
+        legalEvidence = loadLegalEvidenceRegistry(resolvedRoot);
+      } catch {
+        legalEvidence = undefined;
+      }
+    }
+
+    return { inseeEvidence, legalEvidence };
   }
 
   /**
@@ -124,29 +274,36 @@ export class TrustGovernanceStore {
   ) {
     const claims = await this.listClaimLineage(projectId, pageIdentity, contentDigest);
     const originals = await this.listOriginalValues(projectId, pageIdentity);
-    const { inseeEvidence, legalEvidence } = this.resolveEvidence();
+    const reqs = classifyPageEvidenceRequirements(claims, originals);
+    const { inseeEvidence, legalEvidence } = this.resolveEvidence(reqs.needsInsee, reqs.needsLegal);
     const pageSourceInfo = computePageSourceEvidenceDigest({ claims, originals, inseeEvidence, legalEvidence });
     const claimSetDigest = claims.length > 0 ? computeClaimSetDigest(claims) : undefined;
     const workProductSetDigest = originals.length > 0 ? computeWorkProductSetDigest(originals) : undefined;
     const rev = latestReview === undefined ? await this.latestReview(projectId, pageIdentity) : latestReview;
-    const registriesAvailable = Boolean(inseeEvidence && legalEvidence);
 
-    const pageNeedsInsee = claims.some((c) => c.sourceRefs.some((r) => r.evidenceBindings && r.evidenceBindings.length > 0));
-    const pageNeedsLegal = claims.some((c) => c.sourceRefs.some((r) => !r.evidenceBindings || r.evidenceBindings.length === 0));
     const pageNeedsSources =
-      pageNeedsInsee ||
-      pageNeedsLegal ||
+      reqs.needsInsee ||
+      reqs.needsLegal ||
       (originals.length > 0 && originals.some((o) => (o.workProduct?.inputDatasetDigests.length ?? 0) > 0));
 
-    if (pageNeedsInsee && !inseeEvidence) {
+    if (reqs.needsInsee && (!inseeEvidence || inseeEvidence.snapshots.length === 0)) {
       pageSourceInfo.problems.push("review_authority_stale: Required INSEE evidence registry is unavailable.");
     }
-    if (pageNeedsLegal && !legalEvidence) {
+    if (reqs.needsLegal && (!legalEvidence || legalEvidence.snapshots.length === 0)) {
       pageSourceInfo.problems.push("review_authority_stale: Required legal evidence registry is unavailable.");
     }
-    if (pageNeedsSources && !registriesAvailable && pageSourceInfo.problems.length === 0) {
+
+    const requiredRegistriesAvailable =
+      (!reqs.needsInsee || Boolean(inseeEvidence && inseeEvidence.snapshots.length > 0)) &&
+      (!reqs.needsLegal || Boolean(legalEvidence && legalEvidence.snapshots.length > 0));
+
+    if (pageNeedsSources && !requiredRegistriesAvailable && pageSourceInfo.problems.length === 0) {
       pageSourceInfo.problems.push("review_authority_stale: Required source evidence registries are unavailable.");
     }
+
+    const registriesAvailable = Boolean(
+      (!reqs.needsInsee || inseeEvidence) && (!reqs.needsLegal || legalEvidence),
+    );
 
     const globalDigest = computeSourceEvidenceSetDigest({ inseeEvidence, legalEvidence });
     const sourceEvidenceSetDigest =
@@ -157,7 +314,7 @@ export class TrustGovernanceStore {
       (!rev?.pageSourceEvidenceDigest || rev.pageSourceEvidenceDigest === pageSourceInfo.digest) &&
       rev?.sourceEvidenceSetDigest
         ? rev.sourceEvidenceSetDigest
-        : (registriesAvailable ? globalDigest : undefined));
+        : (registriesAvailable && (inseeEvidence || legalEvidence) ? globalDigest : undefined));
     return {
       claims,
       originals,
@@ -166,6 +323,7 @@ export class TrustGovernanceStore {
       pageSourceInfo,
       sourceEvidenceSetDigest,
       registriesAvailable,
+      evidenceRequirements: reqs,
     };
   }
 

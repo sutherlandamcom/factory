@@ -26,9 +26,13 @@ import { deterministicDigest } from "../intelligence/digest.js";
 import { createAssetStorage, type AssetStorage } from "../assets/storage.js";
 import { requireProductionDerivativeSet } from "../derivatives/production-verifier.js";
 import { ProductionStore } from "./store.js";
-import { TrustGovernanceStore } from "../trust/store.js";
+import { TrustGovernanceStore, type TrustEvidenceOptions } from "../trust/store.js";
 import { deriveDesignImplementationContract } from "./design-implementation.js";
 import type { DesignImplementationContract } from "@factory/contracts";
+
+export interface ProductionRenderCompilerOptions extends TrustEvidenceOptions {
+  evidenceRoot?: string;
+}
 
 /**
  * PRODUCTION RENDER MANIFEST — Macro Run 9 (Phase 2).
@@ -183,6 +187,7 @@ export class ProductionRenderCompiler {
   constructor(
     private readonly db: FactoryDb,
     private readonly repoRoot: string,
+    private readonly options: ProductionRenderCompilerOptions = {},
   ) {
     this.storage = createAssetStorage(repoRoot);
   }
@@ -198,7 +203,15 @@ export class ProductionRenderCompiler {
     assetSnapshotDir: string;
     registry?: Array<{ route: string; title: string }>;
   }): Promise<ProductionRenderManifest> {
-    const store = new ProductionStore(this.db, { repoRoot: this.repoRoot });
+    const trustEvidenceOptions: TrustEvidenceOptions = {
+      repoRoot: this.repoRoot,
+      evidenceRoot: this.options.evidenceRoot,
+      inseeEvidence: this.options.inseeEvidence,
+      legalEvidence: this.options.legalEvidence,
+      sourceEvidenceSetDigest: this.options.sourceEvidenceSetDigest,
+      keyring: this.options.keyring,
+    };
+    const store = new ProductionStore(this.db, trustEvidenceOptions);
     const [productionInput] = await this.db
       .select()
       .from(productionPageInputs)
@@ -427,7 +440,7 @@ export class ProductionRenderCompiler {
       composition = deriveManifestComposition(dic, content, activeDeclaredSlots, productionInput.pageType);
       manifestVersion = "production-v3";
     }
-    const trustStore = new TrustGovernanceStore(this.db, { repoRoot: this.repoRoot });
+    const trustStore = new TrustGovernanceStore(this.db, trustEvidenceOptions);
     const evidence = await trustStore.currentPageEvidence(
       input.projectId,
       productionInput.pageIdentity,

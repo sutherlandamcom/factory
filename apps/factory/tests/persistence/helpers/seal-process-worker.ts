@@ -22,7 +22,10 @@ async function main() {
 
   try {
     if (command === "record-approval") {
-      const harness = TrustedExternalIdpAdapter.createTestHarness(args.trustedProviderId ?? "sutherland-corp-okta");
+      const harness = TrustedExternalIdpAdapter.createTestHarness(
+        args.trustedProviderId ?? "sutherland-corp-okta",
+        dbInst.db,
+      );
       const token = harness.issueSignedSession({
         actorId: args.actorId,
         actorName: args.actorName ?? "Test Reviewer",
@@ -32,10 +35,8 @@ async function main() {
       const membership = ProjectMembershipAuthority.getInstance(dbInst.db);
       await membership.grantMembership(args.projectId, args.actorId, ["EDITORIAL_REVIEW:APPROVE"], args.actorRole ?? "EDITORIAL_BOARD", dbInst.db);
 
-      const trustStore = new TrustGovernanceStore(dbInst.db);
-      const auditStore = EditorialAuditStore.getInstance(dbInst.db);
-      // Ensure keyring picks up process environment
-      auditStore.setKeyring(AuditSealKeyring.fromEnvironment());
+      const auditStore = EditorialAuditStore.getInstance(dbInst.db, AuditSealKeyring.fromEnvironment());
+      const trustStore = new TrustGovernanceStore(dbInst.db, { auditStore });
 
       const service = new EditorialReviewService(trustStore, harness.adapter, membership, auditStore);
       const review = await service.recordAuthenticatedApproval({
@@ -64,8 +65,7 @@ async function main() {
         authorityKind: review.authorityKind,
       }));
     } else if (command === "verify-audit-event") {
-      const auditStore = EditorialAuditStore.getInstance(dbInst.db);
-      auditStore.setKeyring(AuditSealKeyring.fromEnvironment());
+      const auditStore = EditorialAuditStore.getInstance(dbInst.db, AuditSealKeyring.fromEnvironment());
       const event = await auditStore.getApprovalAuditEvent(args.eventId, dbInst.db);
       console.log(JSON.stringify({
         ok: true,
@@ -77,9 +77,8 @@ async function main() {
         contentDigest: event?.contentDigest,
       }));
     } else if (command === "verify-review-authority") {
-      const trustStore = new TrustGovernanceStore(dbInst.db);
-      const auditStore = EditorialAuditStore.getInstance(dbInst.db);
-      auditStore.setKeyring(AuditSealKeyring.fromEnvironment());
+      const auditStore = EditorialAuditStore.getInstance(dbInst.db, AuditSealKeyring.fromEnvironment());
+      const trustStore = new TrustGovernanceStore(dbInst.db, { auditStore });
 
       const result = await trustStore.currentReview(
         args.projectId,
@@ -142,6 +141,54 @@ async function main() {
           message: err.message,
         }));
       }
+    } else if (command === "attempt-approval-with-token") {
+      const adapter = new TrustedExternalIdpAdapter({
+        providerId: args.trustedProviderId ?? "sutherland-corp-okta",
+        publicKeyPem: args.publicKeyPem,
+        db: dbInst.db,
+      });
+      const membership = ProjectMembershipAuthority.getInstance(dbInst.db);
+      const auditStore = EditorialAuditStore.getInstance(dbInst.db, AuditSealKeyring.fromEnvironment());
+      const trustStore = new TrustGovernanceStore(dbInst.db, { auditStore });
+      const service = new EditorialReviewService(trustStore, adapter, membership, auditStore);
+      try {
+        const review = await service.recordAuthenticatedApproval({
+          projectId: args.projectId,
+          pageIdentity: args.pageIdentity,
+          contentDigest: args.contentDigest,
+          claimSetDigest: args.claimSetDigest,
+          sourceEvidenceSetDigest: args.sourceEvidenceSetDigest,
+          verifiedClaimIds: args.verifiedClaimIds ?? ["claim-1"],
+          note: args.note ?? "Worker token approval attempt",
+          sessionToken: args.sessionToken,
+          reviewerRef: args.reviewerRef ?? args.actorId,
+          reviewerExpertise: args.reviewerExpertise ?? "Independent Reviewer",
+          reviewAction: "APPROVED",
+        });
+        console.log(JSON.stringify({
+          ok: true,
+          reviewEventId: review.approvalEvent?.reviewEventId,
+          authorityKind: review.authorityKind,
+        }));
+      } catch (err: any) {
+        console.log(JSON.stringify({
+          ok: false,
+          error: err.code || err.message,
+          message: err.message,
+        }));
+      }
+    } else if (command === "verify-session") {
+      const adapter = new TrustedExternalIdpAdapter({
+        providerId: args.trustedProviderId ?? "sutherland-corp-okta",
+        publicKeyPem: args.publicKeyPem,
+        db: dbInst.db,
+      });
+      const res = await adapter.verifySession(args.sessionToken);
+      console.log(JSON.stringify({
+        ok: true,
+        valid: res !== null,
+        actorId: res?.actorId,
+      }));
     } else {
       throw new Error(`Unknown command: ${command}`);
     }

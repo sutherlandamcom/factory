@@ -472,75 +472,80 @@ export class ProductionStore {
     // verification applies to this exact implementation).
     const digest = deterministicDigest(data);
 
-    // Idempotency: identical upstream authority + identical renderer config
-    // returns the existing latest input for this page identity.
-    const [latest] = await this.db
-      .select()
-      .from(productionPageInputs)
-      .where(
-        and(
-          eq(productionPageInputs.projectId, input.projectId),
-          eq(productionPageInputs.pageIdentity, input.pageSlug),
-        ),
-      )
-      .orderBy(desc(productionPageInputs.version))
-      .limit(1);
-    if (latest && latest.inputDigest === digest) {
-      return latest;
-    }
-
-    const [maxVersion] = await this.db
-      .select({ maxVersion: sql<number>`coalesce(max(${productionPageInputs.version}), 0)` })
-      .from(productionPageInputs)
-      .where(eq(productionPageInputs.projectId, input.projectId));
-    const nextVersion = (maxVersion?.maxVersion ?? 0) + 1;
-    const id = `ppin-${randomUUID()}`;
-    try {
-      const [row] = await this.db
-        .insert(productionPageInputs)
-        .values({
-          id,
-          projectId: input.projectId,
-          version: nextVersion,
-          pageIdentity: input.pageSlug,
-          pageType: data.pageType,
-          route: data.route,
-          canonicalOrigin: input.siteIdentity.canonicalOrigin,
-          siteId: input.siteIdentity.siteId,
-          siteName: input.siteIdentity.siteName,
-          siteLanguage: input.siteIdentity.language,
-          siteProfileDigest: input.siteIdentity.profileDigest,
-          acceptedContentId: data.acceptedContent.id,
-          acceptedContentVersion: data.acceptedContent.version,
-          acceptedContentDigest: data.acceptedContent.digest,
-          acceptedDesignId: data.acceptedDesign.id,
-          acceptedDesignVersion: data.acceptedDesign.version,
-          acceptedDesignDigest: data.acceptedDesign.digest,
-          acceptedVisualSetId: data.acceptedVisualSet.id,
-          acceptedVisualSetVersion: data.acceptedVisualSet.version,
-          acceptedVisualSetDigest: data.acceptedVisualSet.digest,
-          rendererId: data.renderer.id,
-          rendererVersion: data.renderer.version,
-          rendererPolicyVersion: data.renderer.policyVersion,
-          data,
-          inputDigest: digest,
-        })
-        .returning();
-      return row!;
-    } catch (error) {
-      // Concurrent route claims or version races fail closed with the typed
-      // conflict (drizzle wraps driver errors: check both shapes).
-      const pgCode =
-        (error as { code?: string } | null)?.code ??
-        (error as { cause?: { code?: string } | null } | null)?.cause?.code;
-      if (pgCode === "23505" || pgCode === "23514") {
-        throw productionError(
-          "production_route_conflict",
-          "Production input rejected: route/version conflict under concurrent derivation.",
-        );
+    return await this.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`,
+      );
+      // Idempotency: identical upstream authority + identical renderer config
+      // returns the existing latest input for this page identity.
+      const [latest] = await tx
+        .select()
+        .from(productionPageInputs)
+        .where(
+          and(
+            eq(productionPageInputs.projectId, input.projectId),
+            eq(productionPageInputs.pageIdentity, input.pageSlug),
+          ),
+        )
+        .orderBy(desc(productionPageInputs.version))
+        .limit(1);
+      if (latest && latest.inputDigest === digest) {
+        return latest;
       }
-      throw error;
-    }
+
+      const [maxVersion] = await tx
+        .select({ maxVersion: sql<number>`coalesce(max(${productionPageInputs.version}), 0)` })
+        .from(productionPageInputs)
+        .where(eq(productionPageInputs.projectId, input.projectId));
+      const nextVersion = (maxVersion?.maxVersion ?? 0) + 1;
+      const id = `ppin-${randomUUID()}`;
+      try {
+        const [row] = await tx
+          .insert(productionPageInputs)
+          .values({
+            id,
+            projectId: input.projectId,
+            version: nextVersion,
+            pageIdentity: input.pageSlug,
+            pageType: data.pageType,
+            route: data.route,
+            canonicalOrigin: input.siteIdentity.canonicalOrigin,
+            siteId: input.siteIdentity.siteId,
+            siteName: input.siteIdentity.siteName,
+            siteLanguage: input.siteIdentity.language,
+            siteProfileDigest: input.siteIdentity.profileDigest,
+            acceptedContentId: data.acceptedContent.id,
+            acceptedContentVersion: data.acceptedContent.version,
+            acceptedContentDigest: data.acceptedContent.digest,
+            acceptedDesignId: data.acceptedDesign.id,
+            acceptedDesignVersion: data.acceptedDesign.version,
+            acceptedDesignDigest: data.acceptedDesign.digest,
+            acceptedVisualSetId: data.acceptedVisualSet.id,
+            acceptedVisualSetVersion: data.acceptedVisualSet.version,
+            acceptedVisualSetDigest: data.acceptedVisualSet.digest,
+            rendererId: data.renderer.id,
+            rendererVersion: data.renderer.version,
+            rendererPolicyVersion: data.renderer.policyVersion,
+            data,
+            inputDigest: digest,
+          })
+          .returning();
+        return row!;
+      } catch (error) {
+        // Concurrent route claims or version races fail closed with the typed
+        // conflict (drizzle wraps driver errors: check both shapes).
+        const pgCode =
+          (error as { code?: string } | null)?.code ??
+          (error as { cause?: { code?: string } | null } | null)?.cause?.code;
+        if (pgCode === "23505" || pgCode === "23514") {
+          throw productionError(
+            "production_route_conflict",
+            "Production input rejected: route/version conflict under concurrent derivation.",
+          );
+        }
+        throw error;
+      }
+    });
   }
 
   async latestProductionInput(projectId: string, pageSlug: string): Promise<ProductionPageInputRecord | null> {
@@ -728,7 +733,7 @@ export class ProductionStore {
         reason: currentRev.reason ?? "Trust review is stale against current content or source evidence.",
       };
     }
-    if (currentRev.review?.verifiedClaimIds && evidence.claims.length > 0) {
+    if (currentRev.review?.verifiedClaimIds) {
       const ids = new Set(evidence.claims.map((c) => c.claimId));
       const v = currentRev.review.verifiedClaimIds;
       if (v.length !== ids.size || v.some((id) => !ids.has(id))) {
@@ -1143,9 +1148,13 @@ export class ProductionStore {
       // lock, so this read is a consistent snapshot. Earlier in-memory check
       // verdicts never override persisted authority observed here.
       const txDb = tx as unknown as FactoryDb;
-      const trustStore = new TrustGovernanceStore(txDb, this.evidenceOptions);
-      const auditStore = EditorialAuditStore.getInstance();
-      const membershipAuthority = ProjectMembershipAuthority.getInstance();
+      const auditStore = EditorialAuditStore.getInstance(txDb, this.evidenceOptions?.keyring);
+      const membershipAuthority = ProjectMembershipAuthority.getInstance(txDb);
+      const trustStore = new TrustGovernanceStore(txDb, {
+        ...this.evidenceOptions,
+        auditStore,
+        membershipAuthority,
+      });
       const rawOverall = qaOverallVerdict(input.checks);
       const hasUnresolvedTrustGate = input.checks.some((entry) => entry.checkId.startsWith("trust.") && entry.verdict !== "PASS");
       let overall = rawOverall === "FAIL" || hasUnresolvedTrustGate ? ("FAIL" as const) : rawOverall;

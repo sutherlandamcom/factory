@@ -198,7 +198,7 @@ export class ProductionRenderCompiler {
     assetSnapshotDir: string;
     registry?: Array<{ route: string; title: string }>;
   }): Promise<ProductionRenderManifest> {
-    const store = new ProductionStore(this.db);
+    const store = new ProductionStore(this.db, { repoRoot: this.repoRoot });
     const [productionInput] = await this.db
       .select()
       .from(productionPageInputs)
@@ -427,11 +427,20 @@ export class ProductionRenderCompiler {
       composition = deriveManifestComposition(dic, content, activeDeclaredSlots, productionInput.pageType);
       manifestVersion = "production-v3";
     }
-    const trustStore = new TrustGovernanceStore(this.db);
+    const trustStore = new TrustGovernanceStore(this.db, { repoRoot: this.repoRoot });
+    const evidence = await trustStore.currentPageEvidence(
+      input.projectId,
+      productionInput.pageIdentity,
+      contentRow.contentDigest,
+    );
     const currentReview = await trustStore.currentReview(
       input.projectId,
       productionInput.pageIdentity,
       contentRow.contentDigest,
+      evidence.claimSetDigest,
+      evidence.sourceEvidenceSetDigest,
+      evidence.pageSourceInfo.referencedCount > 0 ? evidence.pageSourceInfo.digest : undefined,
+      evidence.workProductSetDigest,
     );
     const reviewAuthority: ProductionRenderManifest["reviewAuthority"] =
       currentReview.review &&

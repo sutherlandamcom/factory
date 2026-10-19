@@ -27,7 +27,11 @@ import {
   type OriginalValueRecord,
 } from "@factory/contracts";
 import { normalizePageIdentity } from "../page-authority/store.js";
-import { EditorialAuditStore, ProjectMembershipAuthority } from "./editorial-review-boundary.js";
+import {
+  EditorialAuditStore,
+  ProjectMembershipAuthority,
+  AuditSealKeyring,
+} from "./editorial-review-boundary.js";
 import { loadInseeEvidenceRegistry, type InseeEvidenceRegistry } from "./insee-evidence.js";
 import { loadLegalEvidenceRegistry, type LegalEvidenceRegistry } from "./legal-evidence.js";
 import {
@@ -71,13 +75,33 @@ export interface TrustEvidenceOptions {
   legalEvidence?: LegalEvidenceRegistry;
   /** Optional explicit override of the global source-evidence-set digest. */
   sourceEvidenceSetDigest?: string;
+  keyring?: AuditSealKeyring;
+}
+
+export interface TrustGovernanceStoreOptions extends TrustEvidenceOptions {
+  auditStore?: EditorialAuditStore;
+  membershipAuthority?: ProjectMembershipAuthority;
 }
 
 export class TrustGovernanceStore {
+  private readonly auditStore: EditorialAuditStore;
+  private readonly membershipAuthority: ProjectMembershipAuthority;
+
   constructor(
     private readonly db: FactoryDb,
-    private readonly evidenceOptions: TrustEvidenceOptions = {},
-  ) {}
+    private readonly evidenceOptions: TrustGovernanceStoreOptions = {},
+  ) {
+    this.auditStore = evidenceOptions.auditStore ?? new EditorialAuditStore(this.db, evidenceOptions.keyring);
+    this.membershipAuthority = evidenceOptions.membershipAuthority ?? new ProjectMembershipAuthority(this.db);
+  }
+
+  getAuditStore(): EditorialAuditStore {
+    return this.auditStore;
+  }
+
+  getMembershipAuthority(): ProjectMembershipAuthority {
+    return this.membershipAuthority;
+  }
 
   private resolveEvidence(): { inseeEvidence?: InseeEvidenceRegistry; legalEvidence?: LegalEvidenceRegistry } {
     const root = this.evidenceOptions.repoRoot;
@@ -105,15 +129,35 @@ export class TrustGovernanceStore {
     const claimSetDigest = claims.length > 0 ? computeClaimSetDigest(claims) : undefined;
     const workProductSetDigest = originals.length > 0 ? computeWorkProductSetDigest(originals) : undefined;
     const rev = latestReview === undefined ? await this.latestReview(projectId, pageIdentity) : latestReview;
+    const registriesAvailable = Boolean(inseeEvidence && legalEvidence);
+
+    const pageNeedsInsee = claims.some((c) => c.sourceRefs.some((r) => r.evidenceBindings && r.evidenceBindings.length > 0));
+    const pageNeedsLegal = claims.some((c) => c.sourceRefs.some((r) => !r.evidenceBindings || r.evidenceBindings.length === 0));
+    const pageNeedsSources =
+      pageNeedsInsee ||
+      pageNeedsLegal ||
+      (originals.length > 0 && originals.some((o) => (o.workProduct?.inputDatasetDigests.length ?? 0) > 0));
+
+    if (pageNeedsInsee && !inseeEvidence) {
+      pageSourceInfo.problems.push("review_authority_stale: Required INSEE evidence registry is unavailable.");
+    }
+    if (pageNeedsLegal && !legalEvidence) {
+      pageSourceInfo.problems.push("review_authority_stale: Required legal evidence registry is unavailable.");
+    }
+    if (pageNeedsSources && !registriesAvailable && pageSourceInfo.problems.length === 0) {
+      pageSourceInfo.problems.push("review_authority_stale: Required source evidence registries are unavailable.");
+    }
+
     const globalDigest = computeSourceEvidenceSetDigest({ inseeEvidence, legalEvidence });
     const sourceEvidenceSetDigest =
       this.evidenceOptions.sourceEvidenceSetDigest ??
       (pageSourceInfo.referencedCount > 0 &&
       pageSourceInfo.problems.length === 0 &&
+      registriesAvailable &&
       (!rev?.pageSourceEvidenceDigest || rev.pageSourceEvidenceDigest === pageSourceInfo.digest) &&
       rev?.sourceEvidenceSetDigest
         ? rev.sourceEvidenceSetDigest
-        : globalDigest);
+        : (registriesAvailable ? globalDigest : undefined));
     return {
       claims,
       originals,
@@ -121,7 +165,7 @@ export class TrustGovernanceStore {
       workProductSetDigest,
       pageSourceInfo,
       sourceEvidenceSetDigest,
-      registriesAvailable: Boolean(inseeEvidence && legalEvidence),
+      registriesAvailable,
     };
   }
 
@@ -323,6 +367,7 @@ export class TrustGovernanceStore {
   async recordReviewLocked(
     tx: FactoryDb,
     input: { projectId: string; review: ReviewAuthority },
+    overrideAuditStore?: EditorialAuditStore,
   ): Promise<ReviewAuthorityRecord> {
     const review = parseReviewAuthority(input.review);
     if (review.projectId !== input.projectId) {
@@ -341,7 +386,9 @@ export class TrustGovernanceStore {
           "Direct submission of VERIFIED_HUMAN_REVIEW_AUTHORITY without a validated authenticated approval event is rejected. Approvals must originate from an authorized editorial action.",
         );
       }
-      const auditStore = EditorialAuditStore.getInstance();
+      const auditStore = overrideAuditStore
+        ? new EditorialAuditStore(tx, overrideAuditStore.getKeyring())
+        : new EditorialAuditStore(tx, this.evidenceOptions.keyring ?? this.auditStore.getKeyring());
       const auditEvent = await auditStore.getApprovalAuditEvent(appEvt.reviewEventId, tx);
       if (!auditEvent) {
         throw trustError(
@@ -373,7 +420,7 @@ export class TrustGovernanceStore {
           `Audit event "${appEvt.reviewEventId}" was recorded for project "${auditEvent.projectId}", not "${input.projectId}". Cross-project approvals are rejected.`,
         );
       }
-      const membershipAuthority = ProjectMembershipAuthority.getInstance();
+      const membershipAuthority = new ProjectMembershipAuthority(tx);
       const permissions = await membershipAuthority.getMemberPermissions(input.projectId, auditEvent.actorId, tx);
       if (!permissions.includes("EDITORIAL_REVIEW:APPROVE")) {
         throw trustError(
@@ -423,10 +470,8 @@ export class TrustGovernanceStore {
     const storedReview: ReviewAuthority = {
       ...review,
       claimSetDigest: review.claimSetDigest ?? bound.claimSetDigest,
-      pageSourceEvidenceDigest:
-        review.pageSourceEvidenceDigest ??
-        (bound.registriesAvailable && bound.pageSourceInfo.referencedCount > 0 ? bound.pageSourceInfo.digest : undefined),
-      workProductSetDigest: review.workProductSetDigest ?? bound.workProductSetDigest,
+      pageSourceEvidenceDigest: review.pageSourceEvidenceDigest,
+      workProductSetDigest: review.workProductSetDigest,
     };
     const [latest] = await tx
       .select()
@@ -502,10 +547,10 @@ export class TrustGovernanceStore {
     ) {
       const eventId = review.approvalEvent?.reviewEventId;
       const auditEvent = eventId
-        ? await EditorialAuditStore.getInstance().getApprovalAuditEvent(eventId, this.db)
+        ? await this.auditStore.getApprovalAuditEvent(eventId, this.db)
         : null;
       const permissions = auditEvent
-        ? await ProjectMembershipAuthority.getInstance().getMemberPermissions(projectId, auditEvent.actorId, this.db)
+        ? await this.membershipAuthority.getMemberPermissions(projectId, auditEvent.actorId, this.db)
         : [];
       if (
         !auditEvent ||

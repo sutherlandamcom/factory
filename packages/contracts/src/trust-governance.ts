@@ -873,7 +873,7 @@ export function parseReviewAuthority(input: unknown): ReviewAuthority {
   return reviewAuthoritySchema.parse(input);
 }
 
-/** A review is stale when the reviewed content digest, bound claim-set digest, source evidence digest, or work-product digest no longer matches. */
+/** A review is stale when the reviewed content digest, bound claim-set digest, source evidence digest, or work-product digest no longer matches or required evidence is missing. */
 export function reviewStaleness(
   review: ReviewAuthority,
   currentContentDigest: string,
@@ -885,38 +885,61 @@ export function reviewStaleness(
   if (review.reviewedContentDigest !== currentContentDigest) {
     return { stale: true, reason: "review_authority_stale: Reviewed content changed materially after review; the review is stale." };
   }
-  if (review.claimSetDigest && currentClaimSetDigest && review.claimSetDigest !== currentClaimSetDigest) {
-    return { stale: true, reason: "review_authority_stale: Underlying claim lineage, source evidence, or calculation changed after review." };
+  if (review.claimSetDigest) {
+    if (!currentClaimSetDigest) {
+      return {
+        stale: true,
+        reason: "review_authority_stale: Required claim lineage is missing or was removed after review.",
+      };
+    }
+    if (review.claimSetDigest !== currentClaimSetDigest) {
+      return {
+        stale: true,
+        reason: "review_authority_stale: Underlying claim lineage, source evidence, or calculation changed after review.",
+      };
+    }
   }
-  if (
-    review.pageSourceEvidenceDigest &&
-    currentPageSourceEvidenceDigest &&
-    review.pageSourceEvidenceDigest !== currentPageSourceEvidenceDigest
-  ) {
-    return {
-      stale: true,
-      reason: "review_authority_stale: Underlying page-bound source evidence snapshot bytes, version, or effective period changed after review.",
-    };
+  if (review.pageSourceEvidenceDigest) {
+    if (!currentPageSourceEvidenceDigest) {
+      return {
+        stale: true,
+        reason: "review_authority_stale: Required page-bound source evidence is missing or undefined after review.",
+      };
+    }
+    if (review.pageSourceEvidenceDigest !== currentPageSourceEvidenceDigest) {
+      return {
+        stale: true,
+        reason: "review_authority_stale: Underlying page-bound source evidence snapshot bytes, version, or effective period changed after review.",
+      };
+    }
   }
-  if (
-    review.workProductSetDigest &&
-    currentWorkProductSetDigest &&
-    review.workProductSetDigest !== currentWorkProductSetDigest
-  ) {
-    return {
-      stale: true,
-      reason: "review_authority_stale: Underlying numerical analysis / OriginalWorkProduct inputs or execution hash changed after review.",
-    };
+  if (review.workProductSetDigest) {
+    if (!currentWorkProductSetDigest) {
+      return {
+        stale: true,
+        reason: "review_authority_stale: Required OriginalWorkProduct / numerical analysis records were removed after review.",
+      };
+    }
+    if (review.workProductSetDigest !== currentWorkProductSetDigest) {
+      return {
+        stale: true,
+        reason: "review_authority_stale: Underlying numerical analysis / OriginalWorkProduct inputs or execution hash changed after review.",
+      };
+    }
   }
-  if (
-    review.sourceEvidenceSetDigest &&
-    currentSourceEvidenceSetDigest &&
-    review.sourceEvidenceSetDigest !== currentSourceEvidenceSetDigest
-  ) {
-    return {
-      stale: true,
-      reason: "review_authority_stale: Underlying source evidence snapshot bytes or registry changed after review.",
-    };
+  if (review.sourceEvidenceSetDigest) {
+    if (!currentSourceEvidenceSetDigest) {
+      return {
+        stale: true,
+        reason: "review_authority_stale: Required source evidence set digest is missing or source registry unavailable after review.",
+      };
+    }
+    if (review.sourceEvidenceSetDigest !== currentSourceEvidenceSetDigest) {
+      return {
+        stale: true,
+        reason: "review_authority_stale: Underlying source evidence snapshot bytes or registry changed after review.",
+      };
+    }
   }
   if (review.approvalEvent) {
     if (review.approvalEvent.reviewedContentDigest !== currentContentDigest) {
@@ -925,17 +948,33 @@ export function reviewStaleness(
         reason: "review_authority_stale: Authenticated approval event content digest does not match current content digest.",
       };
     }
-    if (currentClaimSetDigest && review.approvalEvent.reviewedClaimSetDigest !== currentClaimSetDigest) {
-      return {
-        stale: true,
-        reason: "review_authority_stale: Authenticated approval event claim set digest does not match current claim set digest.",
-      };
+    if (review.approvalEvent.reviewedClaimSetDigest) {
+      if (!currentClaimSetDigest) {
+        return {
+          stale: true,
+          reason: "review_authority_stale: Required claim lineage is missing for authenticated approval event.",
+        };
+      }
+      if (review.approvalEvent.reviewedClaimSetDigest !== currentClaimSetDigest) {
+        return {
+          stale: true,
+          reason: "review_authority_stale: Authenticated approval event claim set digest does not match current claim set digest.",
+        };
+      }
     }
-    if (currentSourceEvidenceSetDigest && review.approvalEvent.reviewedSourceEvidenceDigest !== currentSourceEvidenceSetDigest) {
-      return {
-        stale: true,
-        reason: "review_authority_stale: Authenticated approval event source evidence digest does not match current source evidence digest.",
-      };
+    if (review.approvalEvent.reviewedSourceEvidenceDigest) {
+      if (!currentSourceEvidenceSetDigest) {
+        return {
+          stale: true,
+          reason: "review_authority_stale: Required source evidence is missing for authenticated approval event.",
+        };
+      }
+      if (review.approvalEvent.reviewedSourceEvidenceDigest !== currentSourceEvidenceSetDigest) {
+        return {
+          stale: true,
+          reason: "review_authority_stale: Authenticated approval event source evidence digest does not match current source evidence digest.",
+        };
+      }
     }
   }
   return { stale: false, reason: null };

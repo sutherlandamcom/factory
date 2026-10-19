@@ -2912,9 +2912,20 @@ export const projectReviewerMemberships = pgTable(
   ],
 );
 
+export const editorialSessionRevocations = pgTable(
+  "editorial_session_revocations",
+  {
+    sessionId: text("session_id").primaryKey(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }).defaultNow().notNull(),
+    reason: text("reason"),
+  },
+);
+
 export type PageIntentAuthorityRecord = typeof pageIntentAuthorities.$inferSelect;
 export type ClaimLineageRecord = typeof claimLineageRecords.$inferSelect;
 export type ReviewAuthorityRecord = typeof reviewAuthorities.$inferSelect;
 export type OriginalValueRecordRow = typeof originalValueRecords.$inferSelect;
 export type EditorialApprovalAuditEventRecord = typeof editorialApprovalAuditEvents.$inferSelect;
 export type ProjectReviewerMembershipRecord = typeof projectReviewerMemberships.$inferSelect;
+export type EditorialSessionRevocationRecord = typeof editorialSessionRevocations.$inferSelect;
+

@@ -16,6 +16,7 @@ import type { FactoryDb } from "../persistence/db.js";
 import {
   editorialApprovalAuditEvents,
   projectReviewerMemberships,
+  editorialSessionRevocations,
 } from "../persistence/schema.js";
 
 const INTERNAL_AUDIT_WRITE_CAPABILITY = Symbol("EditorialReviewServiceAuditWriteCapability");
@@ -39,7 +40,7 @@ export interface AuditSealKeyringConfig {
  */
 export class AuditSealKeyring {
   private readonly keys = new Map<string, Buffer>();
-  private readonly activeKeyId: string | null;
+  public readonly activeKeyId: string | null;
 
   constructor(config?: AuditSealKeyringConfig) {
     let candidateActiveId = config?.activeKeyId?.trim() || null;
@@ -284,9 +285,79 @@ export interface SignedIdpAssertionPayload {
   jti: string;
 }
 
+export interface SessionRevocationStore {
+  isRevoked(sessionId: string, tx?: FactoryDb): Promise<boolean>;
+  revokeSession(sessionId: string, reason?: string, tx?: FactoryDb): Promise<void>;
+  clear(): Promise<void>;
+}
+
+export class InMemorySessionRevocationStore implements SessionRevocationStore {
+  private readonly revoked = new Set<string>();
+
+  async isRevoked(sessionId: string): Promise<boolean> {
+    return this.revoked.has(sessionId);
+  }
+
+  async revokeSession(sessionId: string): Promise<void> {
+    this.revoked.add(sessionId);
+  }
+
+  async clear(): Promise<void> {
+    this.revoked.clear();
+  }
+}
+
+export class PostgreSqlSessionRevocationStore implements SessionRevocationStore {
+  constructor(private readonly db: FactoryDb) {}
+
+  async isRevoked(sessionId: string, tx?: FactoryDb): Promise<boolean> {
+    const client = tx ?? this.db;
+    try {
+      const [row] = await client
+        .select({ sessionId: editorialSessionRevocations.sessionId })
+        .from(editorialSessionRevocations)
+        .where(eq(editorialSessionRevocations.sessionId, sessionId))
+        .limit(1);
+      return Boolean(row);
+    } catch (err) {
+      if (err instanceof TrustGovernanceError) throw err;
+      throw new TrustGovernanceError(
+        "trust_database_unavailable",
+        `Failed to check session revocation in PostgreSQL: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  async revokeSession(sessionId: string, reason?: string, tx?: FactoryDb): Promise<void> {
+    const client = tx ?? this.db;
+    try {
+      await client
+        .insert(editorialSessionRevocations)
+        .values({ sessionId, reason: reason ?? null })
+        .onConflictDoNothing();
+    } catch (err) {
+      if (err instanceof TrustGovernanceError) throw err;
+      throw new TrustGovernanceError(
+        "trust_database_unavailable",
+        `Failed to record session revocation in PostgreSQL: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  async clear(): Promise<void> {
+    try {
+      await this.db.execute(sql`TRUNCATE TABLE editorial_session_revocations;`);
+    } catch {
+      // Best effort in test environments
+    }
+  }
+}
+
 export interface TrustedExternalIdpConfig {
   providerId?: string;
   publicKeyPem?: string;
+  db?: FactoryDb;
+  revocationStore?: SessionRevocationStore;
 }
 
 /**
@@ -296,6 +367,10 @@ export interface TrustedExternalIdpConfig {
  * (`publicKeyPem` or `FACTORY_IDP_PUBLIC_KEY_PEM`) and a cryptographically
  * signed assertion token (`ext-idp-v1.<payloadB64Url>.<sigB64Url>`).
  *
+ * Session revocation is backed by durable shared PostgreSQL storage
+ * (`editorial_session_revocations`), ensuring revocation survives process
+ * restarts and is observed across multiple application instances.
+ *
  * Raw caller-supplied principal objects are rejected fail-closed.
  * For isolated test environments, use `TrustedExternalIdpAdapter.createTestHarness()`
  * to create an ephemeral Ed25519 keypair and sign test assertions.
@@ -304,9 +379,14 @@ export class TrustedExternalIdpAdapter implements TrustedIdentityProvider {
   readonly isSyntheticProvider = false;
   public readonly providerId: string;
   private readonly publicKey: KeyObject | null;
-  private readonly revokedSessionIds = new Set<string>();
+  private readonly revocationStore: SessionRevocationStore;
 
-  constructor(configOrProviderId: string | TrustedExternalIdpConfig = "trusted-external-idp") {
+  constructor(
+    configOrProviderId: string | TrustedExternalIdpConfig = "trusted-external-idp",
+    db?: FactoryDb,
+  ) {
+    let resolvedDb = db;
+    let customStore: SessionRevocationStore | undefined;
     if (typeof configOrProviderId === "string") {
       this.providerId = configOrProviderId;
       const envPem = process.env.FACTORY_IDP_PUBLIC_KEY_PEM?.trim();
@@ -315,6 +395,16 @@ export class TrustedExternalIdpAdapter implements TrustedIdentityProvider {
       this.providerId = configOrProviderId.providerId ?? "trusted-external-idp";
       const pem = configOrProviderId.publicKeyPem?.trim() ?? process.env.FACTORY_IDP_PUBLIC_KEY_PEM?.trim();
       this.publicKey = pem ? createPublicKey(pem) : null;
+      resolvedDb = configOrProviderId.db ?? db;
+      customStore = configOrProviderId.revocationStore;
+    }
+
+    if (customStore) {
+      this.revocationStore = customStore;
+    } else if (resolvedDb) {
+      this.revocationStore = new PostgreSqlSessionRevocationStore(resolvedDb);
+    } else {
+      this.revocationStore = new InMemorySessionRevocationStore();
     }
   }
 
@@ -323,8 +413,9 @@ export class TrustedExternalIdpAdapter implements TrustedIdentityProvider {
    * so tests can exercise real cryptographic signature verification without
    * allowing unverified caller-supplied principal objects.
    */
-  static createTestHarness(providerId = "trusted-external-idp"): {
+  static createTestHarness(providerId = "trusted-external-idp", db?: FactoryDb): {
     adapter: TrustedExternalIdpAdapter;
+    publicKeyPem: string;
     signPrincipalAssertion: (params: {
       actorId: string;
       actorName: string;
@@ -344,7 +435,7 @@ export class TrustedExternalIdpAdapter implements TrustedIdentityProvider {
     const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
     const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
     const privKeyObj = createPrivateKey(privateKeyPem);
-    const adapter = new TrustedExternalIdpAdapter({ providerId, publicKeyPem });
+    const adapter = new TrustedExternalIdpAdapter({ providerId, publicKeyPem, db });
 
     const signPrincipalAssertion = (params: {
       actorId: string;
@@ -369,7 +460,7 @@ export class TrustedExternalIdpAdapter implements TrustedIdentityProvider {
       return `ext-idp-v1.${payloadB64}.${signatureB64}`;
     };
 
-    return { adapter, signPrincipalAssertion, issueSignedSession: signPrincipalAssertion };
+    return { adapter, publicKeyPem, signPrincipalAssertion, issueSignedSession: signPrincipalAssertion };
   }
 
   isConfigured(): boolean {
@@ -395,7 +486,7 @@ export class TrustedExternalIdpAdapter implements TrustedIdentityProvider {
         "TrustedExternalIdpAdapter rejects caller-supplied principals without a cryptographically signed upstream IdP assertion.",
       );
     }
-    const verified = this.verifySignedTokenSync(params.signedAssertion);
+    const verified = this.verifySignedTokenPayload(params.signedAssertion);
     if (
       !verified ||
       verified.actorId !== params.actorId ||
@@ -416,13 +507,33 @@ export class TrustedExternalIdpAdapter implements TrustedIdentityProvider {
     );
   }
 
-  revokePrincipal(token: string): void {
-    this.revokedSessionIds.add(token);
+  async revokePrincipal(token: string, reason?: string, tx?: FactoryDb): Promise<void> {
+    await this.revocationStore.revokeSession(token, reason, tx);
+    const parsed = this.parseTokenPayload(token);
+    if (parsed?.jti) {
+      await this.revocationStore.revokeSession(parsed.jti, reason, tx);
+    }
   }
 
-  private verifySignedTokenSync(sessionToken: string): AuthenticatedSession | null {
+  async revokeSession(sessionId: string, reason?: string, tx?: FactoryDb): Promise<void> {
+    await this.revocationStore.revokeSession(sessionId, reason, tx);
+  }
+
+  private parseTokenPayload(sessionToken: string): SignedIdpAssertionPayload | null {
+    if (!sessionToken) return null;
+    const parts = sessionToken.split(".");
+    if (parts.length !== 3 || parts[0] !== "ext-idp-v1") return null;
+    const [, payloadB64] = parts;
+    if (!payloadB64) return null;
+    try {
+      return JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8")) as SignedIdpAssertionPayload;
+    } catch {
+      return null;
+    }
+  }
+
+  private verifySignedTokenPayload(sessionToken: string): AuthenticatedSession | null {
     if (!sessionToken || !this.publicKey) return null;
-    if (this.revokedSessionIds.has(sessionToken)) return null;
     const parts = sessionToken.split(".");
     if (parts.length !== 3 || parts[0] !== "ext-idp-v1") return null;
     const [, payloadB64, signatureB64] = parts;
@@ -455,9 +566,6 @@ export class TrustedExternalIdpAdapter implements TrustedIdentityProvider {
       if (parsed.exp < Date.now()) {
         return null;
       }
-      if (this.revokedSessionIds.has(parsed.jti)) {
-        return null;
-      }
       return {
         sessionId: parsed.jti,
         actorId: parsed.sub,
@@ -473,12 +581,17 @@ export class TrustedExternalIdpAdapter implements TrustedIdentityProvider {
     }
   }
 
-  async verifySession(sessionToken: string): Promise<AuthenticatedSession | null> {
-    return this.verifySignedTokenSync(sessionToken);
+  async verifySession(sessionToken: string, tx?: FactoryDb): Promise<AuthenticatedSession | null> {
+    if (!sessionToken || !this.publicKey) return null;
+    if (await this.revocationStore.isRevoked(sessionToken, tx)) return null;
+    const verified = this.verifySignedTokenPayload(sessionToken);
+    if (!verified) return null;
+    if (await this.revocationStore.isRevoked(verified.sessionId, tx)) return null;
+    return verified;
   }
 
-  clear(): void {
-    this.revokedSessionIds.clear();
+  async clear(): Promise<void> {
+    await this.revocationStore.clear();
   }
 }
 
@@ -584,24 +697,18 @@ export const SyntheticTestSessionRegistry = TrustedSessionRegistry;
  * Never falls back to in-memory maps; database unavailability or errors fail closed.
  */
 export class ProjectMembershipAuthority {
-  private static instance: ProjectMembershipAuthority;
-  private db?: FactoryDb;
+  private readonly db?: FactoryDb;
 
   static getInstance(db?: FactoryDb): ProjectMembershipAuthority {
-    if (!this.instance) {
-      this.instance = new ProjectMembershipAuthority(db);
-    } else if (db) {
-      this.instance.db = db;
-    }
-    return this.instance;
+    return new ProjectMembershipAuthority(db);
   }
 
   constructor(db?: FactoryDb) {
     this.db = db;
   }
 
-  setDb(db: FactoryDb | undefined): void {
-    this.db = db;
+  getDb(): FactoryDb | undefined {
+    return this.db;
   }
 
   private requireDb(tx?: FactoryDb): FactoryDb {
@@ -624,6 +731,9 @@ export class ProjectMembershipAuthority {
   ): Promise<void> {
     const dbClient = this.requireDb(tx);
     const run = async (client: FactoryDb) => {
+      if (typeof client.execute === "function") {
+        await client.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${projectId}, 104))`);
+      }
       const [existing] = await client
         .select()
         .from(projectReviewerMemberships)
@@ -660,7 +770,6 @@ export class ProjectMembershipAuthority {
     try {
       if (!tx && typeof dbClient.transaction === "function") {
         await dbClient.transaction(async (innerTx) => {
-          await innerTx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${projectId}, 104))`);
           await run(innerTx as unknown as FactoryDb);
         });
       } else {
@@ -678,6 +787,9 @@ export class ProjectMembershipAuthority {
   async revokeMembership(projectId: string, actorId: string, tx?: FactoryDb): Promise<void> {
     const dbClient = this.requireDb(tx);
     const run = async (client: FactoryDb) => {
+      if (typeof client.execute === "function") {
+        await client.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${projectId}, 104))`);
+      }
       const [existing] = await client
         .select()
         .from(projectReviewerMemberships)
@@ -706,7 +818,6 @@ export class ProjectMembershipAuthority {
     try {
       if (!tx && typeof dbClient.transaction === "function") {
         await dbClient.transaction(async (innerTx) => {
-          await innerTx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${projectId}, 104))`);
           await run(innerTx as unknown as FactoryDb);
         });
       } else {
@@ -771,22 +882,11 @@ export interface StoredApprovalAuditEvent {
  * writes fail closed.
  */
 export class EditorialAuditStore {
-  private static instance: EditorialAuditStore;
-  private db?: FactoryDb;
-  private keyring?: AuditSealKeyring;
+  private readonly db?: FactoryDb;
+  private readonly keyring?: AuditSealKeyring;
 
   static getInstance(db?: FactoryDb, keyring?: AuditSealKeyring): EditorialAuditStore {
-    if (!this.instance) {
-      this.instance = new EditorialAuditStore(db, keyring);
-    } else {
-      if (db) {
-        this.instance.db = db;
-      }
-      if (keyring !== undefined) {
-        this.instance.keyring = keyring;
-      }
-    }
-    return this.instance;
+    return new EditorialAuditStore(db, keyring);
   }
 
   constructor(db?: FactoryDb, keyring?: AuditSealKeyring) {
@@ -794,16 +894,12 @@ export class EditorialAuditStore {
     this.keyring = keyring;
   }
 
-  setDb(db: FactoryDb | undefined): void {
-    this.db = db;
-  }
-
-  setKeyring(keyring: AuditSealKeyring | undefined): void {
-    this.keyring = keyring;
-  }
-
   getKeyring(): AuditSealKeyring {
     return this.keyring ?? AuditSealKeyring.fromEnvironment();
+  }
+
+  getDb(): FactoryDb | undefined {
+    return this.db;
   }
 
   private requireDb(tx?: FactoryDb): FactoryDb {
@@ -903,7 +999,7 @@ export class EditorialAuditStore {
           sealKeyId: row.sealKeyId,
           sealStatus: row.sealStatus,
         },
-        this.keyring,
+        this.getKeyring(),
       );
       return {
         auditEventId: row.id,
@@ -940,7 +1036,7 @@ export class EditorialAuditStore {
         .select({ projectId: editorialApprovalAuditEvents.projectId })
         .from(editorialApprovalAuditEvents)
         .where(eq(editorialApprovalAuditEvents.id, eventId));
-      if (row && !tx && typeof client.execute === "function") {
+      if (row && typeof client.execute === "function") {
         await client.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${row.projectId}, 104))`);
       }
       await client
@@ -1012,7 +1108,7 @@ export class EditorialAuditStore {
           sealKeyId: row.sealKeyId,
           sealStatus: row.sealStatus,
         },
-        this.keyring,
+        this.getKeyring(),
       );
       if (!sealVerified) return null;
       return {
@@ -1070,22 +1166,21 @@ export class EditorialReviewService {
 
   constructor(
     private readonly trustStore: TrustGovernanceStore,
-    sessionRegistry: TrustedIdentityProvider = new FailClosedProductionIdentityProvider(),
+    sessionRegistry?: TrustedIdentityProvider,
     membershipAuthority?: ProjectMembershipAuthority,
     auditStore?: EditorialAuditStore,
     keyring?: AuditSealKeyring,
   ) {
-    this.sessionRegistry = sessionRegistry;
     const db = this.trustStore?.getDb?.();
-    this.membershipAuthority = membershipAuthority ?? ProjectMembershipAuthority.getInstance(db);
-    this.auditStore = auditStore ?? EditorialAuditStore.getInstance(db, keyring);
-    if (keyring !== undefined) {
-      this.auditStore.setKeyring(keyring);
+    if (sessionRegistry) {
+      this.sessionRegistry = sessionRegistry;
+    } else if (db) {
+      this.sessionRegistry = new TrustedExternalIdpAdapter("trusted-external-idp", db);
+    } else {
+      this.sessionRegistry = new FailClosedProductionIdentityProvider();
     }
-    if (db) {
-      this.membershipAuthority.setDb(db);
-      this.auditStore.setDb(db);
-    }
+    this.membershipAuthority = membershipAuthority ?? new ProjectMembershipAuthority(db);
+    this.auditStore = auditStore ?? new EditorialAuditStore(db, keyring);
   }
 
   async recordAuthenticatedApproval(request: AuthenticatedReviewApprovalRequest): Promise<ReviewAuthority> {
@@ -1251,10 +1346,14 @@ export class EditorialReviewService {
           INTERNAL_AUDIT_WRITE_CAPABILITY,
         );
 
-        await this.trustStore.recordReviewLocked(txDb, {
-          projectId: request.projectId,
-          review,
-        });
+        await this.trustStore.recordReviewLocked(
+          txDb,
+          {
+            projectId: request.projectId,
+            review,
+          },
+          this.auditStore,
+        );
       });
     } catch (err) {
       if (err instanceof TrustGovernanceError) throw err;

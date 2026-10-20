@@ -40,7 +40,8 @@ export function DeploymentPage() {
   };
 
   const previewMutation = useMutation({
-    mutationFn: (candidateId: string) => deploymentApi.preparePreview(projectId!, candidateId),
+    mutationFn: (candidateId: string) =>
+      deploymentApi.preparePreview(projectId!, { candidateId, sessionToken }),
     onSuccess: () => {
       setActionError(null);
       setActionSuccess("Candidate preview successfully created and verified with remote QA.");
@@ -99,7 +100,7 @@ export function DeploymentPage() {
   });
 
   const monitoringMutation = useMutation({
-    mutationFn: () => deploymentApi.runMonitoringCheck(projectId!),
+    mutationFn: () => deploymentApi.runMonitoringCheck(projectId!, sessionToken || undefined),
     onSuccess: () => {
       setActionError(null);
       setActionSuccess("Operational monitoring check completed successfully.");
@@ -132,15 +133,44 @@ export function DeploymentPage() {
   const latestKnownGood = dep.currentProduction?.knownGoodVersionId;
   const activeProductionVersion = dep.currentProduction?.activeVersionId;
 
+  // Reconcile deployment readiness with upstream authority staleness
+  const wfDeployment = workflowQuery.data?.deployment;
+  const isWorkflowBlocked = wfDeployment ? wfDeployment.state === "BLOCKED" : false;
+  const isDeliveryBlocked = dep.readinessState === "BLOCKED";
+  const effectiveState = (isWorkflowBlocked || isDeliveryBlocked) ? "BLOCKED" : "READY_FOR_DEPLOYMENT";
+
+  const allBlockers: Array<{ code: string; message: string; area?: string }> = [];
+  const seenCodes = new Set<string>();
+
+  if (wfDeployment?.blockers) {
+    for (const b of wfDeployment.blockers) {
+      if (!seenCodes.has(b.code)) {
+        seenCodes.add(b.code);
+        allBlockers.push({ code: b.code, message: b.message, area: b.area });
+      }
+    }
+  }
+  if (dep.blockers) {
+    for (const b of dep.blockers) {
+      if (!seenCodes.has(b.code)) {
+        seenCodes.add(b.code);
+        allBlockers.push({ code: b.code, message: b.message, area: b.area });
+      }
+    }
+  }
+
   const canPreparePreview = Boolean(
-    currentCandidate &&
+    effectiveState === "READY_FOR_DEPLOYMENT" &&
+      currentCandidate &&
       currentCandidate.state === "qa_passed" &&
       dep.latestQa?.publicationEligible &&
+      sessionToken.trim().length > 0 &&
       !previewMutation.isPending,
   );
 
   const canApprove = Boolean(
-    activePreview &&
+    effectiveState === "READY_FOR_DEPLOYMENT" &&
+      activePreview &&
       activePreview.previewVerified &&
       currentCandidate &&
       sessionToken.trim().length > 0 &&
@@ -149,12 +179,13 @@ export function DeploymentPage() {
   );
 
   const canPublish = Boolean(
-    activePreview &&
+    effectiveState === "READY_FOR_DEPLOYMENT" &&
+      activePreview &&
       activeApproval &&
       !activeApproval.revoked &&
       currentCandidate &&
       sessionToken.trim().length > 0 &&
-      dep.blockers.length === 0 &&
+      allBlockers.length === 0 &&
       !publishMutation.isPending,
   );
 
@@ -169,7 +200,8 @@ export function DeploymentPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <h2 className="text-lg font-semibold text-gray-900">Governed Production Delivery</h2>
-          <StatusBadge status={dep.readinessState} />
+          <StatusBadge status={effectiveState} />
+          <span className="font-mono text-xs text-gray-500">({effectiveState})</span>
         </div>
         <div className="text-xs text-gray-500">
           Target: <span className="font-mono text-gray-700">{dep.targetWorkerName || "Unset"}</span> ·{" "}
@@ -189,13 +221,13 @@ export function DeploymentPage() {
         </div>
       )}
 
-      {dep.blockers.length > 0 && (
+      {allBlockers.length > 0 && (
         <div className="rounded-md border border-amber-200 bg-amber-50 p-4">
           <h4 className="text-xs font-semibold uppercase tracking-wide text-amber-800">
-            Blocking reasons ({dep.blockers.length})
+            Blocking reasons ({allBlockers.length})
           </h4>
           <ul className="mt-2 list-inside list-disc text-sm text-amber-700">
-            {dep.blockers.map((b, i) => (
+            {allBlockers.map((b, i) => (
               <li key={i}>{b.message} ({b.code})</li>
             ))}
           </ul>
@@ -208,7 +240,7 @@ export function DeploymentPage() {
           Operator IdP Session Token
         </h3>
         <p className="mt-1 text-xs text-gray-500">
-          Required for Human Release Approval, Governed Publish, and Explicit Rollback. Must carry genuine IdP signature with project permissions.
+          Required for Candidate Preview, Human Release Approval, Governed Publish, and Explicit Rollback. Must carry genuine IdP signature with project permissions.
         </p>
         <input
           type="password"

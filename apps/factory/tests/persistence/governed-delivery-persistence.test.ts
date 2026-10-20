@@ -328,3 +328,132 @@ test("governed delivery concurrency (P0-01): multi-connection PostgreSQL session
   await dbInst1.close();
   await dbInst2.close();
 });
+
+test("governed delivery persistence: production_effective_transitions append-only and as-of timeline reconstruction", async () => {
+  const dbInst = await createTestDatabase();
+  const db = dbInst.db;
+  const store = new FactoryStore(db);
+
+  const suffix = randomUUID().slice(0, 8);
+  const projectId = `proj-trans-${suffix}`;
+  const siteId = `site-trans-${suffix}`;
+
+  await db.insert(projects).values({
+    id: projectId,
+    key: `proj-key-${suffix}`,
+    name: "Transition Test Project",
+  });
+
+  await db.insert(sites).values({
+    id: siteId,
+    projectId,
+    key: `site-key-${suffix}`,
+    name: "Transition Test Site",
+    cloudflareWorkerName: "worker-trans",
+    productionUrl: "https://trans.example.com",
+  });
+
+  const dep1 = await store.createDeployment({
+    id: `dep-1-${suffix}`,
+    siteId,
+    sourceCommit: "1".repeat(40),
+    workerName: "worker-trans",
+    productionUrl: "https://trans.example.com",
+    versionId: "ver-A",
+    status: "verified",
+    productionVerified: true,
+  });
+
+  const dep2 = await store.createDeployment({
+    id: `dep-2-${suffix}`,
+    siteId,
+    sourceCommit: "2".repeat(40),
+    workerName: "worker-trans",
+    productionUrl: "https://trans.example.com",
+    versionId: "ver-B",
+    status: "verified",
+    productionVerified: true,
+  });
+
+  const t1 = new Date(Date.now() - 30_000);
+  const t2 = new Date(Date.now() - 20_000);
+  const t3 = new Date(Date.now() - 10_000);
+
+  // 1. Record Version A publish at t1
+  const trans1 = await store.insertEffectiveTransition({
+    id: `trans-1-${suffix}`,
+    projectId,
+    siteId,
+    deploymentId: dep1.id,
+    versionId: "ver-A",
+    candidateId: "cand-A",
+    eventType: "PUBLISH",
+    fromVersionId: null,
+    toVersionId: "ver-A",
+    effectiveAt: t1,
+  });
+
+  // 2. Record Version B publish at t2
+  const trans2 = await store.insertEffectiveTransition({
+    id: `trans-2-${suffix}`,
+    projectId,
+    siteId,
+    deploymentId: dep2.id,
+    versionId: "ver-B",
+    candidateId: "cand-B",
+    eventType: "PUBLISH",
+    fromVersionId: "ver-A",
+    toVersionId: "ver-B",
+    effectiveAt: t2,
+  });
+
+  // 3. Record Rollback to Version A at t3
+  const trans3 = await store.insertEffectiveTransition({
+    id: `trans-3-${suffix}`,
+    projectId,
+    siteId,
+    deploymentId: dep1.id,
+    versionId: "ver-A",
+    candidateId: "cand-A",
+    eventType: "ROLLBACK",
+    fromVersionId: "ver-B",
+    toVersionId: "ver-A",
+    effectiveAt: t3,
+  });
+
+  // 4. Verify Immutability Trigger: UPDATE throws 23514
+  await assert.rejects(
+    () => db.execute(sql`UPDATE "production_effective_transitions" SET "version_id" = 'tampered' WHERE "id" = ${trans1.id}`),
+    (err: any) => err.code === "23514" || err.cause?.code === "23514",
+    "UPDATE must be blocked by immutability trigger",
+  );
+
+  // 5. Verify Immutability Trigger: DELETE throws 23514
+  await assert.rejects(
+    () => db.execute(sql`DELETE FROM "production_effective_transitions" WHERE "id" = ${trans1.id}`),
+    (err: any) => err.code === "23514" || err.cause?.code === "23514",
+    "DELETE must be blocked by immutability trigger",
+  );
+
+  // 6. As-of Historical Reconstruction (P0-E)
+  // Before any release: null
+  const beforeAll = await store.getEffectiveTransitionAsOf(siteId, new Date(t1.getTime() - 5000));
+  assert.equal(beforeAll, null);
+
+  // During Version A: ver-A
+  const duringA = await store.getEffectiveTransitionAsOf(siteId, new Date(t1.getTime() + 1000));
+  assert.equal(duringA?.versionId, "ver-A");
+  assert.equal(duringA?.eventType, "PUBLISH");
+
+  // During Version B: ver-B
+  const duringB = await store.getEffectiveTransitionAsOf(siteId, new Date(t2.getTime() + 1000));
+  assert.equal(duringB?.versionId, "ver-B");
+  assert.equal(duringB?.eventType, "PUBLISH");
+
+  // After Rollback: ver-A restored truthfully
+  const afterRollback = await store.getEffectiveTransitionAsOf(siteId, new Date(t3.getTime() + 1000));
+  assert.equal(afterRollback?.versionId, "ver-A");
+  assert.equal(afterRollback?.eventType, "ROLLBACK");
+
+  await dbInst.close();
+});

@@ -104,23 +104,17 @@ test("MonitoringService - recordTechnicalVerification persists multi-route produ
   assert.equal(summary.observations[0]?.status, "PASS");
 });
 
-test("MonitoringService - runOperationalCheck reports NOT_CONFIGURED when Search Console credentials absent", async () => {
+test("MonitoringService - runOperationalCheck reports NOT_CONFIGURED when adapters absent (zero manufactured observations)", async () => {
   const store = makeMockStore();
-  const originalEnv = process.env.SEARCH_CONSOLE_SERVICE_ACCOUNT_KEY;
-  delete process.env.SEARCH_CONSOLE_SERVICE_ACCOUNT_KEY;
-  delete process.env.CRUX_API_KEY;
+  const service = new MonitoringService({ db: {} as FactoryDb, store });
+  const summary = await service.runOperationalCheck("proj-1");
 
-  try {
-    const service = new MonitoringService({ db: {} as FactoryDb, store });
-    const summary = await service.runOperationalCheck("proj-1");
-
-    assert.equal(summary.searchConsole.status, "NOT_CONFIGURED");
-    assert.equal(summary.fieldCwv.status, "INSUFFICIENT_DATA");
-    assert.equal(summary.lastOperationalCheck.status, "PASS");
-    assert.equal(summary.lighthouse.status, "PASS");
-  } finally {
-    if (originalEnv) process.env.SEARCH_CONSOLE_SERVICE_ACCOUNT_KEY = originalEnv;
-  }
+  assert.equal(summary.searchConsole.status, "NOT_CONFIGURED");
+  assert.equal(summary.fieldCwv.status, "NOT_CONFIGURED");
+  assert.equal(summary.lastOperationalCheck.status, "NOT_CONFIGURED");
+  assert.equal(summary.lighthouse.status, "NOT_CONFIGURED");
+  assert.equal(summary.lighthouse.score, null);
+  assert.equal(summary.fieldCwv.p75LcpMs, null);
 });
 
 test("MonitoringService - runOperationalCheck binds injected Search Console and CrUX doubles", async () => {
@@ -182,4 +176,53 @@ test("MonitoringService - runOperationalCheck binds injected Search Console and 
   assert.equal(summary.fieldCwv.p75LcpMs, 1850);
   assert.equal(summary.lighthouse.score, 99);
   assert.equal(summary.lastOperationalCheck.status, "PASS");
+});
+
+test("MonitoringService - API key present in env but adapter unavailable produces NOT_CONFIGURED (no manufactured PASS)", async () => {
+  const store = makeMockStore();
+  const originalKey = process.env.SEARCH_CONSOLE_SERVICE_ACCOUNT_KEY;
+  const originalCrux = process.env.CRUX_API_KEY;
+  process.env.SEARCH_CONSOLE_SERVICE_ACCOUNT_KEY = "dummy-fake-key";
+  process.env.CRUX_API_KEY = "dummy-crux-key";
+
+  try {
+    const service = new MonitoringService({ db: {} as FactoryDb, store });
+    const summary = await service.runOperationalCheck("proj-1");
+
+    assert.equal(summary.searchConsole.status, "NOT_CONFIGURED");
+    assert.equal(summary.fieldCwv.status, "NOT_CONFIGURED");
+    assert.equal(summary.lighthouse.status, "NOT_CONFIGURED");
+    assert.equal(summary.lastOperationalCheck.status, "NOT_CONFIGURED");
+  } finally {
+    if (originalKey) process.env.SEARCH_CONSOLE_SERVICE_ACCOUNT_KEY = originalKey;
+    else delete process.env.SEARCH_CONSOLE_SERVICE_ACCOUNT_KEY;
+    if (originalCrux) process.env.CRUX_API_KEY = originalCrux;
+    else delete process.env.CRUX_API_KEY;
+  }
+});
+
+test("MonitoringService - CrUX adapter returning INSUFFICIENT_DATA results in INSUFFICIENT_DATA with null metrics", async () => {
+  const store = makeMockStore();
+  const service = new MonitoringService({
+    db: {} as FactoryDb,
+    store,
+    adapters: {
+      crux: {
+        queryFieldMetrics: async (): Promise<CruxFieldResult> => ({
+          status: "INSUFFICIENT_DATA",
+          p75LcpMs: null,
+          p75InpMs: null,
+          p75Cls: null,
+          collectionPeriod: "28_day",
+          errorMessage: "Insufficient traffic for domain",
+        }),
+      },
+    },
+  });
+
+  const summary = await service.runOperationalCheck("proj-1");
+  assert.equal(summary.fieldCwv.status, "INSUFFICIENT_DATA");
+  assert.equal(summary.fieldCwv.p75LcpMs, null);
+  assert.equal(summary.fieldCwv.p75InpMs, null);
+  assert.equal(summary.fieldCwv.p75Cls, null);
 });

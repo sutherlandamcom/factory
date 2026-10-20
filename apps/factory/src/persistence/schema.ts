@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { sql, desc } from "drizzle-orm";
 import {
   pgTable,
   text,
@@ -3039,6 +3039,46 @@ export const monitoringObservations = pgTable(
 
 export type MonitoringObservationRecord = typeof monitoringObservations.$inferSelect;
 export type InsertMonitoringObservation = typeof monitoringObservations.$inferInsert;
+
+export const productionEffectiveTransitions = pgTable(
+  "production_effective_transitions",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    siteId: text("site_id")
+      .notNull()
+      .references(() => sites.id, { onDelete: "cascade" }),
+    deploymentId: text("deployment_id")
+      .notNull()
+      .references(() => deployments.id, { onDelete: "cascade" }),
+    versionId: text("version_id").notNull(),
+    candidateId: text("candidate_id"),
+    eventType: text("event_type").notNull(), // 'PUBLISH' | 'ROLLBACK'
+    fromVersionId: text("from_version_id"),
+    toVersionId: text("to_version_id").notNull(),
+    actorId: text("actor_id"),
+    actorName: text("actor_name"),
+    actorRole: text("actor_role"),
+    sessionId: text("session_id"),
+    candidateRoutes: jsonb("candidate_routes"),
+    artifactDigest: text("artifact_digest"),
+    evidenceRef: text("evidence_ref"),
+    effectiveAt: timestamp("effective_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("prod_eff_trans_site_effective_idx").on(table.siteId, desc(table.effectiveAt)),
+    index("prod_eff_trans_project_site_idx").on(table.projectId, table.siteId),
+  ],
+);
+
+export type ProductionEffectiveTransitionRecord = typeof productionEffectiveTransitions.$inferSelect;
+export type InsertProductionEffectiveTransition = typeof productionEffectiveTransitions.$inferInsert;
+
 
 
 

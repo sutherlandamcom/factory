@@ -308,6 +308,7 @@ test("Operator API - POST /api/projects/:id/deployment/preview prepares preview 
   const deps = makeDeps(makeGovernedDeliveryStub());
   const res = await callApi(deps, "POST", `/api/projects/${PROJECT.id}/deployment/preview`, {
     candidateId: "cand-1",
+    sessionToken: "token-valid",
   });
   assert.equal(res.status, 200);
   assert.equal(res.body.status, "preview_verified");

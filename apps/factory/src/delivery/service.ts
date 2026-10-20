@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { DeploymentStatus } from "@factory/contracts";
 import type { DeploymentRecord, ReleaseApprovalRecord } from "../persistence/schema.js";
 import { FactoryError } from "../executor/errors.js";
@@ -5,6 +6,7 @@ import type { RemoteQaResult } from "./qa.js";
 import type { UploadedVersion } from "./wrangler.js";
 
 export interface DeliveryStore {
+  createDeployment?(input: any): Promise<DeploymentRecord>;
   updateDeployment(input: {
     id: string;
     status: DeploymentStatus;
@@ -252,6 +254,16 @@ export class ProductionDelivery {
 
     try {
       await this.wrangler.rollback(input.deployment.workerName, input.targetVersionId);
+
+      // P0-C: Independent verification that Cloudflare actually switched to target version
+      const activeAfterRollback = await this.wrangler.currentProductionVersion(input.deployment.workerName);
+      if (activeAfterRollback !== input.targetVersionId) {
+        throw new FactoryError(
+          "rollback_drift",
+          `Cloudflare active version after rollback ('${activeAfterRollback}') does not match expected target version ('${input.targetVersionId}').`,
+        );
+      }
+
       const rollbackQa = await this.runtime.qa(input.deployment.productionUrl, "rollback");
       if (!rollbackQa.passed) {
         return await this.store.updateDeployment({
@@ -261,6 +273,30 @@ export class ProductionDelivery {
           errorMessage: "Manual rollback completed but production verification failed.",
         });
       }
+
+      // P0-D: Preserve historical publication facts. Create a new rollback deployment event
+      // instead of mutating the historical verified deployment in-place.
+      if (typeof this.store.createDeployment === "function") {
+        return await this.store.createDeployment({
+          id: `dep-rb-${randomUUID()}`,
+          siteId: input.deployment.siteId,
+          sourceCommit: input.deployment.sourceCommit,
+          artifactDigest: input.deployment.artifactDigest,
+          versionId: input.targetVersionId,
+          previousVersionId: input.deployment.versionId,
+          workerName: input.deployment.workerName,
+          productionUrl: input.deployment.productionUrl,
+          status: "rolled_back",
+          previewVerified: true,
+          productionVerified: true,
+          rolledBack: true,
+          candidateId: input.deployment.candidateId,
+          artifactDirectory: input.deployment.artifactDirectory,
+          verifiedAt: new Date(),
+          promotedAt: new Date(),
+        });
+      }
+
       return await this.store.updateDeployment({
         id: input.deployment.id,
         status: "rolled_back",

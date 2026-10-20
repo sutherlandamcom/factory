@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { eq, and, asc, desc, inArray, isNotNull, ne } from "drizzle-orm";
+import { eq, and, asc, desc, inArray, isNotNull, ne, lte } from "drizzle-orm";
 import type { DeploymentStatus } from "@factory/contracts";
 import type { FactoryDb } from "./db.js";
 import {
@@ -13,6 +13,7 @@ import {
   modelInvocations,
   releaseApprovals,
   monitoringObservations,
+  productionEffectiveTransitions,
   type ProjectRecord,
   type SiteRecord,
   type DeploymentRecord,
@@ -26,6 +27,8 @@ import {
   type InsertReleaseApproval,
   type MonitoringObservationRecord,
   type InsertMonitoringObservation,
+  type ProductionEffectiveTransitionRecord,
+  type InsertProductionEffectiveTransition,
 } from "./schema.js";
 import { FactoryError } from "../executor/errors.js";
 
@@ -288,18 +291,28 @@ export class FactoryStore {
     sourceCommit: string;
     workerName: string;
     productionUrl: string;
-    artifactDirectory: string;
+    artifactDirectory?: string | null;
+    status?: DeploymentStatus;
+    versionId?: string | null;
+    previousVersionId?: string | null;
+    artifactDigest?: string | null;
+    previewUrl?: string | null;
+    previewVerified?: boolean;
+    productionVerified?: boolean;
+    rolledBack?: boolean;
     candidateId?: string | null;
     qaRunId?: string | null;
     releaseApprovalId?: string | null;
     candidateRoutes?: unknown;
     snapshotData?: unknown;
+    verifiedAt?: Date | null;
+    promotedAt?: Date | null;
   }): Promise<DeploymentRecord> {
     const [created] = await this.db
       .insert(deployments)
       .values({
         ...input,
-        status: "preparing",
+        status: input.status ?? "preparing",
         candidateId: input.candidateId ?? null,
         qaRunId: input.qaRunId ?? null,
         releaseApprovalId: input.releaseApprovalId ?? null,
@@ -555,6 +568,68 @@ export class FactoryStore {
       }
     }
     return map;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Production Effective Transitions (Run 13 Remediation)
+  // ---------------------------------------------------------------------------
+
+  async insertEffectiveTransition(
+    input: InsertProductionEffectiveTransition,
+  ): Promise<ProductionEffectiveTransitionRecord> {
+    const [created] = await this.db
+      .insert(productionEffectiveTransitions)
+      .values(input)
+      .returning();
+    if (!created) {
+      throw new FactoryError(
+        "persistence_write_failed",
+        "Failed to insert production effective transition",
+      );
+    }
+    return created;
+  }
+
+  async listEffectiveTransitions(
+    siteId: string,
+    limit = 50,
+  ): Promise<ProductionEffectiveTransitionRecord[]> {
+    return await this.db
+      .select()
+      .from(productionEffectiveTransitions)
+      .where(eq(productionEffectiveTransitions.siteId, siteId))
+      .orderBy(desc(productionEffectiveTransitions.effectiveAt))
+      .limit(limit);
+  }
+
+  async getEffectiveTransitionAsOf(
+    siteId: string,
+    asOf: Date,
+  ): Promise<ProductionEffectiveTransitionRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(productionEffectiveTransitions)
+      .where(
+        and(
+          eq(productionEffectiveTransitions.siteId, siteId),
+          lte(productionEffectiveTransitions.effectiveAt, asOf),
+        ),
+      )
+      .orderBy(desc(productionEffectiveTransitions.effectiveAt))
+      .limit(1);
+    return row ?? null;
+  }
+
+  async getCurrentEffectiveTransition(
+    siteId: string,
+  ): Promise<ProductionEffectiveTransitionRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(productionEffectiveTransitions)
+      .where(eq(productionEffectiveTransitions.siteId, siteId))
+      .orderBy(desc(productionEffectiveTransitions.effectiveAt))
+      .limit(1);
+    return row ?? null;
   }
 
   // ---------------------------------------------------------------------------

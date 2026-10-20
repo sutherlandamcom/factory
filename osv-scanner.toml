@@ -1,3 +1,16 @@
+# Explicit OSV exemptions per Factory Constitution & Run 13 security policy
+# Scope: restricted exclusively to Vite development-server vulnerabilities.
+# Production delivery outputs static HTML/JS/CSS assets via astro build / vite build;
+# the Vite development server is never executed in production runtime environments.
+
 [[IgnoredVulns]]
 id = "GHSA-698v-4r3x-3vcv"
-reason = "Vite dev server vulnerability; production builds are unaffected"
+reason = "Vite dev server fs.deny bypass vulnerability (vite 6.4.3 / 8.2.2); development server only, production static builds and preview are unaffected. Remediation: upgrade Vite when Astro upgrades its internal bundler."
+
+[[IgnoredVulns]]
+id = "GHSA-587h-7wmj-h5pm"
+reason = "Vite dev server HTML injection vulnerability via URL decoding (vite 6.4.3 / 8.2.2); development server only, production static builds are unaffected. Remediation: upgrade Vite when Astro upgrades its internal bundler."
+
+[[IgnoredVulns]]
+id = "GHSA-r825-w8mm-5pxw"
+reason = "Vite dev server path traversal vulnerability (vite 6.4.3 / 8.2.2); development server only, production static builds are unaffected. Remediation: upgrade Vite when Astro upgrades its internal bundler."

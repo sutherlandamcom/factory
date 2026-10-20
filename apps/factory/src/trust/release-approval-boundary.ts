@@ -307,7 +307,7 @@ export class ReleaseApprovalBoundary {
   async verifyActorPermission(params: {
     sessionToken: string;
     projectId: string;
-    requiredPermission: typeof DEPLOYMENT_APPROVE_PERMISSION | typeof DEPLOYMENT_PUBLISH_PERMISSION;
+    requiredPermission: typeof DEPLOYMENT_APPROVE_PERMISSION | typeof DEPLOYMENT_PUBLISH_PERMISSION | "DEPLOYMENT:PREVIEW" | "DEPLOYMENT:MONITOR" | string;
     tx?: FactoryDb;
   }): Promise<AuthenticatedSession> {
     const client = params.tx ?? this.db;
@@ -353,7 +353,14 @@ export class ReleaseApprovalBoundary {
     }
 
     const perms = (membership.permissions as string[]) ?? [];
-    if (!perms.includes(params.requiredPermission)) {
+    const hasPermission =
+      perms.includes(params.requiredPermission) ||
+      (params.requiredPermission === "DEPLOYMENT:PREVIEW" &&
+        (perms.includes(DEPLOYMENT_APPROVE_PERMISSION) || perms.includes(DEPLOYMENT_PUBLISH_PERMISSION))) ||
+      (params.requiredPermission === "DEPLOYMENT:MONITOR" &&
+        (perms.includes(DEPLOYMENT_APPROVE_PERMISSION) || perms.includes(DEPLOYMENT_PUBLISH_PERMISSION)));
+
+    if (!hasPermission) {
       throw new FactoryError(
         "permission_denied",
         `Actor '${session.actorId}' lacks required permission '${params.requiredPermission}'.`,

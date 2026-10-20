@@ -1715,12 +1715,15 @@ export const deploymentApi = {
       `/api/projects/${encodeURIComponent(projectId)}/deployment`,
     ),
 
-  preparePreview: (projectId: string, candidateId: string) =>
+  preparePreview: (
+    projectId: string,
+    input: { candidateId: string; sessionToken: string },
+  ) =>
     request<{ id: string; status: string; versionId: string | null; previewUrl: string | null }>(
       `/api/projects/${encodeURIComponent(projectId)}/deployment/preview`,
       {
         method: "POST",
-        body: JSON.stringify({ candidateId }),
+        body: JSON.stringify(input),
       },
     ),
 
@@ -1765,12 +1768,12 @@ export const deploymentApi = {
       `/api/projects/${encodeURIComponent(projectId)}/deployment/monitoring`,
     ),
 
-  runMonitoringCheck: (projectId: string) =>
+  runMonitoringCheck: (projectId: string, sessionToken?: string) =>
     request<MonitoringSummary>(
       `/api/projects/${encodeURIComponent(projectId)}/deployment/monitoring/check`,
       {
         method: "POST",
-        body: JSON.stringify({}),
+        body: JSON.stringify(sessionToken ? { sessionToken } : {}),
       },
     ),
 };

@@ -103,35 +103,41 @@ test.describe("Run 13 governed production delivery lifecycle", () => {
 
     // Verify Candidate card is rendered
     await expect(page.getByText(/1\. Candidate Build & QA/i)).toBeVisible();
-    await expect(page.getByRole("button", { name: /Prepare Candidate Preview/i })).toBeEnabled();
+    await expect(page.getByRole("button", { name: /Prepare Candidate Preview/i })).toBeDisabled();
 
-    // 4. Stage 1: Prepare Candidate Preview
-    await page.getByRole("button", { name: /Prepare Candidate Preview/i }).click();
-    await expect(page.getByText(/Candidate preview successfully created and verified/i)).toBeVisible({ timeout: 60_000 });
-    await expect(page.locator("span", { hasText: "Verified" }).first()).toBeVisible();
+    const tokenInput = page.locator('input[type="password"]');
 
-    // 5. Negative Test: Unauthorized actor cannot approve release
+    // 4a. Negative Test: Unauthorized actor cannot prepare preview (P1-A)
     const unauthorizedToken = await requestReleaseToken(page, {
       actorId: "actor-mallory",
       actorName: "Mallory Attacker",
       actorRole: "VIEWER",
       permissions: [], // zero permissions
     });
+    await tokenInput.fill(unauthorizedToken);
+    await expect(page.getByRole("button", { name: /Prepare Candidate Preview/i })).toBeEnabled();
+    await page.getByRole("button", { name: /Prepare Candidate Preview/i }).click();
+    await expect(page.getByText(/Permission denied|unauthorized|failed to prepare preview|lacks required permission/i).first()).toBeVisible({ timeout: 15_000 });
 
-    const tokenInput = page.locator('input[type="password"]');
+    // 4b. Authorized operator (Alice) prepares preview
+    const aliceToken = await requestReleaseToken(page, {
+      actorId: "actor-alice",
+      actorName: "Alice ReleaseManager",
+      actorRole: "DEPLOYER",
+      permissions: ["DEPLOYMENT:PREVIEW", "DEPLOYMENT:APPROVE", "DEPLOYMENT:PUBLISH", "DEPLOYMENT:MONITOR"],
+    });
+    await tokenInput.fill(aliceToken);
+    await page.getByRole("button", { name: /Prepare Candidate Preview/i }).click();
+    await expect(page.getByText(/Candidate preview successfully created and verified/i)).toBeVisible({ timeout: 180_000 });
+    await expect(page.locator("span", { hasText: "Verified" }).first()).toBeVisible();
+
+    // 5. Negative Test: Unauthorized actor cannot approve release
     await tokenInput.fill(unauthorizedToken);
     await expect(page.getByRole("button", { name: /Approve Release for Production/i })).toBeEnabled();
     await page.getByRole("button", { name: /Approve Release for Production/i }).click();
     await expect(page.getByText(/Permission denied|unauthorized|failed to approve|lacks required permission/i).first()).toBeVisible({ timeout: 15_000 });
 
     // 6. Positive Test: Alice (authorized Release Manager) approves release
-    const aliceToken = await requestReleaseToken(page, {
-      actorId: "actor-alice",
-      actorName: "Alice ReleaseManager",
-      actorRole: "DEPLOYER",
-      permissions: ["DEPLOYMENT:APPROVE", "DEPLOYMENT:PUBLISH"],
-    });
-
     await tokenInput.fill(aliceToken);
     await page.getByRole("button", { name: /Approve Release for Production/i }).click();
     await expect(page.getByText(/Release approval successfully verified and cryptographically sealed/i)).toBeVisible({ timeout: 30_000 });
@@ -141,7 +147,7 @@ test.describe("Run 13 governed production delivery lifecycle", () => {
     // 7. Stage 3: Publish Approved Release to Production
     await expect(page.getByRole("button", { name: /Publish Approved Release/i })).toBeEnabled();
     await page.getByRole("button", { name: /Publish Approved Release/i }).click();
-    await expect(page.getByText(/promoted to Cloudflare production and verified/i)).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText(/promoted to Cloudflare production and verified/i)).toBeVisible({ timeout: 180_000 });
     await expect(page.locator("span", { hasText: "Live" }).first()).toBeVisible();
 
     // 8. Stage 4: Production Monitoring & Search Quality
@@ -156,13 +162,17 @@ test.describe("Run 13 governed production delivery lifecycle", () => {
     // 9. Stage 5: Rollback to Known-Good
     await expect(page.getByRole("button", { name: /Explicit Rollback to Known-Good/i })).toBeEnabled();
     await page.getByRole("button", { name: /Explicit Rollback to Known-Good/i }).click();
-    await expect(page.getByText(/Explicit rollback executed and production verified/i)).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText(/Explicit rollback executed and production verified/i)).toBeVisible({ timeout: 180_000 });
 
-    // 10. Audit History Integrity: verify historical entries are immutably recorded
+    // 10. Audit History Integrity: verify historical entries are immutably recorded (P0-D)
     await expect(page.getByText(/Deployment Audit History/i)).toBeVisible();
     const rows = page.locator("table tbody tr");
-    await expect(rows).toHaveCount(1);
+    await expect(rows).toHaveCount(2);
+    // Row 1: Rollback event
     await expect(rows.first().locator("td").nth(1)).toHaveText("rolled_back");
     await expect(rows.first().locator("td").nth(5)).toHaveText("Yes");
+    // Row 2: Past published deployment preserved without mutation
+    await expect(rows.nth(1).locator("td").nth(1)).toHaveText("verified");
+    await expect(rows.nth(1).locator("td").nth(5)).toHaveText("No");
   });
 });

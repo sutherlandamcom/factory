@@ -139,16 +139,16 @@ export class MonitoringService {
     const now = new Date();
 
     // 1. Operational check (technical ping / verification)
-    const opResult = this.adapters.operationalVerifier
+    const opResult: OperationalCheckResult = this.adapters.operationalVerifier
       ? await this.adapters.operationalVerifier.verifyUrl(targetUrl, targetUrl)
       : {
-          status: "PASS" as MonitoringObservationStatus,
-          statusCode: 200,
-          canonicalMatches: true,
-          robotsValid: true,
-          sitemapValid: true,
-          summary: "HTTP 200 OK, canonical and sitemap matched",
-          errorMessage: null,
+          status: "NOT_CONFIGURED",
+          statusCode: 0,
+          canonicalMatches: false,
+          robotsValid: false,
+          sitemapValid: false,
+          summary: "Operational crawler adapter not configured.",
+          errorMessage: "Operational crawler adapter not configured in environment.",
         };
 
     await this.store.insertMonitoringObservation({
@@ -176,29 +176,18 @@ export class MonitoringService {
     });
 
     // 2. Google Search Console inspection
-    const scResult = this.adapters.searchConsole
+    const scResult: SearchConsoleInspectionResult = this.adapters.searchConsole
       ? await this.adapters.searchConsole.inspectUrl(targetUrl, site.key)
-      : process.env.SEARCH_CONSOLE_SERVICE_ACCOUNT_KEY
-        ? {
-            status: "PASS" as MonitoringObservationStatus,
-            indexCoverageStatus: "INDEXED",
-            googleSelectedCanonical: targetUrl,
-            userDeclaredCanonical: targetUrl,
-            lastCrawlTime: now.toISOString(),
-            robotsTxtStatus: "ALLOWED",
-            issues: [],
-            errorMessage: null,
-          }
-        : {
-            status: "NOT_CONFIGURED" as MonitoringObservationStatus,
-            indexCoverageStatus: null,
-            googleSelectedCanonical: null,
-            userDeclaredCanonical: null,
-            lastCrawlTime: null,
-            robotsTxtStatus: null,
-            issues: [],
-            errorMessage: "Google Search Console API credentials not configured in environment.",
-          };
+      : {
+          status: "NOT_CONFIGURED",
+          indexCoverageStatus: null,
+          googleSelectedCanonical: null,
+          userDeclaredCanonical: null,
+          lastCrawlTime: null,
+          robotsTxtStatus: null,
+          issues: [],
+          errorMessage: "Google Search Console adapter not configured in environment.",
+        };
 
     await this.store.insertMonitoringObservation({
       id: `mon-gsc-${randomUUID()}`,
@@ -227,15 +216,15 @@ export class MonitoringService {
     });
 
     // 3. Lighthouse lab measurement
-    const lhResult = this.adapters.lighthouse
+    const lhResult: LighthouseLabResult = this.adapters.lighthouse
       ? await this.adapters.lighthouse.runLab(targetUrl)
       : {
-          status: "PASS" as MonitoringObservationStatus,
-          score: 98,
-          p75LcpMs: 1200,
-          p75Cls: 0.01,
-          p75InpMs: 50,
-          errorMessage: null,
+          status: "NOT_CONFIGURED",
+          score: null,
+          p75LcpMs: null,
+          p75Cls: null,
+          p75InpMs: null,
+          errorMessage: "Lighthouse lab runner not configured in environment.",
         };
 
     await this.store.insertMonitoringObservation({
@@ -263,25 +252,16 @@ export class MonitoringService {
     });
 
     // 4. CrUX real-user field CWV observation
-    const cruxResult = this.adapters.crux
+    const cruxResult: CruxFieldResult = this.adapters.crux
       ? await this.adapters.crux.queryFieldMetrics(targetUrl)
-      : process.env.CRUX_API_KEY
-        ? {
-            status: "PASS" as MonitoringObservationStatus,
-            p75LcpMs: 1400,
-            p75InpMs: 75,
-            p75Cls: 0.02,
-            collectionPeriod: "28_day",
-            errorMessage: null,
-          }
-        : {
-            status: "INSUFFICIENT_DATA" as MonitoringObservationStatus,
-            p75LcpMs: null,
-            p75InpMs: null,
-            p75Cls: null,
-            collectionPeriod: "none",
-            errorMessage: "Field Core Web Vitals currently has insufficient traffic data for this origin.",
-          };
+      : {
+          status: "NOT_CONFIGURED",
+          p75LcpMs: null,
+          p75InpMs: null,
+          p75Cls: null,
+          collectionPeriod: "none",
+          errorMessage: "Field Core Web Vitals (CrUX) adapter not configured in environment.",
+        };
 
     await this.store.insertMonitoringObservation({
       id: `mon-crux-${randomUUID()}`,

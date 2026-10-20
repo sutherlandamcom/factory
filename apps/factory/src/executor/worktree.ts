@@ -51,6 +51,11 @@ export async function createWorktree(
 /** Remove a worktree. Best-effort idempotent: safe to call twice. */
 export async function removeWorktree(repoRoot: string, worktreePath: string): Promise<void> {
   try {
+    await git(repoRoot, ["worktree", "unlock", worktreePath]);
+  } catch {
+    // Ignore if not locked
+  }
+  try {
     await git(repoRoot, ["worktree", "remove", "--force", worktreePath]);
   } catch {
     // Already gone or never registered — prune below reconciles either way.

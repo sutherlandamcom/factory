@@ -333,7 +333,22 @@ export class GovernedDeliveryService {
   async prepareCandidatePreview(input: {
     projectId: string;
     candidateId?: string;
+    sessionToken?: string;
   }): Promise<DeploymentRecord> {
+    if (this.releaseBoundary) {
+      if (!input.sessionToken) {
+        throw new FactoryError(
+          "actor_unauthenticated",
+          "IdP session token is required to prepare candidate preview.",
+        );
+      }
+      await this.releaseBoundary.verifyActorPermission({
+        sessionToken: input.sessionToken,
+        projectId: input.projectId,
+        requiredPermission: "DEPLOYMENT:PREVIEW",
+      });
+    }
+
     return await this.withProjectLock(input.projectId, async () => {
       const site = await this.resolveSite(input.projectId);
 
@@ -609,8 +624,28 @@ export class GovernedDeliveryService {
           approval,
         });
 
-        // R13-R5: Record post-publication technical verification
+        // R13-R5: Record post-publication technical verification and append-only effective transition
         if (published.status === "verified" && published.versionId) {
+          await this.store.insertEffectiveTransition({
+            id: `trans-${randomUUID()}`,
+            projectId: input.projectId,
+            siteId: site.id,
+            deploymentId: published.id,
+            versionId: published.versionId,
+            candidateId: candidate.id,
+            eventType: "PUBLISH",
+            fromVersionId: previewDeployment.previousVersionId ?? null,
+            toVersionId: published.versionId,
+            actorId: approval.actorId,
+            actorName: approval.actorName,
+            actorRole: approval.actorRole,
+            sessionId: approval.sessionId,
+            candidateRoutes,
+            artifactDigest: candidate.artifactDigest,
+            evidenceRef: published.artifactDirectory ?? undefined,
+            effectiveAt: published.verifiedAt ?? new Date(),
+          });
+
           await this.monitoringService
             .recordTechnicalVerification({
               projectId: input.projectId,
@@ -645,7 +680,7 @@ export class GovernedDeliveryService {
       const site = await this.resolveSite(input.projectId);
 
       // Verify publisher permission
-      await this.releaseBoundary.verifyActorPermission({
+      const session = await this.releaseBoundary.verifyActorPermission({
         sessionToken: input.sessionToken,
         projectId: input.projectId,
         requiredPermission: DEPLOYMENT_PUBLISH_PERMISSION,
@@ -733,10 +768,34 @@ export class GovernedDeliveryService {
         };
 
         const delivery = new ProductionDelivery(this.store, provider, deliveryRuntime);
-        return await delivery.rollbackExplicit({
+        const rolledBack = await delivery.rollbackExplicit({
           deployment: latestDeployment,
           targetVersionId: targetVersion,
         });
+
+        if (rolledBack.status === "rolled_back" && rolledBack.versionId) {
+          await this.store.insertEffectiveTransition({
+            id: `trans-${randomUUID()}`,
+            projectId: input.projectId,
+            siteId: site.id,
+            deploymentId: rolledBack.id,
+            versionId: targetVersion,
+            candidateId: targetDeployment.candidateId,
+            eventType: "ROLLBACK",
+            fromVersionId: latestDeployment.versionId,
+            toVersionId: targetVersion,
+            actorId: session.actorId,
+            actorName: session.actorName,
+            actorRole: session.actorRole,
+            sessionId: session.sessionId,
+            candidateRoutes: targetRoutes,
+            artifactDigest: targetDeployment.artifactDigest,
+            evidenceRef: rolledBack.artifactDirectory ?? undefined,
+            effectiveAt: rolledBack.verifiedAt ?? new Date(),
+          });
+        }
+
+        return rolledBack;
       } finally {
         if (worktree) {
           await this.worktreeProvider.remove(this.repoRoot, worktree).catch(() => {});
@@ -908,25 +967,69 @@ export class GovernedDeliveryService {
     const { siteId, route, asOf } = params;
     const normalizedRoute = route === "" ? "/" : route.startsWith("/") ? route : `/${route}`;
 
-    // 1. Locate the deployment that was active and verified as of that timestamp
-    const allDeployments = await this.store.listDeployments(siteId, 200);
-    const effectiveDeployment = allDeployments
-      .filter((d) => {
-        const effectiveTime = d.verifiedAt ?? d.promotedAt ?? d.createdAt;
-        return (
-          d.productionVerified &&
-          d.versionId &&
-          effectiveTime <= asOf &&
-          (d.status === "verified" || d.status === "rolled_back")
-        );
-      })
-      .sort((a, b) => {
-        const timeA = (a.verifiedAt ?? a.promotedAt ?? a.createdAt).getTime();
-        const timeB = (b.verifiedAt ?? b.promotedAt ?? b.createdAt).getTime();
-        return timeB - timeA;
-      })[0] ?? null;
+    // 1. Locate the transition that was active as of that timestamp (P0-E truthful as-of historical lineage)
+    let effectiveDeployment: DeploymentRecord | null = null;
+    let effectiveCandidateId: string | null = null;
 
-    if (!effectiveDeployment || !effectiveDeployment.candidateId) {
+    const transition = typeof this.store.getEffectiveTransitionAsOf === "function"
+      ? await this.store.getEffectiveTransitionAsOf(siteId, asOf)
+      : null;
+
+    if (transition) {
+      const allDeps = await this.store.listDeployments(siteId, 200);
+      effectiveDeployment = allDeps.find((d) => d.id === transition.deploymentId || d.versionId === transition.versionId) ?? null;
+      if (!effectiveDeployment) {
+        effectiveDeployment = {
+          id: transition.deploymentId,
+          siteId,
+          sourceCommit: "transition-commit",
+          artifactDigest: transition.artifactDigest,
+          versionId: transition.versionId,
+          previewUrl: null,
+          previousVersionId: transition.fromVersionId,
+          workerName: "",
+          productionUrl: "",
+          status: "verified",
+          previewVerified: true,
+          productionVerified: true,
+          rolledBack: transition.eventType === "ROLLBACK",
+          errorCode: null,
+          errorMessage: null,
+          artifactDirectory: null,
+          candidateId: transition.candidateId,
+          qaRunId: null,
+          releaseApprovalId: null,
+          candidateRoutes: transition.candidateRoutes,
+          snapshotData: null,
+          createdAt: transition.createdAt,
+          updatedAt: transition.createdAt,
+          promotedAt: transition.effectiveAt,
+          verifiedAt: transition.effectiveAt,
+        };
+      }
+      effectiveCandidateId = transition.candidateId;
+    } else {
+      const allDeployments = await this.store.listDeployments(siteId, 200);
+      effectiveDeployment = allDeployments
+        .filter((d) => {
+          const effectiveTime = d.verifiedAt ?? d.promotedAt ?? d.createdAt;
+          return (
+            d.productionVerified &&
+            d.versionId &&
+            effectiveTime <= asOf &&
+            (d.status === "verified" || d.status === "rolled_back")
+          );
+        })
+        .sort((a, b) => {
+          const timeA = (a.verifiedAt ?? a.promotedAt ?? a.createdAt).getTime();
+          const timeB = (b.verifiedAt ?? b.promotedAt ?? b.createdAt).getTime();
+          return timeB - timeA;
+        })[0] ?? null;
+
+      effectiveCandidateId = effectiveDeployment?.candidateId ?? null;
+    }
+
+    if (!effectiveDeployment || !effectiveCandidateId) {
       return {
         siteId,
         route: normalizedRoute,
@@ -956,8 +1059,8 @@ export class GovernedDeliveryService {
       (await (this.store as any).getSiteById?.(siteId));
     const projectId = site?.projectId ?? "";
 
-    const candidate = await this.productionStore.getCandidate(projectId, effectiveDeployment.candidateId);
-    const candidateInputs = await this.productionStore.listCandidateInputs(projectId, effectiveDeployment.candidateId);
+    const candidate = await this.productionStore.getCandidate(projectId, effectiveCandidateId);
+    const candidateInputs = await this.productionStore.listCandidateInputs(projectId, effectiveCandidateId);
     const matchedBinding = candidateInputs.find(
       (b) => b.route === normalizedRoute || (normalizedRoute === "/" && b.route === "/"),
     );
@@ -1017,7 +1120,7 @@ export class GovernedDeliveryService {
 
     // 5. Load QA evidence
     let qaEvidence = null;
-    if (effectiveDeployment.qaRunId) {
+    if (effectiveDeployment.qaRunId && effectiveDeployment.candidateId) {
       const qaRun = await this.productionStore.latestQaRun(projectId, effectiveDeployment.candidateId);
       if (qaRun && qaRun.id === effectiveDeployment.qaRunId) {
         const qaData = qaRun.data as any;
@@ -1078,7 +1181,14 @@ export class GovernedDeliveryService {
   /**
    * Triggers an on-demand operational check across verification and monitoring providers.
    */
-  async runMonitoringCheck(projectId: string): Promise<MonitoringSummary> {
+  async runMonitoringCheck(projectId: string, sessionToken?: string): Promise<MonitoringSummary> {
+    if (this.releaseBoundary && sessionToken) {
+      await this.releaseBoundary.verifyActorPermission({
+        sessionToken,
+        projectId,
+        requiredPermission: "DEPLOYMENT:MONITOR",
+      });
+    }
     return await this.monitoringService.runOperationalCheck(projectId);
   }
 }

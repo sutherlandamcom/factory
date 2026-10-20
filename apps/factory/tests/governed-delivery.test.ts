@@ -322,6 +322,20 @@ test("governed delivery lifecycle: preview -> approval -> publish -> rollback", 
         rec.revoked = true;
       }
     },
+    transitions: [] as any[],
+    async insertEffectiveTransition(t: any) {
+      const rec = { ...t, createdAt: new Date(), effectiveAt: t.effectiveAt ? new Date(t.effectiveAt) : new Date() };
+      this.transitions.unshift(rec);
+      return rec;
+    },
+    async getEffectiveTransitionAsOf(sId: string, asOf: Date) {
+      return this.transitions
+        .filter((t: any) => t.siteId === sId && t.effectiveAt.getTime() <= asOf.getTime())
+        .sort((a: any, b: any) => b.effectiveAt.getTime() - a.effectiveAt.getTime())[0] ?? null;
+    },
+    async getCurrentEffectiveTransition(sId: string) {
+      return this.transitions.filter((t: any) => t.siteId === sId)[0] ?? null;
+    },
   };
 
   const productionStore: any = {
@@ -527,10 +541,37 @@ test("governed delivery lifecycle: preview -> approval -> publish -> rollback", 
   });
   fakeWrangler.current = "v-cf-v0";
 
-  // 1. Prepare Candidate Preview
+  // Operator session tokens (P1-A verification)
+  const aliceToken = signAssertion({
+    actorId: "alice",
+    actorName: "Alice Lead",
+    actorRole: "LEAD",
+    audience: "factory-release-governance",
+  });
+  const bobToken = signAssertion({
+    actorId: "bob",
+    actorName: "Bob Viewer",
+    actorRole: "VIEWER",
+    audience: "factory-release-governance",
+  });
+
+  // 1a. Negative Test: Missing session token throws actor_unauthenticated
+  await assert.rejects(
+    () => service.prepareCandidatePreview({ projectId, candidateId }),
+    (err: any) => err.code === "actor_unauthenticated",
+  );
+
+  // 1b. Negative Test: Bob lacks preview permission throws permission_denied
+  await assert.rejects(
+    () => service.prepareCandidatePreview({ projectId, candidateId, sessionToken: bobToken }),
+    (err: any) => err.code === "permission_denied",
+  );
+
+  // 1c. Authorized Operator (Alice) prepares candidate preview
   const preview = await service.prepareCandidatePreview({
     projectId,
     candidateId,
+    sessionToken: aliceToken,
   });
 
   assert.equal(preview.status, "preview_verified");
@@ -542,12 +583,6 @@ test("governed delivery lifecycle: preview -> approval -> publish -> rollback", 
   assert.equal(removedWorktrees.length, 1);
 
   // 2. Human Release Approval (Alice has DEPLOYMENT:APPROVE)
-  const aliceToken = signAssertion({
-    actorId: "alice",
-    actorName: "Alice Lead",
-    actorRole: "LEAD",
-    audience: "factory-release-governance",
-  });
   const approval = await service.approveRelease({
     projectId,
     candidateId,
@@ -562,12 +597,6 @@ test("governed delivery lifecycle: preview -> approval -> publish -> rollback", 
   assert.ok(approval.verificationSeal!.length > 20);
 
   // 2b. Attempt approval with Bob (lacks DEPLOYMENT:APPROVE) -> denied
-  const bobToken = signAssertion({
-    actorId: "bob",
-    actorName: "Bob Observer",
-    actorRole: "VIEWER",
-    audience: "factory-release-governance",
-  });
   await assert.rejects(
     () =>
       service.approveRelease({
@@ -617,7 +646,29 @@ test("governed delivery lifecycle: preview -> approval -> publish -> rollback", 
     sessionToken: aliceToken,
   });
 
+  if (rollback.status === "needs_review") {
+    console.log("ROLLBACK ERROR:", rollback.errorCode, rollback.errorMessage);
+  }
+
   assert.equal(rollback.status, "rolled_back");
   assert.equal(rollback.rolledBack, true);
   assert.deepEqual(fakeWrangler.rolledBack, ["v-cf-v0"]);
+
+  // P0-D: Verify past published deployment was NOT mutated in-place
+  assert.equal(published.status, "verified");
+  assert.equal(published.productionVerified, true);
+
+  // P0-D & P0-E: Verify transition history and lineage
+  assert.equal(store.transitions.length, 2);
+  assert.equal(store.transitions[0].eventType, "ROLLBACK");
+  assert.equal(store.transitions[0].toVersionId, "v-cf-v0");
+  assert.equal(store.transitions[1].eventType, "PUBLISH");
+  assert.equal(store.transitions[1].toVersionId, "v-cf-preview-123");
+
+  const effectiveNow = await service.getEffectiveReleaseAsOf({
+    siteId,
+    route: "/",
+    asOf: new Date(),
+  });
+  assert.equal(effectiveNow.effectiveDeployment?.versionId, "v-cf-v0");
 });

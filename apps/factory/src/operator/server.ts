@@ -431,19 +431,24 @@ export async function startOperatorServer(): Promise<http.Server> {
   const prodStore = new ProductionStore(dbInstance.db, { repoRoot });
   const releaseBoundary = new ReleaseApprovalBoundary(dbInstance.db);
 
-  const deliveryMode =
-    process.env.FACTORY_DELIVERY_MODE ??
-    (process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID
-      ? "production"
-      : "fixture");
+  const rawDeliveryMode = process.env.FACTORY_DELIVERY_MODE?.trim().toLowerCase();
+  const deliveryMode = rawDeliveryMode || "production";
 
   let wranglerFactory;
   let qaRunner;
-  if (deliveryMode === "fixture") {
+  if (deliveryMode === "fixture" || deliveryMode === "test" || deliveryMode === "simulation") {
     const { SimulatedWrangler } = await import("../delivery/simulated-wrangler.js");
     const simulated = new SimulatedWrangler();
     wranglerFactory = () => simulated;
     qaRunner = async () => ({ passed: true, exitCode: 0, timedOut: false });
+  } else if (deliveryMode === "production") {
+    // Governed production: only real Wrangler with credentials.
+    // If credentials are not set, wranglerFactory remains undefined and any delivery attempt fails closed.
+  } else {
+    throw new FactoryError(
+      "invalid_configuration",
+      `Unrecognized FACTORY_DELIVERY_MODE '${rawDeliveryMode}'. Allowed values: 'production', 'fixture', 'test'.`,
+    );
   }
 
   const governedDelivery = new GovernedDeliveryService({

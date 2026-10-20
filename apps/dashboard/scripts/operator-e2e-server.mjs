@@ -72,6 +72,8 @@ const CHILD_ENV = {
   // Governed production delivery (Macro Run 13): strict production trust mode
   // for publication eligibility in E2E delivery journeys.
   FACTORY_TRUST_MODE: process.env.FACTORY_TRUST_MODE || "STRICT_PRODUCTION",
+  // Governed delivery provider mode: explicitly set to fixture for automated browser testing
+  FACTORY_DELIVERY_MODE: process.env.FACTORY_DELIVERY_MODE || "fixture",
   // Release approval cryptographic HMAC seal keyring
   FACTORY_AUDIT_SEAL_KEY: process.env.FACTORY_AUDIT_SEAL_KEY || "e2e-audit-seal-key-32-bytes-long-secret-key-12345",
   FACTORY_AUDIT_SEAL_KEY_ID: process.env.FACTORY_AUDIT_SEAL_KEY_ID || "v1",

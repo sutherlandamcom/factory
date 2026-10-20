@@ -425,6 +425,19 @@ export async function startOperatorServer(): Promise<http.Server> {
       new LocalTrustedQaEvidenceExecutor(),
     );
   }
+  const { GovernedDeliveryService } = await import("../delivery/governed-service.js");
+  const { ProductionStore } = await import("../production/store.js");
+  const { ReleaseApprovalBoundary } = await import("../trust/release-approval-boundary.js");
+  const prodStore = new ProductionStore(dbInstance.db, { repoRoot });
+  const releaseBoundary = new ReleaseApprovalBoundary(dbInstance.db);
+  const governedDelivery = new GovernedDeliveryService({
+    db: dbInstance.db,
+    repoRoot,
+    store,
+    productionStore: prodStore,
+    releaseBoundary,
+  });
+
   const deps: OperatorApiDeps = {
     store, intake, search, competitors, writer, assets, design, visual,
     production: new ProductionApiFacade(dbInstance.db, repoRoot, {
@@ -434,6 +447,7 @@ export async function startOperatorServer(): Promise<http.Server> {
     }),
     derivatives: new DerivativesApiFacade(dbInstance.db, repoRoot, summaryMode === "fixture" ? { summaryInvoke: fixtureSummaryInvoke } : {}),
     qaCollector,
+    governedDelivery,
   };
   const server = createOperatorServer(deps);
   const host = process.env.FACTORY_OPERATOR_HOST ?? "127.0.0.1";

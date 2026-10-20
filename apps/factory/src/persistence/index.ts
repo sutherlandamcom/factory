@@ -22,6 +22,7 @@ export {
   attempts,
   qualityResults,
   modelInvocations,
+  releaseApprovals,
   type ProjectRecord,
   type InsertProject,
   type SiteRecord,
@@ -38,6 +39,8 @@ export {
   type InsertQualityResult,
   type ModelInvocationRecord,
   type InsertModelInvocation,
+  type ReleaseApprovalRecord,
+  type InsertReleaseApproval,
 } from "./schema.js";
 
 export {

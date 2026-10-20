@@ -872,3 +872,21 @@ export type {
   WorkflowReason,
   WorkflowState,
 } from "./operator-workflow.js";
+export {
+  DEPLOYMENT_APPROVE_PERMISSION,
+  DEPLOYMENT_PUBLISH_PERMISSION,
+  createReleaseApprovalRequestSchema,
+  deploymentHistoryItemSchema,
+  governedDeploymentViewSchema,
+  publishApprovedReleaseRequestSchema,
+  releaseApprovalSchema,
+  releaseApprovalSealStatusSchema,
+} from "./release.js";
+export type {
+  CreateReleaseApprovalRequest,
+  DeploymentHistoryItem,
+  GovernedDeploymentView,
+  PublishApprovedReleaseRequest,
+  ReleaseApproval,
+  ReleaseApprovalSealStatus,
+} from "./release.js";

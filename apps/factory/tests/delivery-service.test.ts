@@ -36,6 +36,11 @@ function record(overrides: Partial<DeploymentRecord> = {}): DeploymentRecord {
     errorCode: null,
     errorMessage: null,
     artifactDirectory: ".factory/deployments/deployment-1",
+    candidateId: null,
+    qaRunId: null,
+    releaseApprovalId: null,
+    candidateRoutes: null,
+    snapshotData: null,
     createdAt: now,
     updatedAt: now,
     promotedAt: null,
@@ -242,3 +247,142 @@ test("Run 13 preparePreview rejects replay of an already-uploaded deployment", a
   assert.deepEqual(store.updates, []);
   assert.deepEqual(provider.promoted, []);
 });
+
+test("Run 13 publishApproved promotes exact approved preview version and verifies production", async () => {
+  const verifiedPreview = record({
+    status: "preview_verified",
+    versionId: "candidate-v2",
+    previewVerified: true,
+    candidateId: "cand-1",
+    qaRunId: "qa-1",
+    artifactDigest: "a".repeat(64),
+  });
+  const approval = {
+    id: "appr-1",
+    projectId: "proj-1",
+    siteId: "site-db-id",
+    candidateId: "cand-1",
+    qaRunId: "qa-1",
+    artifactDigest: "a".repeat(64),
+    previewVersionId: "candidate-v2",
+    targetWorkerName: "factory-site",
+    targetProductionUrl: "https://example.com",
+    actorId: "actor-alice",
+    actorName: "Alice",
+    actorRole: "DEPLOYER",
+    sessionId: "sess-1",
+    isSynthetic: false,
+    verificationSeal: "s".repeat(64),
+    sealKeyId: "v1",
+    sealStatus: "SEALED" as const,
+    revoked: false,
+    createdAt: new Date(),
+  };
+
+  const store = new MemoryStore(verifiedPreview);
+  const provider = new FakeWrangler(null);
+  const rt = runtime([true]); // production QA passes
+  const result = await new ProductionDelivery(store, provider, rt).publishApproved({
+    previewDeployment: verifiedPreview,
+    approval,
+  });
+
+  assert.equal(result.status, "verified");
+  assert.equal(result.productionVerified, true);
+  assert.deepEqual(provider.promoted, ["candidate-v2"]);
+  assert.equal(provider.current, "candidate-v2");
+});
+
+test("Run 13 publishApproved rejects version mismatch, candidate mismatch, and revoked approval", async () => {
+  const verifiedPreview = record({
+    status: "preview_verified",
+    versionId: "candidate-v2",
+    previewVerified: true,
+    candidateId: "cand-1",
+    qaRunId: "qa-1",
+    artifactDigest: "a".repeat(64),
+  });
+  const baseApproval = {
+    id: "appr-1",
+    projectId: "proj-1",
+    siteId: "site-db-id",
+    candidateId: "cand-1",
+    qaRunId: "qa-1",
+    artifactDigest: "a".repeat(64),
+    previewVersionId: "candidate-v2",
+    targetWorkerName: "factory-site",
+    targetProductionUrl: "https://example.com",
+    actorId: "actor-alice",
+    actorName: "Alice",
+    actorRole: "DEPLOYER",
+    sessionId: "sess-1",
+    isSynthetic: false,
+    verificationSeal: "s".repeat(64),
+    sealKeyId: "v1",
+    sealStatus: "SEALED" as const,
+    revoked: false,
+    createdAt: new Date(),
+  };
+
+  const delivery = new ProductionDelivery(new MemoryStore(verifiedPreview), new FakeWrangler(null), runtime([]));
+
+  // Version mismatch
+  await assert.rejects(
+    delivery.publishApproved({
+      previewDeployment: verifiedPreview,
+      approval: { ...baseApproval, previewVersionId: "candidate-v3" },
+    }),
+    (err: any) => err.code === "release_version_mismatch",
+  );
+
+  // Candidate mismatch
+  await assert.rejects(
+    delivery.publishApproved({
+      previewDeployment: verifiedPreview,
+      approval: { ...baseApproval, candidateId: "cand-other" },
+    }),
+    (err: any) => err.code === "release_candidate_mismatch",
+  );
+
+  // Revoked approval
+  await assert.rejects(
+    delivery.publishApproved({
+      previewDeployment: verifiedPreview,
+      approval: { ...baseApproval, revoked: true },
+    }),
+    (err: any) => err.code === "release_approval_revoked",
+  );
+});
+
+test("Run 13 execute rejects governed candidate deployments without approval (legacy bypass prevention)", async () => {
+  const governedCandidate = record({
+    candidateId: "cand-1",
+    status: "preparing",
+  });
+  const delivery = new ProductionDelivery(new MemoryStore(governedCandidate), new FakeWrangler(null), runtime([]));
+  await assert.rejects(
+    delivery.execute(governedCandidate),
+    (err: any) => err.code === "governed_site_requires_release_approval",
+  );
+});
+
+test("Run 13 rollbackExplicit restores known-good version and rejects untrusted target", async () => {
+  const known = record({ id: "known", status: "verified", versionId: "known-v1", productionVerified: true });
+  const activeDeployment = record({ id: "active", status: "verified", versionId: "candidate-v2" });
+  const store = new MemoryStore(activeDeployment, known);
+  const provider = new FakeWrangler("candidate-v2");
+  const delivery = new ProductionDelivery(store, provider, runtime([true]));
+
+  // Rejects invalid target
+  await assert.rejects(
+    delivery.rollbackExplicit({ deployment: activeDeployment, targetVersionId: "untrusted-v9" }),
+    (err: any) => err.code === "rollback_target_invalid",
+  );
+
+  // Restores known-v1
+  const result = await delivery.rollbackExplicit({ deployment: activeDeployment, targetVersionId: "known-v1" });
+  assert.equal(result.status, "rolled_back");
+  assert.equal(result.rolledBack, true);
+  assert.equal(provider.current, "known-v1");
+});
+

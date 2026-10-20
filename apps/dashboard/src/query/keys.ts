@@ -29,6 +29,9 @@ export const queryKeys = {
   /** Parameterized detail queries (e.g. a specific search run). */
   detail: (projectId: string, area: WorkflowAreaId, id: string) =>
     ["detail", area, projectId, id] as const,
+
+  /** Governed production delivery view (Macro Run 13). */
+  deployment: (projectId: string) => ["deployment", projectId] as const,
 };
 
 /** Areas whose data can change as a downstream consequence of a mutation. */

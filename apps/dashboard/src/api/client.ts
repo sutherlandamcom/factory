@@ -4,7 +4,11 @@
  * and renders the canonical ProjectOperatorWorkspace read-model.
  */
 
-import { OPERATOR_ERROR_CODES, type OperatorErrorCode } from "@factory/contracts";
+import {
+  OPERATOR_ERROR_CODES,
+  type OperatorErrorCode,
+  type GovernedDeploymentView,
+} from "@factory/contracts";
 
 export interface ApiErrorBody {
   error?: { code?: string; message?: string };
@@ -1696,5 +1700,61 @@ export const workflowApi = {
   getCosts: (projectId: string) =>
     request<ProjectCostsReadModel>(
       `/api/projects/${encodeURIComponent(projectId)}/workflow-costs`,
+    ),
+};
+
+// ---------------------------------------------------------------------------
+// Run 13 — Governed Production Delivery
+// ---------------------------------------------------------------------------
+
+export const deploymentApi = {
+  getView: (projectId: string) =>
+    request<GovernedDeploymentView>(
+      `/api/projects/${encodeURIComponent(projectId)}/deployment`,
+    ),
+
+  preparePreview: (projectId: string, candidateId: string) =>
+    request<{ id: string; status: string; versionId: string | null; previewUrl: string | null }>(
+      `/api/projects/${encodeURIComponent(projectId)}/deployment/preview`,
+      {
+        method: "POST",
+        body: JSON.stringify({ candidateId }),
+      },
+    ),
+
+  approveRelease: (
+    projectId: string,
+    input: { candidateId: string; previewVersionId: string; sessionToken: string },
+  ) =>
+    request<{ id: string; verificationSeal: string | null }>(
+      `/api/projects/${encodeURIComponent(projectId)}/deployment/approve`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    ),
+
+  publishRelease: (
+    projectId: string,
+    input: { candidateId: string; previewVersionId: string; approvalId: string; sessionToken: string },
+  ) =>
+    request<{ id: string; status: string; versionId: string | null }>(
+      `/api/projects/${encodeURIComponent(projectId)}/deployment/publish`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    ),
+
+  rollbackRelease: (
+    projectId: string,
+    input: { sessionToken: string; targetVersionId?: string },
+  ) =>
+    request<{ id: string; status: string; rolledBack: boolean }>(
+      `/api/projects/${encodeURIComponent(projectId)}/deployment/rollback`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
     ),
 };

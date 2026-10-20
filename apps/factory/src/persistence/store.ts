@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { eq, and, asc, desc, inArray, isNotNull } from "drizzle-orm";
+import { eq, and, asc, desc, inArray, isNotNull, ne } from "drizzle-orm";
 import type { DeploymentStatus } from "@factory/contracts";
 import type { FactoryDb } from "./db.js";
 import {
@@ -11,6 +11,7 @@ import {
   attempts,
   qualityResults,
   modelInvocations,
+  releaseApprovals,
   type ProjectRecord,
   type SiteRecord,
   type DeploymentRecord,
@@ -20,6 +21,8 @@ import {
   type QualityResultRecord,
   type ModelInvocationRecord,
   type InsertQualityResult,
+  type ReleaseApprovalRecord,
+  type InsertReleaseApproval,
 } from "./schema.js";
 import { FactoryError } from "../executor/errors.js";
 
@@ -201,6 +204,23 @@ export class FactoryStore {
     return resolved.site;
   }
 
+  async findSiteByProjectId(projectId: string): Promise<SiteRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(sites)
+      .where(eq(sites.projectId, projectId))
+      .limit(1);
+    return row ?? null;
+  }
+
+  async getSiteById(siteId: string): Promise<SiteRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(sites)
+      .where(eq(sites.id, siteId));
+    return row ?? null;
+  }
+
   async findSiteByGlobalKey(siteKey: string): Promise<{ site: SiteRecord; project: ProjectRecord } | null> {
     const rows = await this.db
       .select({
@@ -254,10 +274,23 @@ export class FactoryStore {
     workerName: string;
     productionUrl: string;
     artifactDirectory: string;
+    candidateId?: string | null;
+    qaRunId?: string | null;
+    releaseApprovalId?: string | null;
+    candidateRoutes?: unknown;
+    snapshotData?: unknown;
   }): Promise<DeploymentRecord> {
     const [created] = await this.db
       .insert(deployments)
-      .values({ ...input, status: "preparing" })
+      .values({
+        ...input,
+        status: "preparing",
+        candidateId: input.candidateId ?? null,
+        qaRunId: input.qaRunId ?? null,
+        releaseApprovalId: input.releaseApprovalId ?? null,
+        candidateRoutes: input.candidateRoutes ?? null,
+        snapshotData: input.snapshotData ?? null,
+      })
       .returning();
     if (!created) throw new FactoryError("persistence_write_failed", "Failed to create deployment");
     return created;
@@ -265,6 +298,30 @@ export class FactoryStore {
 
   async getDeployment(id: string): Promise<DeploymentRecord | null> {
     const [row] = await this.db.select().from(deployments).where(eq(deployments.id, id));
+    return row ?? null;
+  }
+
+  async listDeployments(siteId: string, limit = 50): Promise<DeploymentRecord[]> {
+    return await this.db
+      .select()
+      .from(deployments)
+      .where(eq(deployments.siteId, siteId))
+      .orderBy(desc(deployments.createdAt))
+      .limit(limit);
+  }
+
+  async findLatestDeploymentByCandidate(siteId: string, candidateId: string): Promise<DeploymentRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(deployments)
+      .where(
+        and(
+          eq(deployments.siteId, siteId),
+          eq(deployments.candidateId, candidateId),
+        ),
+      )
+      .orderBy(desc(deployments.createdAt))
+      .limit(1);
     return row ?? null;
   }
 
@@ -285,20 +342,22 @@ export class FactoryStore {
 
   async findLatestKnownGoodDeployment(
     siteId: string,
-    workerName: string,
-    productionUrl: string,
+    workerName?: string,
+    productionUrl?: string,
+    excludeDeploymentId?: string,
   ): Promise<DeploymentRecord | null> {
+    const conditions = [
+      eq(deployments.siteId, siteId),
+      inArray(deployments.status, ["verified", "rolled_back"]),
+    ];
+    if (workerName) conditions.push(eq(deployments.workerName, workerName));
+    if (productionUrl) conditions.push(eq(deployments.productionUrl, productionUrl));
+    if (excludeDeploymentId) conditions.push(ne(deployments.id, excludeDeploymentId));
+
     const [row] = await this.db
       .select()
       .from(deployments)
-      .where(
-        and(
-          eq(deployments.siteId, siteId),
-          eq(deployments.workerName, workerName),
-          eq(deployments.productionUrl, productionUrl),
-          inArray(deployments.status, ["verified", "rolled_back"]),
-        ),
-      )
+      .where(and(...conditions))
       .orderBy(desc(deployments.verifiedAt), desc(deployments.createdAt))
       .limit(1);
     return row ?? null;
@@ -333,6 +392,11 @@ export class FactoryStore {
     versionId?: string | null;
     previewUrl?: string | null;
     previousVersionId?: string | null;
+    candidateId?: string | null;
+    qaRunId?: string | null;
+    releaseApprovalId?: string | null;
+    candidateRoutes?: unknown;
+    snapshotData?: unknown;
     errorCode?: string | null;
     errorMessage?: string | null;
     promotedAt?: Date | null;
@@ -353,6 +417,11 @@ export class FactoryStore {
         ...(input.versionId !== undefined ? { versionId: input.versionId } : {}),
         ...(input.previewUrl !== undefined ? { previewUrl: input.previewUrl } : {}),
         ...(input.previousVersionId !== undefined ? { previousVersionId: input.previousVersionId } : {}),
+        ...(input.candidateId !== undefined ? { candidateId: input.candidateId } : {}),
+        ...(input.qaRunId !== undefined ? { qaRunId: input.qaRunId } : {}),
+        ...(input.releaseApprovalId !== undefined ? { releaseApprovalId: input.releaseApprovalId } : {}),
+        ...(input.candidateRoutes !== undefined ? { candidateRoutes: input.candidateRoutes } : {}),
+        ...(input.snapshotData !== undefined ? { snapshotData: input.snapshotData } : {}),
         ...(input.errorCode !== undefined ? { errorCode: input.errorCode } : {}),
         ...(input.errorMessage !== undefined
           ? { errorMessage: truncateBounded(input.errorMessage, MAX_ERROR_MESSAGE_LENGTH) }
@@ -367,6 +436,50 @@ export class FactoryStore {
       .returning();
     if (!updated) throw new FactoryError("persistence_write_failed", `Deployment '${input.id}' not found`);
     return updated;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Release approvals
+  // ---------------------------------------------------------------------------
+
+  async insertReleaseApproval(input: InsertReleaseApproval): Promise<ReleaseApprovalRecord> {
+    const [created] = await this.db
+      .insert(releaseApprovals)
+      .values(input)
+      .returning();
+    if (!created) throw new FactoryError("persistence_write_failed", "Failed to insert release approval");
+    return created;
+  }
+
+  async getReleaseApproval(id: string): Promise<ReleaseApprovalRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(releaseApprovals)
+      .where(eq(releaseApprovals.id, id));
+    return row ?? null;
+  }
+
+  async findReleaseApproval(
+    candidateId: string,
+    previewVersionId: string,
+  ): Promise<ReleaseApprovalRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(releaseApprovals)
+      .where(
+        and(
+          eq(releaseApprovals.candidateId, candidateId),
+          eq(releaseApprovals.previewVersionId, previewVersionId),
+        ),
+      );
+    return row ?? null;
+  }
+
+  async revokeReleaseApproval(id: string): Promise<void> {
+    await this.db
+      .update(releaseApprovals)
+      .set({ revoked: true })
+      .where(eq(releaseApprovals.id, id));
   }
 
   // ---------------------------------------------------------------------------

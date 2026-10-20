@@ -1175,6 +1175,7 @@ export class GovernedDeliveryService {
    * Retrieves operational monitoring summary for this project.
    */
   async getMonitoringSummary(projectId: string): Promise<MonitoringSummary> {
+    await this.resolveSite(projectId).catch(() => null);
     return await this.monitoringService.getMonitoringSummary(projectId);
   }
 
@@ -1189,6 +1190,7 @@ export class GovernedDeliveryService {
         requiredPermission: "DEPLOYMENT:MONITOR",
       });
     }
+    await this.resolveSite(projectId).catch(() => null);
     return await this.monitoringService.runOperationalCheck(projectId);
   }
 }

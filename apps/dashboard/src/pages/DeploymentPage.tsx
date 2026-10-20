@@ -40,8 +40,12 @@ export function DeploymentPage() {
   };
 
   const previewMutation = useMutation({
-    mutationFn: (candidateId: string) =>
-      deploymentApi.preparePreview(projectId!, { candidateId, sessionToken }),
+    mutationFn: (input: { candidateId: string; sessionToken: string }) =>
+      deploymentApi.preparePreview(projectId!, input),
+    onMutate: () => {
+      setActionError(null);
+      setActionSuccess(null);
+    },
     onSuccess: () => {
       setActionError(null);
       setActionSuccess("Candidate preview successfully created and verified with remote QA.");
@@ -56,6 +60,10 @@ export function DeploymentPage() {
   const approveMutation = useMutation({
     mutationFn: (input: { candidateId: string; previewVersionId: string; sessionToken: string }) =>
       deploymentApi.approveRelease(projectId!, input),
+    onMutate: () => {
+      setActionError(null);
+      setActionSuccess(null);
+    },
     onSuccess: () => {
       setActionError(null);
       setActionSuccess("Release approval successfully verified and cryptographically sealed.");
@@ -74,6 +82,10 @@ export function DeploymentPage() {
       approvalId: string;
       sessionToken: string;
     }) => deploymentApi.publishRelease(projectId!, input),
+    onMutate: () => {
+      setActionError(null);
+      setActionSuccess(null);
+    },
     onSuccess: () => {
       setActionError(null);
       setActionSuccess("Candidate promoted to Cloudflare production and verified with production QA!");
@@ -88,6 +100,10 @@ export function DeploymentPage() {
   const rollbackMutation = useMutation({
     mutationFn: (input: { sessionToken: string; targetVersionId?: string }) =>
       deploymentApi.rollbackRelease(projectId!, input),
+    onMutate: () => {
+      setActionError(null);
+      setActionSuccess(null);
+    },
     onSuccess: () => {
       setActionError(null);
       setActionSuccess("Explicit rollback executed and production verified.");
@@ -101,6 +117,10 @@ export function DeploymentPage() {
 
   const monitoringMutation = useMutation({
     mutationFn: () => deploymentApi.runMonitoringCheck(projectId!, sessionToken || undefined),
+    onMutate: () => {
+      setActionError(null);
+      setActionSuccess(null);
+    },
     onSuccess: () => {
       setActionError(null);
       setActionSuccess("Operational monitoring check completed successfully.");
@@ -288,7 +308,13 @@ export function DeploymentPage() {
           )}
           <button
             disabled={!canPreparePreview}
-            onClick={() => currentCandidate && previewMutation.mutate(currentCandidate.id)}
+            onClick={() =>
+              currentCandidate &&
+              previewMutation.mutate({
+                candidateId: currentCandidate.id,
+                sessionToken,
+              })
+            }
             className={`w-full rounded px-3 py-2 text-xs font-medium text-white transition ${
               canPreparePreview
                 ? "bg-blue-600 hover:bg-blue-700"

@@ -1540,6 +1540,7 @@ export function createOperatorApi(deps: OperatorApiDeps) {
 
       return sendError(res, "not_found", "Unknown endpoint.");
     } catch (error) {
+      console.error("[operator] API error:", error);
       if (error instanceof FactoryError && CONTRACT_ERROR_CODES.has(error.code)) {
         return sendError(res, error.code as OperatorErrorCode, error.message);
       }

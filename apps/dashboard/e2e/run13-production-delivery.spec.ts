@@ -127,18 +127,23 @@ test.describe("Run 13 governed production delivery lifecycle", () => {
       permissions: ["DEPLOYMENT:PREVIEW", "DEPLOYMENT:APPROVE", "DEPLOYMENT:PUBLISH", "DEPLOYMENT:MONITOR"],
     });
     await tokenInput.fill(aliceToken);
+    await expect(tokenInput).toHaveValue(aliceToken);
+    await expect(page.getByRole("button", { name: /Prepare Candidate Preview/i })).toBeEnabled();
     await page.getByRole("button", { name: /Prepare Candidate Preview/i }).click();
     await expect(page.getByText(/Candidate preview successfully created and verified/i)).toBeVisible({ timeout: 180_000 });
     await expect(page.locator("span", { hasText: "Verified" }).first()).toBeVisible();
 
     // 5. Negative Test: Unauthorized actor cannot approve release
     await tokenInput.fill(unauthorizedToken);
+    await expect(tokenInput).toHaveValue(unauthorizedToken);
     await expect(page.getByRole("button", { name: /Approve Release for Production/i })).toBeEnabled();
     await page.getByRole("button", { name: /Approve Release for Production/i }).click();
     await expect(page.getByText(/Permission denied|unauthorized|failed to approve|lacks required permission/i).first()).toBeVisible({ timeout: 15_000 });
 
     // 6. Positive Test: Alice (authorized Release Manager) approves release
     await tokenInput.fill(aliceToken);
+    await expect(tokenInput).toHaveValue(aliceToken);
+    await expect(page.getByRole("button", { name: /Approve Release for Production/i })).toBeEnabled();
     await page.getByRole("button", { name: /Approve Release for Production/i }).click();
     await expect(page.getByText(/Release approval successfully verified and cryptographically sealed/i)).toBeVisible({ timeout: 30_000 });
     await expect(page.locator("span", { hasText: "SEALED" }).first()).toBeVisible();

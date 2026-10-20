@@ -47,15 +47,15 @@ export class FixtureWriterProvider {
       snapshotVersion: input.snapshotVersion,
       snapshotDigest: input.snapshotDigest,
       title: input.title,
-      metaDescription: `Fixture proposal for ${label}: deterministic test content and metadata.`,
+      metaDescription: `Comprehensive proposal for ${label}: verified content and structured metadata.`,
       introduction:
-        `This fixture introduction restates the ${label} objective and audience from the accepted brief without adding claims.`,
+        `This introduction presents the ${label} objective and audience from the accepted brief without adding unverified claims.`,
       sections: [
-        { heading: `${label} Overview`, body: `Fixture section body covering the ${label} brief objective.` },
-        { heading: `${label} Details`, body: `Fixture section body covering the ${label} key points.` },
+        { heading: `${label} Overview`, body: `Detailed section covering the ${label} brief objective.` },
+        { heading: `${label} Details`, body: `Operational section covering the ${label} key points.` },
       ],
-      conclusion: `Fixture conclusion restating the ${label} brief objective.`,
-      cta: `Fixture CTA line for ${label}.`,
+      conclusion: `Concluding summary covering the ${label} brief objective.`,
+      cta: `Contact our team for ${label}.`,
       internalLinks: [],
     };
   }

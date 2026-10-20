@@ -25,9 +25,16 @@ export function DeploymentPage() {
     enabled: Boolean(projectId),
   });
 
+  const monitoringQuery = useQuery({
+    queryKey: queryKeys.monitoring(projectId ?? ""),
+    queryFn: () => deploymentApi.getMonitoring(projectId!),
+    enabled: Boolean(projectId),
+  });
+
   const invalidate = () => {
     if (projectId) {
       queryClient.invalidateQueries({ queryKey: queryKeys.deployment(projectId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.monitoring(projectId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.workflow(projectId) });
     }
   };
@@ -88,6 +95,19 @@ export function DeploymentPage() {
     onError: (err: any) => {
       setActionSuccess(null);
       setActionError(err.message ?? "Failed to rollback.");
+    },
+  });
+
+  const monitoringMutation = useMutation({
+    mutationFn: () => deploymentApi.runMonitoringCheck(projectId!),
+    onSuccess: () => {
+      setActionError(null);
+      setActionSuccess("Operational monitoring check completed successfully.");
+      invalidate();
+    },
+    onError: (err: any) => {
+      setActionSuccess(null);
+      setActionError(err.message ?? "Failed to run operational check.");
     },
   });
 
@@ -172,7 +192,7 @@ export function DeploymentPage() {
       {dep.blockers.length > 0 && (
         <div className="rounded-md border border-amber-200 bg-amber-50 p-4">
           <h4 className="text-xs font-semibold uppercase tracking-wide text-amber-800">
-            Blockers ({dep.blockers.length})
+            Blocking reasons ({dep.blockers.length})
           </h4>
           <ul className="mt-2 list-inside list-disc text-sm text-amber-700">
             {dep.blockers.map((b, i) => (
@@ -364,7 +384,12 @@ export function DeploymentPage() {
           </div>
           <button
             disabled={!canRollback}
-            onClick={() => rollbackMutation.mutate({ sessionToken })}
+            onClick={() =>
+              rollbackMutation.mutate({
+                sessionToken,
+                targetVersionId: latestKnownGood ?? activeProductionVersion ?? undefined,
+              })
+            }
             className={`w-full rounded px-3 py-2 text-xs font-medium text-white transition ${
               canRollback
                 ? "bg-red-600 hover:bg-red-700"
@@ -374,6 +399,58 @@ export function DeploymentPage() {
             {rollbackMutation.isPending ? "Rolling back…" : "Explicit Rollback to Known-Good"}
           </button>
         </div>
+      </div>
+
+      {/* 5. Production Monitoring & Search Quality (Run 13 §10) */}
+      <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+              Production Monitoring & Search Quality
+            </h3>
+            {monitoringQuery.data?.technicalVerification && (
+              <StatusBadge status={monitoringQuery.data.technicalVerification.status} />
+            )}
+          </div>
+          <button
+            onClick={() => monitoringMutation.mutate()}
+            disabled={monitoringMutation.isPending}
+            className="rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:bg-gray-100"
+          >
+            {monitoringMutation.isPending ? "Checking…" : "Run Operational Check"}
+          </button>
+        </div>
+
+        {monitoringQuery.data && (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 font-mono text-xs">
+            <div className="rounded border border-gray-100 bg-gray-50 p-2.5 space-y-1">
+              <div className="font-sans font-medium text-gray-700">Technical Verification</div>
+              <div className="text-gray-600">Status: {monitoringQuery.data.technicalVerification.status}</div>
+              <div className="text-gray-500">{monitoringQuery.data.technicalVerification.summary}</div>
+            </div>
+
+            <div className="rounded border border-gray-100 bg-gray-50 p-2.5 space-y-1">
+              <div className="font-sans font-medium text-gray-700">Google Search Console</div>
+              <div className="text-gray-600">Status: {monitoringQuery.data.searchConsole.status}</div>
+              <div className="text-gray-500">Coverage: {monitoringQuery.data.searchConsole.indexCoverage ?? "—"}</div>
+              <div className="text-gray-500">Issues: {monitoringQuery.data.searchConsole.issues.length}</div>
+            </div>
+
+            <div className="rounded border border-gray-100 bg-gray-50 p-2.5 space-y-1">
+              <div className="font-sans font-medium text-gray-700">Lighthouse Lab</div>
+              <div className="text-gray-600">Status: {monitoringQuery.data.lighthouse.status}</div>
+              <div className="text-gray-500">Score: {monitoringQuery.data.lighthouse.score ?? "—"}</div>
+              <div className="text-gray-500">LCP: {monitoringQuery.data.lighthouse.p75LcpMs ? `${monitoringQuery.data.lighthouse.p75LcpMs}ms` : "—"}</div>
+            </div>
+
+            <div className="rounded border border-gray-100 bg-gray-50 p-2.5 space-y-1">
+              <div className="font-sans font-medium text-gray-700">Field CWV (CrUX)</div>
+              <div className="text-gray-600">Status: {monitoringQuery.data.fieldCwv.status}</div>
+              <div className="text-gray-500">LCP: {monitoringQuery.data.fieldCwv.p75LcpMs ? `${monitoringQuery.data.fieldCwv.p75LcpMs}ms` : "—"}</div>
+              <div className="text-gray-500">INP: {monitoringQuery.data.fieldCwv.p75InpMs ? `${monitoringQuery.data.fieldCwv.p75InpMs}ms` : "—"}</div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Deployment History Table */}

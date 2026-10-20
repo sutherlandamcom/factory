@@ -1,0 +1,3 @@
+[[IgnoredVulns]]
+id = "GHSA-698v-4r3x-3vcv"
+reason = "Vite dev server vulnerability; production builds are unaffected"

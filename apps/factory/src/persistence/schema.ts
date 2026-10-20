@@ -2992,4 +2992,53 @@ export const releaseApprovals = pgTable(
 export type ReleaseApprovalRecord = typeof releaseApprovals.$inferSelect;
 export type InsertReleaseApproval = typeof releaseApprovals.$inferInsert;
 
+export const monitoringObservations = pgTable(
+  "monitoring_observations",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    siteId: text("site_id")
+      .notNull()
+      .references(() => sites.id, { onDelete: "cascade" }),
+    route: text("route").notNull(),
+    deploymentId: text("deployment_id").references(() => deployments.id, {
+      onDelete: "set null",
+    }),
+    versionId: text("version_id"),
+    observationType: text("observation_type").notNull(),
+    source: text("source").notNull(),
+    status: text("status").notNull(),
+    collectionWindow: text("collection_window").default("realtime").notNull(),
+    freshness: text("freshness").default("fresh").notNull(),
+    metrics: jsonb("metrics"),
+    evidenceRef: text("evidence_ref"),
+    errorMessage: text("error_message"),
+    observedAt: timestamp("observed_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("monitoring_observations_project_site_idx").on(
+      table.projectId,
+      table.siteId,
+      table.observedAt,
+    ),
+    index("monitoring_observations_route_idx").on(
+      table.siteId,
+      table.route,
+      table.observedAt,
+    ),
+    index("monitoring_observations_deployment_idx").on(table.deploymentId),
+  ],
+);
+
+export type MonitoringObservationRecord = typeof monitoringObservations.$inferSelect;
+export type InsertMonitoringObservation = typeof monitoringObservations.$inferInsert;
+
+
 

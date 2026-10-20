@@ -191,6 +191,17 @@ export async function runProductionDelivery(input: {
   try {
     const store = new FactoryStore(db.db);
     const site = await resolveSite(store, input.siteKey);
+
+    // Governed site protection (P0-03): Any site associated with a Factory project
+    // requires candidate-bound verified preview and human release approval.
+    // Legacy unapproved promotion via runProductionDelivery() is strictly prohibited.
+    if (site.projectId) {
+      throw new FactoryError(
+        "governed_site_requires_release_approval",
+        `Site '${input.siteKey}' is a governed production site (project '${site.projectId}'). Legacy runProductionDelivery() bypass is prohibited; use GovernedDeliveryService.`,
+      );
+    }
+
     const target = requireDeliveryTarget(site);
     const sourceCommit = await resolveTrustedControlPlaneSource(input.repoRoot);
 
@@ -269,6 +280,17 @@ export async function runExplicitRollback(input: {
   try {
     const store = new FactoryStore(db.db);
     const site = await resolveSite(store, input.siteKey);
+
+    // Governed site protection (P0-03): Any site associated with a Factory project
+    // requires candidate-bound verified preview and human release approval.
+    // Legacy unapproved promotion via runProductionDelivery() is strictly prohibited.
+    if (site.projectId) {
+      throw new FactoryError(
+        "governed_site_requires_release_approval",
+        `Site '${input.siteKey}' is a governed production site (project '${site.projectId}'). Legacy runProductionDelivery() bypass is prohibited; use GovernedDeliveryService.`,
+      );
+    }
+
     const target = requireDeliveryTarget(site);
     await resolveTrustedControlPlaneSource(input.repoRoot);
     return await executeExplicitRollbackBoundary({

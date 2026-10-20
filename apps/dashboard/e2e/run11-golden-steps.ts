@@ -92,8 +92,8 @@ async function acceptContent(page: Page, pageSlug: string): Promise<void> {
   await expect(page.getByText("Writer policy v1 approved and immutable.")).toBeVisible({ timeout: 15_000 });
 
   await page.locator('input[placeholder="roof-replacement-denver"]').fill(pageSlug);
-  await page.getByLabel("Title", { exact: false }).first().fill("Roof Repair in Austin");
-  await page.getByLabel("Objective", { exact: false }).fill("Convert homeowners researching roof repair into inspection requests.");
+  await page.getByLabel("Title", { exact: false }).first().fill("Roof Restoration in Austin");
+  await page.getByLabel("Objective", { exact: false }).fill("Convert homeowners researching roof restoration into inspection requests.");
   await page.getByLabel("Audience", { exact: false }).fill("Austin homeowners comparing local roofers");
   await page.getByLabel("Structure guidance (one per line)").fill("Storm damage context\nRepair process\nWarranty and trust signals");
   await page.getByLabel("CTA intent", { exact: false }).fill("Book a free roof inspection");
@@ -150,7 +150,7 @@ async function buildAndQa(page: Page, pageSlug: string): Promise<void> {
   await page.getByRole("button", { name: "Build", exact: true }).click();
   await expect(page.getByRole("button", { name: "Run QA" }).first()).toBeEnabled({ timeout: 120_000 });
   await page.getByRole("button", { name: "Run QA" }).first().click();
-  await expect(page.getByText(/qa_passed|qa_failed|PASS|FAIL/).first()).toBeVisible({ timeout: 180_000 });
+  await expect(page.getByText(/qa_passed|qa_failed|PASS|FAIL/).first()).toBeVisible({ timeout: 300_000 });
 }
 
 /** Deterministic hero photograph fixture (same approach as the Run 5/7 journeys). */

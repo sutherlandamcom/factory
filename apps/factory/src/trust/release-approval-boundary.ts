@@ -13,6 +13,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import {
   DEPLOYMENT_APPROVE_PERMISSION,
   DEPLOYMENT_PUBLISH_PERMISSION,
+  qaRunPublicationEligible,
   type ReleaseApproval,
 } from "@factory/contracts";
 import type { FactoryDb } from "../persistence/db.js";
@@ -133,7 +134,7 @@ export function verifyReleaseApprovalSeal(
 
 export interface ReleaseIdpTokenPayload {
   iss: string;
-  aud: "factory-release-governance" | "factory-editorial-governance";
+  aud: "factory-release-governance";
   sub: string;
   name: string;
   role: string;
@@ -144,7 +145,7 @@ export interface ReleaseIdpTokenPayload {
 
 /**
  * Release-specific Identity Provider verifying cryptographic upstream tokens.
- * Supports audience 'factory-release-governance' as well as 'factory-editorial-governance'.
+ * Strictly requires audience 'factory-release-governance' (P1-01 audience separation).
  */
 export class ReleaseIdentityProvider implements TrustedIdentityProvider {
   readonly isSyntheticProvider = false;
@@ -197,7 +198,7 @@ export class ReleaseIdentityProvider implements TrustedIdentityProvider {
       if (
         !parsed ||
         parsed.iss !== this.providerId ||
-        (parsed.aud !== "factory-release-governance" && parsed.aud !== "factory-editorial-governance") ||
+        parsed.aud !== "factory-release-governance" ||
         typeof parsed.sub !== "string" ||
         !parsed.sub ||
         typeof parsed.name !== "string" ||
@@ -261,7 +262,7 @@ export class ReleaseIdentityProvider implements TrustedIdentityProvider {
       ttlMs?: number;
     }): string => {
       const now = Date.now();
-      const payload: ReleaseIdpTokenPayload = {
+      const payload = {
         iss: providerId,
         aud: params.audience ?? "factory-release-governance",
         sub: params.actorId,
@@ -447,8 +448,8 @@ export class ReleaseApprovalBoundary {
           ),
         );
 
-      if (!qaRun || qaRun.overall !== "PASS") {
-        throw new FactoryError("qa_not_eligible", "QA run is missing or not PASS.");
+      if (!qaRun || qaRun.overall !== "PASS" || !qaRunPublicationEligible(qaRun.data)) {
+        throw new FactoryError("qa_not_eligible", "QA run is missing, not PASS, or not publication-eligible.");
       }
 
       // 5. Check if approval already exists
@@ -605,6 +606,14 @@ export class ReleaseApprovalBoundary {
       throw new FactoryError(
         "project_membership_revoked",
         `Approving actor '${approval.actorId}' membership has been revoked.`,
+      );
+    }
+
+    const perms = (membership.permissions as string[]) ?? [];
+    if (!perms.includes(DEPLOYMENT_APPROVE_PERMISSION)) {
+      throw new FactoryError(
+        "permission_revoked",
+        `Approving actor '${approval.actorId}' no longer holds required permission '${DEPLOYMENT_APPROVE_PERMISSION}'.`,
       );
     }
 

@@ -12,6 +12,7 @@ import {
   qualityResults,
   modelInvocations,
   releaseApprovals,
+  monitoringObservations,
   type ProjectRecord,
   type SiteRecord,
   type DeploymentRecord,
@@ -23,6 +24,8 @@ import {
   type InsertQualityResult,
   type ReleaseApprovalRecord,
   type InsertReleaseApproval,
+  type MonitoringObservationRecord,
+  type InsertMonitoringObservation,
 } from "./schema.js";
 import { FactoryError } from "../executor/errors.js";
 
@@ -33,12 +36,24 @@ const DEPLOYMENT_TRANSITIONS: Record<DeploymentStatus, readonly DeploymentStatus
   preparing: ["preparing", "uploaded", "promoting", "failed"],
   uploaded: ["preview_verified", "failed"],
   preview_verified: ["promoting", "failed"],
-  promoting: ["promoted", "verified", "rolled_back", "needs_review"],
-  promoted: ["verified", "rolled_back", "needs_review"],
-  verified: [],
+  promoting: ["promoted", "verified", "rolled_back", "needs_review", "failed"],
+  promoted: ["verified", "rolled_back", "needs_review", "failed"],
+  verified: ["rolled_back"],
   rolled_back: [],
   failed: [],
   needs_review: [],
+};
+
+const VALID_PRIOR_STATUSES: Record<DeploymentStatus, readonly DeploymentStatus[]> = {
+  preparing: ["preparing"],
+  uploaded: ["preparing"],
+  preview_verified: ["uploaded"],
+  promoting: ["preparing", "preview_verified"],
+  promoted: ["promoting"],
+  verified: ["promoting", "promoted"],
+  rolled_back: ["promoting", "promoted", "verified"],
+  failed: ["preparing", "uploaded", "preview_verified", "promoting", "promoted"],
+  needs_review: ["promoting", "promoted", "verified"],
 };
 
 export function assertDeploymentTransition(from: string, to: DeploymentStatus): void {
@@ -332,7 +347,7 @@ export class FactoryStore {
       .where(
         and(
           eq(deployments.siteId, siteId),
-          inArray(deployments.status, ["promoting", "promoted"]),
+          inArray(deployments.status, ["preparing", "uploaded", "promoting", "promoted"]),
         ),
       )
       .orderBy(desc(deployments.createdAt))
@@ -388,6 +403,7 @@ export class FactoryStore {
   async updateDeployment(input: {
     id: string;
     status: DeploymentStatus;
+    expectedStatus?: DeploymentStatus | readonly DeploymentStatus[];
     artifactDigest?: string | null;
     versionId?: string | null;
     previewUrl?: string | null;
@@ -405,9 +421,10 @@ export class FactoryStore {
     productionVerified?: boolean;
     rolledBack?: boolean;
   }): Promise<DeploymentRecord> {
-    const existing = await this.getDeployment(input.id);
-    if (!existing) throw new FactoryError("persistence_write_failed", `Deployment '${input.id}' not found`);
-    assertDeploymentTransition(existing.status, input.status);
+    const allowedPriors = input.expectedStatus
+      ? (Array.isArray(input.expectedStatus) ? input.expectedStatus : [input.expectedStatus])
+      : VALID_PRIOR_STATUSES[input.status] ?? [];
+
     const [updated] = await this.db
       .update(deployments)
       .set({
@@ -432,9 +449,22 @@ export class FactoryStore {
         ...(input.productionVerified !== undefined ? { productionVerified: input.productionVerified } : {}),
         ...(input.rolledBack !== undefined ? { rolledBack: input.rolledBack } : {}),
       })
-      .where(eq(deployments.id, input.id))
+      .where(
+        and(
+          eq(deployments.id, input.id),
+          inArray(deployments.status, allowedPriors as DeploymentStatus[]),
+        ),
+      )
       .returning();
-    if (!updated) throw new FactoryError("persistence_write_failed", `Deployment '${input.id}' not found`);
+
+    if (!updated) {
+      const current = await this.getDeployment(input.id);
+      if (!current) throw new FactoryError("persistence_write_failed", `Deployment '${input.id}' not found`);
+      throw new FactoryError(
+        "deployment_transition_invalid",
+        `Atomic status transition conflict: deployment '${input.id}' is currently in state '${current.status}', cannot transition to '${input.status}' (allowed priors: ${allowedPriors.join(", ")}).`,
+      );
+    }
     return updated;
   }
 
@@ -480,6 +510,51 @@ export class FactoryStore {
       .update(releaseApprovals)
       .set({ revoked: true })
       .where(eq(releaseApprovals.id, id));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Monitoring Observations (Run 13)
+  // ---------------------------------------------------------------------------
+
+  async insertMonitoringObservation(
+    input: InsertMonitoringObservation,
+  ): Promise<MonitoringObservationRecord> {
+    const [created] = await this.db
+      .insert(monitoringObservations)
+      .values(input)
+      .returning();
+    if (!created) {
+      throw new FactoryError(
+        "persistence_write_failed",
+        "Failed to insert monitoring observation",
+      );
+    }
+    return created;
+  }
+
+  async listMonitoringObservations(
+    siteId: string,
+    limit = 50,
+  ): Promise<MonitoringObservationRecord[]> {
+    return await this.db
+      .select()
+      .from(monitoringObservations)
+      .where(eq(monitoringObservations.siteId, siteId))
+      .orderBy(desc(monitoringObservations.observedAt))
+      .limit(limit);
+  }
+
+  async getLatestMonitoringObservationsByType(
+    siteId: string,
+  ): Promise<Map<string, MonitoringObservationRecord>> {
+    const list = await this.listMonitoringObservations(siteId, 100);
+    const map = new Map<string, MonitoringObservationRecord>();
+    for (const obs of list) {
+      if (!map.has(obs.observationType)) {
+        map.set(obs.observationType, obs);
+      }
+    }
+    return map;
   }
 
   // ---------------------------------------------------------------------------

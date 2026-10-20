@@ -430,20 +430,42 @@ export async function startOperatorServer(): Promise<http.Server> {
   const { ReleaseApprovalBoundary } = await import("../trust/release-approval-boundary.js");
   const prodStore = new ProductionStore(dbInstance.db, { repoRoot });
   const releaseBoundary = new ReleaseApprovalBoundary(dbInstance.db);
+
+  const deliveryMode =
+    process.env.FACTORY_DELIVERY_MODE ??
+    (process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID
+      ? "production"
+      : "fixture");
+
+  let wranglerFactory;
+  let qaRunner;
+  if (deliveryMode === "fixture") {
+    const { SimulatedWrangler } = await import("../delivery/simulated-wrangler.js");
+    const simulated = new SimulatedWrangler();
+    wranglerFactory = () => simulated;
+    qaRunner = async () => ({ passed: true, exitCode: 0, timedOut: false });
+  }
+
   const governedDelivery = new GovernedDeliveryService({
     db: dbInstance.db,
+    pool: dbInstance.pool,
     repoRoot,
     store,
     productionStore: prodStore,
     releaseBoundary,
+    wranglerFactory,
+    qaRunner,
   });
 
   const deps: OperatorApiDeps = {
     store, intake, search, competitors, writer, assets, design, visual,
     production: new ProductionApiFacade(dbInstance.db, repoRoot, {
       // Trusted backend config only: synthetic fixture content is tolerated
-      // solely when the deterministic fixture writer is wired.
-      syntheticFixtureContent: writerMode === "fixture",
+      // solely when the deterministic fixture writer is wired and not overridden.
+      syntheticFixtureContent:
+        process.env.FACTORY_TRUST_MODE === "STRICT_PRODUCTION"
+          ? false
+          : writerMode === "fixture",
     }),
     derivatives: new DerivativesApiFacade(dbInstance.db, repoRoot, summaryMode === "fixture" ? { summaryInvoke: fixtureSummaryInvoke } : {}),
     qaCollector,

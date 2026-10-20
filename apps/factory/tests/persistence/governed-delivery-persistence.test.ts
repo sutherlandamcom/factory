@@ -13,7 +13,9 @@ import {
   releaseApprovals,
 } from "../../src/persistence/schema.js";
 import { FactoryStore } from "../../src/persistence/store.js";
-import { AuditSealKeyring } from "../../src/trust/release-approval-boundary.js";
+import { AuditSealKeyring, ReleaseApprovalBoundary } from "../../src/trust/release-approval-boundary.js";
+import { GovernedDeliveryService } from "../../src/delivery/governed-service.js";
+import { ProductionStore } from "../../src/production/store.js";
 
 test("governed delivery persistence: PostgreSQL 18 schema, constraints, immutability trigger", async () => {
   const dbInst = await createTestDatabase();
@@ -195,4 +197,134 @@ test("governed delivery persistence: PostgreSQL 18 schema, constraints, immutabi
   assert.equal(updatedDeployment.productionVerified, true);
 
   await dbInst.close();
+});
+
+test("governed delivery concurrency (P0-01): multi-connection PostgreSQL session advisory lock & atomic CAS", async () => {
+  const dbInst1 = await createTestDatabase();
+  const dbInst2 = await createTestDatabase();
+
+  const store1 = new FactoryStore(dbInst1.db);
+  const store2 = new FactoryStore(dbInst2.db);
+  const prodStore1 = new ProductionStore(dbInst1.db);
+  const prodStore2 = new ProductionStore(dbInst2.db);
+
+  const boundary1 = new ReleaseApprovalBoundary(dbInst1.db);
+  const boundary2 = new ReleaseApprovalBoundary(dbInst2.db);
+
+  const service1 = new GovernedDeliveryService({
+    db: dbInst1.db,
+    pool: dbInst1.pool,
+    repoRoot: process.cwd(),
+    store: store1,
+    productionStore: prodStore1,
+    releaseBoundary: boundary1,
+  });
+
+  const service2 = new GovernedDeliveryService({
+    db: dbInst2.db,
+    pool: dbInst2.pool,
+    repoRoot: process.cwd(),
+    store: store2,
+    productionStore: prodStore2,
+    releaseBoundary: boundary2,
+  });
+
+  const suffix = randomUUID().slice(0, 8);
+  const projectId = `proj-conc-${suffix}`;
+  const siteId = `site-conc-${suffix}`;
+
+  await dbInst1.db.insert(projects).values({
+    id: projectId,
+    key: `test-proj-conc-${suffix}`,
+    name: "Concurrency Test Project",
+  });
+
+  await dbInst1.db.insert(sites).values({
+    id: siteId,
+    projectId,
+    key: `site-conc-${suffix}`,
+    name: "Concurrency Site",
+    cloudflareWorkerName: "worker-conc-test",
+    productionUrl: "https://conc.example.com",
+  });
+
+  // 1. Multi-connection session advisory lock mutual exclusion
+  let lock1Active = false;
+  let service2AttemptFinished = false;
+  let service2Rejected = false;
+
+  const promise1 = service1.withProjectLock(projectId, async () => {
+    lock1Active = true;
+    // Wait long enough for service2 to try and fail
+    await new Promise((r) => setTimeout(r, 600));
+    lock1Active = false;
+    return "service1_done";
+  });
+
+  // Small delay to ensure service1 has acquired the lock
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(lock1Active, true);
+
+  // Connection 2 attempts to acquire lock on the same project with short timeout
+  const promise2 = service2
+    .withProjectLock(
+      projectId,
+      async () => {
+        return "service2_should_not_run";
+      },
+      300,
+    )
+    .catch((err) => {
+      service2AttemptFinished = true;
+      if (err.code === "concurrent_deployment_in_progress") {
+        service2Rejected = true;
+      }
+      return "rejected";
+    });
+
+  const [res1, res2] = await Promise.all([promise1, promise2]);
+  assert.equal(res1, "service1_done");
+  assert.equal(res2, "rejected");
+  assert.equal(service2Rejected, true);
+  assert.equal(service2AttemptFinished, true);
+
+  // 2. Lock is now released: service2 can acquire without contention
+  const res3 = await service2.withProjectLock(projectId, async () => {
+    return "service2_subsequent_acquired";
+  }, 1000);
+  assert.equal(res3, "service2_subsequent_acquired");
+
+  // 3. Atomic CAS: updateDeployment prevents concurrent double-promotion
+  const deploymentId = `dep-cas-${suffix}`;
+  await store1.createDeployment({
+    id: deploymentId,
+    siteId,
+    sourceCommit: "c".repeat(40),
+    workerName: "worker-conc-test",
+    productionUrl: "https://conc.example.com",
+    artifactDirectory: ".factory/deployments/test",
+  });
+
+  // Advance to promoting
+  await store1.updateDeployment({ id: deploymentId, status: "promoting" });
+
+  // Two independent connections race to update status to "promoted"
+  const race = await Promise.allSettled([
+    store1.updateDeployment({ id: deploymentId, status: "promoted", promotedAt: new Date() }),
+    store2.updateDeployment({ id: deploymentId, status: "promoted", promotedAt: new Date() }),
+  ]);
+
+  const fulfilled = race.filter((r) => r.status === "fulfilled");
+  const rejected = race.filter((r) => r.status === "rejected");
+
+  assert.equal(fulfilled.length, 1, "Exactly one concurrent transition must succeed");
+  assert.equal(rejected.length, 1, "The concurrent transition race loser must fail");
+  assert.equal(
+    (rejected[0] as PromiseRejectedResult).reason?.code,
+    "deployment_transition_invalid",
+    "Loser must receive deployment_transition_invalid",
+  );
+
+  await dbInst1.close();
+  await dbInst2.close();
 });

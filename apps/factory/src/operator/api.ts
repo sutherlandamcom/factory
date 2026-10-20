@@ -1415,6 +1415,37 @@ export function createOperatorApi(deps: OperatorApiDeps) {
           return sendJson(res, 200, view);
         }
 
+        // GET /projects/:id/deployment/lineage: historical as-of lineage query
+        if (req.method === "GET" && segments.length === 4 && segments[3] === "lineage") {
+          const site = await deps.store.findSiteByProjectId(project.id);
+          if (!site) return sendError(res, "not_found", "Site not found for project.");
+          const url = new URL(req.url ?? "/", "http://localhost");
+          const route = url.searchParams.get("route") || "/";
+          const asOfRaw = url.searchParams.get("asOf");
+          const asOf = asOfRaw ? new Date(asOfRaw) : new Date();
+          if (isNaN(asOf.getTime())) {
+            return sendError(res, "validation_error", "Invalid asOf timestamp.");
+          }
+          const lineage = await delivery.getEffectiveReleaseAsOf({
+            siteId: site.id,
+            route,
+            asOf,
+          });
+          return sendJson(res, 200, lineage);
+        }
+
+        // GET /projects/:id/deployment/monitoring: current monitoring summary
+        if (req.method === "GET" && segments.length === 4 && segments[3] === "monitoring") {
+          const summary = await delivery.getMonitoringSummary(project.id);
+          return sendJson(res, 200, summary);
+        }
+
+        // POST /projects/:id/deployment/monitoring/check: trigger operational monitoring check
+        if (req.method === "POST" && segments.length === 5 && segments[3] === "monitoring" && segments[4] === "check") {
+          const summary = await delivery.runMonitoringCheck(project.id);
+          return sendJson(res, 200, summary);
+        }
+
         // POST /projects/:id/deployment/preview
         if (req.method === "POST" && segments.length === 4 && segments[3] === "preview") {
           const parsed = parseJsonBody(body);

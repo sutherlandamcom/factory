@@ -210,7 +210,7 @@ test("governed delivery lifecycle: preview -> approval -> publish -> rollback", 
       rendererVersion: buildIdentity.rendererVersion,
       rendererPolicyVersion: "production-policy-v3",
       data: {} as any,
-      inputDigest: "i".repeat(64),
+      inputDigest: "p".repeat(64),
       createdAt: new Date(),
     },
   ];
@@ -283,6 +283,20 @@ test("governed delivery lifecycle: preview -> approval -> publish -> rollback", 
     },
     async listDeployments(sId: string, limit: number) {
       return deployments.filter((d) => d.siteId === sId).slice(-limit).reverse();
+    },
+    async listCanonicalVerifiedDeployments(sId: string, workerName?: string, productionUrl?: string) {
+      return deployments
+        .filter(
+          (d) =>
+            d.siteId === sId &&
+            d.status === "verified" &&
+            d.productionVerified &&
+            d.versionId &&
+            d.artifactDigest &&
+            (!workerName || d.workerName === workerName) &&
+            (!productionUrl || d.productionUrl === productionUrl),
+        )
+        .reverse();
     },
     async findLatestDeploymentByCandidate(sId: string, cId: string) {
       return deployments.filter((d) => d.siteId === sId && d.candidateId === cId).slice(-1)[0] ?? null;

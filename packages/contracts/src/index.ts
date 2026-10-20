@@ -890,3 +890,16 @@ export type {
   ReleaseApproval,
   ReleaseApprovalSealStatus,
 } from "./release.js";
+export {
+  monitoringObservationSchema,
+  monitoringObservationStatusSchema,
+  monitoringObservationTypeSchema,
+  monitoringSummarySchema,
+} from "./monitoring.js";
+export type {
+  MonitoringObservation,
+  MonitoringObservationStatus,
+  MonitoringObservationType,
+  MonitoringSummary,
+} from "./monitoring.js";
+

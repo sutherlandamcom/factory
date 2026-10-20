@@ -32,6 +32,9 @@ export const queryKeys = {
 
   /** Governed production delivery view (Macro Run 13). */
   deployment: (projectId: string) => ["deployment", projectId] as const,
+
+  /** Governed monitoring view (Macro Run 13). */
+  monitoring: (projectId: string) => ["monitoring", projectId] as const,
 };
 
 /** Areas whose data can change as a downstream consequence of a mutation. */

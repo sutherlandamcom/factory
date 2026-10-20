@@ -8,6 +8,7 @@ import {
   OPERATOR_ERROR_CODES,
   type OperatorErrorCode,
   type GovernedDeploymentView,
+  type MonitoringSummary,
 } from "@factory/contracts";
 
 export interface ApiErrorBody {
@@ -85,8 +86,9 @@ function isOperatorErrorCode(value: string): value is OperatorErrorCode {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const isMutation = Boolean(init.method && ["POST", "PUT", "PATCH"].includes(init.method.toUpperCase()));
   const headers: Record<string, string> = {
-    ...(init.body ? { "Content-Type": "application/json" } : {}),
+    ...(init.body || isMutation ? { "Content-Type": "application/json" } : {}),
     ...((init.headers as Record<string, string>) ?? {}),
   };
   let res: Response;
@@ -1755,6 +1757,20 @@ export const deploymentApi = {
       {
         method: "POST",
         body: JSON.stringify(input),
+      },
+    ),
+
+  getMonitoring: (projectId: string) =>
+    request<MonitoringSummary>(
+      `/api/projects/${encodeURIComponent(projectId)}/deployment/monitoring`,
+    ),
+
+  runMonitoringCheck: (projectId: string) =>
+    request<MonitoringSummary>(
+      `/api/projects/${encodeURIComponent(projectId)}/deployment/monitoring/check`,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
       },
     ),
 };

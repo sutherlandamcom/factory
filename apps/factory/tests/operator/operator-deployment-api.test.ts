@@ -10,7 +10,7 @@ async function callApi(
   method: string,
   path: string,
   body?: unknown,
-): Promise<{ status: number; body: Record<string, unknown> }> {
+): Promise<{ status: number; body: any }> {
   const handle = createOperatorApi(deps);
   const res = {
     headersSent: false,
@@ -30,13 +30,14 @@ async function callApi(
     headers: Record<string, string>;
   };
 
+  const parsedUrl = new URL(path, "http://localhost");
   await handle(
     { method, url: path, headers: {} } as unknown as import("node:http").IncomingMessage,
     res,
-    path,
+    parsedUrl.pathname,
     body === undefined ? "" : JSON.stringify(body),
   );
-  return { status: res.statusCode, body: JSON.parse(res.body || "{}") };
+  return { status: res.statusCode, body: JSON.parse(res.body || "{}") as any };
 }
 
 const PROJECT = {
@@ -191,6 +192,88 @@ function makeGovernedDeliveryStub(): GovernedDeliveryService {
         rolledBack: true,
       };
     },
+    getEffectiveReleaseAsOf: async (input: { siteId: string; route: string; asOf: Date }) => {
+      return {
+        siteId: input.siteId,
+        route: input.route,
+        asOfTimestamp: input.asOf.toISOString(),
+        effectiveDeployment: {
+          id: "dep-pub-1",
+          versionId: "ver-current-prod",
+          workerName: "worker-sutherland",
+          productionUrl: "https://example.com",
+          sourceCommit: "a".repeat(40),
+          artifactDigest: "b".repeat(64),
+          promotedAt: new Date(0).toISOString(),
+          verifiedAt: new Date(0).toISOString(),
+          status: "verified",
+        },
+        releaseApproval: {
+          id: "appr-1",
+          actorId: "usr-alice",
+          actorName: "Alice",
+          actorRole: "ReleaseManager",
+          sealedAt: new Date(0).toISOString(),
+          sealStatus: "SEALED",
+          verificationSeal: "c".repeat(64),
+        },
+        qaEvidence: {
+          qaRunId: "qa-1",
+          overall: "PASS",
+          publicationEligible: true,
+          checkCount: 1,
+          checks: [{ checkId: "html.valid_structure", group: "html", verdict: "PASS" }],
+        },
+        candidate: {
+          id: "cand-1",
+          artifactDigest: "b".repeat(64),
+          manifestSetDigest: "m".repeat(64),
+          repositorySha: "a".repeat(40),
+          lockfileDigest: "l".repeat(64),
+          rendererVersion: "astro-v5",
+          siteProfileDigest: "s".repeat(64),
+        },
+        pageAuthority: {
+          pageIdentity: "blog/post-1",
+          productionInputId: "input-1",
+          productionInputVersion: 1,
+          productionInputDigest: "p".repeat(64),
+          acceptedContent: { id: "c-1", version: 1, digest: "c".repeat(64) },
+          acceptedDesign: { id: "d-1", version: 1, digest: "d".repeat(64) },
+          acceptedVisualSet: { id: "v-1", version: 1, digest: "v".repeat(64) },
+          pageArchetype: "article",
+          renderer: { id: "astro", version: "astro-v5", policyVersion: "policy-v1" },
+        },
+      };
+    },
+    getMonitoringSummary: async (projectId: string) => {
+      return {
+        projectId,
+        siteId: "site-1",
+        targetProductionUrl: "https://example.com",
+        activeVersionId: "ver-current-prod",
+        technicalVerification: { status: "PASS", checkedAt: new Date(0).toISOString(), summary: "Passed" },
+        lastOperationalCheck: { status: "PASS", checkedAt: new Date(0).toISOString(), summary: "HTTP 200 OK" },
+        searchConsole: { status: "PASS", checkedAt: new Date(0).toISOString(), indexCoverage: "INDEXED", issues: [], property: "sutherland" },
+        lighthouse: { status: "PASS", checkedAt: new Date(0).toISOString(), score: 98, p75LcpMs: 1200, p75Cls: 0.01 },
+        fieldCwv: { status: "INSUFFICIENT_DATA", checkedAt: new Date(0).toISOString(), p75LcpMs: null, p75InpMs: null, p75Cls: null },
+        observations: [],
+      };
+    },
+    runMonitoringCheck: async (projectId: string) => {
+      return {
+        projectId,
+        siteId: "site-1",
+        targetProductionUrl: "https://example.com",
+        activeVersionId: "ver-current-prod",
+        technicalVerification: { status: "PASS", checkedAt: new Date().toISOString(), summary: "Passed" },
+        lastOperationalCheck: { status: "PASS", checkedAt: new Date().toISOString(), summary: "HTTP 200 OK" },
+        searchConsole: { status: "NOT_CONFIGURED", checkedAt: new Date().toISOString(), indexCoverage: null, issues: [], property: "sutherland" },
+        lighthouse: { status: "PASS", checkedAt: new Date().toISOString(), score: 98, p75LcpMs: 1200, p75Cls: 0.01 },
+        fieldCwv: { status: "INSUFFICIENT_DATA", checkedAt: new Date().toISOString(), p75LcpMs: null, p75InpMs: null, p75Cls: null },
+        observations: [],
+      };
+    },
   } as unknown as GovernedDeliveryService;
 }
 
@@ -198,6 +281,7 @@ function makeDeps(governedDelivery?: GovernedDeliveryService): OperatorApiDeps {
   return {
     store: {
       getProjectById: async (id: string) => (id === PROJECT.id ? PROJECT : null),
+      findSiteByProjectId: async (id: string) => (id === PROJECT.id ? { id: "site-1", projectId: id } : null),
     } as unknown as OperatorApiDeps["store"],
     intake: {} as unknown as OperatorApiDeps["intake"],
     governedDelivery,
@@ -247,6 +331,20 @@ test("Operator API - POST /api/projects/:id/deployment/approve succeeds with val
   assert.equal(res.status, 201);
   assert.equal(res.body.id, "appr-new-1");
   assert.equal(res.body.verificationSeal, "c".repeat(64));
+});
+
+test("GET /projects/:id/deployment/lineage returns full 6-month historical authority record", async () => {
+  const deps = makeDeps(makeGovernedDeliveryStub());
+  const res = await callApi(
+    deps,
+    "GET",
+    `/api/projects/${PROJECT.id}/deployment/lineage?route=/blog/post-1&asOf=2026-10-01T00:00:00.000Z`,
+  );
+  assert.equal(res.status, 200);
+  assert.equal((res.body as any).effectiveDeployment.versionId, "ver-current-prod");
+  assert.equal((res.body as any).pageAuthority.acceptedContent.id, "c-1");
+  assert.equal((res.body as any).releaseApproval.actorId, "usr-alice");
+  assert.equal((res.body as any).qaEvidence.overall, "PASS");
 });
 
 test("Operator API - POST /api/projects/:id/deployment/approve fails 403 when permission denied", async () => {
@@ -302,4 +400,23 @@ test("Operator API - POST /api/projects/:id/deployment/rollback fails 404 when n
   });
   assert.equal(res.status, 404);
   assert.equal((res.body.error as { code: string }).code, "delivery_no_known_good_deployment");
+});
+
+test("Operator API - GET /api/projects/:id/deployment/monitoring returns 200 with MonitoringSummary", async () => {
+  const deps = makeDeps(makeGovernedDeliveryStub());
+  const res = await callApi(deps, "GET", `/api/projects/${PROJECT.id}/deployment/monitoring`);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.projectId, PROJECT.id);
+  assert.equal(res.body.technicalVerification.status, "PASS");
+  assert.equal(res.body.searchConsole.status, "PASS");
+  assert.equal(res.body.fieldCwv.status, "INSUFFICIENT_DATA");
+});
+
+test("Operator API - POST /api/projects/:id/deployment/monitoring/check runs operational check", async () => {
+  const deps = makeDeps(makeGovernedDeliveryStub());
+  const res = await callApi(deps, "POST", `/api/projects/${PROJECT.id}/deployment/monitoring/check`);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.projectId, PROJECT.id);
+  assert.equal(res.body.technicalVerification.status, "PASS");
+  assert.equal(res.body.searchConsole.status, "NOT_CONFIGURED");
 });

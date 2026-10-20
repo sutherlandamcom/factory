@@ -31,6 +31,11 @@ export interface DeliveryStore {
     productionUrl?: string,
     excludeDeploymentId?: string,
   ): Promise<DeploymentRecord | null>;
+  listCanonicalVerifiedDeployments?(
+    siteId: string,
+    workerName: string,
+    productionUrl: string,
+  ): Promise<DeploymentRecord[]>;
 }
 
 /** Test seam for the concrete Wrangler command set; not a provider abstraction. */
@@ -224,13 +229,27 @@ export class ProductionDelivery {
       input.deployment.productionUrl,
       input.deployment.id,
     ));
-    if (!knownGood || knownGood !== input.targetVersionId) {
+
+    const canonicals = typeof this.store.listCanonicalVerifiedDeployments === "function"
+      ? await this.store.listCanonicalVerifiedDeployments(
+          input.deployment.siteId,
+          input.deployment.workerName,
+          input.deployment.productionUrl,
+        )
+      : [];
+
+    const isCanonical =
+      canonicals.some((d: DeploymentRecord) => d.versionId === input.targetVersionId) ||
+      (input.deployment.versionId === input.targetVersionId && input.deployment.productionVerified);
+
+    if (!knownGood && !isCanonical) {
       throw new FactoryError("rollback_target_invalid", "Target rollback version is not a verified known-good version.");
     }
-    const active = await this.wrangler.currentProductionVersion(input.deployment.workerName);
-    if (active === input.targetVersionId) {
-      return input.deployment;
+
+    if (knownGood && knownGood !== input.targetVersionId && !isCanonical) {
+      throw new FactoryError("rollback_target_invalid", "Target rollback version is not a verified known-good version.");
     }
+
     try {
       await this.wrangler.rollback(input.deployment.workerName, input.targetVersionId);
       const rollbackQa = await this.runtime.qa(input.deployment.productionUrl, "rollback");

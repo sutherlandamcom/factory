@@ -617,6 +617,16 @@ export class FactoryStore {
     return row ?? null;
   }
 
+  async getEffectiveTransitionByOperationId(
+    operationId: string,
+  ): Promise<ProductionEffectiveTransitionRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(productionEffectiveTransitions)
+      .where(eq(productionEffectiveTransitions.operationId, operationId));
+    return row ?? null;
+  }
+
   async insertEffectiveTransition(
     input: InsertProductionEffectiveTransition,
   ): Promise<ProductionEffectiveTransitionRecord> {
@@ -624,9 +634,11 @@ export class FactoryStore {
     if (existing) {
       return existing;
     }
-    const existingByDep = await this.getEffectiveTransitionByDeploymentId(input.deploymentId);
-    if (existingByDep) {
-      return existingByDep;
+    if (input.operationId) {
+      const existingByOp = await this.getEffectiveTransitionByOperationId(input.operationId);
+      if (existingByOp) {
+        return existingByOp;
+      }
     }
     const [created] = await this.db
       .insert(productionEffectiveTransitions)
@@ -634,8 +646,12 @@ export class FactoryStore {
       .onConflictDoNothing()
       .returning();
     if (!created) {
-      const fallback = await this.getEffectiveTransitionByDeploymentId(input.deploymentId);
-      if (fallback) return fallback;
+      if (input.operationId) {
+        const fallback = await this.getEffectiveTransitionByOperationId(input.operationId);
+        if (fallback) return fallback;
+      }
+      const fallbackById = await this.getEffectiveTransition(input.id);
+      if (fallbackById) return fallbackById;
       throw new FactoryError(
         "persistence_write_failed",
         "Failed to insert production effective transition",
@@ -668,10 +684,22 @@ export class FactoryStore {
     const targetStatus = params.status ?? "verified";
     return await this.db.transaction(async (tx) => {
       // 1. Inspect existing deployment and transition state
-      const [existingTrans] = await tx
-        .select()
-        .from(productionEffectiveTransitions)
-        .where(eq(productionEffectiveTransitions.deploymentId, params.deploymentId));
+      const opId = params.operationId ?? params.transition.operationId;
+      let existingTrans: ProductionEffectiveTransitionRecord | undefined;
+      if (opId) {
+        const [byOp] = await tx
+          .select()
+          .from(productionEffectiveTransitions)
+          .where(eq(productionEffectiveTransitions.operationId, opId));
+        existingTrans = byOp;
+      }
+      if (!existingTrans) {
+        const [byDep] = await tx
+          .select()
+          .from(productionEffectiveTransitions)
+          .where(eq(productionEffectiveTransitions.deploymentId, params.deploymentId));
+        existingTrans = byDep;
+      }
 
       const [existingDep] = await tx
         .select()
@@ -733,8 +761,16 @@ export class FactoryStore {
             operationId: params.operationId ?? params.transition.operationId ?? null,
             effectiveAt: params.transition.effectiveAt ?? verifiedAt,
           })
+          .onConflictDoNothing()
           .returning();
         transitionRecord = createdTrans;
+        if (!transitionRecord && opId) {
+          const [byOp] = await tx
+            .select()
+            .from(productionEffectiveTransitions)
+            .where(eq(productionEffectiveTransitions.operationId, opId));
+          transitionRecord = byOp;
+        }
       }
 
       if (!updatedDep || !transitionRecord) {

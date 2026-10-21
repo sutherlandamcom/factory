@@ -3077,7 +3077,7 @@ export const productionEffectiveTransitions = pgTable(
   (table) => [
     index("prod_eff_trans_site_effective_idx").on(table.siteId, desc(table.effectiveAt)),
     index("prod_eff_trans_project_site_idx").on(table.projectId, table.siteId),
-    unique("prod_eff_trans_deployment_id_unique").on(table.deploymentId),
+    unique("prod_eff_trans_operation_id_unique").on(table.operationId),
   ],
 );
 

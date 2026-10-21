@@ -428,8 +428,18 @@ export async function startOperatorServer(): Promise<http.Server> {
   const { GovernedDeliveryService } = await import("../delivery/governed-service.js");
   const { ProductionStore } = await import("../production/store.js");
   const { ReleaseApprovalBoundary } = await import("../trust/release-approval-boundary.js");
+  const isDedicatedTestDatabase = Boolean(
+    process.env.FACTORY_DATABASE_URL?.includes("factory_test") ||
+    process.env.FACTORY_TEST_DATABASE_URL?.includes("factory_test"),
+  );
+  const isE2ETestHarness =
+    isDedicatedTestDatabase &&
+    (process.env.FACTORY_DELIVERY_MODE === "test" || process.env.FACTORY_DELIVERY_MODE === "fixture");
+
   const prodStore = new ProductionStore(dbInstance.db, { repoRoot });
-  const releaseBoundary = new ReleaseApprovalBoundary(dbInstance.db);
+  const releaseBoundary = new ReleaseApprovalBoundary(dbInstance.db, {
+    allowSimulation: isE2ETestHarness,
+  });
 
   const rawDeliveryMode = process.env.FACTORY_DELIVERY_MODE?.trim().toLowerCase();
   const deliveryMode = rawDeliveryMode || "production";
@@ -486,21 +496,13 @@ export async function startOperatorServer(): Promise<http.Server> {
     wranglerFactory,
     qaRunner,
     worktreeProvider,
+    allowSimulation: isE2ETestHarness,
   });
-
-  const isDedicatedTestDatabase = Boolean(
-    process.env.FACTORY_DATABASE_URL?.includes("factory_test") ||
-    process.env.FACTORY_TEST_DATABASE_URL?.includes("factory_test"),
-  );
-  const isE2ETestHarness =
-    isDedicatedTestDatabase &&
-    (process.env.FACTORY_DELIVERY_MODE === "test" || process.env.FACTORY_DELIVERY_MODE === "fixture");
 
   const deps: OperatorApiDeps = {
     store, intake, search, competitors, writer, assets, design, visual,
     production: new ProductionApiFacade(dbInstance.db, repoRoot, {
-      syntheticFixtureContent: isE2ETestHarness ? false : writerMode === "fixture",
-      allowTestSyntheticPublication: isE2ETestHarness,
+      syntheticFixtureContent: writerMode === "fixture",
     }),
     derivatives: new DerivativesApiFacade(dbInstance.db, repoRoot, summaryMode === "fixture" ? { summaryInvoke: fixtureSummaryInvoke } : {}),
     qaCollector,

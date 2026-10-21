@@ -68,6 +68,8 @@ export const deployments = pgTable(
     releaseApprovalId: text("release_approval_id"),
     candidateRoutes: jsonb("candidate_routes"),
     snapshotData: jsonb("snapshot_data"),
+    executionOrigin: text("execution_origin"),
+    operationId: text("operation_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
     promotedAt: timestamp("promoted_at", { withTimezone: true }),
@@ -3066,6 +3068,8 @@ export const productionEffectiveTransitions = pgTable(
     artifactDigest: text("artifact_digest"),
     evidenceRef: text("evidence_ref"),
     effectiveAt: timestamp("effective_at", { withTimezone: true }).notNull(),
+    executionOrigin: text("execution_origin"),
+    operationId: text("operation_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -3073,6 +3077,7 @@ export const productionEffectiveTransitions = pgTable(
   (table) => [
     index("prod_eff_trans_site_effective_idx").on(table.siteId, desc(table.effectiveAt)),
     index("prod_eff_trans_project_site_idx").on(table.projectId, table.siteId),
+    unique("prod_eff_trans_deployment_id_unique").on(table.deploymentId),
   ],
 );
 

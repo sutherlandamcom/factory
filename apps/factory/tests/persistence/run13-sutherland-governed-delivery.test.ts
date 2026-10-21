@@ -486,8 +486,30 @@ test("Run 13 Sutherland 6-page governed delivery, rollback and historical lineag
     assert.equal(asOfRb.pageAuthority?.pageIdentity, route === "/" ? "home" : route.slice(1));
   }
 
-  // 11. P1-03 Crash Reconciliation test
-  // Insert an unverified deployment stuck in 'promoting'
+  // 11. P0-01 Crash Reconciliation test
+  // Case A: Missing approval -> reconciler safely sets needs_review (no fabricated verification)
+  const missingApprovalDepId = `dep-no-appr-${suffix}`;
+  await store.createDeployment({
+    id: missingApprovalDepId,
+    siteId,
+    sourceCommit: shaA,
+    workerName,
+    productionUrl,
+    artifactDirectory: `.factory/deployments/${missingApprovalDepId}`,
+    candidateId: candidateIdA,
+    artifactDigest: digestA,
+    versionId: publishedA.versionId,
+    status: "promoting",
+    candidateRoutes: SUTHERLAND_SIX_ROUTES,
+  });
+
+  const reconMissingAppr = await governedDelivery.reconcilePendingDeployments(siteId);
+  assert.equal(reconMissingAppr.reconciled, true);
+  const unverifiedDep = await store.getDeployment(missingApprovalDepId);
+  assert.equal(unverifiedDep?.status, "needs_review");
+  assert.equal(unverifiedDep?.productionVerified, false);
+
+  // Case B: Valid approval, candidate, and QA -> reconciler re-runs real QA and recovers to verified
   const stuckDepId = `dep-stuck-${suffix}`;
   await store.createDeployment({
     id: stuckDepId,
@@ -497,28 +519,26 @@ test("Run 13 Sutherland 6-page governed delivery, rollback and historical lineag
     productionUrl,
     artifactDirectory: `.factory/deployments/${stuckDepId}`,
     candidateId: candidateIdA,
+    artifactDigest: digestA,
+    releaseApprovalId: approvalA.id,
     versionId: publishedA.versionId,
     status: "promoting",
     candidateRoutes: SUTHERLAND_SIX_ROUTES,
   });
 
-  // Reconciler detects Cloudflare active version matches -> recovers to verified and writes transition
   const reconResult = await governedDelivery.reconcilePendingDeployments(siteId);
   assert.equal(reconResult.reconciled, true);
   const recovered = await store.getDeployment(stuckDepId);
   assert.equal(recovered?.status, "verified");
   assert.equal(recovered?.productionVerified, true);
 
-  // 12. P0-01 Truthful execution origin test
+  // 12. P0-03 Immutable execution origin test: derived from DB records, not environment variables
+  // The reconciled transition recorded REAL_CLOUDFLARE because approvalA is a genuine, non-synthetic approval.
+  // Setting environment variable to simulation must NEVER override the immutable DB origin!
   process.env.FACTORY_DELIVERY_MODE = "simulation";
   const effectiveSim = await governedDelivery.resolveCurrentEffectiveProduction(siteId);
-  assert.equal(effectiveSim.executionOrigin, "TEST_SIMULATION");
-  assert.equal(effectiveSim.deliveryMode, "simulation");
-
-  // In production mode with real Cloudflare
+  assert.equal(effectiveSim.executionOrigin, "REAL_CLOUDFLARE");
   delete process.env.FACTORY_DELIVERY_MODE;
-  const effectiveProd = await governedDelivery.resolveCurrentEffectiveProduction(siteId);
-  assert.equal(effectiveProd.executionOrigin, "REAL_CLOUDFLARE");
 
   // 13. P0-04 Negative: Synthetic fixture QA can never be publication-eligible
   const fakeQa = {
@@ -557,7 +577,8 @@ test("Run 13 Sutherland 6-page governed delivery, rollback and historical lineag
     (err: any) => err instanceof FactoryError && err.code === "production_authority_stale",
   );
 
-  // 14. P1-03 Negative: When Cloudflare active version does NOT match stuck deployment, reconciles to 'failed'
+  // 14. P0-01 Negative: When Cloudflare active version does NOT match stuck deployment,
+  // recovery does not guess or call it failed blindly; it marks needs_review (P0-01 Case D).
   const mismatchDepId = `dep-mismatch-${suffix}`;
   await store.createDeployment({
     id: mismatchDepId,
@@ -575,8 +596,7 @@ test("Run 13 Sutherland 6-page governed delivery, rollback and historical lineag
   const mismatchRecon = await governedDelivery.reconcilePendingDeployments(siteId);
   assert.equal(mismatchRecon.reconciled, true);
   const mismatchRecovered = await store.getDeployment(mismatchDepId);
-  assert.equal(mismatchRecovered?.status, "failed");
-  assert.equal(mismatchRecovered?.errorCode, "delivery_interrupted");
+  assert.equal(mismatchRecovered?.status, "needs_review");
 
   await rm(path.resolve(repoRoot, ".factory", "production", "projects", projectId), { recursive: true, force: true }).catch(() => {});
   await dbInst.close();

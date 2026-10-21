@@ -36,6 +36,8 @@ function record(overrides: Partial<DeploymentRecord> = {}): DeploymentRecord {
     releaseApprovalId: null,
     candidateRoutes: null,
     snapshotData: null,
+    executionOrigin: null,
+    operationId: null,
     createdAt: now,
     updatedAt: now,
     promotedAt: now,

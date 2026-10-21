@@ -141,12 +141,8 @@ export class MonitoringService {
     if (transition) {
       activeVersionId = transition.versionId;
       deploymentId = transition.deploymentId;
-    } else {
-      const deployments = await this.store.listDeployments(site.id, 5);
-      const activeDeployment = deployments.find((d) => d.status === "verified");
-      activeVersionId = activeDeployment?.versionId ?? null;
-      deploymentId = activeDeployment?.id ?? null;
     }
+    // P1-05: Do not infer activeVersionId or deploymentId from deployments table when no transition exists
     const targetUrl = site.productionUrl.replace(/\/$/, "");
     const now = new Date();
 
@@ -317,11 +313,8 @@ export class MonitoringService {
 
     if (transition) {
       activeVersionId = transition.versionId;
-    } else {
-      const deployments = await this.store.listDeployments(site.id, 5);
-      const activeDeployment = deployments.find((d) => d.status === "verified");
-      activeVersionId = activeDeployment?.versionId ?? null;
     }
+    // P1-05: Do not infer activeVersionId from deployments table when no transition exists
 
     const observations = await this.store.listMonitoringObservations(site.id, 50);
     const latestByType = await this.store.getLatestMonitoringObservationsByType(site.id);

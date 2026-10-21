@@ -26,6 +26,8 @@ export interface DeliveryStore {
     previewVerified?: boolean;
     productionVerified?: boolean;
     rolledBack?: boolean;
+    executionOrigin?: "REAL_CLOUDFLARE" | "TEST_SIMULATION" | "UNKNOWN" | null;
+    operationId?: string | null;
   }): Promise<DeploymentRecord>;
   findLatestKnownGoodDeployment(
     siteId: string,
@@ -199,11 +201,15 @@ export class ProductionDelivery {
       }
 
       if (productionQa.passed) {
+        const executionOrigin =
+          (preview.executionOrigin as "REAL_CLOUDFLARE" | "TEST_SIMULATION" | "UNKNOWN" | null) ??
+          ((this.wrangler as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
         return await this.store.updateDeployment({
           id: preview.id,
           status: "verified",
           verifiedAt: new Date(),
           productionVerified: true,
+          executionOrigin,
           errorCode: null,
           errorMessage: null,
         });
@@ -290,12 +296,16 @@ export class ProductionDelivery {
         });
       }
 
-      // P0-D & P0-02: Preserve historical publication facts and restore target release identity.
+      // P0-D & P0-02 & P1-01: Preserve historical publication facts and restore target release identity.
       // The new rollback deployment event strictly inherits the target release's candidate,
-      // source commit, artifact digest, routes, and approval lineage.
+      // source commit, artifact digest, qaRunId, routes, and approval lineage.
       if (typeof this.store.createDeployment === "function") {
+        const rollbackDepId = `dep-rb-${randomUUID()}`;
+        const executionOrigin =
+          targetDep.executionOrigin ??
+          ((this.wrangler as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
         return await this.store.createDeployment({
-          id: `dep-rb-${randomUUID()}`,
+          id: rollbackDepId,
           siteId: input.deployment.siteId,
           sourceCommit: targetDep.sourceCommit,
           artifactDigest: targetDep.artifactDigest,
@@ -308,9 +318,17 @@ export class ProductionDelivery {
           productionVerified: true,
           rolledBack: true,
           candidateId: targetDep.candidateId,
-          artifactDirectory: targetDep.artifactDirectory,
-          candidateRoutes: targetDep.candidateRoutes,
+          qaRunId: targetDep.qaRunId ?? null, // R13-F3-P1-01: exact target QA preserved
           releaseApprovalId: targetDep.releaseApprovalId,
+          candidateRoutes: targetDep.candidateRoutes,
+          artifactDirectory: targetDep.artifactDirectory,
+          executionOrigin,
+          operationId: `rb-${rollbackDepId}`,
+          snapshotData: {
+            targetDeploymentId: targetDep.id,
+            rollbackQaPassed: rollbackQa.passed,
+            rollbackQaRunId: (rollbackQa as any)?.qaRunId ?? null,
+          },
           verifiedAt: new Date(),
           promotedAt: new Date(),
         });
@@ -386,11 +404,15 @@ export class ProductionDelivery {
 
       const productionQa = await this.runtime.qa(preview.productionUrl, "production");
       if (productionQa.passed) {
+        const executionOrigin =
+          (preview.executionOrigin as "REAL_CLOUDFLARE" | "TEST_SIMULATION" | "UNKNOWN" | null) ??
+          ((this.wrangler as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
         return await this.store.updateDeployment({
           id: preview.id,
           status: "verified",
           verifiedAt: new Date(),
           productionVerified: true,
+          executionOrigin,
           errorCode: null,
           errorMessage: null,
         });

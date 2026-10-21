@@ -53,6 +53,9 @@ export const publishApprovedReleaseRequestSchema = z.object({
 });
 export type PublishApprovedReleaseRequest = z.infer<typeof publishApprovedReleaseRequestSchema>;
 
+export const executionOriginSchema = z.enum(["REAL_CLOUDFLARE", "TEST_SIMULATION", "UNKNOWN"]);
+export type ExecutionOrigin = z.infer<typeof executionOriginSchema>;
+
 /** Deployment history item in operator view. */
 export const deploymentHistoryItemSchema = z.object({
   id: z.string().min(1),
@@ -70,6 +73,7 @@ export const deploymentHistoryItemSchema = z.object({
   rolledBack: z.boolean(),
   errorCode: z.string().nullable(),
   errorMessage: z.string().nullable(),
+  executionOrigin: executionOriginSchema.optional(),
   createdAt: z.string().datetime({ offset: true }),
   promotedAt: z.string().datetime({ offset: true }).nullable(),
   verifiedAt: z.string().datetime({ offset: true }).nullable(),
@@ -101,6 +105,7 @@ export const governedDeploymentViewSchema = z.object({
       id: z.string(),
       overall: z.enum(["PASS", "REVIEW", "FAIL"]),
       publicationEligible: z.boolean(),
+      simulationEligible: z.boolean().optional(),
       createdAt: z.string(),
     })
     .nullable(),
@@ -119,7 +124,7 @@ export const governedDeploymentViewSchema = z.object({
       activeVersionId: z.string().nullable(),
       knownGoodVersionId: z.string().nullable(),
       lastVerifiedAt: z.string().nullable(),
-      executionOrigin: z.enum(["REAL_CLOUDFLARE", "TEST_SIMULATION"]).optional(),
+      executionOrigin: executionOriginSchema.optional(),
       deliveryMode: z.string().optional(),
     })
     .nullable(),

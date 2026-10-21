@@ -63,7 +63,6 @@ export class ProductionApiFacade {
     private readonly trustPolicy: {
       syntheticFixtureContent?: boolean;
       evidenceRoot?: string;
-      allowTestSyntheticPublication?: boolean;
     } = {},
   ) {
     this.store = new ProductionStore(db, { repoRoot, evidenceRoot: trustPolicy.evidenceRoot });
@@ -230,8 +229,7 @@ export class ProductionApiFacade {
       }
     }
     const isSyntheticContent =
-      !this.trustPolicy.allowTestSyntheticPublication &&
-      (this.trustPolicy.syntheticFixtureContent === true || factualSyntheticProvenance);
+      this.trustPolicy.syntheticFixtureContent === true || factualSyntheticProvenance;
     const trustQa = await runTrustQa({
       manifests,
       distDir: candidate.artifactRef,

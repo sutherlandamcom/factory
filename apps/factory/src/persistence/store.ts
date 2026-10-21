@@ -305,6 +305,8 @@ export class FactoryStore {
     releaseApprovalId?: string | null;
     candidateRoutes?: unknown;
     snapshotData?: unknown;
+    executionOrigin?: "REAL_CLOUDFLARE" | "TEST_SIMULATION" | "UNKNOWN" | null;
+    operationId?: string | null;
     verifiedAt?: Date | null;
     promotedAt?: Date | null;
   }): Promise<DeploymentRecord> {
@@ -318,6 +320,8 @@ export class FactoryStore {
         releaseApprovalId: input.releaseApprovalId ?? null,
         candidateRoutes: input.candidateRoutes ?? null,
         snapshotData: input.snapshotData ?? null,
+        executionOrigin: input.executionOrigin ?? null,
+        operationId: input.operationId ?? null,
       })
       .returning();
     if (!created) throw new FactoryError("persistence_write_failed", "Failed to create deployment");
@@ -443,6 +447,8 @@ export class FactoryStore {
     releaseApprovalId?: string | null;
     candidateRoutes?: unknown;
     snapshotData?: unknown;
+    executionOrigin?: "REAL_CLOUDFLARE" | "TEST_SIMULATION" | "UNKNOWN" | null;
+    operationId?: string | null;
     errorCode?: string | null;
     errorMessage?: string | null;
     promotedAt?: Date | null;
@@ -469,6 +475,8 @@ export class FactoryStore {
         ...(input.releaseApprovalId !== undefined ? { releaseApprovalId: input.releaseApprovalId } : {}),
         ...(input.candidateRoutes !== undefined ? { candidateRoutes: input.candidateRoutes } : {}),
         ...(input.snapshotData !== undefined ? { snapshotData: input.snapshotData } : {}),
+        ...(input.executionOrigin !== undefined ? { executionOrigin: input.executionOrigin } : {}),
+        ...(input.operationId !== undefined ? { operationId: input.operationId } : {}),
         ...(input.errorCode !== undefined ? { errorCode: input.errorCode } : {}),
         ...(input.errorMessage !== undefined
           ? { errorMessage: truncateBounded(input.errorMessage, MAX_ERROR_MESSAGE_LENGTH) }
@@ -616,17 +624,132 @@ export class FactoryStore {
     if (existing) {
       return existing;
     }
+    const existingByDep = await this.getEffectiveTransitionByDeploymentId(input.deploymentId);
+    if (existingByDep) {
+      return existingByDep;
+    }
     const [created] = await this.db
       .insert(productionEffectiveTransitions)
       .values(input)
+      .onConflictDoNothing()
       .returning();
     if (!created) {
+      const fallback = await this.getEffectiveTransitionByDeploymentId(input.deploymentId);
+      if (fallback) return fallback;
       throw new FactoryError(
         "persistence_write_failed",
         "Failed to insert production effective transition",
       );
     }
     return created;
+  }
+
+  /**
+   * P0-02: Atomically and idempotently finalizes a deployment and commits its
+   * authoritative production_effective_transitions record in a single PostgreSQL transaction.
+   *
+   * Invariants:
+   * 1. CAS check: verifies deployment status is within expected priors.
+   * 2. Atomic: deployment status=verified/rolled_back and transition insert commit together.
+   * 3. Idempotent: retrying an already finalized deployment returns existing records without duplicate rows or altered timestamps.
+   */
+  async finalizeDeploymentAndTransitionAtomic(params: {
+    deploymentId: string;
+    expectedStatus?: DeploymentStatus | readonly DeploymentStatus[];
+    status?: "verified" | "rolled_back";
+    transition: InsertProductionEffectiveTransition;
+    executionOrigin?: "REAL_CLOUDFLARE" | "TEST_SIMULATION" | "UNKNOWN";
+    operationId?: string;
+  }): Promise<{
+    deployment: DeploymentRecord;
+    transition: ProductionEffectiveTransitionRecord;
+    alreadyFinalized: boolean;
+  }> {
+    const targetStatus = params.status ?? "verified";
+    return await this.db.transaction(async (tx) => {
+      // 1. Inspect existing deployment and transition state
+      const [existingTrans] = await tx
+        .select()
+        .from(productionEffectiveTransitions)
+        .where(eq(productionEffectiveTransitions.deploymentId, params.deploymentId));
+
+      const [existingDep] = await tx
+        .select()
+        .from(deployments)
+        .where(eq(deployments.id, params.deploymentId));
+
+      if (!existingDep) {
+        throw new FactoryError("deployment_not_found", `Deployment '${params.deploymentId}' not found.`);
+      }
+
+      // 2. Safe idempotent return on retry: if already in terminal verified state with transition
+      if (existingDep.status === targetStatus && existingTrans) {
+        return {
+          deployment: existingDep,
+          transition: existingTrans,
+          alreadyFinalized: true,
+        };
+      }
+
+      // 3. CAS status validation
+      const allowedPriors = params.expectedStatus
+        ? (Array.isArray(params.expectedStatus) ? params.expectedStatus : [params.expectedStatus])
+        : VALID_PRIOR_STATUSES[targetStatus] ?? [];
+
+      if (!allowedPriors.includes(existingDep.status as DeploymentStatus) && existingDep.status !== targetStatus) {
+        throw new FactoryError(
+          "deployment_invalid_transition",
+          `Cannot finalize deployment '${params.deploymentId}' from status '${existingDep.status}'. Expected: ${allowedPriors.join(", ")}`,
+        );
+      }
+
+      const verifiedAt = existingDep.verifiedAt ?? new Date();
+
+      // 4. Update deployment to target status
+      const [updatedDep] = await tx
+        .update(deployments)
+        .set({
+          status: targetStatus,
+          productionVerified: true,
+          verifiedAt,
+          errorCode: null,
+          errorMessage: null,
+          updatedAt: new Date(),
+          ...(params.executionOrigin ? { executionOrigin: params.executionOrigin } : {}),
+          ...(params.operationId ? { operationId: params.operationId } : {}),
+        })
+        .where(eq(deployments.id, params.deploymentId))
+        .returning();
+
+      // 5. Insert effective transition atomically within same transaction
+      let transitionRecord = existingTrans;
+      if (!transitionRecord) {
+        const [createdTrans] = await tx
+          .insert(productionEffectiveTransitions)
+          .values({
+            ...params.transition,
+            deploymentId: params.deploymentId,
+            executionOrigin: params.executionOrigin ?? params.transition.executionOrigin ?? existingDep.executionOrigin ?? null,
+            operationId: params.operationId ?? params.transition.operationId ?? null,
+            effectiveAt: params.transition.effectiveAt ?? verifiedAt,
+          })
+          .returning();
+        transitionRecord = createdTrans;
+      }
+
+      if (!updatedDep || !transitionRecord) {
+        throw new FactoryError(
+          "persistence_write_failed",
+          `Failed to finalize deployment '${params.deploymentId}' atomically.`,
+        );
+      }
+
+      return {
+        deployment: updatedDep,
+        transition: transitionRecord,
+        alreadyFinalized: false,
+      };
+    });
   }
 
   async listEffectiveTransitions(

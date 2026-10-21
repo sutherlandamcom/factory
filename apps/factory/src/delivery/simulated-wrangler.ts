@@ -7,6 +7,7 @@ import type { UploadedVersion } from "./wrangler.js";
  * when real Cloudflare credentials are not configured or fixture mode is enabled.
  */
 export class SimulatedWrangler implements WranglerOperations {
+  readonly isSimulated: boolean = true;
   promoted: string[] = [];
   rolledBack: string[] = [];
   current: string | null = null;

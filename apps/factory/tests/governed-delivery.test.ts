@@ -336,6 +336,26 @@ test("governed delivery lifecycle: preview -> approval -> publish -> rollback", 
     async getCurrentEffectiveTransition(sId: string) {
       return this.transitions.filter((t: any) => t.siteId === sId)[0] ?? null;
     },
+    async finalizeDeploymentAndTransitionAtomic(params: any) {
+      const dep = await this.updateDeployment({
+        id: params.deploymentId,
+        status: params.status ?? "verified",
+        productionVerified: true,
+        verifiedAt: new Date(),
+        executionOrigin: params.executionOrigin,
+        operationId: params.operationId,
+      });
+      const transition = await this.insertEffectiveTransition({
+        ...params.transition,
+        executionOrigin: params.executionOrigin,
+        operationId: params.operationId,
+      });
+      return {
+        deployment: dep,
+        transition,
+        alreadyFinalized: false,
+      };
+    },
   };
 
   const productionStore: any = {

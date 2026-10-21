@@ -285,6 +285,7 @@ export class ReleaseApprovalBoundary {
   private readonly keyring: AuditSealKeyring;
   private readonly idp: TrustedIdentityProvider;
   private readonly revocationStore: SessionRevocationStore;
+  public readonly allowSimulation: boolean;
 
   constructor(
     private readonly db: FactoryDb,
@@ -292,12 +293,14 @@ export class ReleaseApprovalBoundary {
       keyring?: AuditSealKeyring;
       idp?: TrustedIdentityProvider;
       revocationStore?: SessionRevocationStore;
+      allowSimulation?: boolean;
     },
   ) {
     this.keyring = options?.keyring ?? AuditSealKeyring.fromEnvironment();
     this.idp = options?.idp ?? new ReleaseIdentityProvider({ db });
     this.revocationStore =
       options?.revocationStore ?? new PostgreSqlSessionRevocationStore(db);
+    this.allowSimulation = options?.allowSimulation ?? false;
   }
 
   /**
@@ -444,7 +447,7 @@ export class ReleaseApprovalBoundary {
         throw new FactoryError("qa_run_not_found", `Deployment '${deployment.id}' has no associated QA run.`);
       }
 
-      // 4. Query QA run: must be PASS and publication eligible
+      // 4. Query QA run: must be PASS and publication eligible (or simulation eligible if configured)
       const [qaRun] = await c
         .select()
         .from(productionQaRuns)
@@ -455,9 +458,20 @@ export class ReleaseApprovalBoundary {
           ),
         );
 
-      if (!qaRun || qaRun.overall !== "PASS" || !qaRunPublicationEligible(qaRun.data)) {
-        throw new FactoryError("qa_not_eligible", "QA run is missing, not PASS, or not publication-eligible.");
+      if (!qaRun) {
+        throw new FactoryError("qa_not_eligible", "QA run is missing.");
       }
+
+      const isEligibleForRealPublication = Boolean(qaRun.overall === "PASS" && qaRunPublicationEligible(qaRun.data));
+      const isSimulationEligible =
+        Boolean(this.allowSimulation) &&
+        Boolean(qaRun.overall === "PASS");
+
+      if (!isEligibleForRealPublication && !isSimulationEligible) {
+        throw new FactoryError("qa_not_eligible", "QA run is not PASS or not publication-eligible.");
+      }
+
+      const isSynthetic = !isEligibleForRealPublication && isSimulationEligible;
 
       // 5. Check if approval already exists
       const [existing] = await c
@@ -490,7 +504,7 @@ export class ReleaseApprovalBoundary {
         targetWorkerName: deployment.workerName,
         targetProductionUrl: deployment.productionUrl,
         actorId: session.actorId,
-        isSynthetic: false,
+        isSynthetic,
       };
 
       const { seal, sealKeyId } = computeReleaseApprovalSeal(sealFields, this.keyring);
@@ -512,7 +526,7 @@ export class ReleaseApprovalBoundary {
           actorName: session.actorName,
           actorRole: session.actorRole,
           sessionId: session.sessionId,
-          isSynthetic: false,
+          isSynthetic,
           verificationSeal: seal,
           sealKeyId,
           sealStatus: "SEALED",
@@ -539,6 +553,15 @@ export class ReleaseApprovalBoundary {
       });
     }
     return await run(client);
+  }
+
+  async getApproval(approvalId: string, tx?: FactoryDb): Promise<ReleaseApprovalRecord | null> {
+    const client = paramsClient(this.db, tx);
+    const [approval] = await client
+      .select()
+      .from(releaseApprovals)
+      .where(eq(releaseApprovals.id, approvalId));
+    return approval ?? null;
   }
 
   /**

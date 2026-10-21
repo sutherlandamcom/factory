@@ -877,6 +877,7 @@ export {
   DEPLOYMENT_PUBLISH_PERMISSION,
   createReleaseApprovalRequestSchema,
   deploymentHistoryItemSchema,
+  executionOriginSchema,
   governedDeploymentViewSchema,
   publishApprovedReleaseRequestSchema,
   releaseApprovalSchema,
@@ -885,6 +886,7 @@ export {
 export type {
   CreateReleaseApprovalRequest,
   DeploymentHistoryItem,
+  ExecutionOrigin,
   GovernedDeploymentView,
   PublishApprovedReleaseRequest,
   ReleaseApproval,

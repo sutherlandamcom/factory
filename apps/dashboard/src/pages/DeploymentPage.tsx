@@ -183,7 +183,7 @@ export function DeploymentPage() {
     effectiveState === "READY_FOR_DEPLOYMENT" &&
       currentCandidate &&
       currentCandidate.state === "qa_passed" &&
-      dep.latestQa?.publicationEligible &&
+      (dep.latestQa?.publicationEligible || dep.latestQa?.simulationEligible) &&
       sessionToken.trim().length > 0 &&
       !previewMutation.isPending,
   );

@@ -5,6 +5,7 @@ import { eq, sql } from "drizzle-orm";
 import {
   DEPLOYMENT_PUBLISH_PERMISSION,
   qaRunPublicationEligible,
+  type ExecutionOrigin,
   type GovernedDeploymentView,
   type MonitoringSummary,
 } from "@factory/contracts";
@@ -131,6 +132,7 @@ export interface GovernedDeliveryDeps {
     remove: (repoRoot: string, worktree: string) => Promise<void>;
   };
   qaRunner?: (input: Parameters<typeof runRemoteQa>[0]) => Promise<RemoteQaResult>;
+  allowSimulation?: boolean;
 }
 
 export class GovernedDeliveryService {
@@ -147,6 +149,7 @@ export class GovernedDeliveryService {
     remove: (repoRoot: string, worktree: string) => Promise<void>;
   };
   private readonly qaRunner: (input: Parameters<typeof runRemoteQa>[0]) => Promise<RemoteQaResult>;
+  public readonly allowSimulation: boolean;
   private static readonly memoryLocks = new Map<string, Promise<void>>();
 
   constructor(deps: GovernedDeliveryDeps) {
@@ -167,6 +170,7 @@ export class GovernedDeliveryService {
       remove: removeWorktree,
     };
     this.qaRunner = deps.qaRunner ?? runRemoteQa;
+    this.allowSimulation = deps.allowSimulation ?? false;
   }
 
   async withProjectLock<T>(projectId: string, fn: () => Promise<T>, timeoutMs = 15_000): Promise<T> {
@@ -433,6 +437,9 @@ export class GovernedDeliveryService {
       const fullArtifactDir = path.join(this.repoRoot, artifactDir);
       await mkdir(fullArtifactDir, { recursive: true });
 
+      const tempProvider = this.wranglerFactory(this.repoRoot, fullArtifactDir);
+      const executionOrigin = (tempProvider as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE";
+
       const deployment = await this.store.createDeployment({
         id: deploymentId,
         siteId: site.id,
@@ -443,6 +450,7 @@ export class GovernedDeliveryService {
         candidateId: candidate.id,
         qaRunId: latestQa!.id,
         candidateRoutes,
+        executionOrigin,
         snapshotData: {
           buildIdentity,
           manifestSetDigest: candidate.manifestSetDigest,
@@ -626,6 +634,13 @@ export class GovernedDeliveryService {
 
         const provider = this.wranglerFactory(worktree, fullArtifactDir);
 
+        if (approval.isSynthetic && !(provider as any)?.isSimulated) {
+          throw new FactoryError(
+            "synthetic_publication_blocked",
+            "Synthetic release approval cannot be published to live Cloudflare production.",
+          );
+        }
+
         const deliveryRuntime: DeliveryRuntime = {
           build: async () => path.join(worktree!, "sites", "starter", "dist"),
           digest: async () => candidate.artifactDigest!,
@@ -649,24 +664,37 @@ export class GovernedDeliveryService {
 
         // R13-R5: Record post-publication technical verification and append-only effective transition
         if (published.status === "verified" && published.versionId) {
-          await this.store.insertEffectiveTransition({
-            id: `trans-${randomUUID()}`,
-            projectId: input.projectId,
-            siteId: site.id,
+          const executionOrigin =
+            (published.executionOrigin as any) ??
+            previewDeployment.executionOrigin ??
+            ((provider as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
+          await this.store.finalizeDeploymentAndTransitionAtomic({
             deploymentId: published.id,
-            versionId: published.versionId,
-            candidateId: candidate.id,
-            eventType: "PUBLISH",
-            fromVersionId: previewDeployment.previousVersionId ?? null,
-            toVersionId: published.versionId,
-            actorId: approval.actorId,
-            actorName: approval.actorName,
-            actorRole: approval.actorRole,
-            sessionId: approval.sessionId,
-            candidateRoutes,
-            artifactDigest: candidate.artifactDigest,
-            evidenceRef: published.artifactDirectory ?? undefined,
-            effectiveAt: published.verifiedAt ?? new Date(),
+            expectedStatus: ["promoting", "promoted", "verified"],
+            status: "verified",
+            executionOrigin,
+            operationId: `pub-${published.id}`,
+            transition: {
+              id: `trans-pub-${published.id}`,
+              projectId: input.projectId,
+              siteId: site.id,
+              deploymentId: published.id,
+              versionId: published.versionId,
+              candidateId: candidate.id,
+              eventType: "PUBLISH",
+              fromVersionId: previewDeployment.previousVersionId ?? null,
+              toVersionId: published.versionId,
+              actorId: approval.actorId,
+              actorName: approval.actorName,
+              actorRole: approval.actorRole,
+              sessionId: approval.sessionId,
+              candidateRoutes,
+              artifactDigest: candidate.artifactDigest,
+              evidenceRef: published.artifactDirectory ?? undefined,
+              effectiveAt: published.verifiedAt ?? new Date(),
+              executionOrigin,
+              operationId: `pub-${published.id}`,
+            },
           });
 
           await this.monitoringService
@@ -812,24 +840,37 @@ export class GovernedDeliveryService {
         });
 
         if (rolledBack.status === "rolled_back" && rolledBack.versionId) {
-          await this.store.insertEffectiveTransition({
-            id: `trans-${randomUUID()}`,
-            projectId: input.projectId,
-            siteId: site.id,
+          const executionOrigin =
+            (rolledBack.executionOrigin as any) ??
+            targetDeployment.executionOrigin ??
+            ((provider as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
+          await this.store.finalizeDeploymentAndTransitionAtomic({
             deploymentId: rolledBack.id,
-            versionId: targetVersion,
-            candidateId: targetDeployment.candidateId,
-            eventType: "ROLLBACK",
-            fromVersionId: latestDeployment.versionId,
-            toVersionId: targetVersion,
-            actorId: session.actorId,
-            actorName: session.actorName,
-            actorRole: session.actorRole,
-            sessionId: session.sessionId,
-            candidateRoutes: targetRoutes,
-            artifactDigest: targetDeployment.artifactDigest,
-            evidenceRef: rolledBack.artifactDirectory ?? undefined,
-            effectiveAt: rolledBack.verifiedAt ?? new Date(),
+            expectedStatus: ["promoting", "promoted", "rolled_back"],
+            status: "rolled_back",
+            executionOrigin,
+            operationId: `rb-${rolledBack.id}`,
+            transition: {
+              id: `trans-rb-${rolledBack.id}`,
+              projectId: input.projectId,
+              siteId: site.id,
+              deploymentId: rolledBack.id,
+              versionId: targetVersion,
+              candidateId: targetDeployment.candidateId,
+              eventType: "ROLLBACK",
+              fromVersionId: latestDeployment.versionId,
+              toVersionId: targetVersion,
+              actorId: session.actorId,
+              actorName: session.actorName,
+              actorRole: session.actorRole,
+              sessionId: session.sessionId,
+              candidateRoutes: targetRoutes,
+              artifactDigest: targetDeployment.artifactDigest,
+              evidenceRef: rolledBack.artifactDirectory ?? undefined,
+              effectiveAt: rolledBack.verifiedAt ?? new Date(),
+              executionOrigin,
+              operationId: `rb-${rolledBack.id}`,
+            },
           });
         }
 
@@ -849,6 +890,20 @@ export class GovernedDeliveryService {
    * - If Cloudflare active version matches: recovers deployment to 'verified' and records reconciled transition.
    * - If Cloudflare active version does NOT match: marks deployment as 'failed'.
    */
+  /**
+   * P0-01: Crash reconciliation for uncommitted Cloudflare mutations.
+   * Reconstructs intended release operation from persisted immutable facts.
+   *
+   * Invariants:
+   * 1. Resolves exact pending deployment by primary key.
+   * 2. Resolves exact ProductionCandidate; verifies candidateId, artifactDigest, and sourceCommit.
+   * 3. Resolves and revalidates exact ReleaseApproval seal.
+   * 4. Revalidates strict-production QA proof.
+   * 5. Queries Cloudflare provider version (never infers PASS on network failure).
+   * 6. If provider version matches: executes real post-recovery production QA across all candidate routes.
+   * 7. If post-recovery QA passes: atomically finalizes status=verified and inserts effective transition.
+   * 8. If QA fails or authority/evidence is missing: transitions to needs_review. Zero fabricated fallbacks.
+   */
   async reconcilePendingDeployments(siteId: string): Promise<{ reconciled: boolean; details?: string }> {
     const unverified = await this.store.findLatestUnverifiedDeployment(siteId);
     if (!unverified) {
@@ -857,10 +912,114 @@ export class GovernedDeliveryService {
 
     if (unverified.status === "promoting" || unverified.status === "promoted") {
       const site = await this.store.getSiteById(siteId);
-      if (!site || !site.cloudflareWorkerName) {
-        return { reconciled: false, details: "Site or worker configuration missing." };
+      if (!site || !site.cloudflareWorkerName || !site.productionUrl) {
+        return { reconciled: false, details: "Site, worker, or productionUrl configuration missing." };
       }
 
+      // Step 2 & 3: Validate presence of immutable authority facts (no fabricated fallbacks)
+      const candidateRoutes = (unverified.candidateRoutes as string[]) ?? [];
+      if (
+        !unverified.candidateId ||
+        !unverified.artifactDigest ||
+        !unverified.sourceCommit ||
+        !unverified.versionId ||
+        !unverified.releaseApprovalId ||
+        candidateRoutes.length === 0
+      ) {
+        await this.store.updateDeployment({
+          id: unverified.id,
+          status: "needs_review",
+          errorCode: "recovery_missing_authority",
+          errorMessage: "Pending deployment lacks required candidate, digest, sourceCommit, approval, or routes. Cannot verify.",
+        });
+        return {
+          reconciled: true,
+          details: `Deployment '${unverified.id}' moved to needs_review due to missing required authority facts.`,
+        };
+      }
+
+      // Step 4: Resolve exact candidate and verify digest/commit
+      const candidate = await this.productionStore.getCandidate(site.projectId, unverified.candidateId);
+      if (!candidate) {
+        await this.store.updateDeployment({
+          id: unverified.id,
+          status: "needs_review",
+          errorCode: "recovery_candidate_not_found",
+          errorMessage: `Candidate '${unverified.candidateId}' referenced by deployment not found.`,
+        });
+        return {
+          reconciled: true,
+          details: `Deployment '${unverified.id}' moved to needs_review: candidate not found.`,
+        };
+      }
+      if (candidate.artifactDigest !== unverified.artifactDigest || candidate.repositorySha !== unverified.sourceCommit) {
+        await this.store.updateDeployment({
+          id: unverified.id,
+          status: "needs_review",
+          errorCode: "recovery_candidate_mismatch",
+          errorMessage: "Candidate artifactDigest or repositorySha does not match pending deployment.",
+        });
+        return {
+          reconciled: true,
+          details: `Deployment '${unverified.id}' moved to needs_review: candidate digest/commit mismatch.`,
+        };
+      }
+
+      // Step 5: Resolve exact release approval and revalidate seal
+      let approval: any = null;
+      try {
+        approval = await this.releaseBoundary.getApproval(unverified.releaseApprovalId);
+      } catch {
+        approval = null;
+      }
+      if (
+        !approval ||
+        approval.revoked ||
+        approval.candidateId !== unverified.candidateId ||
+        approval.previewVersionId !== unverified.versionId ||
+        approval.targetWorkerName !== site.cloudflareWorkerName ||
+        approval.artifactDigest !== unverified.artifactDigest
+      ) {
+        await this.store.updateDeployment({
+          id: unverified.id,
+          status: "needs_review",
+          errorCode: "recovery_approval_invalid",
+          errorMessage: "Release approval is missing, revoked, or invalid for target version/candidate.",
+        });
+        return {
+          reconciled: true,
+          details: `Deployment '${unverified.id}' moved to needs_review: release approval invalid.`,
+        };
+      }
+
+      // Step 6: Revalidate QA evidence
+      const qaRun = await this.productionStore.latestQaRun(site.projectId, unverified.candidateId);
+      if (!qaRun || qaRun.overall !== "PASS") {
+        await this.store.updateDeployment({
+          id: unverified.id,
+          status: "needs_review",
+          errorCode: "recovery_qa_invalid",
+          errorMessage: "Candidate QA run is missing or not PASS.",
+        });
+        return {
+          reconciled: true,
+          details: `Deployment '${unverified.id}' moved to needs_review: QA run is not PASS.`,
+        };
+      }
+      if (!approval.isSynthetic && !qaRunPublicationEligible(qaRun.data)) {
+        await this.store.updateDeployment({
+          id: unverified.id,
+          status: "needs_review",
+          errorCode: "recovery_qa_ineligible",
+          errorMessage: "Candidate QA run is not publication eligible.",
+        });
+        return {
+          reconciled: true,
+          details: `Deployment '${unverified.id}' moved to needs_review: QA run is not publication eligible.`,
+        };
+      }
+
+      // Step 7: Query actual effective Cloudflare version
       const fullArtifactDir = path.join(this.repoRoot, unverified.artifactDirectory || ".factory/deployments/reconcile");
       const provider = this.wranglerFactory(this.repoRoot, fullArtifactDir);
       let cfActiveVersion: string | null = null;
@@ -870,58 +1029,114 @@ export class GovernedDeliveryService {
         return { reconciled: false, details: `Failed to query Cloudflare provider: ${err.message}` };
       }
 
-      if (cfActiveVersion && cfActiveVersion === unverified.versionId) {
+      // Step 8: Distinguish version outcomes
+      if (!cfActiveVersion || cfActiveVersion !== unverified.versionId) {
+        if (unverified.previousVersionId && cfActiveVersion === unverified.previousVersionId) {
+          await this.store.updateDeployment({
+            id: unverified.id,
+            status: "failed",
+            errorCode: "delivery_interrupted",
+            errorMessage: "Deployment interrupted before Cloudflare promotion completed. Active version remains previous version.",
+          });
+          return {
+            reconciled: true,
+            details: `Deployment '${unverified.id}' reconciled to failed; Cloudflare active version remains '${cfActiveVersion}'.`,
+          };
+        } else {
+          await this.store.updateDeployment({
+            id: unverified.id,
+            status: "needs_review",
+            errorCode: "provider_version_diverged",
+            errorMessage: `Cloudflare active version is '${cfActiveVersion}', expected candidate '${unverified.versionId}' or previous '${unverified.previousVersionId}'.`,
+          });
+          return {
+            reconciled: true,
+            details: `Deployment '${unverified.id}' marked needs_review due to external/diverged provider version '${cfActiveVersion}'.`,
+          };
+        }
+      }
+
+      // Step 9 & 10: Provider version matches -> MUST run REAL production QA across all candidate routes
+      let worktree: string | null = null;
+      let qaPassed = false;
+      try {
+        worktree = await this.worktreeProvider.prepare(
+          this.repoRoot,
+          unverified.sourceCommit,
+          `rec-${unverified.id}`,
+        );
+        const qaRes = await this.qaRunner({
+          worktree,
+          targetUrl: site.productionUrl,
+          productionUrl: site.productionUrl,
+          artifactDirectory: fullArtifactDir,
+          phase: "production",
+          candidateRoutes,
+        });
+        qaPassed = Boolean(qaRes && qaRes.passed);
+      } catch {
+        qaPassed = false;
+      } finally {
+        if (worktree) {
+          await this.worktreeProvider.remove(this.repoRoot, worktree).catch(() => {});
+        }
+      }
+
+      if (!qaPassed) {
         await this.store.updateDeployment({
           id: unverified.id,
-          status: "verified",
-          productionVerified: true,
-          verifiedAt: new Date(),
-          errorCode: null,
-          errorMessage: null,
+          status: "needs_review",
+          errorCode: "recovery_qa_failed",
+          errorMessage: "Provider active version matched candidate, but post-recovery production QA failed.",
         });
+        return {
+          reconciled: true,
+          details: `Deployment '${unverified.id}' marked needs_review: post-recovery production QA failed.`,
+        };
+      }
 
-        const routes = (unverified.candidateRoutes as string[]) ?? ["/"];
-        await this.store.insertEffectiveTransition({
-          id: `trans-rec-${randomUUID()}`,
+      // Step 11 & 12: Atomic finalization of status=verified and effective transition
+      const executionOrigin: ExecutionOrigin =
+        (unverified.executionOrigin as ExecutionOrigin) ??
+        (approval.isSynthetic ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
+
+      await this.store.finalizeDeploymentAndTransitionAtomic({
+        deploymentId: unverified.id,
+        expectedStatus: ["promoting", "promoted"],
+        status: "verified",
+        executionOrigin,
+        operationId: `rec-${unverified.id}`,
+        transition: {
+          id: `trans-rec-${unverified.id}`,
           projectId: site.projectId,
           siteId: site.id,
           deploymentId: unverified.id,
           versionId: unverified.versionId,
-          candidateId: unverified.candidateId ?? "unknown",
+          candidateId: unverified.candidateId,
           eventType: "PUBLISH",
           fromVersionId: unverified.previousVersionId ?? null,
           toVersionId: unverified.versionId,
-          actorId: "system:crash-recovery",
-          actorName: "Crash Recovery Reconciler",
-          actorRole: "SYSTEM",
-          sessionId: "session:crash-recovery",
-          candidateRoutes: routes,
-          artifactDigest: unverified.artifactDigest ?? "reconciled-digest",
+          actorId: approval.actorId,
+          actorName: approval.actorName,
+          actorRole: approval.actorRole,
+          sessionId: approval.sessionId,
+          candidateRoutes,
+          artifactDigest: unverified.artifactDigest,
           evidenceRef: JSON.stringify({
             reconciled: true,
-            reason: "crash_recovery_cloudflare_matched",
+            reason: "crash_recovery_cloudflare_matched_qa_passed",
             recoveredAt: new Date().toISOString(),
           }),
           effectiveAt: new Date(),
-        });
+          executionOrigin,
+          operationId: `rec-${unverified.id}`,
+        },
+      });
 
-        return {
-          reconciled: true,
-          details: `Deployment '${unverified.id}' reconciled to verified; active Cloudflare version '${cfActiveVersion}' confirmed.`,
-        };
-      } else {
-        await this.store.updateDeployment({
-          id: unverified.id,
-          status: "failed",
-          errorCode: "delivery_interrupted",
-          errorMessage: "Deployment interrupted before Cloudflare promotion completed. Reconciled to failed.",
-        });
-
-        return {
-          reconciled: true,
-          details: `Deployment '${unverified.id}' reconciled to failed; Cloudflare active version was '${cfActiveVersion}', expected '${unverified.versionId}'.`,
-        };
-      }
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' reconciled to verified with passing production QA and atomic transition.`,
+      };
     }
 
     return { reconciled: false, details: `Deployment '${unverified.id}' is in status '${unverified.status}' (not reconcilable).` };
@@ -931,9 +1146,9 @@ export class GovernedDeliveryService {
    * Computes the full governed operator deployment read model.
    */
   /**
-   * P1-01: Single authoritative resolver of current effective production state.
+   * P1-01 & P1-05: Single authoritative resolver of current effective production state.
    * Derives active version, deployment ID, candidate, and execution origin
-   * from append-only production_effective_transitions (or canonical deployments fallback).
+   * strictly from append-only production_effective_transitions. Zero status-based fallbacks.
    */
   async resolveCurrentEffectiveProduction(siteId: string): Promise<{
     activeVersionId: string | null;
@@ -941,18 +1156,9 @@ export class GovernedDeliveryService {
     lastVerifiedAt: string | null;
     deploymentId: string | null;
     candidateId: string | null;
-    executionOrigin: "REAL_CLOUDFLARE" | "TEST_SIMULATION";
+    executionOrigin: "REAL_CLOUDFLARE" | "TEST_SIMULATION" | "UNKNOWN";
     deliveryMode?: string;
   }> {
-    const rawDeliveryMode = process.env.FACTORY_DELIVERY_MODE?.trim().toLowerCase();
-    const isSimulated =
-      rawDeliveryMode === "fixture" ||
-      rawDeliveryMode === "test" ||
-      rawDeliveryMode === "simulation";
-    const executionOrigin: "REAL_CLOUDFLARE" | "TEST_SIMULATION" = isSimulated
-      ? "TEST_SIMULATION"
-      : "REAL_CLOUDFLARE";
-
     const transition = typeof this.store.getCurrentEffectiveTransition === "function"
       ? await this.store.getCurrentEffectiveTransition(siteId)
       : null;
@@ -969,6 +1175,12 @@ export class GovernedDeliveryService {
 
     if (transition) {
       const dep = await this.store.getDeployment(transition.deploymentId);
+      const originRaw = transition.executionOrigin ?? dep?.executionOrigin;
+      const executionOrigin: "REAL_CLOUDFLARE" | "TEST_SIMULATION" | "UNKNOWN" =
+        originRaw === "REAL_CLOUDFLARE" || originRaw === "TEST_SIMULATION"
+          ? originRaw
+          : "UNKNOWN";
+
       return {
         activeVersionId: transition.versionId,
         knownGoodVersionId: knownGood,
@@ -976,30 +1188,20 @@ export class GovernedDeliveryService {
         deploymentId: transition.deploymentId,
         candidateId: transition.candidateId,
         executionOrigin,
-        deliveryMode: rawDeliveryMode || "production",
+        deliveryMode: executionOrigin === "TEST_SIMULATION" ? "simulation" : "production",
       };
     }
 
-    if (latestKnownGood) {
-      return {
-        activeVersionId: latestKnownGood.versionId,
-        knownGoodVersionId: knownGood,
-        lastVerifiedAt: latestKnownGood.verifiedAt?.toISOString() ?? null,
-        deploymentId: latestKnownGood.id,
-        candidateId: latestKnownGood.candidateId,
-        executionOrigin,
-        deliveryMode: rawDeliveryMode || "production",
-      };
-    }
-
+    // P1-05: When no authoritative transition exists, return null/UNKNOWN.
+    // Do not infer an active production version from listDeployments.
     return {
       activeVersionId: null,
-      knownGoodVersionId: null,
+      knownGoodVersionId: knownGood,
       lastVerifiedAt: null,
       deploymentId: null,
       candidateId: null,
-      executionOrigin,
-      deliveryMode: rawDeliveryMode || "production",
+      executionOrigin: "UNKNOWN",
+      deliveryMode: "production",
     };
   }
 
@@ -1020,6 +1222,7 @@ export class GovernedDeliveryService {
           id: qaRun.id,
           overall: qaRun.overall as "PASS" | "REVIEW" | "FAIL",
           publicationEligible: qaRunPublicationEligible(qaRun.data),
+          simulationEligible: Boolean(this.allowSimulation && qaRun.overall === "PASS"),
           createdAt: qaRun.createdAt.toISOString(),
         };
       }
@@ -1170,38 +1373,7 @@ export class GovernedDeliveryService {
 
     if (transition) {
       effectiveDeployment = await this.store.getDeployment(transition.deploymentId);
-      if (!effectiveDeployment) {
-        effectiveDeployment = await this.store.findDeploymentByVersion(siteId, transition.versionId);
-      }
       effectiveCandidateId = transition.candidateId;
-    } else {
-      // P0-03: If transition history is present for this site but no transition existed at or before asOf,
-      // return UNKNOWN/null without falling back to scanning recent deployments.
-      const currentTrans = typeof this.store.getCurrentEffectiveTransition === "function"
-        ? await this.store.getCurrentEffectiveTransition(siteId)
-        : null;
-
-      if (!currentTrans) {
-        // Pre-migration legacy fallback only if site has zero transition records:
-        const allDeployments = await this.store.listDeployments(siteId, 200);
-        effectiveDeployment = allDeployments
-          .filter((d) => {
-            const effectiveTime = d.verifiedAt ?? d.promotedAt ?? d.createdAt;
-            return (
-              d.productionVerified &&
-              d.versionId &&
-              effectiveTime <= asOf &&
-              (d.status === "verified" || d.status === "rolled_back")
-            );
-          })
-          .sort((a, b) => {
-            const timeA = (a.verifiedAt ?? a.promotedAt ?? a.createdAt).getTime();
-            const timeB = (b.verifiedAt ?? b.promotedAt ?? b.createdAt).getTime();
-            return timeB - timeA;
-          })[0] ?? null;
-
-        effectiveCandidateId = effectiveDeployment?.candidateId ?? null;
-      }
     }
 
     if (!effectiveDeployment || !effectiveCandidateId) {

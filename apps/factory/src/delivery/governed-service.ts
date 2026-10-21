@@ -237,8 +237,8 @@ export class GovernedDeliveryService {
   }): Promise<void> {
     const { projectId, candidate, candidateInputs, currentInputs, buildIdentity, forPublication } = params;
 
-    // Reject synthetic fixture mode for publication
-    if (forPublication) {
+    // Reject synthetic fixture mode for publication (unless simulation pathway is active)
+    if (forPublication && !this.allowSimulation) {
       const qaRun = await this.productionStore.latestQaRun(projectId, candidate.id);
       if (qaRun?.data && !qaRunPublicationEligible(qaRun.data)) {
         throw new FactoryError(
@@ -408,6 +408,7 @@ export class GovernedDeliveryService {
         candidateInputs,
         currentPageInputIds,
         canonicalOrigin: site.productionUrl,
+        allowSimulation: this.allowSimulation,
         buildIdentity,
       });
 
@@ -607,6 +608,7 @@ export class GovernedDeliveryService {
         candidateInputs,
         currentPageInputIds: currentInputs.map((i) => i.id),
         canonicalOrigin: site.productionUrl,
+        allowSimulation: this.allowSimulation,
         buildIdentity,
       });
 

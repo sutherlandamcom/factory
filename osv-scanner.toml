@@ -14,3 +14,15 @@ reason = "Vite dev server HTML injection vulnerability via URL decoding (vite 6.
 [[IgnoredVulns]]
 id = "GHSA-r825-w8mm-5pxw"
 reason = "Vite dev server path traversal vulnerability (vite 6.4.3 / 8.2.2); development server only, production static builds are unaffected. Remediation: upgrade Vite when Astro upgrades its internal bundler."
+
+[[IgnoredVulns]]
+id = "GHSA-9jrq-w75r-8gcw"
+reason = "Vite dev server middleware execution vulnerability (vite 6.4.3 / 8.2.2); development server only, production static builds are unaffected. Remediation: upgrade Vite when Astro upgrades its internal bundler."
+
+[[IgnoredVulns]]
+id = "GHSA-rq7h-c2jc-7f22"
+reason = "Vite dev server server.fs.allow path match vulnerability (vite 6.4.3 / 8.2.2); development server only, production static builds are unaffected. Remediation: upgrade Vite when Astro upgrades its internal bundler."
+
+[[IgnoredVulns]]
+id = "GHSA-vfpm-58rq-9qcg"
+reason = "Vite dev server server.fs wasm error exposure vulnerability (vite 6.4.3 / 8.2.2); development server only, production static builds are unaffected. Remediation: upgrade Vite when Astro upgrades its internal bundler."

@@ -25,6 +25,7 @@ export interface CandidateReleaseProof {
   candidateInputs: readonly ProductionCandidateInputRecord[];
   currentPageInputIds: readonly string[];
   canonicalOrigin: string;
+  allowSimulation?: boolean;
   buildIdentity: {
     repositorySha: string;
     lockfileDigest: string;
@@ -55,9 +56,13 @@ export function assertCandidateReleaseQaProof(p: CandidateReleaseProof): void {
   const stale = candidateBuildStaleness(c, p.buildIdentity);
   if (stale.stale) reject(stale.reason ?? "Candidate build identity is stale.");
 
+  const isEligible =
+    p.allowSimulation === true
+      ? q?.overall === "PASS"
+      : Boolean(q?.overall === "PASS" && qaRunPublicationEligible(q.data));
+
   if (!q || q.projectId !== p.projectId || q.candidateId !== c.id ||
-      q.candidateArtifactDigest !== c.artifactDigest || q.overall !== "PASS" ||
-      !qaRunPublicationEligible(q.data)) {
+      q.candidateArtifactDigest !== c.artifactDigest || !isEligible) {
     reject("No current publication-eligible QA run bound to this exact candidate.");
   }
   const qaData = q.data as { candidateId?: string };

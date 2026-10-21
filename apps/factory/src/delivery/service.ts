@@ -224,13 +224,15 @@ export class ProductionDelivery {
   async rollbackExplicit(input: {
     deployment: DeploymentRecord;
     targetVersionId: string;
+    targetDeployment?: DeploymentRecord;
   }): Promise<DeploymentRecord> {
-    const knownGood = knownGoodVersion(await this.store.findLatestKnownGoodDeployment(
+    const knownGoodRaw = await this.store.findLatestKnownGoodDeployment(
       input.deployment.siteId,
       input.deployment.workerName,
       input.deployment.productionUrl,
       input.deployment.id,
-    ));
+    );
+    const knownGood = knownGoodVersion(knownGoodRaw);
 
     const canonicals = typeof this.store.listCanonicalVerifiedDeployments === "function"
       ? await this.store.listCanonicalVerifiedDeployments(
@@ -250,6 +252,20 @@ export class ProductionDelivery {
 
     if (knownGood && knownGood !== input.targetVersionId && !isCanonical) {
       throw new FactoryError("rollback_target_invalid", "Target rollback version is not a verified known-good version.");
+    }
+
+    const targetDep =
+      input.targetDeployment ??
+      canonicals.find((d: DeploymentRecord) => d.versionId === input.targetVersionId) ??
+      (input.deployment.versionId === input.targetVersionId && input.deployment.productionVerified ? input.deployment : null) ??
+      (knownGoodRaw && typeof knownGoodRaw === "object" && knownGoodRaw.versionId === input.targetVersionId ? knownGoodRaw : null);
+
+    if (!targetDep || !targetDep.versionId) {
+      throw new FactoryError("rollback_target_invalid", "Target rollback deployment record could not be resolved.");
+    }
+
+    if (targetDep.siteId !== input.deployment.siteId) {
+      throw new FactoryError("rollback_target_invalid", "Target rollback version does not belong to the same site.");
     }
 
     try {
@@ -274,24 +290,27 @@ export class ProductionDelivery {
         });
       }
 
-      // P0-D: Preserve historical publication facts. Create a new rollback deployment event
-      // instead of mutating the historical verified deployment in-place.
+      // P0-D & P0-02: Preserve historical publication facts and restore target release identity.
+      // The new rollback deployment event strictly inherits the target release's candidate,
+      // source commit, artifact digest, routes, and approval lineage.
       if (typeof this.store.createDeployment === "function") {
         return await this.store.createDeployment({
           id: `dep-rb-${randomUUID()}`,
           siteId: input.deployment.siteId,
-          sourceCommit: input.deployment.sourceCommit,
-          artifactDigest: input.deployment.artifactDigest,
+          sourceCommit: targetDep.sourceCommit,
+          artifactDigest: targetDep.artifactDigest,
           versionId: input.targetVersionId,
           previousVersionId: input.deployment.versionId,
-          workerName: input.deployment.workerName,
-          productionUrl: input.deployment.productionUrl,
+          workerName: targetDep.workerName || input.deployment.workerName,
+          productionUrl: targetDep.productionUrl || input.deployment.productionUrl,
           status: "rolled_back",
           previewVerified: true,
           productionVerified: true,
           rolledBack: true,
-          candidateId: input.deployment.candidateId,
-          artifactDirectory: input.deployment.artifactDirectory,
+          candidateId: targetDep.candidateId,
+          artifactDirectory: targetDep.artifactDirectory,
+          candidateRoutes: targetDep.candidateRoutes,
+          releaseApprovalId: targetDep.releaseApprovalId,
           verifiedAt: new Date(),
           promotedAt: new Date(),
         });

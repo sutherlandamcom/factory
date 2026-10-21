@@ -413,11 +413,19 @@ test("Operator API - GET /api/projects/:id/deployment/monitoring returns 200 wit
   assert.equal(res.body.fieldCwv.status, "INSUFFICIENT_DATA");
 });
 
-test("Operator API - POST /api/projects/:id/deployment/monitoring/check runs operational check", async () => {
+test("Operator API - POST /api/projects/:id/deployment/monitoring/check runs operational check with sessionToken", async () => {
   const deps = makeDeps(makeGovernedDeliveryStub());
-  const res = await callApi(deps, "POST", `/api/projects/${PROJECT.id}/deployment/monitoring/check`);
+  const res = await callApi(deps, "POST", `/api/projects/${PROJECT.id}/deployment/monitoring/check`, {
+    sessionToken: "token-operator-valid",
+  });
   assert.equal(res.status, 200);
   assert.equal(res.body.projectId, PROJECT.id);
   assert.equal(res.body.technicalVerification.status, "PASS");
   assert.equal(res.body.searchConsole.status, "NOT_CONFIGURED");
+});
+
+test("Operator API - POST /api/projects/:id/deployment/monitoring/check rejects missing sessionToken (P1-02)", async () => {
+  const deps = makeDeps(makeGovernedDeliveryStub());
+  const res = await callApi(deps, "POST", `/api/projects/${PROJECT.id}/deployment/monitoring/check`);
+  assert.equal(res.status, 400);
 });

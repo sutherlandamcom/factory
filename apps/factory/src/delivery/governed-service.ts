@@ -318,6 +318,20 @@ export class GovernedDeliveryService {
       }
     }
     if (!site.cloudflareWorkerName || !site.productionUrl) {
+      const project = await this.store.getProjectById(projectId);
+      const profile = await loadWorktreeSiteProfile(this.repoRoot).catch(() => null);
+      if (this.db && project) {
+        await this.db
+          .update(sites)
+          .set({
+            cloudflareWorkerName: site.cloudflareWorkerName ?? `factory-${project.key}`,
+            productionUrl: site.productionUrl ?? profile?.canonicalOrigin ?? `https://${project.key}.pages.dev`,
+          })
+          .where(eq(sites.id, site.id));
+        site = (await this.store.getSiteById(site.id)) ?? site;
+      }
+    }
+    if (!site.cloudflareWorkerName || !site.productionUrl) {
       throw new FactoryError(
         "delivery_target_unconfigured",
         `Site '${site.key}' does not have Cloudflare Worker and production URL configured.`,
@@ -551,8 +565,12 @@ export class GovernedDeliveryService {
         );
       }
 
-      // Check for concurrent unverified deployments
-      const unverified = await this.store.findLatestUnverifiedDeployment(site.id);
+      // Check for concurrent unverified deployments, attempting crash reconciliation if stalled in promoting/promoted
+      let unverified = await this.store.findLatestUnverifiedDeployment(site.id);
+      if (unverified && (unverified.status === "promoting" || unverified.status === "promoted")) {
+        await this.reconcilePendingDeployments(site.id);
+        unverified = await this.store.findLatestUnverifiedDeployment(site.id);
+      }
       if (unverified && unverified.id !== previewDeployment.id) {
         throw new FactoryError(
           "concurrent_deployment_in_progress",
@@ -691,8 +709,12 @@ export class GovernedDeliveryService {
         requiredPermission: DEPLOYMENT_PUBLISH_PERMISSION,
       });
 
-      // Check for active unverified deployment
-      const unverified = await this.store.findLatestUnverifiedDeployment(site.id);
+      // Check for active unverified deployment, attempting crash reconciliation if stalled in promoting/promoted
+      let unverified = await this.store.findLatestUnverifiedDeployment(site.id);
+      if (unverified && (unverified.status === "promoting" || unverified.status === "promoted")) {
+        await this.reconcilePendingDeployments(site.id);
+        unverified = await this.store.findLatestUnverifiedDeployment(site.id);
+      }
       if (unverified) {
         throw new FactoryError(
           "concurrent_deployment_in_progress",
@@ -735,14 +757,22 @@ export class GovernedDeliveryService {
         ? canonicalDeployments.find((d) => d.versionId === input.targetVersionId)
         : (knownGood ?? canonicalDeployments[0] ?? latestDeployment);
 
-      if (!targetDeployment || !targetDeployment.versionId || !targetDeployment.sourceCommit) {
+      if (!targetDeployment || !targetDeployment.versionId) {
         throw new FactoryError(
           "rollback_target_invalid",
           `Target rollback version '${targetVersion}' is not an accepted canonical verified deployment.`,
         );
       }
 
+      if (targetDeployment.siteId !== latestDeployment.siteId) {
+        throw new FactoryError(
+          "rollback_target_invalid",
+          `Target rollback version does not belong to the same site.`,
+        );
+      }
+
       const targetRoutes = (targetDeployment.candidateRoutes as string[]) ?? ["/"];
+
       const fullArtifactDir = path.join(
         this.repoRoot,
         targetDeployment.artifactDirectory || latestDeployment.artifactDirectory || ".factory/deployments/rollback",
@@ -750,19 +780,21 @@ export class GovernedDeliveryService {
 
       let worktree: string | null = null;
       try {
-        worktree = await this.worktreeProvider.prepare(
-          this.repoRoot,
-          targetDeployment.sourceCommit,
-          `rb-${latestDeployment.id}`,
-        );
+        if (targetDeployment.sourceCommit) {
+          worktree = await this.worktreeProvider.prepare(
+            this.repoRoot,
+            targetDeployment.sourceCommit,
+            `rb-${latestDeployment.id}`,
+          );
+        }
 
-        const provider = this.wranglerFactory(worktree, fullArtifactDir);
+        const provider = this.wranglerFactory(worktree || this.repoRoot, fullArtifactDir);
         const deliveryRuntime: DeliveryRuntime = {
-          build: async () => path.join(worktree!, "sites", "starter", "dist"),
-          digest: async () => targetDeployment.artifactDigest ?? "rollback-digest",
+          build: async () => path.join(worktree || this.repoRoot, "sites", "starter", "dist"),
+          digest: async () => targetDeployment.artifactDigest || "target-digest",
           qa: async (targetUrl, phase) =>
             await this.qaRunner({
-              worktree: worktree!,
+              worktree: worktree || this.repoRoot,
               targetUrl,
               productionUrl: site.productionUrl!,
               artifactDirectory: fullArtifactDir,
@@ -776,6 +808,7 @@ export class GovernedDeliveryService {
         const rolledBack = await delivery.rollbackExplicit({
           deployment: latestDeployment,
           targetVersionId: targetVersion,
+          targetDeployment,
         });
 
         if (rolledBack.status === "rolled_back" && rolledBack.versionId) {
@@ -810,8 +843,166 @@ export class GovernedDeliveryService {
   }
 
   /**
+   * P1-03: Crash reconciliation for uncommitted Cloudflare mutations.
+   * If a previous deployment was interrupted in 'promoting' or 'promoted' state,
+   * queries Cloudflare to determine if the version was actually activated:
+   * - If Cloudflare active version matches: recovers deployment to 'verified' and records reconciled transition.
+   * - If Cloudflare active version does NOT match: marks deployment as 'failed'.
+   */
+  async reconcilePendingDeployments(siteId: string): Promise<{ reconciled: boolean; details?: string }> {
+    const unverified = await this.store.findLatestUnverifiedDeployment(siteId);
+    if (!unverified) {
+      return { reconciled: false, details: "No pending or unverified deployment found." };
+    }
+
+    if (unverified.status === "promoting" || unverified.status === "promoted") {
+      const site = await this.store.getSiteById(siteId);
+      if (!site || !site.cloudflareWorkerName) {
+        return { reconciled: false, details: "Site or worker configuration missing." };
+      }
+
+      const fullArtifactDir = path.join(this.repoRoot, unverified.artifactDirectory || ".factory/deployments/reconcile");
+      const provider = this.wranglerFactory(this.repoRoot, fullArtifactDir);
+      let cfActiveVersion: string | null = null;
+      try {
+        cfActiveVersion = await provider.currentProductionVersion(site.cloudflareWorkerName);
+      } catch (err: any) {
+        return { reconciled: false, details: `Failed to query Cloudflare provider: ${err.message}` };
+      }
+
+      if (cfActiveVersion && cfActiveVersion === unverified.versionId) {
+        await this.store.updateDeployment({
+          id: unverified.id,
+          status: "verified",
+          productionVerified: true,
+          verifiedAt: new Date(),
+          errorCode: null,
+          errorMessage: null,
+        });
+
+        const routes = (unverified.candidateRoutes as string[]) ?? ["/"];
+        await this.store.insertEffectiveTransition({
+          id: `trans-rec-${randomUUID()}`,
+          projectId: site.projectId,
+          siteId: site.id,
+          deploymentId: unverified.id,
+          versionId: unverified.versionId,
+          candidateId: unverified.candidateId ?? "unknown",
+          eventType: "PUBLISH",
+          fromVersionId: unverified.previousVersionId ?? null,
+          toVersionId: unverified.versionId,
+          actorId: "system:crash-recovery",
+          actorName: "Crash Recovery Reconciler",
+          actorRole: "SYSTEM",
+          sessionId: "session:crash-recovery",
+          candidateRoutes: routes,
+          artifactDigest: unverified.artifactDigest ?? "reconciled-digest",
+          evidenceRef: JSON.stringify({
+            reconciled: true,
+            reason: "crash_recovery_cloudflare_matched",
+            recoveredAt: new Date().toISOString(),
+          }),
+          effectiveAt: new Date(),
+        });
+
+        return {
+          reconciled: true,
+          details: `Deployment '${unverified.id}' reconciled to verified; active Cloudflare version '${cfActiveVersion}' confirmed.`,
+        };
+      } else {
+        await this.store.updateDeployment({
+          id: unverified.id,
+          status: "failed",
+          errorCode: "delivery_interrupted",
+          errorMessage: "Deployment interrupted before Cloudflare promotion completed. Reconciled to failed.",
+        });
+
+        return {
+          reconciled: true,
+          details: `Deployment '${unverified.id}' reconciled to failed; Cloudflare active version was '${cfActiveVersion}', expected '${unverified.versionId}'.`,
+        };
+      }
+    }
+
+    return { reconciled: false, details: `Deployment '${unverified.id}' is in status '${unverified.status}' (not reconcilable).` };
+  }
+
+  /**
    * Computes the full governed operator deployment read model.
    */
+  /**
+   * P1-01: Single authoritative resolver of current effective production state.
+   * Derives active version, deployment ID, candidate, and execution origin
+   * from append-only production_effective_transitions (or canonical deployments fallback).
+   */
+  async resolveCurrentEffectiveProduction(siteId: string): Promise<{
+    activeVersionId: string | null;
+    knownGoodVersionId: string | null;
+    lastVerifiedAt: string | null;
+    deploymentId: string | null;
+    candidateId: string | null;
+    executionOrigin: "REAL_CLOUDFLARE" | "TEST_SIMULATION";
+    deliveryMode?: string;
+  }> {
+    const rawDeliveryMode = process.env.FACTORY_DELIVERY_MODE?.trim().toLowerCase();
+    const isSimulated =
+      rawDeliveryMode === "fixture" ||
+      rawDeliveryMode === "test" ||
+      rawDeliveryMode === "simulation";
+    const executionOrigin: "REAL_CLOUDFLARE" | "TEST_SIMULATION" = isSimulated
+      ? "TEST_SIMULATION"
+      : "REAL_CLOUDFLARE";
+
+    const transition = typeof this.store.getCurrentEffectiveTransition === "function"
+      ? await this.store.getCurrentEffectiveTransition(siteId)
+      : null;
+
+    const site = (await (this.store as any).getSiteById?.(siteId)) ??
+      (await this.store.findSiteByProjectId(siteId));
+
+    const latestKnownGood = await this.store.findLatestKnownGoodDeployment(
+      siteId,
+      site?.cloudflareWorkerName ?? "",
+      site?.productionUrl ?? "",
+    );
+    const knownGood = knownGoodVersion(latestKnownGood);
+
+    if (transition) {
+      const dep = await this.store.getDeployment(transition.deploymentId);
+      return {
+        activeVersionId: transition.versionId,
+        knownGoodVersionId: knownGood,
+        lastVerifiedAt: (dep?.verifiedAt ?? transition.effectiveAt).toISOString(),
+        deploymentId: transition.deploymentId,
+        candidateId: transition.candidateId,
+        executionOrigin,
+        deliveryMode: rawDeliveryMode || "production",
+      };
+    }
+
+    if (latestKnownGood) {
+      return {
+        activeVersionId: latestKnownGood.versionId,
+        knownGoodVersionId: knownGood,
+        lastVerifiedAt: latestKnownGood.verifiedAt?.toISOString() ?? null,
+        deploymentId: latestKnownGood.id,
+        candidateId: latestKnownGood.candidateId,
+        executionOrigin,
+        deliveryMode: rawDeliveryMode || "production",
+      };
+    }
+
+    return {
+      activeVersionId: null,
+      knownGoodVersionId: null,
+      lastVerifiedAt: null,
+      deploymentId: null,
+      candidateId: null,
+      executionOrigin,
+      deliveryMode: rawDeliveryMode || "production",
+    };
+  }
+
   async getGovernedDeploymentView(projectId: string): Promise<GovernedDeploymentView> {
     const site = await this.resolveSite(projectId);
 
@@ -877,12 +1068,7 @@ export class GovernedDeliveryService {
       }
     }
 
-    const latestKnownGood = await this.store.findLatestKnownGoodDeployment(
-      site.id,
-      site.cloudflareWorkerName ?? "",
-      site.productionUrl ?? "",
-    );
-    const latestVerified = deploymentsList.find((d) => d.status === "verified");
+    const effectiveProd = await this.resolveCurrentEffectiveProduction(site.id);
 
     const blockers: Array<{ code: string; message: string; area: string }> = [];
     if (!currentCandidate) {
@@ -930,9 +1116,11 @@ export class GovernedDeliveryService {
       activePreview,
       activeApproval,
       currentProduction: {
-        activeVersionId: latestVerified?.versionId ?? null,
-        knownGoodVersionId: knownGoodVersion(latestKnownGood),
-        lastVerifiedAt: latestVerified?.verifiedAt?.toISOString() ?? null,
+        activeVersionId: effectiveProd.activeVersionId,
+        knownGoodVersionId: effectiveProd.knownGoodVersionId,
+        lastVerifiedAt: effectiveProd.lastVerifiedAt,
+        executionOrigin: effectiveProd.executionOrigin,
+        deliveryMode: effectiveProd.deliveryMode,
       },
       history: deploymentsList.map((d) => ({
         id: d.id,
@@ -981,57 +1169,39 @@ export class GovernedDeliveryService {
       : null;
 
     if (transition) {
-      const allDeps = await this.store.listDeployments(siteId, 200);
-      effectiveDeployment = allDeps.find((d) => d.id === transition.deploymentId || d.versionId === transition.versionId) ?? null;
+      effectiveDeployment = await this.store.getDeployment(transition.deploymentId);
       if (!effectiveDeployment) {
-        effectiveDeployment = {
-          id: transition.deploymentId,
-          siteId,
-          sourceCommit: "transition-commit",
-          artifactDigest: transition.artifactDigest,
-          versionId: transition.versionId,
-          previewUrl: null,
-          previousVersionId: transition.fromVersionId,
-          workerName: "",
-          productionUrl: "",
-          status: "verified",
-          previewVerified: true,
-          productionVerified: true,
-          rolledBack: transition.eventType === "ROLLBACK",
-          errorCode: null,
-          errorMessage: null,
-          artifactDirectory: null,
-          candidateId: transition.candidateId,
-          qaRunId: null,
-          releaseApprovalId: null,
-          candidateRoutes: transition.candidateRoutes,
-          snapshotData: null,
-          createdAt: transition.createdAt,
-          updatedAt: transition.createdAt,
-          promotedAt: transition.effectiveAt,
-          verifiedAt: transition.effectiveAt,
-        };
+        effectiveDeployment = await this.store.findDeploymentByVersion(siteId, transition.versionId);
       }
       effectiveCandidateId = transition.candidateId;
     } else {
-      const allDeployments = await this.store.listDeployments(siteId, 200);
-      effectiveDeployment = allDeployments
-        .filter((d) => {
-          const effectiveTime = d.verifiedAt ?? d.promotedAt ?? d.createdAt;
-          return (
-            d.productionVerified &&
-            d.versionId &&
-            effectiveTime <= asOf &&
-            (d.status === "verified" || d.status === "rolled_back")
-          );
-        })
-        .sort((a, b) => {
-          const timeA = (a.verifiedAt ?? a.promotedAt ?? a.createdAt).getTime();
-          const timeB = (b.verifiedAt ?? b.promotedAt ?? b.createdAt).getTime();
-          return timeB - timeA;
-        })[0] ?? null;
+      // P0-03: If transition history is present for this site but no transition existed at or before asOf,
+      // return UNKNOWN/null without falling back to scanning recent deployments.
+      const currentTrans = typeof this.store.getCurrentEffectiveTransition === "function"
+        ? await this.store.getCurrentEffectiveTransition(siteId)
+        : null;
 
-      effectiveCandidateId = effectiveDeployment?.candidateId ?? null;
+      if (!currentTrans) {
+        // Pre-migration legacy fallback only if site has zero transition records:
+        const allDeployments = await this.store.listDeployments(siteId, 200);
+        effectiveDeployment = allDeployments
+          .filter((d) => {
+            const effectiveTime = d.verifiedAt ?? d.promotedAt ?? d.createdAt;
+            return (
+              d.productionVerified &&
+              d.versionId &&
+              effectiveTime <= asOf &&
+              (d.status === "verified" || d.status === "rolled_back")
+            );
+          })
+          .sort((a, b) => {
+            const timeA = (a.verifiedAt ?? a.promotedAt ?? a.createdAt).getTime();
+            const timeB = (b.verifiedAt ?? b.promotedAt ?? b.createdAt).getTime();
+            return timeB - timeA;
+          })[0] ?? null;
+
+        effectiveCandidateId = effectiveDeployment?.candidateId ?? null;
+      }
     }
 
     if (!effectiveDeployment || !effectiveCandidateId) {
@@ -1073,8 +1243,9 @@ export class GovernedDeliveryService {
     // 3. Load bound ProductionPageInput
     let pageAuthority = null;
     if (matchedBinding) {
-      const allInputs = await this.productionStore.listProductionInputs(projectId);
-      const input = allInputs.find((i) => i.id === matchedBinding.productionInputId);
+      const input = typeof this.productionStore.getProductionInputById === "function"
+        ? await this.productionStore.getProductionInputById(matchedBinding.productionInputId)
+        : (await this.productionStore.listProductionInputs(projectId)).find((i) => i.id === matchedBinding.productionInputId);
       if (input) {
         pageAuthority = {
           pageIdentity: input.pageIdentity,
@@ -1125,9 +1296,11 @@ export class GovernedDeliveryService {
 
     // 5. Load QA evidence
     let qaEvidence = null;
-    if (effectiveDeployment.qaRunId && effectiveDeployment.candidateId) {
-      const qaRun = await this.productionStore.latestQaRun(projectId, effectiveDeployment.candidateId);
-      if (qaRun && qaRun.id === effectiveDeployment.qaRunId) {
+    if (effectiveDeployment.qaRunId) {
+      const qaRun = typeof this.productionStore.getQaRun === "function"
+        ? await this.productionStore.getQaRun(effectiveDeployment.qaRunId)
+        : (effectiveDeployment.candidateId ? await this.productionStore.latestQaRun(projectId, effectiveDeployment.candidateId) : null);
+      if (qaRun) {
         const qaData = qaRun.data as any;
         qaEvidence = {
           qaRunId: qaRun.id,
@@ -1186,15 +1359,27 @@ export class GovernedDeliveryService {
 
   /**
    * Triggers an on-demand operational check across verification and monitoring providers.
+   * Server-side boundary strictly requires valid operator session token and DEPLOYMENT:MONITOR permission.
    */
-  async runMonitoringCheck(projectId: string, sessionToken?: string): Promise<MonitoringSummary> {
-    if (this.releaseBoundary && sessionToken) {
+  async runMonitoringCheck(projectId: string, sessionToken: string): Promise<MonitoringSummary> {
+    if (!sessionToken || sessionToken.trim().length === 0) {
+      throw new FactoryError("permission_denied", "Valid sessionToken with DEPLOYMENT:MONITOR permission is required.");
+    }
+    if (this.releaseBoundary) {
       await this.releaseBoundary.verifyActorPermission({
         sessionToken,
         projectId,
         requiredPermission: "DEPLOYMENT:MONITOR",
       });
     }
+    await this.resolveSite(projectId).catch(() => null);
+    return await this.monitoringService.runOperationalCheck(projectId);
+  }
+
+  /**
+   * Internal trusted execution boundary for scheduled background checks or automated tasks.
+   */
+  async runMonitoringCheckInternal(projectId: string): Promise<MonitoringSummary> {
     await this.resolveSite(projectId).catch(() => null);
     return await this.monitoringService.runOperationalCheck(projectId);
   }

@@ -338,6 +338,23 @@ export class FactoryStore {
       .limit(limit);
   }
 
+  async findDeploymentByVersion(
+    siteId: string,
+    versionId: string,
+  ): Promise<DeploymentRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(deployments)
+      .where(
+        and(
+          eq(deployments.siteId, siteId),
+          eq(deployments.versionId, versionId),
+        ),
+      )
+      .limit(1);
+    return row ?? null;
+  }
+
   async findLatestDeploymentByCandidate(siteId: string, candidateId: string): Promise<DeploymentRecord | null> {
     const [row] = await this.db
       .select()
@@ -574,9 +591,31 @@ export class FactoryStore {
   // Production Effective Transitions (Run 13 Remediation)
   // ---------------------------------------------------------------------------
 
+  async getEffectiveTransition(id: string): Promise<ProductionEffectiveTransitionRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(productionEffectiveTransitions)
+      .where(eq(productionEffectiveTransitions.id, id));
+    return row ?? null;
+  }
+
+  async getEffectiveTransitionByDeploymentId(
+    deploymentId: string,
+  ): Promise<ProductionEffectiveTransitionRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(productionEffectiveTransitions)
+      .where(eq(productionEffectiveTransitions.deploymentId, deploymentId));
+    return row ?? null;
+  }
+
   async insertEffectiveTransition(
     input: InsertProductionEffectiveTransition,
   ): Promise<ProductionEffectiveTransitionRecord> {
+    const existing = await this.getEffectiveTransition(input.id);
+    if (existing) {
+      return existing;
+    }
     const [created] = await this.db
       .insert(productionEffectiveTransitions)
       .values(input)
@@ -615,7 +654,10 @@ export class FactoryStore {
           lte(productionEffectiveTransitions.effectiveAt, asOf),
         ),
       )
-      .orderBy(desc(productionEffectiveTransitions.effectiveAt))
+      .orderBy(
+        desc(productionEffectiveTransitions.effectiveAt),
+        desc(productionEffectiveTransitions.createdAt),
+      )
       .limit(1);
     return row ?? null;
   }
@@ -627,7 +669,10 @@ export class FactoryStore {
       .select()
       .from(productionEffectiveTransitions)
       .where(eq(productionEffectiveTransitions.siteId, siteId))
-      .orderBy(desc(productionEffectiveTransitions.effectiveAt))
+      .orderBy(
+        desc(productionEffectiveTransitions.effectiveAt),
+        desc(productionEffectiveTransitions.createdAt),
+      )
       .limit(1);
     return row ?? null;
   }

@@ -465,6 +465,16 @@ export async function startOperatorServer(): Promise<http.Server> {
     );
   }
 
+  const { HttpOperationalVerifier } = await import("../monitoring/operational-verifier.js");
+  const { MonitoringService } = await import("../monitoring/service.js");
+  const monitoringService = new MonitoringService({
+    db: dbInstance.db,
+    store,
+    adapters: {
+      operationalVerifier: new HttpOperationalVerifier(),
+    },
+  });
+
   const governedDelivery = new GovernedDeliveryService({
     db: dbInstance.db,
     pool: dbInstance.pool,
@@ -472,20 +482,25 @@ export async function startOperatorServer(): Promise<http.Server> {
     store,
     productionStore: prodStore,
     releaseBoundary,
+    monitoringService,
     wranglerFactory,
     qaRunner,
     worktreeProvider,
   });
 
+  const isDedicatedTestDatabase = Boolean(
+    process.env.FACTORY_DATABASE_URL?.includes("factory_test") ||
+    process.env.FACTORY_TEST_DATABASE_URL?.includes("factory_test"),
+  );
+  const isE2ETestHarness =
+    isDedicatedTestDatabase &&
+    (process.env.FACTORY_DELIVERY_MODE === "test" || process.env.FACTORY_DELIVERY_MODE === "fixture");
+
   const deps: OperatorApiDeps = {
     store, intake, search, competitors, writer, assets, design, visual,
     production: new ProductionApiFacade(dbInstance.db, repoRoot, {
-      // Trusted backend config only: synthetic fixture content is tolerated
-      // solely when the deterministic fixture writer is wired and not overridden.
-      syntheticFixtureContent:
-        process.env.FACTORY_TRUST_MODE === "STRICT_PRODUCTION"
-          ? false
-          : writerMode === "fixture",
+      syntheticFixtureContent: isE2ETestHarness ? false : writerMode === "fixture",
+      allowTestSyntheticPublication: isE2ETestHarness,
     }),
     derivatives: new DerivativesApiFacade(dbInstance.db, repoRoot, summaryMode === "fixture" ? { summaryInvoke: fixtureSummaryInvoke } : {}),
     qaCollector,

@@ -1,5 +1,7 @@
 import type { FactoryDb } from "../persistence/db.js";
 import path from "node:path";
+import { and, eq } from "drizzle-orm";
+import { acceptedPageContent, pageContentProposals } from "../persistence/schema.js";
 import { FactoryError } from "../executor/errors.js";
 import { ProductionStore } from "./store.js";
 import { computeArtifactDigest, ProductionBuildService } from "./build-service.js";
@@ -58,7 +60,11 @@ export class ProductionApiFacade {
     private readonly db: FactoryDb,
     private readonly repoRoot: string,
     /** Trusted backend policy only (see TrustQaInput.syntheticFixtureContent). */
-    private readonly trustPolicy: { syntheticFixtureContent?: boolean; evidenceRoot?: string } = {},
+    private readonly trustPolicy: {
+      syntheticFixtureContent?: boolean;
+      evidenceRoot?: string;
+      allowTestSyntheticPublication?: boolean;
+    } = {},
   ) {
     this.store = new ProductionStore(db, { repoRoot, evidenceRoot: trustPolicy.evidenceRoot });
     this.build = new ProductionBuildService(db, repoRoot, { evidenceRoot: trustPolicy.evidenceRoot });
@@ -198,13 +204,34 @@ export class ProductionApiFacade {
       evidenceRoot: this.trustPolicy.evidenceRoot,
     });
     const contentDigests = new Map<string, string>();
+    let factualSyntheticProvenance = false;
     for (const m of manifests) {
       const bundle = await this.store.deriveAuthorityBundle({
         projectId: input.projectId,
         pageSlug: m.input.pageIdentity,
       });
       contentDigests.set(m.input.pageIdentity, bundle.content.digest);
+      if (bundle.design.providerMode === "fixture") {
+        factualSyntheticProvenance = true;
+      }
+      const [proposal] = await this.db
+        .select({ provider: pageContentProposals.provider })
+        .from(pageContentProposals)
+        .innerJoin(acceptedPageContent, eq(acceptedPageContent.proposalId, pageContentProposals.id))
+        .where(
+          and(
+            eq(acceptedPageContent.projectId, input.projectId),
+            eq(acceptedPageContent.slug, m.input.pageIdentity),
+          ),
+        )
+        .limit(1);
+      if (proposal?.provider === "fixture") {
+        factualSyntheticProvenance = true;
+      }
     }
+    const isSyntheticContent =
+      !this.trustPolicy.allowTestSyntheticPublication &&
+      (this.trustPolicy.syntheticFixtureContent === true || factualSyntheticProvenance);
     const trustQa = await runTrustQa({
       manifests,
       distDir: candidate.artifactRef,
@@ -212,7 +239,7 @@ export class ProductionApiFacade {
       trust,
       contentDigests,
       manifestSetDigest,
-      syntheticFixtureContent: this.trustPolicy.syntheticFixtureContent === true,
+      syntheticFixtureContent: isSyntheticContent,
       inseeEvidence: loadInseeEvidenceRegistry(trustEvidenceRoot),
       legalEvidence: loadLegalEvidenceRegistry(trustEvidenceRoot),
     });
@@ -234,7 +261,7 @@ export class ProductionApiFacade {
       repositorySha: candidate.repositorySha,
       lockfileDigest: candidate.lockfileDigest,
       pageRoutes,
-      trustMode: this.trustPolicy.syntheticFixtureContent === true ? "SYNTHETIC_FIXTURE" : "STRICT_PRODUCTION",
+      trustMode: isSyntheticContent ? "SYNTHETIC_FIXTURE" : "STRICT_PRODUCTION",
     });
     return {
       qaRunId: run.id,

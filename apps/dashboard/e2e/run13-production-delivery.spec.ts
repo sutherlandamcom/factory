@@ -153,7 +153,7 @@ test.describe("Run 13 governed production delivery lifecycle", () => {
     await expect(page.getByRole("button", { name: /Publish Approved Release/i })).toBeEnabled();
     await page.getByRole("button", { name: /Publish Approved Release/i }).click();
     await expect(page.getByText(/promoted to Cloudflare production and verified/i)).toBeVisible({ timeout: 180_000 });
-    await expect(page.locator("span", { hasText: "Live" }).first()).toBeVisible();
+    await expect(page.locator("span", { hasText: "SIMULATED — NOT LIVE" }).first()).toBeVisible();
 
     // 8. Stage 4: Production Monitoring & Search Quality
     await expect(page.getByText(/Production Monitoring & Search Quality/i)).toBeVisible();

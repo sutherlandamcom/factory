@@ -131,10 +131,22 @@ export class MonitoringService {
       throw new FactoryError("unknown_site", `Site for project '${projectId}' not found or productionUrl unset.`);
     }
 
-    const deployments = await this.store.listDeployments(site.id, 5);
-    const activeDeployment = deployments.find((d) => d.status === "verified");
-    const activeVersionId = activeDeployment?.versionId ?? null;
-    const deploymentId = activeDeployment?.id ?? null;
+    let activeVersionId: string | null = null;
+    let deploymentId: string | null = null;
+
+    const transition = typeof this.store.getCurrentEffectiveTransition === "function"
+      ? await this.store.getCurrentEffectiveTransition(site.id)
+      : null;
+
+    if (transition) {
+      activeVersionId = transition.versionId;
+      deploymentId = transition.deploymentId;
+    } else {
+      const deployments = await this.store.listDeployments(site.id, 5);
+      const activeDeployment = deployments.find((d) => d.status === "verified");
+      activeVersionId = activeDeployment?.versionId ?? null;
+      deploymentId = activeDeployment?.id ?? null;
+    }
     const targetUrl = site.productionUrl.replace(/\/$/, "");
     const now = new Date();
 
@@ -298,9 +310,18 @@ export class MonitoringService {
       throw new FactoryError("unknown_site", `Site for project '${projectId}' not found.`);
     }
 
-    const deployments = await this.store.listDeployments(site.id, 5);
-    const activeDeployment = deployments.find((d) => d.status === "verified");
-    const activeVersionId = activeDeployment?.versionId ?? null;
+    let activeVersionId: string | null = null;
+    const transition = typeof this.store.getCurrentEffectiveTransition === "function"
+      ? await this.store.getCurrentEffectiveTransition(site.id)
+      : null;
+
+    if (transition) {
+      activeVersionId = transition.versionId;
+    } else {
+      const deployments = await this.store.listDeployments(site.id, 5);
+      const activeDeployment = deployments.find((d) => d.status === "verified");
+      activeVersionId = activeDeployment?.versionId ?? null;
+    }
 
     const observations = await this.store.listMonitoringObservations(site.id, 50);
     const latestByType = await this.store.getLatestMonitoringObservationsByType(site.id);

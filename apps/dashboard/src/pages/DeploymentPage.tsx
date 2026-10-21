@@ -116,7 +116,7 @@ export function DeploymentPage() {
   });
 
   const monitoringMutation = useMutation({
-    mutationFn: () => deploymentApi.runMonitoringCheck(projectId!, sessionToken || undefined),
+    mutationFn: () => deploymentApi.runMonitoringCheck(projectId!, sessionToken),
     onMutate: () => {
       setActionError(null);
       setActionSuccess(null);
@@ -431,9 +431,18 @@ export function DeploymentPage() {
               4. Production State & Recovery
             </span>
             {activeProductionVersion && (
-              <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">
-                Live
-              </span>
+              (dep.currentProduction?.executionOrigin === "TEST_SIMULATION" ||
+               dep.currentProduction?.deliveryMode === "fixture" ||
+               dep.currentProduction?.deliveryMode === "test" ||
+               dep.currentProduction?.deliveryMode === "simulation") ? (
+                <span className="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+                  SIMULATED — NOT LIVE
+                </span>
+              ) : (
+                <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">
+                  Live
+                </span>
+              )
             )}
           </div>
           <div className="space-y-1 font-mono text-xs">
@@ -472,7 +481,7 @@ export function DeploymentPage() {
           </div>
           <button
             onClick={() => monitoringMutation.mutate()}
-            disabled={monitoringMutation.isPending}
+            disabled={monitoringMutation.isPending || !sessionToken}
             className="rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:bg-gray-100"
           >
             {monitoringMutation.isPending ? "Checking…" : "Run Operational Check"}

@@ -571,6 +571,15 @@ export class ProductionStore {
       .orderBy(desc(productionPageInputs.version));
   }
 
+  async getProductionInputById(id: string): Promise<ProductionPageInputRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(productionPageInputs)
+      .where(eq(productionPageInputs.id, id))
+      .limit(1);
+    return row ?? null;
+  }
+
   // ---- Staleness -------------------------------------------------------------
 
   /**
@@ -1306,6 +1315,15 @@ export class ProductionStore {
         ),
       )
       .orderBy(desc(productionQaRuns.createdAt));
+  }
+
+  async getQaRun(id: string): Promise<ProductionQaRunRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(productionQaRuns)
+      .where(eq(productionQaRuns.id, id))
+      .limit(1);
+    return row ?? null;
   }
 }
 

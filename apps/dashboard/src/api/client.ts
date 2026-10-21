@@ -1768,12 +1768,12 @@ export const deploymentApi = {
       `/api/projects/${encodeURIComponent(projectId)}/deployment/monitoring`,
     ),
 
-  runMonitoringCheck: (projectId: string, sessionToken?: string) =>
+  runMonitoringCheck: (projectId: string, sessionToken: string) =>
     request<MonitoringSummary>(
       `/api/projects/${encodeURIComponent(projectId)}/deployment/monitoring/check`,
       {
         method: "POST",
-        body: JSON.stringify(sessionToken ? { sessionToken } : {}),
+        body: JSON.stringify({ sessionToken }),
       },
     ),
 };

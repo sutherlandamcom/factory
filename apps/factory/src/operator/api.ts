@@ -1442,18 +1442,14 @@ export function createOperatorApi(deps: OperatorApiDeps) {
 
         // POST /projects/:id/deployment/monitoring/check: trigger operational monitoring check
         if (req.method === "POST" && segments.length === 5 && segments[3] === "monitoring" && segments[4] === "check") {
-          let sessionToken: string | undefined;
-          if (body && body.trim().length > 0) {
-            const parsed = parseJsonBody(body);
-            const input = parseOr400(
-              z.object({
-                sessionToken: z.string().trim().min(1).optional(),
-              }).strict(),
-              parsed,
-            );
-            sessionToken = input.sessionToken;
-          }
-          const summary = await delivery.runMonitoringCheck(project.id, sessionToken);
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(
+            z.object({
+              sessionToken: z.string().trim().min(1),
+            }).strict(),
+            parsed,
+          );
+          const summary = await delivery.runMonitoringCheck(project.id, input.sessionToken);
           return sendJson(res, 200, summary);
         }
 

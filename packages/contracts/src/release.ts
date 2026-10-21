@@ -119,6 +119,8 @@ export const governedDeploymentViewSchema = z.object({
       activeVersionId: z.string().nullable(),
       knownGoodVersionId: z.string().nullable(),
       lastVerifiedAt: z.string().nullable(),
+      executionOrigin: z.enum(["REAL_CLOUDFLARE", "TEST_SIMULATION"]).optional(),
+      deliveryMode: z.string().optional(),
     })
     .nullable(),
   history: z.array(deploymentHistoryItemSchema),

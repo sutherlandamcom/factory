@@ -1,3 +1,5 @@
+import http from "node:http";
+import https from "node:https";
 import { lookup } from "node:dns/promises";
 import ipaddr from "ipaddr.js";
 import type { OperationalCheckResult } from "./service.js";
@@ -8,6 +10,7 @@ export interface HttpOperationalVerifierOptions {
   maxRedirects?: number;
   maxBodyBytes?: number;
   lookupFn?: typeof lookup;
+  trustedOrigins?: string[];
 }
 
 const BLOCKED_HOST_MESSAGE = "URL host resolves to a forbidden network range.";
@@ -41,6 +44,66 @@ export function normalizeCanonicalUrl(rawUrl: string, baseUrl?: string): string 
   parsed.hash = "";
 
   return parsed.toString();
+}
+
+/**
+ * Checks whether an IP address belongs to a blocked/forbidden network range.
+ * Blocks private, loopback (unless allowLocalhost), link-local (cloud metadata),
+ * CGNAT, multicast, broadcast, and reserved ranges.
+ */
+export function isBlockedIp(address: string, allowLocalhost?: boolean): boolean {
+  if (!ipaddr.isValid(address)) {
+    return true;
+  }
+  const parsedIp = ipaddr.parse(address);
+
+  // If IPv6 is mapped IPv4 (::ffff:192.0.2.1), check IPv4 range
+  if (parsedIp.kind() === "ipv6" && (parsedIp as ipaddr.IPv6).isIPv4MappedAddress()) {
+    const v4 = (parsedIp as ipaddr.IPv6).toIPv4Address();
+    return isBlockedIpv4(v4, allowLocalhost);
+  }
+
+  if (parsedIp.kind() === "ipv4") {
+    return isBlockedIpv4(parsedIp as ipaddr.IPv4, allowLocalhost);
+  } else {
+    return isBlockedIpv6(parsedIp as ipaddr.IPv6, allowLocalhost);
+  }
+}
+
+function isBlockedIpv4(ip: ipaddr.IPv4, allowLocalhost?: boolean): boolean {
+  const range = ip.range();
+  if (allowLocalhost && range === "loopback") {
+    return false;
+  }
+  // linkLocal includes 169.254.169.254 (cloud metadata)
+  const blockedRanges = new Set([
+    "unspecified",
+    "private",
+    "loopback",
+    "linkLocal",
+    "carrierGradeNat",
+    "multicast",
+    "broadcast",
+    "reserved",
+  ]);
+  return blockedRanges.has(range);
+}
+
+function isBlockedIpv6(ip: ipaddr.IPv6, allowLocalhost?: boolean): boolean {
+  const range = ip.range();
+  if (allowLocalhost && range === "loopback") {
+    return false;
+  }
+  const blockedRanges = new Set([
+    "unspecified",
+    "loopback",
+    "linkLocal",
+    "uniqueLocal",
+    "multicast",
+    "reserved",
+    "discard",
+  ]);
+  return blockedRanges.has(range);
 }
 
 /**
@@ -94,80 +157,158 @@ export async function validateUrlForSsrf(
   }
 
   for (const { address } of addresses) {
-    if (!ipaddr.isValid(address)) {
+    if (isBlockedIp(address, options.allowLocalhost)) {
       return { ok: false, reason: BLOCKED_HOST_MESSAGE };
-    }
-    const parsedIp = ipaddr.parse(address);
-
-    // If IPv6 is mapped IPv4 (::ffff:192.0.2.1), check IPv4 range
-    if (parsedIp.kind() === "ipv6" && (parsedIp as ipaddr.IPv6).isIPv4MappedAddress()) {
-      const v4 = (parsedIp as ipaddr.IPv6).toIPv4Address();
-      if (isBlockedIpv4(v4, options.allowLocalhost)) {
-        return { ok: false, reason: BLOCKED_HOST_MESSAGE };
-      }
-      continue;
-    }
-
-    if (parsedIp.kind() === "ipv4") {
-      if (isBlockedIpv4(parsedIp as ipaddr.IPv4, options.allowLocalhost)) {
-        return { ok: false, reason: BLOCKED_HOST_MESSAGE };
-      }
-    } else {
-      if (isBlockedIpv6(parsedIp as ipaddr.IPv6, options.allowLocalhost)) {
-        return { ok: false, reason: BLOCKED_HOST_MESSAGE };
-      }
     }
   }
 
   return { ok: true };
 }
 
-function isBlockedIpv4(ip: ipaddr.IPv4, allowLocalhost?: boolean): boolean {
-  const range = ip.range();
-  if (allowLocalhost && range === "loopback") {
-    return false;
-  }
-  // linkLocal includes 169.254.169.254 (cloud metadata)
-  const blockedRanges = new Set([
-    "unspecified",
-    "private",
-    "loopback",
-    "linkLocal",
-    "carrierGradeNat",
-    "multicast",
-    "broadcast",
-    "reserved",
-  ]);
-  return blockedRanges.has(range);
-}
-
-function isBlockedIpv6(ip: ipaddr.IPv6, allowLocalhost?: boolean): boolean {
-  const range = ip.range();
-  if (allowLocalhost && range === "loopback") {
-    return false;
-  }
-  const blockedRanges = new Set([
-    "unspecified",
-    "loopback",
-    "linkLocal",
-    "uniqueLocal",
-    "multicast",
-    "reserved",
-    "discard",
-  ]);
-  return blockedRanges.has(range);
+interface SafeHttpResponse {
+  status: number;
+  headers: {
+    get: (name: string) => string | null;
+  };
+  body: string;
 }
 
 /**
- * Real HTTP operational verifier for production monitoring (Run 13 §10 / P1-04).
+ * Executes a single HTTP/HTTPS request with connect-time DNS validation.
+ * The custom lookup callback is invoked by net.Socket at actual connection time,
+ * eliminating the DNS rebinding / time-of-check-to-time-of-use (TOCTOU) gap.
+ */
+function safeHttpRequest(
+  targetUrl: URL,
+  timeoutMs: number,
+  allowLocalhost?: boolean,
+  lookupFn?: typeof lookup,
+  maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
+): Promise<SafeHttpResponse> {
+  return new Promise((resolve, reject) => {
+    const isHttps = targetUrl.protocol === "https:";
+    const client = isHttps ? https : http;
+
+    const connectLookup = (
+      hostname: string,
+      opts: any,
+      callback: (err: Error | null, address?: any, family?: number) => void,
+    ) => {
+      if (ipaddr.isValid(hostname)) {
+        if (isBlockedIp(hostname, allowLocalhost)) {
+          return callback(new Error(BLOCKED_HOST_MESSAGE));
+        }
+        const family = hostname.includes(":") ? 6 : 4;
+        if (opts?.all) {
+          return callback(null, [{ address: hostname, family }]);
+        }
+        return callback(null, hostname, family);
+      }
+
+      const resolver = lookupFn ?? lookup;
+      resolver(hostname, { all: true, verbatim: true })
+        .then((addresses) => {
+          if (!addresses || addresses.length === 0) {
+            return callback(new Error("DNS returned no addresses."));
+          }
+          for (const addr of addresses) {
+            if (isBlockedIp(addr.address, allowLocalhost)) {
+              return callback(new Error(BLOCKED_HOST_MESSAGE));
+            }
+          }
+          if (opts?.all) {
+            return callback(null, addresses);
+          }
+          const first = addresses[0];
+          if (!first) {
+            return callback(new Error("DNS returned no addresses."));
+          }
+          return callback(null, first.address, first.family);
+        })
+        .catch((err) => {
+          callback(err);
+        });
+    };
+
+    const req = client.request(
+      {
+        protocol: targetUrl.protocol,
+        hostname: targetUrl.hostname,
+        port: targetUrl.port || (isHttps ? 443 : 80),
+        path: `${targetUrl.pathname}${targetUrl.search}`,
+        method: "GET",
+        headers: {
+          "User-Agent": "Factory-Operational-Verifier/1.0",
+          Accept: "*/*",
+        },
+        lookup: connectLookup,
+        timeout: timeoutMs,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        let bytesRead = 0;
+
+        res.on("data", (chunk: Buffer) => {
+          bytesRead += chunk.length;
+          if (bytesRead > maxBodyBytes) {
+            const allowed = chunk.length - (bytesRead - maxBodyBytes);
+            if (allowed > 0) {
+              chunks.push(chunk.subarray(0, allowed));
+            }
+            res.destroy();
+            return;
+          }
+          chunks.push(chunk);
+        });
+
+        res.on("end", () => {
+          const body = Buffer.concat(chunks).toString("utf-8");
+          const headersMap = new Map<string, string>();
+          for (const [key, val] of Object.entries(res.headers)) {
+            if (typeof val === "string") {
+              headersMap.set(key.toLowerCase(), val);
+            } else if (Array.isArray(val)) {
+              headersMap.set(key.toLowerCase(), val.join(", "));
+            }
+          }
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: {
+              get: (name: string) => headersMap.get(name.toLowerCase()) ?? null,
+            },
+            body,
+          });
+        });
+
+        res.on("error", (err) => {
+          reject(err);
+        });
+      },
+    );
+
+    req.on("timeout", () => {
+      req.destroy(new Error(`Request timed out after ${timeoutMs}ms`));
+    });
+
+    req.on("error", (err) => {
+      reject(err);
+    });
+
+    req.end();
+  });
+}
+
+/**
+ * Real HTTP operational verifier for production monitoring (Run 13 §10 / P1-04 / P1-02).
  * Performs genuine HTTP requests against the target production origin, inspecting:
  * 1. HTTP 200 response
  * 2. <link rel="canonical"> tag and Link header match via exact normalization
  * 3. /robots.txt availability
  * 4. /sitemap.xml availability
  * 5. Meta robots indexability (no noindex)
- * 6. SSRF guards on all URLs and redirect hops
- * 7. Capped response size (2MB)
+ * 6. Connect-time SSRF guards on all URLs and redirect hops (anti-rebinding / TOCTOU elimination)
+ * 7. Redirect bounding to trusted configured site origins
+ * 8. Capped response size (2MB)
  */
 export class HttpOperationalVerifier {
   private readonly timeoutMs: number;
@@ -175,6 +316,7 @@ export class HttpOperationalVerifier {
   private readonly maxRedirects: number;
   private readonly maxBodyBytes: number;
   private readonly lookupFn?: typeof lookup;
+  private readonly trustedOrigins: readonly string[];
 
   constructor(options: HttpOperationalVerifierOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? 10_000;
@@ -182,20 +324,35 @@ export class HttpOperationalVerifier {
     this.maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
     this.maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
     this.lookupFn = options.lookupFn;
+    this.trustedOrigins = options.trustedOrigins ?? [];
   }
 
   /**
    * Safely fetches a URL, following redirects up to maxRedirects,
-   * validating each redirect hop against SSRF rules, and capping body size.
+   * validating each redirect hop against SSRF rules and permitted origins,
+   * and enforcing connect-time DNS validation.
    */
   private async safeFetch(
     initialUrl: string,
     timeoutMs: number,
-  ): Promise<{ response: Response; body: string; finalUrl: string }> {
+    additionalPermittedOrigins: string[] = [],
+  ): Promise<{ response: SafeHttpResponse; body: string; finalUrl: string }> {
     let currentUrl = initialUrl;
     let redirectCount = 0;
 
+    const initialParsed = new URL(initialUrl);
+    const permittedOrigins = new Set<string>([
+      ...this.trustedOrigins,
+      ...additionalPermittedOrigins,
+      initialParsed.origin,
+    ]);
+
+    if (this.trustedOrigins.length > 0 && !this.trustedOrigins.includes(initialParsed.origin)) {
+      throw new Error(`SSRF blocked: Target URL origin ${initialParsed.origin} is not in trusted origins.`);
+    }
+
     while (redirectCount <= this.maxRedirects) {
+      // 1. Preflight SSRF check
       const ssrfCheck = await validateUrlForSsrf(currentUrl, {
         allowLocalhost: this.allowLocalhost,
         lookupFn: this.lookupFn,
@@ -204,21 +361,17 @@ export class HttpOperationalVerifier {
         throw new Error(`SSRF blocked for URL ${currentUrl}: ${ssrfCheck.reason}`);
       }
 
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      // 2. Outbound request with connect-time DNS validation
+      const targetParsed = new URL(currentUrl);
+      const resp = await safeHttpRequest(
+        targetParsed,
+        timeoutMs,
+        this.allowLocalhost,
+        this.lookupFn,
+        this.maxBodyBytes,
+      );
 
-      let resp: Response;
-      try {
-        resp = await fetch(currentUrl, {
-          redirect: "manual",
-          signal: controller.signal,
-          headers: { "User-Agent": "Factory-Operational-Verifier/1.0" },
-        });
-      } finally {
-        clearTimeout(timer);
-      }
-
-      // Check if redirect
+      // 3. Handle redirects
       if ([301, 302, 303, 307, 308].includes(resp.status)) {
         const location = resp.headers.get("location");
         if (!location) {
@@ -228,61 +381,33 @@ export class HttpOperationalVerifier {
         if (redirectCount > this.maxRedirects) {
           throw new Error(`Exceeded maximum redirect limit (${this.maxRedirects})`);
         }
-        currentUrl = new URL(location, currentUrl).toString();
+
+        const nextUrl = new URL(location, currentUrl);
+        if (!permittedOrigins.has(nextUrl.origin)) {
+          throw new Error(`SSRF blocked: Redirect to unauthorized origin ${nextUrl.origin} is not allowed.`);
+        }
+
+        currentUrl = nextUrl.toString();
         continue;
       }
 
-      // Read response body up to maxBodyBytes
-      const body = await this.readBodyCapped(resp);
-      return { response: resp, body, finalUrl: currentUrl };
+      return { response: resp, body: resp.body, finalUrl: currentUrl };
     }
 
     throw new Error(`Exceeded maximum redirect limit (${this.maxRedirects})`);
   }
 
-  private async readBodyCapped(resp: Response): Promise<string> {
-    if (!resp.body) {
-      return "";
-    }
-    const reader = resp.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let bytesRead = 0;
-
+  async verifyUrl(
+    targetUrl: string,
+    expectedCanonicalUrl: string,
+    options?: { trustedOrigins?: string[] },
+  ): Promise<OperationalCheckResult> {
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) {
-          bytesRead += value.byteLength;
-          if (bytesRead > this.maxBodyBytes) {
-            // Cap at maxBodyBytes
-            const allowedBytes = value.byteLength - (bytesRead - this.maxBodyBytes);
-            if (allowedBytes > 0) {
-              chunks.push(value.slice(0, allowedBytes));
-            }
-            await reader.cancel();
-            break;
-          }
-          chunks.push(value);
-        }
-      }
-    } catch {
-      // Stream error or cancel
-    }
+      const additionalOrigins = options?.trustedOrigins ?? [];
+      const expectedOrigin = new URL(expectedCanonicalUrl, targetUrl).origin;
+      const combinedAdditional = [...additionalOrigins, expectedOrigin];
 
-    const totalLength = chunks.reduce((acc, c) => acc + c.byteLength, 0);
-    const combined = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-      combined.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return new TextDecoder("utf-8").decode(combined);
-  }
-
-  async verifyUrl(targetUrl: string, expectedCanonicalUrl: string): Promise<OperationalCheckResult> {
-    try {
-      const { response: resp, body: html } = await this.safeFetch(targetUrl, this.timeoutMs);
+      const { response: resp, body: html } = await this.safeFetch(targetUrl, this.timeoutMs, combinedAdditional);
       const statusCode = resp.status;
 
       // 1. Exact Canonical check
@@ -332,7 +457,7 @@ export class HttpOperationalVerifier {
       let robotsValid = false;
       try {
         const robotsUrl = new URL("/robots.txt", targetUrl).toString();
-        const robotsResult = await this.safeFetch(robotsUrl, 5_000);
+        const robotsResult = await this.safeFetch(robotsUrl, 5_000, combinedAdditional);
         robotsValid = robotsResult.response.status === 200;
       } catch {
         robotsValid = false;
@@ -342,7 +467,7 @@ export class HttpOperationalVerifier {
       let sitemapValid = false;
       try {
         const sitemapUrl = new URL("/sitemap.xml", targetUrl).toString();
-        const sitemapResult = await this.safeFetch(sitemapUrl, 5_000);
+        const sitemapResult = await this.safeFetch(sitemapUrl, 5_000, combinedAdditional);
         sitemapValid = sitemapResult.response.status === 200;
       } catch {
         sitemapValid = false;

@@ -305,6 +305,7 @@ test("Run 13 P1-03: Six-page end-to-end integration test with real artifacts, un
     },
     getCandidate: (...args: [string, string]) => prodStore.getCandidate(...args),
     latestQaRun: (...args: [string, string]) => prodStore.latestQaRun(...args),
+    getQaRun: (...args: [string]) => prodStore.getQaRun(...args),
     listCandidateInputs: (...args: [string, string]) => prodStore.listCandidateInputs(...args),
     listProductionInputs: async (pId: string) => {
       const all = await prodStore.listProductionInputs(pId);

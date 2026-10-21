@@ -66,7 +66,17 @@ function errorInfo(error: unknown): { code: string; message: string } {
 
 export function knownGoodVersion(record: DeploymentRecord | null): string | null {
   if (!record) return null;
-  return record.status === "rolled_back" ? record.previousVersionId : record.versionId;
+  if (record.status === "rolled_back") {
+    if (
+      record.operationId?.startsWith("rb-") ||
+      (record.snapshotData as any)?.targetDeploymentId ||
+      (record.productionVerified && record.errorCode !== "production_qa_failed_rolled_back")
+    ) {
+      return record.versionId;
+    }
+    return record.previousVersionId ?? record.versionId;
+  }
+  return record.versionId;
 }
 
 export class ProductionDelivery {
@@ -143,6 +153,7 @@ export class ProductionDelivery {
   async publishApproved(input: {
     previewDeployment: DeploymentRecord;
     approval: ReleaseApprovalRecord;
+    deferFinalization?: boolean;
   }): Promise<DeploymentRecord> {
     const { previewDeployment: preview, approval } = input;
     if (preview.status !== "preview_verified" || !preview.previewVerified || !preview.versionId) {
@@ -204,6 +215,16 @@ export class ProductionDelivery {
         const executionOrigin =
           (preview.executionOrigin as "REAL_CLOUDFLARE" | "TEST_SIMULATION" | "UNKNOWN" | null) ??
           ((this.wrangler as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
+        if (input.deferFinalization) {
+          return {
+            ...current,
+            status: "promoted",
+            productionVerified: true,
+            executionOrigin,
+            errorCode: null,
+            errorMessage: null,
+          };
+        }
         return await this.store.updateDeployment({
           id: preview.id,
           status: "verified",
@@ -231,6 +252,7 @@ export class ProductionDelivery {
     deployment: DeploymentRecord;
     targetVersionId: string;
     targetDeployment?: DeploymentRecord;
+    deferFinalization?: boolean;
   }): Promise<DeploymentRecord> {
     const knownGoodRaw = await this.store.findLatestKnownGoodDeployment(
       input.deployment.siteId,
@@ -313,7 +335,7 @@ export class ProductionDelivery {
           previousVersionId: input.deployment.versionId,
           workerName: targetDep.workerName || input.deployment.workerName,
           productionUrl: targetDep.productionUrl || input.deployment.productionUrl,
-          status: "rolled_back",
+          status: input.deferFinalization ? "promoted" : "rolled_back",
           previewVerified: true,
           productionVerified: true,
           rolledBack: true,
@@ -336,7 +358,7 @@ export class ProductionDelivery {
 
       return await this.store.updateDeployment({
         id: input.deployment.id,
-        status: "rolled_back",
+        status: input.deferFinalization ? "promoted" : "rolled_back",
         previousVersionId: input.targetVersionId,
         rolledBack: true,
         verifiedAt: new Date(),

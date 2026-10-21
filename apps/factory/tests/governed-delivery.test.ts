@@ -365,6 +365,9 @@ test("governed delivery lifecycle: preview -> approval -> publish -> rollback", 
     async latestQaRun(pId: string, cId: string) {
       return pId === projectId && cId === candidateId ? qaRun : null;
     },
+    async getQaRun(id: string) {
+      return id === qaRun.id ? qaRun : null;
+    },
     async listCandidateInputs(pId: string, cId: string) {
       return pId === projectId && cId === candidateId ? candidateInputs : [];
     },

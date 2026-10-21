@@ -81,6 +81,7 @@ test("Run 13 Sutherland 6-page governed delivery, rollback and historical lineag
     candidateStaleness: async () => ({ stale: false, reason: null }),
     getCandidate: (...args: [string, string]) => prodStore.getCandidate(...args),
     latestQaRun: (...args: [string, string]) => prodStore.latestQaRun(...args),
+    getQaRun: (...args: [string]) => prodStore.getQaRun(...args),
     listCandidateInputs: (...args: [string, string]) => prodStore.listCandidateInputs(...args),
     listProductionInputs: async (pId: string) => {
       const all = await prodStore.listProductionInputs(pId);

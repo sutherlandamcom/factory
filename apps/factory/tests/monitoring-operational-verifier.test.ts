@@ -198,3 +198,73 @@ test("HttpOperationalVerifier prevents redirect-based SSRF into private IP", asy
     server.close();
   }
 });
+
+test("HttpOperationalVerifier blocks redirect to an unauthorized origin (P1-02)", async () => {
+  const server = http.createServer((req, res) => {
+    if (req.url === "/redirect-to-external") {
+      res.writeHead(302, { Location: "https://evil-unauthorized.com/hijack" });
+      res.end();
+      return;
+    }
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const port = (server.address() as any).port;
+
+  try {
+    const verifier = new HttpOperationalVerifier({ allowLocalhost: true });
+    const result = await verifier.verifyUrl(
+      `http://127.0.0.1:${port}/redirect-to-external`,
+      "https://example.com/test",
+    );
+
+    assert.equal(result.status, "FAIL");
+    assert.match(result.summary, /Redirect to unauthorized origin/);
+  } finally {
+    server.close();
+  }
+});
+
+test("HttpOperationalVerifier closes DNS rebinding gap via connect-time validation (P1-02)", async () => {
+  let callCount = 0;
+  // DNS rebinding simulator: returns public IP on preflight check, then rebinds to cloud metadata IP on connect
+  const rebindingLookup = async (hostname: string, opts?: any) => {
+    callCount++;
+    if (callCount === 1) {
+      // First call (preflight validation): return safe public IP
+      return [{ address: "93.184.216.34", family: 4 }];
+    }
+    // Subsequent call (actual connect-time socket resolution): malicious DNS rebinding to metadata!
+    return [{ address: "169.254.169.254", family: 4 }];
+  };
+
+  const verifier = new HttpOperationalVerifier({
+    allowLocalhost: true,
+    lookupFn: rebindingLookup as any,
+  });
+
+  const result = await verifier.verifyUrl(
+    "http://rebind-test.example.com/",
+    "http://rebind-test.example.com/",
+  );
+
+  assert.equal(result.status, "FAIL");
+  assert.match(result.summary, /forbidden network range/);
+  assert.ok(callCount >= 2, `Expected connect-time lookup to be called, got ${callCount} calls`);
+});
+
+test("HttpOperationalVerifier enforces configured trustedOrigins (P1-02)", async () => {
+  const verifier = new HttpOperationalVerifier({
+    allowLocalhost: true,
+    trustedOrigins: ["https://trusted-site.com"],
+  });
+
+  // Attempting to verify an untrusted origin must fail immediately
+  const result = await verifier.verifyUrl(
+    "https://untrusted-site.com/page",
+    "https://untrusted-site.com/page",
+  );
+
+  assert.equal(result.status, "FAIL");
+  assert.match(result.summary, /Target URL origin https:\/\/untrusted-site\.com is not in trusted origins/);
+});

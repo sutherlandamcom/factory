@@ -662,15 +662,16 @@ export class GovernedDeliveryService {
         const published = await delivery.publishApproved({
           previewDeployment,
           approval,
+          deferFinalization: true,
         });
 
         // R13-R5: Record post-publication technical verification and append-only effective transition
-        if (published.status === "verified" && published.versionId) {
+        if (published.productionVerified && published.versionId) {
           const executionOrigin =
             (published.executionOrigin as any) ??
             previewDeployment.executionOrigin ??
             ((provider as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
-          await this.store.finalizeDeploymentAndTransitionAtomic({
+          const finalized = await this.store.finalizeDeploymentAndTransitionAtomic({
             deploymentId: published.id,
             expectedStatus: ["promoting", "promoted", "verified"],
             status: "verified",
@@ -710,6 +711,8 @@ export class GovernedDeliveryService {
               evidenceRef: published.artifactDirectory ?? undefined,
             })
             .catch(() => {});
+
+          return finalized.deployment;
         }
 
         return published;
@@ -839,14 +842,15 @@ export class GovernedDeliveryService {
           deployment: latestDeployment,
           targetVersionId: targetVersion,
           targetDeployment,
+          deferFinalization: true,
         });
 
-        if (rolledBack.status === "rolled_back" && rolledBack.versionId) {
+        if (rolledBack.productionVerified && rolledBack.versionId) {
           const executionOrigin =
             (rolledBack.executionOrigin as any) ??
             targetDeployment.executionOrigin ??
             ((provider as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
-          await this.store.finalizeDeploymentAndTransitionAtomic({
+          const finalized = await this.store.finalizeDeploymentAndTransitionAtomic({
             deploymentId: rolledBack.id,
             expectedStatus: ["promoting", "promoted", "rolled_back"],
             status: "rolled_back",
@@ -874,6 +878,7 @@ export class GovernedDeliveryService {
               operationId: `rb-${rolledBack.id}`,
             },
           });
+          return finalized.deployment;
         }
 
         return rolledBack;
@@ -967,45 +972,96 @@ export class GovernedDeliveryService {
         };
       }
 
-      // Step 5: Resolve exact release approval and revalidate seal
-      let approval: any = null;
+      // Step 5 (P0-02): Resolve exact release approval and revalidate cryptographic seal, session, & permissions
+      let approval: ReleaseApprovalRecord;
       try {
-        approval = await this.releaseBoundary.getApproval(unverified.releaseApprovalId);
-      } catch {
-        approval = null;
+        approval = await this.releaseBoundary.assertValidReleaseApproval({
+          approvalId: unverified.releaseApprovalId,
+          projectId: site.projectId,
+          siteId: site.id,
+          candidateId: unverified.candidateId,
+          previewVersionId: unverified.versionId,
+          targetWorkerName: site.cloudflareWorkerName,
+          targetProductionUrl: site.productionUrl,
+        });
+      } catch (err: any) {
+        const errorCode = err instanceof FactoryError ? err.code : "recovery_approval_invalid";
+        const errorMessage = err?.message ?? "Release approval verification failed.";
+        await this.store.updateDeployment({
+          id: unverified.id,
+          status: "needs_review",
+          errorCode,
+          errorMessage,
+        });
+        return {
+          reconciled: true,
+          details: `Deployment '${unverified.id}' moved to needs_review: release approval invalid (${errorMessage}).`,
+        };
       }
-      if (
-        !approval ||
-        approval.revoked ||
-        approval.candidateId !== unverified.candidateId ||
-        approval.previewVersionId !== unverified.versionId ||
-        approval.targetWorkerName !== site.cloudflareWorkerName ||
-        approval.artifactDigest !== unverified.artifactDigest
-      ) {
+
+      if (approval.artifactDigest && approval.artifactDigest !== unverified.artifactDigest) {
         await this.store.updateDeployment({
           id: unverified.id,
           status: "needs_review",
           errorCode: "recovery_approval_invalid",
-          errorMessage: "Release approval is missing, revoked, or invalid for target version/candidate.",
+          errorMessage: "Release approval artifactDigest does not match pending deployment.",
         });
         return {
           reconciled: true,
-          details: `Deployment '${unverified.id}' moved to needs_review: release approval invalid.`,
+          details: `Deployment '${unverified.id}' moved to needs_review: release approval artifact digest mismatch.`,
         };
       }
 
-      // Step 6: Revalidate QA evidence
-      const qaRun = await this.productionStore.latestQaRun(site.projectId, unverified.candidateId);
+      // Step 6 (P1-01): Revalidate exact approved QA evidence (strictly bound to approval.qaRunId)
+      if (!approval.qaRunId) {
+        await this.store.updateDeployment({
+          id: unverified.id,
+          status: "needs_review",
+          errorCode: "recovery_qa_missing",
+          errorMessage: "Release approval lacks a required qaRunId.",
+        });
+        return {
+          reconciled: true,
+          details: `Deployment '${unverified.id}' moved to needs_review: release approval lacks qaRunId.`,
+        };
+      }
+
+      if (unverified.qaRunId && unverified.qaRunId !== approval.qaRunId) {
+        await this.store.updateDeployment({
+          id: unverified.id,
+          status: "needs_review",
+          errorCode: "recovery_qa_mismatch",
+          errorMessage: `Deployment qaRunId ('${unverified.qaRunId}') does not match approved qaRunId ('${approval.qaRunId}').`,
+        });
+        return {
+          reconciled: true,
+          details: `Deployment '${unverified.id}' moved to needs_review: deployment qaRunId does not match approved qaRunId.`,
+        };
+      }
+
+      const qaRun = await this.productionStore.getQaRun(approval.qaRunId);
       if (!qaRun || qaRun.overall !== "PASS") {
         await this.store.updateDeployment({
           id: unverified.id,
           status: "needs_review",
           errorCode: "recovery_qa_invalid",
-          errorMessage: "Candidate QA run is missing or not PASS.",
+          errorMessage: `Approved candidate QA run '${approval.qaRunId}' is missing or not PASS.`,
         });
         return {
           reconciled: true,
-          details: `Deployment '${unverified.id}' moved to needs_review: QA run is not PASS.`,
+          details: `Deployment '${unverified.id}' moved to needs_review: approved QA run '${approval.qaRunId}' is not PASS.`,
+        };
+      }
+      if (qaRun.candidateId !== unverified.candidateId || qaRun.candidateArtifactDigest !== unverified.artifactDigest) {
+        await this.store.updateDeployment({
+          id: unverified.id,
+          status: "needs_review",
+          errorCode: "recovery_qa_mismatch",
+          errorMessage: "Approved candidate QA run candidateId or artifactDigest does not match pending deployment.",
+        });
+        return {
+          reconciled: true,
+          details: `Deployment '${unverified.id}' moved to needs_review: approved QA run candidate/digest mismatch.`,
         };
       }
       if (!approval.isSynthetic && !qaRunPublicationEligible(qaRun.data)) {

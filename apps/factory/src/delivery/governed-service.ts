@@ -298,19 +298,24 @@ export class GovernedDeliveryService {
         throw new FactoryError("unknown_project", `Project '${projectId}' not found.`);
       }
       const profile = await loadWorktreeSiteProfile(this.repoRoot).catch(() => null);
-      const registered = await this.store.registerSite({
-        projectKey: project.key,
-        key: project.key,
-        name: project.name,
-      });
-      await this.db
-        .update(sites)
-        .set({
-          cloudflareWorkerName: `factory-${project.key}`,
-          productionUrl: profile?.canonicalOrigin ?? `https://${project.key}.pages.dev`,
-        })
-        .where(eq(sites.id, registered.id));
-      site = (await this.store.getSiteById(registered.id))!;
+      try {
+        const registered = await this.store.registerSite({
+          projectKey: project.key,
+          key: project.key,
+          name: project.name,
+        });
+        await this.db
+          .update(sites)
+          .set({
+            cloudflareWorkerName: `factory-${project.key}`,
+            productionUrl: profile?.canonicalOrigin ?? `https://${project.key}.pages.dev`,
+          })
+          .where(eq(sites.id, registered.id));
+        site = (await this.store.getSiteById(registered.id))!;
+      } catch (err) {
+        site = await this.store.findSiteByProjectId(projectId);
+        if (!site) throw err;
+      }
     }
     if (!site.cloudflareWorkerName || !site.productionUrl) {
       throw new FactoryError(

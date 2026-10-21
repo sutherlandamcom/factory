@@ -436,11 +436,25 @@ export async function startOperatorServer(): Promise<http.Server> {
 
   let wranglerFactory;
   let qaRunner;
+  let worktreeProvider;
   if (deliveryMode === "fixture" || deliveryMode === "test" || deliveryMode === "simulation") {
     const { SimulatedWrangler } = await import("../delivery/simulated-wrangler.js");
+    const { mkdir, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { randomUUID } = await import("node:crypto");
     const simulated = new SimulatedWrangler();
     wranglerFactory = () => simulated;
     qaRunner = async () => ({ passed: true, exitCode: 0, timedOut: false });
+    worktreeProvider = {
+      async prepare(_root: string, _commit: string, id: string) {
+        const wtDir = path.join(tmpdir(), `factory-fixture-wt-${id}-${randomUUID()}`);
+        await mkdir(path.join(wtDir, "sites", "starter"), { recursive: true });
+        return wtDir;
+      },
+      async remove(_root: string, wt: string) {
+        await rm(wt, { recursive: true, force: true }).catch(() => {});
+      },
+    };
   } else if (deliveryMode === "production") {
     // Governed production: only real Wrangler with credentials.
     // If credentials are not set, wranglerFactory remains undefined and any delivery attempt fails closed.
@@ -460,6 +474,7 @@ export async function startOperatorServer(): Promise<http.Server> {
     releaseBoundary,
     wranglerFactory,
     qaRunner,
+    worktreeProvider,
   });
 
   const deps: OperatorApiDeps = {

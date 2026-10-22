@@ -492,6 +492,7 @@ test("Run 13 Sutherland 6-page governed delivery, rollback and historical lineag
   const missingApprovalDepId = `dep-no-appr-${suffix}`;
   await store.createDeployment({
     id: missingApprovalDepId,
+    operationId: `pub-${missingApprovalDepId}`,
     siteId,
     sourceCommit: shaA,
     workerName,
@@ -514,6 +515,7 @@ test("Run 13 Sutherland 6-page governed delivery, rollback and historical lineag
   const stuckDepId = `dep-stuck-${suffix}`;
   await store.createDeployment({
     id: stuckDepId,
+    operationId: `pub-${stuckDepId}`,
     siteId,
     sourceCommit: shaA,
     workerName,
@@ -583,6 +585,7 @@ test("Run 13 Sutherland 6-page governed delivery, rollback and historical lineag
   const mismatchDepId = `dep-mismatch-${suffix}`;
   await store.createDeployment({
     id: mismatchDepId,
+    operationId: `pub-${mismatchDepId}`,
     siteId,
     sourceCommit: shaA,
     workerName,

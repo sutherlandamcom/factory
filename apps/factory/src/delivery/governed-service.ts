@@ -5,6 +5,7 @@ import { eq, sql } from "drizzle-orm";
 import {
   DEPLOYMENT_PUBLISH_PERMISSION,
   qaRunPublicationEligible,
+  productionRouteSchema,
   type ExecutionOrigin,
   type GovernedDeploymentView,
   type MonitoringSummary,
@@ -976,26 +977,32 @@ export class GovernedDeliveryService {
         return { reconciled: false, details: "Site, worker, or productionUrl configuration missing." };
       }
 
-      const isRollback =
-        (unverified.snapshotData as any)?.operationType === "ROLLBACK" ||
-        Boolean(unverified.operationId?.startsWith("rb-")) ||
-        unverified.rolledBack === true;
+      const operationType = (unverified.snapshotData as { operationType?: unknown } | null)?.operationType;
+      const operationId = unverified.operationId;
+      const rollbackId = Boolean(operationId?.startsWith("rb-"));
+      const publishId = Boolean(operationId?.startsWith("pub-"));
+      const isRollback = operationType === "ROLLBACK" || rollbackId;
+      const isPublish = operationType === "PUBLISH" || publishId;
+      const invalidIdentity =
+        (operationType != null && operationType !== "PUBLISH" && operationType !== "ROLLBACK") ||
+        (operationId != null && !rollbackId && !publishId);
+      const conflictingIdentity =
+        (isRollback && isPublish) ||
+        (isRollback && unverified.rolledBack === false) ||
+        (isPublish && unverified.rolledBack === true);
 
-      const isPublish =
-        (unverified.snapshotData as any)?.operationType === "PUBLISH" ||
-        Boolean(unverified.operationId?.startsWith("pub-")) ||
-        (Boolean(unverified.releaseApprovalId) && !isRollback);
-
-      if (!isRollback && !isPublish) {
+      // Approval IDs may be inherited from the target release; they do not identify an operation.
+      if (invalidIdentity || conflictingIdentity || (!isRollback && !isPublish)) {
+        const errorCode = conflictingIdentity ? "recovery_operation_conflict" : "recovery_ambiguous_operation";
         await this.store.updateDeployment({
           id: unverified.id,
           status: "needs_review",
-          errorCode: "recovery_ambiguous_operation",
-          errorMessage: "Pending deployment lacks explicit operation-type evidence (neither valid publish nor rollback metadata). Cannot verify.",
+          errorCode,
+          errorMessage: "Pending deployment operation type, ID prefix, and rollback flag must identify one consistent operation.",
         });
         return {
           reconciled: true,
-          details: `Deployment '${unverified.id}' moved to needs_review due to ambiguous operation type.`,
+          details: `Deployment '${unverified.id}' moved to needs_review: ${errorCode}.`,
         };
       }
 
@@ -1298,7 +1305,6 @@ export class GovernedDeliveryService {
     const initiatingActor = snapshot.initiatingActor;
     const toVersionId = snapshot.toVersionId ?? unverified.versionId;
     const fromVersionId = snapshot.fromVersionId ?? unverified.previousVersionId;
-    const candidateRoutes = (unverified.candidateRoutes as string[]) ?? ["/"];
 
     // 1. Missing target or operator evidence -> fail closed with needs_review (no guessing)
     if (!targetDeploymentId || !initiatingActor || !initiatingActor.actorId || !toVersionId) {
@@ -1348,6 +1354,38 @@ export class GovernedDeliveryService {
         details: `Deployment '${unverified.id}' moved to needs_review: target rollback deployment invalid.`,
       };
     }
+
+    // Both historical manifests must be complete, valid, and describe the same exact route set.
+    // Never reconstruct historical routes from current site inputs or a homepage default.
+    const pendingRoutes = unverified.candidateRoutes;
+    const targetRoutes = targetDep.candidateRoutes;
+    const routesMissing = [pendingRoutes, targetRoutes].some(
+      (routes) => routes == null || (Array.isArray(routes) && routes.length === 0),
+    );
+    const validRoutes = (routes: unknown): routes is string[] =>
+      Array.isArray(routes) &&
+      routes.length > 0 && routes.length <= 200 &&
+      routes.every((route) => productionRouteSchema.safeParse(route).success) &&
+      new Set(routes).size === routes.length;
+
+    if (
+      !validRoutes(pendingRoutes) || !validRoutes(targetRoutes) ||
+      pendingRoutes.length !== targetRoutes.length ||
+      !pendingRoutes.every((route) => targetRoutes.includes(route))
+    ) {
+      const errorCode = routesMissing ? "recovery_routes_missing" : "recovery_routes_mismatch";
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode,
+        errorMessage: "Pending rollback and verified target release must contain the same complete, valid historical route manifest.",
+      });
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' moved to needs_review: ${errorCode}.`,
+      };
+    }
+    const candidateRoutes = targetRoutes;
 
     // 3. Validate target release QA evidence
     const qaRunId = snapshot.targetQaRunId ?? targetDep.qaRunId;

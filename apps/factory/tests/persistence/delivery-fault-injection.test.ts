@@ -254,6 +254,7 @@ test("P0-01 & P0-02 Fault-injection and crash recovery matrix", async () => {
   const stuckDepId1 = `dep-fail-qa-${suffix}`;
   await store.createDeployment({
     id: stuckDepId1,
+    operationId: `pub-${stuckDepId1}`,
     siteId,
     sourceCommit: shaA,
     workerName,
@@ -280,6 +281,7 @@ test("P0-01 & P0-02 Fault-injection and crash recovery matrix", async () => {
   const stuckDepId2 = `dep-no-appr-${suffix}`;
   await store.createDeployment({
     id: stuckDepId2,
+    operationId: `pub-${stuckDepId2}`,
     siteId,
     sourceCommit: shaA,
     workerName,
@@ -304,6 +306,7 @@ test("P0-01 & P0-02 Fault-injection and crash recovery matrix", async () => {
   const stuckDepId3 = `dep-no-digest-${suffix}`;
   await store.createDeployment({
     id: stuckDepId3,
+    operationId: `pub-${stuckDepId3}`,
     siteId,
     sourceCommit: shaA,
     workerName,
@@ -327,6 +330,7 @@ test("P0-01 & P0-02 Fault-injection and crash recovery matrix", async () => {
   const stuckDepId4 = `dep-no-routes-${suffix}`;
   await store.createDeployment({
     id: stuckDepId4,
+    operationId: `pub-${stuckDepId4}`,
     siteId,
     sourceCommit: shaA,
     workerName,
@@ -350,6 +354,7 @@ test("P0-01 & P0-02 Fault-injection and crash recovery matrix", async () => {
   const stuckDepId5 = `dep-valid-${suffix}`;
   await store.createDeployment({
     id: stuckDepId5,
+    operationId: `pub-${stuckDepId5}`,
     siteId,
     sourceCommit: shaA,
     workerName,
@@ -752,6 +757,7 @@ test("P0-01 & P0-02 Fault-injection and crash recovery matrix", async () => {
   const stuckDepIdTampered = `dep-tampered-seal-${suffix}`;
   await store.createDeployment({
     id: stuckDepIdTampered,
+    operationId: `pub-${stuckDepIdTampered}`,
     siteId,
     sourceCommit: shaA,
     workerName,
@@ -812,6 +818,7 @@ test("P0-01 & P0-02 Fault-injection and crash recovery matrix", async () => {
   const stuckDepIdRevoked = `dep-revoked-sess-${suffix}`;
   await store.createDeployment({
     id: stuckDepIdRevoked,
+    operationId: `pub-${stuckDepIdRevoked}`,
     siteId,
     sourceCommit: shaA,
     workerName,
@@ -858,6 +865,7 @@ test("P0-01 & P0-02 Fault-injection and crash recovery matrix", async () => {
   const stuckDepIdMismatchedQa = `dep-mismatched-qa-${suffix}`;
   await store.createDeployment({
     id: stuckDepIdMismatchedQa,
+    operationId: `pub-${stuckDepIdMismatchedQa}`,
     siteId,
     sourceCommit: shaA,
     workerName,
@@ -882,8 +890,9 @@ test("P0-01 & P0-02 Fault-injection and crash recovery matrix", async () => {
   await dbInst.close();
 });
 
-test("P0 & P1 Rollback Crash Recovery Matrix (Separate Semantics, Pre-Mutation Intent, Idempotent Transitions)", async () => {
+test("P0 & P1 Rollback Crash Recovery Matrix (Separate Semantics, Pre-Mutation Intent, Idempotent Transitions)", async (t) => {
   const dbInst = await createTestDatabase();
+  t.after(() => dbInst.close());
   const db = dbInst.db;
   const store = new FactoryStore(db);
   const repoRoot = await resolveRepositoryRoot();
@@ -918,11 +927,11 @@ test("P0 & P1 Rollback Crash Recovery Matrix (Separate Semantics, Pre-Mutation I
   };
 
   let mockQaPassed = true;
-  const qaRunner = async () => ({
-    passed: mockQaPassed,
-    exitCode: mockQaPassed ? 0 : 1,
-    timedOut: false,
-  });
+  const recoveryQaCalls: Array<{ phase: string; candidateRoutes?: readonly string[] }> = [];
+  const qaRunner = async (input: { phase: string; candidateRoutes?: readonly string[] }) => {
+    recoveryQaCalls.push(input);
+    return { passed: mockQaPassed, exitCode: mockQaPassed ? 0 : 1, timedOut: false };
+  };
 
   let currentInputIds: string[] = [];
   const mockProdStore = {
@@ -995,15 +1004,15 @@ test("P0 & P1 Rollback Crash Recovery Matrix (Separate Semantics, Pre-Mutation I
   const sha = buildIdentity.repositorySha;
 
   // Helper to create and seed a verified candidate
-  async function createCandidate(candId: string, versionOffset: number) {
+  async function createCandidate(candId: string, versionOffset: number, routes = SUTHERLAND_SIX_ROUTES) {
     const candidateDist = path.resolve(repoRoot, ".factory", "production", "projects", projectId, "candidates", candId, "dist");
     await mkdir(candidateDist, { recursive: true });
     await writeFile(path.join(candidateDist, "index.html"), `<html><body>Candidate ${candId}</body></html>`, "utf8");
     const digest = await computeArtifactDigest(candidateDist);
 
     const inputIds: string[] = [];
-    for (let idx = 0; idx < SUTHERLAND_SIX_ROUTES.length; idx++) {
-      const route = SUTHERLAND_SIX_ROUTES[idx]!;
+    for (let idx = 0; idx < routes.length; idx++) {
+      const route = routes[idx]!;
       const inputId = `input-${candId}-${route.replace(/[^a-z0-9]/gi, "_")}-${suffix}`;
       inputIds.push(inputId);
       await db.insert(productionPageInputs).values({
@@ -1051,8 +1060,8 @@ test("P0 & P1 Rollback Crash Recovery Matrix (Separate Semantics, Pre-Mutation I
       state: "qa_passed",
     });
 
-    for (let idx = 0; idx < SUTHERLAND_SIX_ROUTES.length; idx++) {
-      const route = SUTHERLAND_SIX_ROUTES[idx]!;
+    for (let idx = 0; idx < routes.length; idx++) {
+      const route = routes[idx]!;
       await db.insert(productionCandidateInputs).values({
         candidateId: candId,
         projectId,
@@ -1444,6 +1453,158 @@ test("P0 & P1 Rollback Crash Recovery Matrix (Separate Semantics, Pre-Mutation I
   assert.equal(latestPublishTransition.candidateId, candD.candId);
   assert.equal(latestPublishTransition.actorId, "operator-publisher");
 
+  // Recovery must reject damaged historical evidence before provider QA or finalization.
+  await simulatedWrangler.promote(workerName, previewA.versionId!);
+  async function pendingRollback(id: string, overrides: Record<string, unknown> = {}) {
+    return store.createDeployment({
+      siteId,
+      sourceCommit: sha,
+      workerName,
+      productionUrl,
+      versionId: previewA.versionId!,
+      previousVersionId: previewB.versionId!,
+      candidateId: candA.candId,
+      artifactDigest: candA.digest,
+      qaRunId: candA.qaRunId,
+      releaseApprovalId: approvalA.id,
+      candidateRoutes: SUTHERLAND_SIX_ROUTES,
+      rolledBack: true,
+      executionOrigin: "TEST_SIMULATION",
+      snapshotData: stuckRollbackDep!.snapshotData,
+      id,
+      status: "promoted",
+      operationId: `rb-${id}`,
+      productionVerified: false,
+      ...overrides,
+    });
+  }
+
+  const badManifests = [
+    { name: "missing", routes: null, code: "recovery_routes_missing" },
+    { name: "empty", routes: [], code: "recovery_routes_missing" },
+    { name: "incomplete", routes: ["/"], code: "recovery_routes_mismatch" },
+    { name: "wrong-route", routes: ["/", "/about", "/contact", "/insights", "/services", "/other"], code: "recovery_routes_mismatch" },
+    { name: "extra-route", routes: [...SUTHERLAND_SIX_ROUTES, "/other"], code: "recovery_routes_mismatch" },
+    { name: "duplicate", routes: [...SUTHERLAND_SIX_ROUTES, "/"], code: "recovery_routes_mismatch" },
+    { name: "not-array", routes: "/", code: "recovery_routes_mismatch" },
+    { name: "not-string", routes: ["/", 42], code: "recovery_routes_mismatch" },
+    { name: "invalid-path", routes: ["/", "//about"], code: "recovery_routes_mismatch" },
+  ];
+  for (const manifest of badManifests) {
+    for (const source of ["operation", "target"] as const) {
+      await t.test(`P0 rejects ${manifest.name} ${source} route manifest`, async () => {
+        const id = `dep-routes-${source}-${manifest.name}-${suffix}`;
+        let targetId = publishedA.id;
+        if (source === "target") {
+          targetId = `target-${id}`;
+          await store.createDeployment({ ...publishedA, id: targetId, status: "verified", executionOrigin: "TEST_SIMULATION", candidateRoutes: manifest.routes });
+        }
+        await pendingRollback(id, source === "operation"
+          ? { candidateRoutes: manifest.routes }
+          : { snapshotData: { ...(stuckRollbackDep!.snapshotData as object), targetDeploymentId: targetId } });
+        const before = (await store.listEffectiveTransitions(siteId, 100)).length;
+        const qaBefore = recoveryQaCalls.length;
+        await governedDelivery.reconcilePendingDeployments(siteId);
+        const recovered = await store.getDeployment(id);
+        assert.equal(recovered?.status, "needs_review");
+        assert.equal(recovered?.errorCode, manifest.code);
+        assert.equal(recovered?.productionVerified, false);
+        assert.equal(recoveryQaCalls.length, qaBefore, "Invalid routes must never reach QA");
+        assert.equal((await store.listEffectiveTransitions(siteId, 100)).length, before);
+      });
+    }
+  }
+
+  const identityCases = [
+    { name: "publish-type-rollback-id", type: "PUBLISH", prefix: "rb", flag: true, code: "recovery_operation_conflict" },
+    { name: "rollback-type-publish-id", type: "ROLLBACK", prefix: "pub", flag: true, code: "recovery_operation_conflict" },
+    { name: "publish-with-rollback-flag", type: "PUBLISH", prefix: "pub", flag: true, code: "recovery_operation_conflict" },
+    { name: "rollback-with-publish-flag", type: "ROLLBACK", prefix: "rb", flag: false, code: "recovery_operation_conflict" },
+    { name: "unknown-type", type: "UNKNOWN", prefix: "rb", flag: true, code: "recovery_ambiguous_operation" },
+    { name: "unknown-prefix", type: "ROLLBACK", prefix: "unknown", flag: true, code: "recovery_ambiguous_operation" },
+    { name: "approval-alone", type: null, prefix: null, flag: false, code: "recovery_ambiguous_operation" },
+    { name: "flag-alone", type: null, prefix: null, flag: true, code: "recovery_ambiguous_operation" },
+  ];
+  for (const identity of identityCases) {
+    await t.test(`P1 rejects ${identity.name}`, async () => {
+      const id = `dep-identity-${identity.name}-${suffix}`;
+      await pendingRollback(id, {
+        operationId: identity.prefix ? `${identity.prefix}-${id}` : null,
+        rolledBack: identity.flag,
+        snapshotData: { ...(stuckRollbackDep!.snapshotData as object), operationType: identity.type },
+      });
+      const before = (await store.listEffectiveTransitions(siteId, 100)).length;
+      const qaBefore = recoveryQaCalls.length;
+      await governedDelivery.reconcilePendingDeployments(siteId);
+      const recovered = await store.getDeployment(id);
+      assert.equal(recovered?.status, "needs_review");
+      assert.equal(recovered?.errorCode, identity.code);
+      assert.equal(recovered?.productionVerified, false);
+      assert.equal(recoveryQaCalls.length, qaBefore);
+      assert.equal((await store.listEffectiveTransitions(siteId, 100)).length, before);
+    });
+  }
+
+  await t.test("P0 complete historical routes reach rollback QA and finalize exactly once", async () => {
+    const id = `dep-complete-routes-${suffix}`;
+    await pendingRollback(id, { candidateRoutes: [...SUTHERLAND_SIX_ROUTES].reverse() });
+    const before = (await store.listEffectiveTransitions(siteId, 100)).length;
+    const qaBefore = recoveryQaCalls.length;
+    await governedDelivery.reconcilePendingDeployments(siteId);
+    assert.equal((await store.getDeployment(id))?.status, "rolled_back");
+    assert.equal(recoveryQaCalls.length, qaBefore + 1);
+    assert.equal(recoveryQaCalls.at(-1)?.phase, "rollback");
+    assert.deepEqual(recoveryQaCalls.at(-1)?.candidateRoutes, SUTHERLAND_SIX_ROUTES);
+    const transitions = await store.listEffectiveTransitions(siteId, 100);
+    assert.equal(transitions.length, before + 1);
+    assert.deepEqual(transitions[0]!.candidateRoutes, SUTHERLAND_SIX_ROUTES);
+    assert.equal(transitions[0]!.eventType, "ROLLBACK");
+    await governedDelivery.reconcilePendingDeployments(siteId);
+    assert.equal((await store.listEffectiveTransitions(siteId, 100)).length, before + 1);
+  });
+
+  await t.test("P0 complete routes with failed rollback QA create no transition", async () => {
+    const id = `dep-complete-failed-qa-${suffix}`;
+    await pendingRollback(id);
+    const before = (await store.listEffectiveTransitions(siteId, 100)).length;
+    mockQaPassed = false;
+    try {
+      await governedDelivery.reconcilePendingDeployments(siteId);
+    } finally {
+      mockQaPassed = true;
+    }
+    assert.equal((await store.getDeployment(id))?.status, "needs_review");
+    assert.equal((await store.getDeployment(id))?.errorCode, "recovery_qa_failed");
+    assert.equal((await store.listEffectiveTransitions(siteId, 100)).length, before);
+  });
+
+  await t.test("P0 genuinely one-page historical release remains recoverable", async () => {
+    const one = await createCandidate(`cand-one-${suffix}`, 500, ["/"]);
+    currentInputIds = one.inputIds;
+    const preview = await governedDelivery.prepareCandidatePreview({ projectId, candidateId: one.candId, sessionToken: publisherSessionToken });
+    const approval = await governedDelivery.approveRelease({ projectId, candidateId: one.candId, previewVersionId: preview.versionId!, sessionToken: publisherSessionToken });
+    const target = await governedDelivery.publishApprovedRelease({ projectId, candidateId: one.candId, previewVersionId: preview.versionId!, approvalId: approval.id, sessionToken: publisherSessionToken });
+    const id = `dep-one-page-${suffix}`;
+    await pendingRollback(id, {
+      versionId: target.versionId,
+      candidateId: one.candId,
+      artifactDigest: one.digest,
+      qaRunId: target.qaRunId,
+      releaseApprovalId: approval.id,
+      candidateRoutes: ["/"],
+      snapshotData: {
+        ...(stuckRollbackDep!.snapshotData as object),
+        targetDeploymentId: target.id,
+        toVersionId: target.versionId,
+        targetQaRunId: target.qaRunId,
+        targetCandidateId: one.candId,
+        targetArtifactDigest: one.digest,
+      },
+    });
+    await governedDelivery.reconcilePendingDeployments(siteId);
+    assert.equal((await store.getDeployment(id))?.status, "rolled_back");
+    assert.deepEqual(recoveryQaCalls.at(-1)?.candidateRoutes, ["/"]);
+  });
+
   await rm(path.resolve(repoRoot, ".factory", "production", "projects", projectId), { recursive: true, force: true }).catch(() => {});
-  await dbInst.close();
 });

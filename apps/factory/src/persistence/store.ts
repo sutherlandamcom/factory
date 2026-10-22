@@ -739,6 +739,7 @@ export class FactoryStore {
         .set({
           status: targetStatus,
           productionVerified: true,
+          ...(targetStatus === "rolled_back" ? { rolledBack: true } : {}),
           verifiedAt,
           errorCode: null,
           errorMessage: null,

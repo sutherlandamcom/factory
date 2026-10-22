@@ -881,3 +881,569 @@ test("P0-01 & P0-02 Fault-injection and crash recovery matrix", async () => {
   await rm(path.resolve(repoRoot, ".factory", "production", "projects", projectId), { recursive: true, force: true }).catch(() => {});
   await dbInst.close();
 });
+
+test("P0 & P1 Rollback Crash Recovery Matrix (Separate Semantics, Pre-Mutation Intent, Idempotent Transitions)", async () => {
+  const dbInst = await createTestDatabase();
+  const db = dbInst.db;
+  const store = new FactoryStore(db);
+  const repoRoot = await resolveRepositoryRoot();
+  const prodStore = new ProductionStore(db, { repoRoot });
+
+  const suffix = randomUUID().slice(0, 8);
+  const projectId = `proj-rb-rec-${suffix}`;
+  const siteId = `site-rb-rec-${suffix}`;
+  const workerName = `worker-rb-rec-${suffix}`;
+  const productionUrl = "https://rollback-recovery-test.pages.dev";
+
+  const keyring = new AuditSealKeyring({
+    activeKeyId: "v1",
+    keys: { v1: "c".repeat(64) },
+  });
+  const revocationStore = new PostgreSqlSessionRevocationStore(db);
+  const { idp, signAssertion } = ReleaseIdentityProvider.createTestHarness("test-rb-recovery-idp", db);
+  const releaseBoundary = new ReleaseApprovalBoundary(db, { keyring, idp, revocationStore });
+
+  const simulatedWrangler = new SimulatedWrangler();
+  const wranglerFactory = () => simulatedWrangler;
+
+  const worktreeProvider = {
+    async prepare(_root: string, _commit: string, id: string) {
+      const wtDir = path.join(tmpdir(), `test-rb-rec-wt-${id}-${randomUUID()}`);
+      await mkdir(path.join(wtDir, "sites", "starter"), { recursive: true });
+      return wtDir;
+    },
+    async remove(_root: string, wt: string) {
+      await rm(wt, { recursive: true, force: true }).catch(() => {});
+    },
+  };
+
+  let mockQaPassed = true;
+  const qaRunner = async () => ({
+    passed: mockQaPassed,
+    exitCode: mockQaPassed ? 0 : 1,
+    timedOut: false,
+  });
+
+  let currentInputIds: string[] = [];
+  const mockProdStore = {
+    inputStaleness: async () => ({ stale: false, reason: null }),
+    candidateStaleness: async () => ({ stale: false, reason: null }),
+    getCandidate: (...args: [string, string]) => prodStore.getCandidate(...args),
+    latestQaRun: (...args: [string, string]) => prodStore.latestQaRun(...args),
+    getQaRun: (...args: [string]) => prodStore.getQaRun(...args),
+    listCandidateInputs: (...args: [string, string]) => prodStore.listCandidateInputs(...args),
+    listProductionInputs: async (pId: string) => {
+      const all = await prodStore.listProductionInputs(pId);
+      return currentInputIds.length ? all.filter((i) => currentInputIds.includes(i.id)) : all;
+    },
+    listCandidateRedirects: (...args: [string, string]) => prodStore.listCandidateRedirects(...args),
+    getProductionInputById: (...args: [string]) => prodStore.getProductionInputById(...args),
+  } as unknown as ProductionStore;
+
+  const governedDelivery = new GovernedDeliveryService({
+    db,
+    repoRoot,
+    store,
+    productionStore: mockProdStore,
+    releaseBoundary,
+    wranglerFactory,
+    worktreeProvider,
+    qaRunner,
+  });
+
+  // Seed project, site, and two distinct operators
+  await db.insert(projects).values({ id: projectId, key: projectId, name: "Rollback Recovery Test" });
+  await db.insert(sites).values({
+    id: siteId,
+    projectId,
+    key: `rb-rec-site-${suffix}`,
+    name: "Rollback Recovery Site",
+    cloudflareWorkerName: workerName,
+    productionUrl,
+  });
+
+  await db.insert(projectReviewerMemberships).values([
+    {
+      id: `mem-pub-${suffix}`,
+      projectId,
+      actorId: "operator-publisher",
+      actorRole: "DEPLOYMENT_ADMIN",
+      permissions: ["DEPLOYMENT:PREVIEW", "DEPLOYMENT:APPROVE", "DEPLOYMENT:PUBLISH", "DEPLOYMENT:MONITOR"],
+    },
+    {
+      id: `mem-rb-${suffix}`,
+      projectId,
+      actorId: "operator-rollback",
+      actorRole: "DEPLOYMENT_ADMIN",
+      permissions: ["DEPLOYMENT:PREVIEW", "DEPLOYMENT:APPROVE", "DEPLOYMENT:PUBLISH", "DEPLOYMENT:MONITOR"],
+    },
+  ]);
+
+  const publisherSessionToken = signAssertion({
+    actorId: "operator-publisher",
+    actorName: "Original Publisher",
+    actorRole: "DEPLOYMENT_ADMIN",
+  });
+
+  const rollbackSessionToken = signAssertion({
+    actorId: "operator-rollback",
+    actorName: "Rollback Operator",
+    actorRole: "DEPLOYMENT_ADMIN",
+  });
+
+  const buildIdentity = await loadProductionBuildIdentity(repoRoot);
+  const sha = buildIdentity.repositorySha;
+
+  // Helper to create and seed a verified candidate
+  async function createCandidate(candId: string, versionOffset: number) {
+    const candidateDist = path.resolve(repoRoot, ".factory", "production", "projects", projectId, "candidates", candId, "dist");
+    await mkdir(candidateDist, { recursive: true });
+    await writeFile(path.join(candidateDist, "index.html"), `<html><body>Candidate ${candId}</body></html>`, "utf8");
+    const digest = await computeArtifactDigest(candidateDist);
+
+    const inputIds: string[] = [];
+    for (let idx = 0; idx < SUTHERLAND_SIX_ROUTES.length; idx++) {
+      const route = SUTHERLAND_SIX_ROUTES[idx]!;
+      const inputId = `input-${candId}-${route.replace(/[^a-z0-9]/gi, "_")}-${suffix}`;
+      inputIds.push(inputId);
+      await db.insert(productionPageInputs).values({
+        id: inputId,
+        projectId,
+        version: idx + versionOffset,
+        pageIdentity: route === "/" ? "home" : route.slice(1),
+        pageType: route === "/" ? "homepage" : "service",
+        route,
+        canonicalOrigin: productionUrl,
+        acceptedContentId: `c-${inputId}`,
+        acceptedContentVersion: 1,
+        acceptedContentDigest: digest,
+        acceptedDesignId: `d-${inputId}`,
+        acceptedDesignVersion: 1,
+        acceptedDesignDigest: digest,
+        acceptedVisualSetId: `v-${inputId}`,
+        acceptedVisualSetVersion: 1,
+        acceptedVisualSetDigest: digest,
+        rendererId: "astro-static",
+        rendererVersion: buildIdentity.rendererVersion,
+        rendererPolicyVersion: "production-policy-v3",
+        data: {},
+        inputDigest: digest,
+      });
+    }
+
+    await db.insert(productionCandidates).values({
+      id: candId,
+      projectId,
+      productionInputId: inputIds[0]!,
+      productionInputVersion: versionOffset,
+      productionInputDigest: digest,
+      pageIdentity: "sutherland-multi",
+      route: "/",
+      canonicalUrl: productionUrl + "/",
+      artifactDigest: digest,
+      artifactRef: candidateDist,
+      manifestSetDigest: digest,
+      redirectSnapshotDigest: digest,
+      siteProfileDigest: buildIdentity.siteIdentity.profileDigest,
+      lockfileDigest: buildIdentity.lockfileDigest,
+      rendererVersion: buildIdentity.rendererVersion,
+      repositorySha: sha,
+      state: "qa_passed",
+    });
+
+    for (let idx = 0; idx < SUTHERLAND_SIX_ROUTES.length; idx++) {
+      const route = SUTHERLAND_SIX_ROUTES[idx]!;
+      await db.insert(productionCandidateInputs).values({
+        candidateId: candId,
+        projectId,
+        productionInputId: inputIds[idx]!,
+        productionInputVersion: idx + versionOffset,
+        productionInputDigest: digest,
+        pageIdentity: route === "/" ? "home" : route.slice(1),
+        route,
+        manifestDigest: digest,
+      });
+    }
+
+    const qaRunId = `qa-${candId}-${suffix}`;
+    await db.insert(productionQaRuns).values({
+      id: qaRunId,
+      projectId,
+      candidateId: candId,
+      candidateArtifactDigest: digest,
+      overall: "PASS",
+      data: {
+        schemaVersion: "production-v1",
+        candidateId: candId,
+        checks: [],
+        overall: "PASS",
+        provenance: {
+          trustMode: "STRICT_PRODUCTION",
+          publicationEligible: true,
+          reviewAuthorityMode: "VERIFIED_HUMAN",
+        },
+      },
+    });
+
+    return { candId, digest, inputIds, qaRunId };
+  }
+
+  // 1. Publish Release A
+  const candA = await createCandidate(`cand-A-${suffix}`, 100);
+  currentInputIds = candA.inputIds;
+  const previewA = await governedDelivery.prepareCandidatePreview({
+    projectId,
+    candidateId: candA.candId,
+    sessionToken: publisherSessionToken,
+  });
+  const approvalA = await governedDelivery.approveRelease({
+    projectId,
+    candidateId: candA.candId,
+    previewVersionId: previewA.versionId!,
+    sessionToken: publisherSessionToken,
+  });
+  const publishedA = await governedDelivery.publishApprovedRelease({
+    projectId,
+    candidateId: candA.candId,
+    previewVersionId: previewA.versionId!,
+    approvalId: approvalA.id,
+    sessionToken: publisherSessionToken,
+  });
+  assert.equal(publishedA.status, "verified");
+
+  // 2. Publish Release B
+  const candB = await createCandidate(`cand-B-${suffix}`, 200);
+  currentInputIds = candB.inputIds;
+  const previewB = await governedDelivery.prepareCandidatePreview({
+    projectId,
+    candidateId: candB.candId,
+    sessionToken: publisherSessionToken,
+  });
+  const approvalB = await governedDelivery.approveRelease({
+    projectId,
+    candidateId: candB.candId,
+    previewVersionId: previewB.versionId!,
+    sessionToken: publisherSessionToken,
+  });
+  const publishedB = await governedDelivery.publishApprovedRelease({
+    projectId,
+    candidateId: candB.candId,
+    previewVersionId: previewB.versionId!,
+    approvalId: approvalB.id,
+    sessionToken: publisherSessionToken,
+  });
+  assert.equal(publishedB.status, "verified");
+
+  // Initial timeline check: PUBLISH A followed by PUBLISH B
+  const initialTransitions = await store.listEffectiveTransitions(siteId, 10);
+  assert.equal(initialTransitions.length, 2);
+  assert.equal(initialTransitions[0]!.eventType, "PUBLISH");
+  assert.equal(initialTransitions[0]!.toVersionId, previewB.versionId);
+  assert.equal(initialTransitions[1]!.eventType, "PUBLISH");
+  assert.equal(initialTransitions[1]!.toVersionId, previewA.versionId);
+
+  // ---------------------------------------------------------------------------
+  // Case 1 (P0 Core): A -> B -> interrupted rollback A -> recovery
+  // Assert: eventType === "ROLLBACK" (NEVER "PUBLISH"), actor is rollback operator
+  // ---------------------------------------------------------------------------
+  let capturedRollbackDepId: string | null = null;
+  const origCreateDeployment = store.createDeployment.bind(store);
+  store.createDeployment = async (input: any) => {
+    const created = await origCreateDeployment(input);
+    if (created.id.startsWith("dep-rb-")) {
+      capturedRollbackDepId = created.id;
+    }
+    return created;
+  };
+
+  const origFinalize = store.finalizeDeploymentAndTransitionAtomic.bind(store);
+  store.finalizeDeploymentAndTransitionAtomic = async () => {
+    throw new Error("Simulated database crash during rollback atomic finalization");
+  };
+
+  // Rollback operator initiates rollback B -> A
+  await assert.rejects(
+    governedDelivery.rollbackExplicit({
+      projectId,
+      targetVersionId: previewA.versionId!,
+      sessionToken: rollbackSessionToken,
+    }),
+    /Simulated database crash during rollback atomic finalization/,
+  );
+
+  // Verify: Rollback intent was persisted before failure
+  assert.ok(capturedRollbackDepId, "Rollback deployment must be persisted");
+  const stuckRollbackDep = await store.getDeployment(capturedRollbackDepId!);
+  assert.equal(stuckRollbackDep?.status, "promoted", "Stuck rollback must remain in promoted, NOT prematurely rolled_back");
+  assert.equal(stuckRollbackDep?.versionId, previewA.versionId);
+  assert.equal(stuckRollbackDep?.previousVersionId, previewB.versionId);
+  assert.equal((stuckRollbackDep?.snapshotData as any)?.operationType, "ROLLBACK");
+
+  // Restore atomic finalization
+  store.createDeployment = origCreateDeployment;
+  store.finalizeDeploymentAndTransitionAtomic = origFinalize;
+
+  // Run crash recovery
+  const reconRollback = await governedDelivery.reconcilePendingDeployments(siteId);
+  assert.equal(reconRollback.reconciled, true);
+
+  // Assert: Recovered deployment is now rolled_back
+  const recoveredDep = await store.getDeployment(capturedRollbackDepId!);
+  assert.equal(recoveredDep?.status, "rolled_back", "Interrupted rollback must recover to rolled_back");
+  assert.equal(recoveredDep?.productionVerified, true);
+  assert.equal(recoveredDep?.rolledBack, true);
+
+  // P0 Core Assertions: Effective transition MUST be ROLLBACK, NOT PUBLISH
+  const transitionsAfterRecovery = await store.listEffectiveTransitions(siteId, 10);
+  assert.equal(transitionsAfterRecovery.length, 3, "Exactly 3 transitions must exist");
+
+  const latestTransition = transitionsAfterRecovery[0]!;
+  assert.equal(latestTransition.eventType, "ROLLBACK", "Recovered event MUST be ROLLBACK, never PUBLISH (P0)");
+  assert.equal(latestTransition.fromVersionId, previewB.versionId, "fromVersionId must be Version B");
+  assert.equal(latestTransition.toVersionId, previewA.versionId, "toVersionId must be Version A");
+  assert.equal(latestTransition.candidateId, candA.candId, "Restored candidate must match Release A");
+  assert.equal(latestTransition.artifactDigest, candA.digest, "Restored artifactDigest must match Release A");
+  assert.equal(latestTransition.actorId, "operator-rollback", "Actor MUST be the actual rollback operator (P0)");
+  assert.equal(latestTransition.actorName, "Rollback Operator");
+  assert.equal(latestTransition.actorRole, "DEPLOYMENT_ADMIN");
+
+  // Timeline integrity: PUBLISH A -> PUBLISH B -> ROLLBACK A
+  assert.deepEqual(
+    transitionsAfterRecovery.map((t) => ({ eventType: t.eventType, to: t.toVersionId, actor: t.actorId })),
+    [
+      { eventType: "ROLLBACK", to: previewA.versionId, actor: "operator-rollback" },
+      { eventType: "PUBLISH", to: previewB.versionId, actor: "operator-publisher" },
+      { eventType: "PUBLISH", to: previewA.versionId, actor: "operator-publisher" },
+    ],
+  );
+
+  // ---------------------------------------------------------------------------
+  // Case 2 (P1 Core): Crash immediately after Cloudflare rollback (persisted intent allows recovery)
+  // ---------------------------------------------------------------------------
+  // First publish Release C so we can test another rollback
+  const candC = await createCandidate(`cand-C-${suffix}`, 300);
+  currentInputIds = candC.inputIds;
+  const previewC = await governedDelivery.prepareCandidatePreview({
+    projectId,
+    candidateId: candC.candId,
+    sessionToken: publisherSessionToken,
+  });
+  const approvalC = await governedDelivery.approveRelease({
+    projectId,
+    candidateId: candC.candId,
+    previewVersionId: previewC.versionId!,
+    sessionToken: publisherSessionToken,
+  });
+  await governedDelivery.publishApprovedRelease({
+    projectId,
+    candidateId: candC.candId,
+    previewVersionId: previewC.versionId!,
+    approvalId: approvalC.id,
+    sessionToken: publisherSessionToken,
+  });
+
+  // Now initiate rollback C -> B, crashing immediately after Cloudflare rollback
+  let intentDeploymentCreated: any = null;
+  store.createDeployment = async (input: any) => {
+    const created = await origCreateDeployment(input);
+    if (created.id.startsWith("dep-rb-")) {
+      intentDeploymentCreated = created;
+    }
+    return created;
+  };
+
+  const origRollback = simulatedWrangler.rollback.bind(simulatedWrangler);
+  const origUpdateDeployment = store.updateDeployment.bind(store);
+  simulatedWrangler.rollback = async (worker: string, ver: string) => {
+    await origRollback(worker, ver);
+    // Persisted intent already exists before mutation!
+    assert.ok(intentDeploymentCreated, "Rollback intent MUST be persisted in PostgreSQL BEFORE Cloudflare mutation (P1)");
+    assert.equal(intentDeploymentCreated.status, "promoting", "Pre-mutation rollback intent must be in promoting status");
+    // Simulate process crash: DB updates fail / process halts immediately after Cloudflare mutation
+    store.updateDeployment = async () => {
+      throw new Error("Simulated process crash immediately after Cloudflare rollback");
+    };
+    throw new Error("Simulated process crash immediately after Cloudflare rollback");
+  };
+
+  await assert.rejects(
+    governedDelivery.rollbackExplicit({
+      projectId,
+      targetVersionId: previewB.versionId!,
+      sessionToken: rollbackSessionToken,
+    }),
+    /Simulated process crash immediately after Cloudflare rollback/,
+  );
+
+  // Restore simulated wrangler and store
+  simulatedWrangler.rollback = origRollback;
+  store.createDeployment = origCreateDeployment;
+  store.updateDeployment = origUpdateDeployment;
+
+  // Cloudflare is running target version B, but Factory process was interrupted
+  const cfActive = await simulatedWrangler.currentProductionVersion(workerName);
+  assert.equal(cfActive, previewB.versionId, "Cloudflare switched to target version B before crash");
+
+  // Reconcile: Pending intent in PostgreSQL allows complete, accurate recovery!
+  const reconCrashPostMutation = await governedDelivery.reconcilePendingDeployments(siteId);
+  assert.equal(reconCrashPostMutation.reconciled, true);
+
+  const depPostMutation = await store.getDeployment(intentDeploymentCreated.id);
+  assert.equal(depPostMutation?.status, "rolled_back", "Interrupted post-mutation rollback must recover to rolled_back");
+
+  const transitionsAfterPostMutation = await store.listEffectiveTransitions(siteId, 10);
+  assert.equal(transitionsAfterPostMutation[0]!.eventType, "ROLLBACK");
+  assert.equal(transitionsAfterPostMutation[0]!.toVersionId, previewB.versionId);
+  assert.equal(transitionsAfterPostMutation[0]!.fromVersionId, previewC.versionId);
+  assert.equal(transitionsAfterPostMutation[0]!.actorId, "operator-rollback");
+
+  // ---------------------------------------------------------------------------
+  // Case 3 & 4: Recovery retried twice (Idempotence)
+  // Assert: Exactly one logical ROLLBACK transition
+  // ---------------------------------------------------------------------------
+  const countBeforeSecondRecon = (await store.listEffectiveTransitions(siteId, 50)).length;
+  const secondRecon = await governedDelivery.reconcilePendingDeployments(siteId);
+  assert.equal(secondRecon.reconciled, false, "Second reconciliation must be a no-op");
+  assert.equal(secondRecon.details, "No pending or unverified deployment found.");
+
+  const countAfterSecondRecon = (await store.listEffectiveTransitions(siteId, 50)).length;
+  assert.equal(countAfterSecondRecon, countBeforeSecondRecon, "Duplicate recovery MUST NOT create duplicate transitions");
+
+  // ---------------------------------------------------------------------------
+  // Case 5: Missing target or operator evidence -> NEEDS_REVIEW, zero fabricated events
+  // ---------------------------------------------------------------------------
+  const stuckDepMissingActor = `dep-rb-missing-actor-${suffix}`;
+  await store.createDeployment({
+    id: stuckDepMissingActor,
+    siteId,
+    sourceCommit: sha,
+    workerName,
+    productionUrl,
+    versionId: previewA.versionId!,
+    previousVersionId: previewB.versionId!,
+    status: "promoting",
+    rolledBack: true,
+    candidateRoutes: SUTHERLAND_SIX_ROUTES,
+    operationId: `rb-${stuckDepMissingActor}`,
+    snapshotData: {
+      operationType: "ROLLBACK",
+      targetDeploymentId: publishedA.id,
+      // initiatingActor is intentionally omitted!
+    },
+  });
+
+  const reconMissingActor = await governedDelivery.reconcilePendingDeployments(siteId);
+  assert.equal(reconMissingActor.reconciled, true);
+  const depMissingActor = await store.getDeployment(stuckDepMissingActor);
+  assert.equal(depMissingActor?.status, "needs_review", "Missing actor evidence MUST move to needs_review (P0)");
+  assert.equal(depMissingActor?.errorCode, "recovery_rollback_evidence_missing");
+
+  // Verify: No transition was fabricated
+  const countAfterMissingActor = (await store.listEffectiveTransitions(siteId, 50)).length;
+  assert.equal(countAfterMissingActor, countAfterSecondRecon, "No transition may be fabricated when actor is missing");
+
+  // Missing target deployment
+  const stuckDepMissingTarget = `dep-rb-missing-target-${suffix}`;
+  await store.createDeployment({
+    id: stuckDepMissingTarget,
+    siteId,
+    sourceCommit: sha,
+    workerName,
+    productionUrl,
+    versionId: previewA.versionId!,
+    previousVersionId: previewB.versionId!,
+    status: "promoting",
+    rolledBack: true,
+    candidateRoutes: SUTHERLAND_SIX_ROUTES,
+    operationId: `rb-${stuckDepMissingTarget}`,
+    snapshotData: {
+      operationType: "ROLLBACK",
+      targetDeploymentId: "dep-non-existent-target",
+      initiatingActor: {
+        actorId: "operator-rollback",
+        actorName: "Rollback Operator",
+        actorRole: "DEPLOYMENT_ADMIN",
+      },
+    },
+  });
+
+  const reconMissingTarget = await governedDelivery.reconcilePendingDeployments(siteId);
+  assert.equal(reconMissingTarget.reconciled, true);
+  const depMissingTarget = await store.getDeployment(stuckDepMissingTarget);
+  assert.equal(depMissingTarget?.status, "needs_review", "Missing target deployment MUST move to needs_review");
+  assert.equal(depMissingTarget?.errorCode, "recovery_target_not_found");
+
+  // ---------------------------------------------------------------------------
+  // Case 6: Ambiguous pending record (neither publish nor rollback metadata)
+  // ---------------------------------------------------------------------------
+  const stuckAmbiguous = `dep-ambiguous-${suffix}`;
+  await store.createDeployment({
+    id: stuckAmbiguous,
+    siteId,
+    sourceCommit: sha,
+    workerName,
+    productionUrl,
+    versionId: "ver-unknown",
+    status: "promoting",
+    candidateRoutes: SUTHERLAND_SIX_ROUTES,
+    // No operationId prefix, no snapshotData, no releaseApprovalId, rolledBack=false
+  });
+
+  const reconAmbiguous = await governedDelivery.reconcilePendingDeployments(siteId);
+  assert.equal(reconAmbiguous.reconciled, true);
+  const depAmbiguous = await store.getDeployment(stuckAmbiguous);
+  assert.equal(depAmbiguous?.status, "needs_review", "Ambiguous pending record MUST fail closed with needs_review");
+  assert.equal(depAmbiguous?.errorCode, "recovery_ambiguous_operation");
+
+  // ---------------------------------------------------------------------------
+  // Case 7: Normal interrupted PUBLISH (Existing publish recovery remains correct)
+  // ---------------------------------------------------------------------------
+  const candD = await createCandidate(`cand-D-${suffix}`, 400);
+  currentInputIds = candD.inputIds;
+  const previewD = await governedDelivery.prepareCandidatePreview({
+    projectId,
+    candidateId: candD.candId,
+    sessionToken: publisherSessionToken,
+  });
+  const approvalD = await governedDelivery.approveRelease({
+    projectId,
+    candidateId: candD.candId,
+    previewVersionId: previewD.versionId!,
+    sessionToken: publisherSessionToken,
+  });
+
+  // Inject failure during publish DB finalization
+  store.finalizeDeploymentAndTransitionAtomic = async () => {
+    throw new Error("Simulated database failure during publish atomic finalization");
+  };
+
+  await assert.rejects(
+    governedDelivery.publishApprovedRelease({
+      projectId,
+      candidateId: candD.candId,
+      previewVersionId: previewD.versionId!,
+      approvalId: approvalD.id,
+      sessionToken: publisherSessionToken,
+    }),
+    /Simulated database failure during publish atomic finalization/,
+  );
+
+  // Restore finalization
+  store.finalizeDeploymentAndTransitionAtomic = origFinalize;
+
+  // Cloudflare is on Version D, deployment in promoted
+  const reconPublish = await governedDelivery.reconcilePendingDeployments(siteId);
+  assert.equal(reconPublish.reconciled, true);
+
+  const depD = await store.getDeployment(previewD.id);
+  assert.equal(depD?.status, "verified", "Interrupted publish must recover to verified");
+
+  const latestPublishTransition = (await store.listEffectiveTransitions(siteId, 1))[0]!;
+  assert.equal(latestPublishTransition.eventType, "PUBLISH", "Interrupted publish MUST recover as PUBLISH (Case A)");
+  assert.equal(latestPublishTransition.toVersionId, previewD.versionId);
+  assert.equal(latestPublishTransition.candidateId, candD.candId);
+  assert.equal(latestPublishTransition.actorId, "operator-publisher");
+
+  await rm(path.resolve(repoRoot, ".factory", "production", "projects", projectId), { recursive: true, force: true }).catch(() => {});
+  await dbInst.close();
+});

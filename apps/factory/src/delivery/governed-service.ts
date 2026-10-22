@@ -806,10 +806,56 @@ export class GovernedDeliveryService {
 
       const targetRoutes = (targetDeployment.candidateRoutes as string[]) ?? ["/"];
 
-      const fullArtifactDir = path.join(
-        this.repoRoot,
-        targetDeployment.artifactDirectory || latestDeployment.artifactDirectory || ".factory/deployments/rollback",
-      );
+      const rollbackDepId = `dep-rb-${randomUUID()}`;
+      const operationId = `rb-${rollbackDepId}`;
+      const relativeArtifactDir =
+        targetDeployment.artifactDirectory || latestDeployment.artifactDirectory || path.join(".factory", "deployments", rollbackDepId);
+      const fullArtifactDir = path.join(this.repoRoot, relativeArtifactDir);
+      await mkdir(fullArtifactDir, { recursive: true });
+
+      const tempProvider = this.wranglerFactory(this.repoRoot, fullArtifactDir);
+      const executionOrigin: ExecutionOrigin =
+        (targetDeployment.executionOrigin as ExecutionOrigin) ??
+        ((tempProvider as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
+
+      // P1: Create durable pending rollback operation in PostgreSQL before external Cloudflare mutation
+      const pendingRollbackDeployment = await this.store.createDeployment({
+        id: rollbackDepId,
+        siteId: site.id,
+        sourceCommit: targetDeployment.sourceCommit,
+        artifactDigest: targetDeployment.artifactDigest,
+        versionId: targetVersion,
+        previousVersionId: latestDeployment.versionId,
+        workerName: targetDeployment.workerName || latestDeployment.workerName,
+        productionUrl: targetDeployment.productionUrl || latestDeployment.productionUrl,
+        status: "promoting",
+        previewVerified: true,
+        productionVerified: false,
+        rolledBack: true,
+        candidateId: targetDeployment.candidateId,
+        qaRunId: targetDeployment.qaRunId ?? null,
+        releaseApprovalId: targetDeployment.releaseApprovalId ?? null,
+        candidateRoutes: targetRoutes,
+        artifactDirectory: relativeArtifactDir,
+        executionOrigin,
+        operationId,
+        snapshotData: {
+          operationType: "ROLLBACK",
+          targetDeploymentId: targetDeployment.id,
+          fromVersionId: latestDeployment.versionId,
+          toVersionId: targetVersion,
+          initiatingActor: {
+            actorId: session.actorId,
+            actorName: session.actorName,
+            actorRole: session.actorRole,
+            sessionId: session.sessionId,
+          },
+          targetQaRunId: targetDeployment.qaRunId ?? null,
+          targetCandidateId: targetDeployment.candidateId,
+          targetArtifactDigest: targetDeployment.artifactDigest,
+        },
+        promotedAt: new Date(),
+      });
 
       let worktree: string | null = null;
       try {
@@ -843,10 +889,17 @@ export class GovernedDeliveryService {
           targetVersionId: targetVersion,
           targetDeployment,
           deferFinalization: true,
+          pendingDeployment: pendingRollbackDeployment,
+          initiatingActor: {
+            actorId: session.actorId,
+            actorName: session.actorName,
+            actorRole: session.actorRole,
+            sessionId: session.sessionId,
+          },
         });
 
         if (rolledBack.productionVerified && rolledBack.versionId) {
-          const executionOrigin =
+          const effectiveExecutionOrigin =
             (rolledBack.executionOrigin as any) ??
             targetDeployment.executionOrigin ??
             ((provider as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
@@ -854,10 +907,10 @@ export class GovernedDeliveryService {
             deploymentId: rolledBack.id,
             expectedStatus: ["promoting", "promoted", "rolled_back"],
             status: "rolled_back",
-            executionOrigin,
-            operationId: `rb-${rolledBack.id}`,
+            executionOrigin: effectiveExecutionOrigin,
+            operationId,
             transition: {
-              id: `trans-rb-${rolledBack.id}`,
+              id: `trans-${operationId}`,
               projectId: input.projectId,
               siteId: site.id,
               deploymentId: rolledBack.id,
@@ -874,8 +927,8 @@ export class GovernedDeliveryService {
               artifactDigest: targetDeployment.artifactDigest,
               evidenceRef: rolledBack.artifactDirectory ?? undefined,
               effectiveAt: rolledBack.verifiedAt ?? new Date(),
-              executionOrigin,
-              operationId: `rb-${rolledBack.id}`,
+              executionOrigin: effectiveExecutionOrigin,
+              operationId,
             },
           });
           return finalized.deployment;
@@ -923,281 +976,546 @@ export class GovernedDeliveryService {
         return { reconciled: false, details: "Site, worker, or productionUrl configuration missing." };
       }
 
-      // Step 2 & 3: Validate presence of immutable authority facts (no fabricated fallbacks)
-      const candidateRoutes = (unverified.candidateRoutes as string[]) ?? [];
-      if (
-        !unverified.candidateId ||
-        !unverified.artifactDigest ||
-        !unverified.sourceCommit ||
-        !unverified.versionId ||
-        !unverified.releaseApprovalId ||
-        candidateRoutes.length === 0
-      ) {
+      const isRollback =
+        (unverified.snapshotData as any)?.operationType === "ROLLBACK" ||
+        Boolean(unverified.operationId?.startsWith("rb-")) ||
+        unverified.rolledBack === true;
+
+      const isPublish =
+        (unverified.snapshotData as any)?.operationType === "PUBLISH" ||
+        Boolean(unverified.operationId?.startsWith("pub-")) ||
+        (Boolean(unverified.releaseApprovalId) && !isRollback);
+
+      if (!isRollback && !isPublish) {
         await this.store.updateDeployment({
           id: unverified.id,
           status: "needs_review",
-          errorCode: "recovery_missing_authority",
-          errorMessage: "Pending deployment lacks required candidate, digest, sourceCommit, approval, or routes. Cannot verify.",
+          errorCode: "recovery_ambiguous_operation",
+          errorMessage: "Pending deployment lacks explicit operation-type evidence (neither valid publish nor rollback metadata). Cannot verify.",
         });
         return {
           reconciled: true,
-          details: `Deployment '${unverified.id}' moved to needs_review due to missing required authority facts.`,
+          details: `Deployment '${unverified.id}' moved to needs_review due to ambiguous operation type.`,
         };
       }
 
-      // Step 4: Resolve exact candidate and verify digest/commit
-      const candidate = await this.productionStore.getCandidate(site.projectId, unverified.candidateId);
-      if (!candidate) {
-        await this.store.updateDeployment({
-          id: unverified.id,
-          status: "needs_review",
-          errorCode: "recovery_candidate_not_found",
-          errorMessage: `Candidate '${unverified.candidateId}' referenced by deployment not found.`,
-        });
-        return {
-          reconciled: true,
-          details: `Deployment '${unverified.id}' moved to needs_review: candidate not found.`,
-        };
-      }
-      if (candidate.artifactDigest !== unverified.artifactDigest || candidate.repositorySha !== unverified.sourceCommit) {
-        await this.store.updateDeployment({
-          id: unverified.id,
-          status: "needs_review",
-          errorCode: "recovery_candidate_mismatch",
-          errorMessage: "Candidate artifactDigest or repositorySha does not match pending deployment.",
-        });
-        return {
-          reconciled: true,
-          details: `Deployment '${unverified.id}' moved to needs_review: candidate digest/commit mismatch.`,
-        };
+      if (isRollback) {
+        return await this.reconcilePendingRollback({ unverified, site });
       }
 
-      // Step 5 (P0-02): Resolve exact release approval and revalidate cryptographic seal, session, & permissions
-      let approval: ReleaseApprovalRecord;
-      try {
-        approval = await this.releaseBoundary.assertValidReleaseApproval({
-          approvalId: unverified.releaseApprovalId,
-          projectId: site.projectId,
-          siteId: site.id,
-          candidateId: unverified.candidateId,
-          previewVersionId: unverified.versionId,
-          targetWorkerName: site.cloudflareWorkerName,
-          targetProductionUrl: site.productionUrl,
-        });
-      } catch (err: any) {
-        const errorCode = err instanceof FactoryError ? err.code : "recovery_approval_invalid";
-        const errorMessage = err?.message ?? "Release approval verification failed.";
-        await this.store.updateDeployment({
-          id: unverified.id,
-          status: "needs_review",
-          errorCode,
-          errorMessage,
-        });
-        return {
-          reconciled: true,
-          details: `Deployment '${unverified.id}' moved to needs_review: release approval invalid (${errorMessage}).`,
-        };
-      }
-
-      if (approval.artifactDigest && approval.artifactDigest !== unverified.artifactDigest) {
-        await this.store.updateDeployment({
-          id: unverified.id,
-          status: "needs_review",
-          errorCode: "recovery_approval_invalid",
-          errorMessage: "Release approval artifactDigest does not match pending deployment.",
-        });
-        return {
-          reconciled: true,
-          details: `Deployment '${unverified.id}' moved to needs_review: release approval artifact digest mismatch.`,
-        };
-      }
-
-      // Step 6 (P1-01): Revalidate exact approved QA evidence (strictly bound to approval.qaRunId)
-      if (!approval.qaRunId) {
-        await this.store.updateDeployment({
-          id: unverified.id,
-          status: "needs_review",
-          errorCode: "recovery_qa_missing",
-          errorMessage: "Release approval lacks a required qaRunId.",
-        });
-        return {
-          reconciled: true,
-          details: `Deployment '${unverified.id}' moved to needs_review: release approval lacks qaRunId.`,
-        };
-      }
-
-      if (unverified.qaRunId && unverified.qaRunId !== approval.qaRunId) {
-        await this.store.updateDeployment({
-          id: unverified.id,
-          status: "needs_review",
-          errorCode: "recovery_qa_mismatch",
-          errorMessage: `Deployment qaRunId ('${unverified.qaRunId}') does not match approved qaRunId ('${approval.qaRunId}').`,
-        });
-        return {
-          reconciled: true,
-          details: `Deployment '${unverified.id}' moved to needs_review: deployment qaRunId does not match approved qaRunId.`,
-        };
-      }
-
-      const qaRun = await this.productionStore.getQaRun(approval.qaRunId);
-      if (!qaRun || qaRun.overall !== "PASS") {
-        await this.store.updateDeployment({
-          id: unverified.id,
-          status: "needs_review",
-          errorCode: "recovery_qa_invalid",
-          errorMessage: `Approved candidate QA run '${approval.qaRunId}' is missing or not PASS.`,
-        });
-        return {
-          reconciled: true,
-          details: `Deployment '${unverified.id}' moved to needs_review: approved QA run '${approval.qaRunId}' is not PASS.`,
-        };
-      }
-      if (qaRun.candidateId !== unverified.candidateId || qaRun.candidateArtifactDigest !== unverified.artifactDigest) {
-        await this.store.updateDeployment({
-          id: unverified.id,
-          status: "needs_review",
-          errorCode: "recovery_qa_mismatch",
-          errorMessage: "Approved candidate QA run candidateId or artifactDigest does not match pending deployment.",
-        });
-        return {
-          reconciled: true,
-          details: `Deployment '${unverified.id}' moved to needs_review: approved QA run candidate/digest mismatch.`,
-        };
-      }
-      if (!approval.isSynthetic && !qaRunPublicationEligible(qaRun.data)) {
-        await this.store.updateDeployment({
-          id: unverified.id,
-          status: "needs_review",
-          errorCode: "recovery_qa_ineligible",
-          errorMessage: "Candidate QA run is not publication eligible.",
-        });
-        return {
-          reconciled: true,
-          details: `Deployment '${unverified.id}' moved to needs_review: QA run is not publication eligible.`,
-        };
-      }
-
-      // Step 7: Query actual effective Cloudflare version
-      const fullArtifactDir = path.join(this.repoRoot, unverified.artifactDirectory || ".factory/deployments/reconcile");
-      const provider = this.wranglerFactory(this.repoRoot, fullArtifactDir);
-      let cfActiveVersion: string | null = null;
-      try {
-        cfActiveVersion = await provider.currentProductionVersion(site.cloudflareWorkerName);
-      } catch (err: any) {
-        return { reconciled: false, details: `Failed to query Cloudflare provider: ${err.message}` };
-      }
-
-      // Step 8: Distinguish version outcomes
-      if (!cfActiveVersion || cfActiveVersion !== unverified.versionId) {
-        if (unverified.previousVersionId && cfActiveVersion === unverified.previousVersionId) {
-          await this.store.updateDeployment({
-            id: unverified.id,
-            status: "failed",
-            errorCode: "delivery_interrupted",
-            errorMessage: "Deployment interrupted before Cloudflare promotion completed. Active version remains previous version.",
-          });
-          return {
-            reconciled: true,
-            details: `Deployment '${unverified.id}' reconciled to failed; Cloudflare active version remains '${cfActiveVersion}'.`,
-          };
-        } else {
-          await this.store.updateDeployment({
-            id: unverified.id,
-            status: "needs_review",
-            errorCode: "provider_version_diverged",
-            errorMessage: `Cloudflare active version is '${cfActiveVersion}', expected candidate '${unverified.versionId}' or previous '${unverified.previousVersionId}'.`,
-          });
-          return {
-            reconciled: true,
-            details: `Deployment '${unverified.id}' marked needs_review due to external/diverged provider version '${cfActiveVersion}'.`,
-          };
-        }
-      }
-
-      // Step 9 & 10: Provider version matches -> MUST run REAL production QA across all candidate routes
-      let worktree: string | null = null;
-      let qaPassed = false;
-      try {
-        worktree = await this.worktreeProvider.prepare(
-          this.repoRoot,
-          unverified.sourceCommit,
-          `rec-${unverified.id}`,
-        );
-        const qaRes = await this.qaRunner({
-          worktree,
-          targetUrl: site.productionUrl,
-          productionUrl: site.productionUrl,
-          artifactDirectory: fullArtifactDir,
-          phase: "production",
-          candidateRoutes,
-        });
-        qaPassed = Boolean(qaRes && qaRes.passed);
-      } catch {
-        qaPassed = false;
-      } finally {
-        if (worktree) {
-          await this.worktreeProvider.remove(this.repoRoot, worktree).catch(() => {});
-        }
-      }
-
-      if (!qaPassed) {
-        await this.store.updateDeployment({
-          id: unverified.id,
-          status: "needs_review",
-          errorCode: "recovery_qa_failed",
-          errorMessage: "Provider active version matched candidate, but post-recovery production QA failed.",
-        });
-        return {
-          reconciled: true,
-          details: `Deployment '${unverified.id}' marked needs_review: post-recovery production QA failed.`,
-        };
-      }
-
-      // Step 11 & 12: Atomic finalization of status=verified and effective transition
-      const executionOrigin: ExecutionOrigin =
-        (unverified.executionOrigin as ExecutionOrigin) ??
-        (approval.isSynthetic ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
-
-      await this.store.finalizeDeploymentAndTransitionAtomic({
-        deploymentId: unverified.id,
-        expectedStatus: ["promoting", "promoted"],
-        status: "verified",
-        executionOrigin,
-        operationId: `rec-${unverified.id}`,
-        transition: {
-          id: `trans-rec-${unverified.id}`,
-          projectId: site.projectId,
-          siteId: site.id,
-          deploymentId: unverified.id,
-          versionId: unverified.versionId,
-          candidateId: unverified.candidateId,
-          eventType: "PUBLISH",
-          fromVersionId: unverified.previousVersionId ?? null,
-          toVersionId: unverified.versionId,
-          actorId: approval.actorId,
-          actorName: approval.actorName,
-          actorRole: approval.actorRole,
-          sessionId: approval.sessionId,
-          candidateRoutes,
-          artifactDigest: unverified.artifactDigest,
-          evidenceRef: JSON.stringify({
-            reconciled: true,
-            reason: "crash_recovery_cloudflare_matched_qa_passed",
-            recoveredAt: new Date().toISOString(),
-          }),
-          effectiveAt: new Date(),
-          executionOrigin,
-          operationId: `rec-${unverified.id}`,
-        },
-      });
-
-      return {
-        reconciled: true,
-        details: `Deployment '${unverified.id}' reconciled to verified with passing production QA and atomic transition.`,
-      };
+      return await this.reconcilePendingPublish({ unverified, site });
     }
 
     return { reconciled: false, details: `Deployment '${unverified.id}' is in status '${unverified.status}' (not reconcilable).` };
+  }
+
+  private async reconcilePendingPublish(params: {
+    unverified: DeploymentRecord;
+    site: SiteRecord;
+  }): Promise<{ reconciled: boolean; details?: string }> {
+    const { unverified, site } = params;
+    // Step 2 & 3: Validate presence of immutable authority facts (no fabricated fallbacks)
+    const candidateRoutes = (unverified.candidateRoutes as string[]) ?? [];
+    if (
+      !unverified.candidateId ||
+      !unverified.artifactDigest ||
+      !unverified.sourceCommit ||
+      !unverified.versionId ||
+      !unverified.releaseApprovalId ||
+      candidateRoutes.length === 0
+    ) {
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode: "recovery_missing_authority",
+        errorMessage: "Pending deployment lacks required candidate, digest, sourceCommit, approval, or routes. Cannot verify.",
+      });
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' moved to needs_review due to missing required authority facts.`,
+      };
+    }
+
+    // Step 4: Resolve exact candidate and verify digest/commit
+    const candidate = await this.productionStore.getCandidate(site.projectId, unverified.candidateId);
+    if (!candidate) {
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode: "recovery_candidate_not_found",
+        errorMessage: `Candidate '${unverified.candidateId}' referenced by deployment not found.`,
+      });
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' moved to needs_review: candidate not found.`,
+      };
+    }
+    if (candidate.artifactDigest !== unverified.artifactDigest || candidate.repositorySha !== unverified.sourceCommit) {
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode: "recovery_candidate_mismatch",
+        errorMessage: "Candidate artifactDigest or repositorySha does not match pending deployment.",
+      });
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' moved to needs_review: candidate digest/commit mismatch.`,
+      };
+    }
+
+    // Step 5 (P0-02): Resolve exact release approval and revalidate cryptographic seal, session, & permissions
+    let approval: ReleaseApprovalRecord;
+    try {
+      approval = await this.releaseBoundary.assertValidReleaseApproval({
+        approvalId: unverified.releaseApprovalId,
+        projectId: site.projectId,
+        siteId: site.id,
+        candidateId: unverified.candidateId,
+        previewVersionId: unverified.versionId,
+        targetWorkerName: site.cloudflareWorkerName!,
+        targetProductionUrl: site.productionUrl!,
+      });
+    } catch (err: any) {
+      const errorCode = err instanceof FactoryError ? err.code : "recovery_approval_invalid";
+      const errorMessage = err?.message ?? "Release approval verification failed.";
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode,
+        errorMessage,
+      });
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' moved to needs_review: release approval invalid (${errorMessage}).`,
+      };
+    }
+
+    if (approval.artifactDigest && approval.artifactDigest !== unverified.artifactDigest) {
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode: "recovery_approval_invalid",
+        errorMessage: "Release approval artifactDigest does not match pending deployment.",
+      });
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' moved to needs_review: release approval artifact digest mismatch.`,
+      };
+    }
+
+    // Step 6 (P1-01): Revalidate exact approved QA evidence (strictly bound to approval.qaRunId)
+    if (!approval.qaRunId) {
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode: "recovery_qa_missing",
+        errorMessage: "Release approval lacks a required qaRunId.",
+      });
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' moved to needs_review: release approval lacks qaRunId.`,
+      };
+    }
+
+    if (unverified.qaRunId && unverified.qaRunId !== approval.qaRunId) {
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode: "recovery_qa_mismatch",
+        errorMessage: `Deployment qaRunId ('${unverified.qaRunId}') does not match approved qaRunId ('${approval.qaRunId}').`,
+      });
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' moved to needs_review: deployment qaRunId does not match approved qaRunId.`,
+      };
+    }
+
+    const qaRun = await this.productionStore.getQaRun(approval.qaRunId);
+    if (!qaRun || qaRun.overall !== "PASS") {
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode: "recovery_qa_invalid",
+        errorMessage: `Approved candidate QA run '${approval.qaRunId}' is missing or not PASS.`,
+      });
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' moved to needs_review: approved QA run '${approval.qaRunId}' is not PASS.`,
+      };
+    }
+    if (qaRun.candidateId !== unverified.candidateId || qaRun.candidateArtifactDigest !== unverified.artifactDigest) {
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode: "recovery_qa_mismatch",
+        errorMessage: "Approved candidate QA run candidateId or artifactDigest does not match pending deployment.",
+      });
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' moved to needs_review: approved QA run candidate/digest mismatch.`,
+      };
+    }
+    if (!approval.isSynthetic && !qaRunPublicationEligible(qaRun.data)) {
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode: "recovery_qa_ineligible",
+        errorMessage: "Candidate QA run is not publication eligible.",
+      });
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' moved to needs_review: QA run is not publication eligible.`,
+      };
+    }
+
+    // Step 7: Query actual effective Cloudflare version
+    const fullArtifactDir = path.join(this.repoRoot, unverified.artifactDirectory || ".factory/deployments/reconcile");
+    const provider = this.wranglerFactory(this.repoRoot, fullArtifactDir);
+    let cfActiveVersion: string | null = null;
+    try {
+      cfActiveVersion = await provider.currentProductionVersion(site.cloudflareWorkerName!);
+    } catch (err: any) {
+      return { reconciled: false, details: `Failed to query Cloudflare provider: ${err.message}` };
+    }
+
+    // Step 8: Distinguish version outcomes
+    if (!cfActiveVersion || cfActiveVersion !== unverified.versionId) {
+      if (unverified.previousVersionId && cfActiveVersion === unverified.previousVersionId) {
+        await this.store.updateDeployment({
+          id: unverified.id,
+          status: "failed",
+          errorCode: "delivery_interrupted",
+          errorMessage: "Deployment interrupted before Cloudflare promotion completed. Active version remains previous version.",
+        });
+        return {
+          reconciled: true,
+          details: `Deployment '${unverified.id}' reconciled to failed; Cloudflare active version remains '${cfActiveVersion}'.`,
+        };
+      } else {
+        await this.store.updateDeployment({
+          id: unverified.id,
+          status: "needs_review",
+          errorCode: "provider_version_diverged",
+          errorMessage: `Cloudflare active version is '${cfActiveVersion}', expected candidate '${unverified.versionId}' or previous '${unverified.previousVersionId}'.`,
+        });
+        return {
+          reconciled: true,
+          details: `Deployment '${unverified.id}' marked needs_review due to external/diverged provider version '${cfActiveVersion}'.`,
+        };
+      }
+    }
+
+    // Step 9 & 10: Provider version matches -> MUST run REAL production QA across all candidate routes
+    let worktree: string | null = null;
+    let qaPassed = false;
+    try {
+      worktree = await this.worktreeProvider.prepare(
+        this.repoRoot,
+        unverified.sourceCommit,
+        `rec-${unverified.id}`,
+      );
+      const qaRes = await this.qaRunner({
+        worktree,
+        targetUrl: site.productionUrl!,
+        productionUrl: site.productionUrl!,
+        artifactDirectory: fullArtifactDir,
+        phase: "production",
+        candidateRoutes,
+      });
+      qaPassed = Boolean(qaRes && qaRes.passed);
+    } catch {
+      qaPassed = false;
+    } finally {
+      if (worktree) {
+        await this.worktreeProvider.remove(this.repoRoot, worktree).catch(() => {});
+      }
+    }
+
+    if (!qaPassed) {
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode: "recovery_qa_failed",
+        errorMessage: "Provider active version matched candidate, but post-recovery production QA failed.",
+      });
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' marked needs_review: post-recovery production QA failed.`,
+      };
+    }
+
+    // Step 11 & 12: Atomic finalization of status=verified and effective transition
+    const executionOrigin: ExecutionOrigin =
+      (unverified.executionOrigin as ExecutionOrigin) ??
+      (approval.isSynthetic ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
+
+    await this.store.finalizeDeploymentAndTransitionAtomic({
+      deploymentId: unverified.id,
+      expectedStatus: ["promoting", "promoted"],
+      status: "verified",
+      executionOrigin,
+      operationId: `rec-${unverified.id}`,
+      transition: {
+        id: `trans-rec-${unverified.id}`,
+        projectId: site.projectId,
+        siteId: site.id,
+        deploymentId: unverified.id,
+        versionId: unverified.versionId,
+        candidateId: unverified.candidateId,
+        eventType: "PUBLISH",
+        fromVersionId: unverified.previousVersionId ?? null,
+        toVersionId: unverified.versionId,
+        actorId: approval.actorId,
+        actorName: approval.actorName,
+        actorRole: approval.actorRole,
+        sessionId: approval.sessionId,
+        candidateRoutes,
+        artifactDigest: unverified.artifactDigest,
+        evidenceRef: JSON.stringify({
+          reconciled: true,
+          reason: "crash_recovery_cloudflare_matched_qa_passed",
+          recoveredAt: new Date().toISOString(),
+        }),
+        effectiveAt: new Date(),
+        executionOrigin,
+        operationId: `rec-${unverified.id}`,
+      },
+    });
+
+    return {
+      reconciled: true,
+      details: `Deployment '${unverified.id}' reconciled to verified with passing production QA and atomic transition.`,
+    };
+  }
+
+  private async reconcilePendingRollback(params: {
+    unverified: DeploymentRecord;
+    site: SiteRecord;
+  }): Promise<{ reconciled: boolean; details?: string }> {
+    const { unverified, site } = params;
+    const snapshot = (unverified.snapshotData as any) ?? {};
+    const targetDeploymentId = snapshot.targetDeploymentId;
+    const initiatingActor = snapshot.initiatingActor;
+    const toVersionId = snapshot.toVersionId ?? unverified.versionId;
+    const fromVersionId = snapshot.fromVersionId ?? unverified.previousVersionId;
+    const candidateRoutes = (unverified.candidateRoutes as string[]) ?? ["/"];
+
+    // 1. Missing target or operator evidence -> fail closed with needs_review (no guessing)
+    if (!targetDeploymentId || !initiatingActor || !initiatingActor.actorId || !toVersionId) {
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode: "recovery_rollback_evidence_missing",
+        errorMessage: "Pending rollback lacks required target deployment ID, target version, or initiating actor evidence.",
+      });
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' moved to needs_review due to missing required rollback authority facts.`,
+      };
+    }
+
+    // 2. Resolve target deployment and verify it was a legitimate previously verified release
+    const targetDep = await this.store.getDeployment(targetDeploymentId);
+    if (!targetDep) {
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode: "recovery_target_not_found",
+        errorMessage: `Target rollback deployment '${targetDeploymentId}' not found.`,
+      });
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' moved to needs_review: target rollback deployment not found.`,
+      };
+    }
+
+    if (
+      targetDep.siteId !== site.id ||
+      targetDep.versionId !== toVersionId ||
+      !(targetDep.status === "verified" || targetDep.productionVerified) ||
+      !targetDep.candidateId ||
+      !targetDep.artifactDigest ||
+      !targetDep.sourceCommit
+    ) {
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode: "recovery_target_invalid",
+        errorMessage: "Target deployment is not a verified release for this site or candidate/digest mismatches.",
+      });
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' moved to needs_review: target rollback deployment invalid.`,
+      };
+    }
+
+    // 3. Validate target release QA evidence
+    const qaRunId = snapshot.targetQaRunId ?? targetDep.qaRunId;
+    if (!qaRunId) {
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode: "recovery_qa_missing",
+        errorMessage: "Target rollback release lacks required qaRunId.",
+      });
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' moved to needs_review: target release lacks qaRunId.`,
+      };
+    }
+
+    const qaRun = await this.productionStore.getQaRun(qaRunId);
+    if (!qaRun || qaRun.overall !== "PASS") {
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode: "recovery_qa_invalid",
+        errorMessage: `Target release QA run '${qaRunId}' is missing or not PASS.`,
+      });
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' moved to needs_review: target QA run '${qaRunId}' is not PASS.`,
+      };
+    }
+
+    if (qaRun.candidateId !== targetDep.candidateId || qaRun.candidateArtifactDigest !== targetDep.artifactDigest) {
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode: "recovery_qa_mismatch",
+        errorMessage: "Target release QA run candidateId or artifactDigest does not match target deployment.",
+      });
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' moved to needs_review: target QA run candidate/digest mismatch.`,
+      };
+    }
+
+    // 4. Query Cloudflare provider version
+    const fullArtifactDir = path.join(
+      this.repoRoot,
+      unverified.artifactDirectory || targetDep.artifactDirectory || ".factory/deployments/rollback",
+    );
+    const provider = this.wranglerFactory(this.repoRoot, fullArtifactDir);
+    let cfActiveVersion: string | null = null;
+    try {
+      cfActiveVersion = await provider.currentProductionVersion(site.cloudflareWorkerName!);
+    } catch (err: any) {
+      return { reconciled: false, details: `Failed to query Cloudflare provider: ${err.message}` };
+    }
+
+    // 5. Check provider active version
+    if (!cfActiveVersion || cfActiveVersion !== toVersionId) {
+      if (fromVersionId && cfActiveVersion === fromVersionId) {
+        await this.store.updateDeployment({
+          id: unverified.id,
+          status: "failed",
+          errorCode: "delivery_interrupted",
+          errorMessage: "Rollback interrupted before Cloudflare switch completed. Active version remains source version.",
+        });
+        return {
+          reconciled: true,
+          details: `Deployment '${unverified.id}' reconciled to failed; Cloudflare active version remains '${cfActiveVersion}'.`,
+        };
+      } else {
+        await this.store.updateDeployment({
+          id: unverified.id,
+          status: "needs_review",
+          errorCode: "provider_version_diverged",
+          errorMessage: `Cloudflare active version is '${cfActiveVersion}', expected target '${toVersionId}' or source '${fromVersionId}'.`,
+        });
+        return {
+          reconciled: true,
+          details: `Deployment '${unverified.id}' marked needs_review due to diverged provider version '${cfActiveVersion}'.`,
+        };
+      }
+    }
+
+    // 6. Provider active version matches rollback target -> MUST run rollback QA
+    let worktree: string | null = null;
+    let qaPassed = false;
+    try {
+      worktree = await this.worktreeProvider.prepare(
+        this.repoRoot,
+        targetDep.sourceCommit,
+        `rec-rb-${unverified.id}`,
+      );
+      const qaRes = await this.qaRunner({
+        worktree,
+        targetUrl: site.productionUrl!,
+        productionUrl: site.productionUrl!,
+        artifactDirectory: fullArtifactDir,
+        phase: "rollback",
+        candidateRoutes,
+      });
+      qaPassed = Boolean(qaRes && qaRes.passed);
+    } catch {
+      qaPassed = false;
+    } finally {
+      if (worktree) {
+        await this.worktreeProvider.remove(this.repoRoot, worktree).catch(() => {});
+      }
+    }
+
+    if (!qaPassed) {
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode: "recovery_qa_failed",
+        errorMessage: "Provider active version matched rollback target, but post-recovery rollback QA failed.",
+      });
+      return {
+        reconciled: true,
+        details: `Deployment '${unverified.id}' marked needs_review: post-recovery rollback QA failed.`,
+      };
+    }
+
+    // 7. Atomic finalization: status=rolled_back + ROLLBACK effective transition
+    const executionOrigin: ExecutionOrigin =
+      (unverified.executionOrigin as ExecutionOrigin) ??
+      targetDep.executionOrigin ??
+      ((provider as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
+
+    const opId = unverified.operationId || `rec-rb-${unverified.id}`;
+
+    await this.store.finalizeDeploymentAndTransitionAtomic({
+      deploymentId: unverified.id,
+      expectedStatus: ["promoting", "promoted"],
+      status: "rolled_back",
+      executionOrigin,
+      operationId: opId,
+      transition: {
+        id: `trans-${opId}`,
+        projectId: site.projectId,
+        siteId: site.id,
+        deploymentId: unverified.id,
+        versionId: toVersionId,
+        candidateId: targetDep.candidateId,
+        eventType: "ROLLBACK",
+        fromVersionId: fromVersionId ?? null,
+        toVersionId: toVersionId,
+        actorId: initiatingActor.actorId,
+        actorName: initiatingActor.actorName,
+        actorRole: initiatingActor.actorRole,
+        sessionId: initiatingActor.sessionId ?? null,
+        candidateRoutes,
+        artifactDigest: targetDep.artifactDigest,
+        evidenceRef: JSON.stringify({
+          reconciled: true,
+          reason: "crash_recovery_rollback_matched_qa_passed",
+          recoveredAt: new Date().toISOString(),
+          targetDeploymentId: targetDep.id,
+        }),
+        effectiveAt: new Date(),
+        executionOrigin,
+        operationId: opId,
+      },
+    });
+
+    return {
+      reconciled: true,
+      details: `Deployment '${unverified.id}' reconciled to rolled_back with passing rollback QA and atomic ROLLBACK transition.`,
+    };
   }
 
   /**

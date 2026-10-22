@@ -194,6 +194,11 @@ export class ProductionDelivery {
         status: "promoting",
         previousVersionId,
         releaseApprovalId: approval.id,
+        operationId: `pub-${preview.id}`,
+        snapshotData: {
+          ...((preview.snapshotData as any) ?? {}),
+          operationType: "PUBLISH",
+        },
       });
       await this.wrangler.promote(preview.workerName, preview.versionId);
       current = await this.store.updateDeployment({
@@ -253,6 +258,13 @@ export class ProductionDelivery {
     targetVersionId: string;
     targetDeployment?: DeploymentRecord;
     deferFinalization?: boolean;
+    pendingDeployment?: DeploymentRecord;
+    initiatingActor?: {
+      actorId: string;
+      actorName: string;
+      actorRole: string;
+      sessionId?: string;
+    };
   }): Promise<DeploymentRecord> {
     const knownGoodRaw = await this.store.findLatestKnownGoodDeployment(
       input.deployment.siteId,
@@ -296,8 +308,57 @@ export class ProductionDelivery {
       throw new FactoryError("rollback_target_invalid", "Target rollback version does not belong to the same site.");
     }
 
+    let rollbackDep = input.pendingDeployment ?? null;
     try {
+      // P1: Persist durable rollback intent before external mutation if not already provided
+      if (!rollbackDep && typeof this.store.createDeployment === "function") {
+        const rollbackDepId = `dep-rb-${randomUUID()}`;
+        const executionOrigin =
+          (targetDep.executionOrigin as "REAL_CLOUDFLARE" | "TEST_SIMULATION" | "UNKNOWN" | null) ??
+          ((this.wrangler as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
+        rollbackDep = await this.store.createDeployment({
+          id: rollbackDepId,
+          siteId: input.deployment.siteId,
+          sourceCommit: targetDep.sourceCommit,
+          artifactDigest: targetDep.artifactDigest,
+          versionId: input.targetVersionId,
+          previousVersionId: input.deployment.versionId,
+          workerName: targetDep.workerName || input.deployment.workerName,
+          productionUrl: targetDep.productionUrl || input.deployment.productionUrl,
+          status: "promoting",
+          previewVerified: true,
+          productionVerified: false,
+          rolledBack: true,
+          candidateId: targetDep.candidateId,
+          qaRunId: targetDep.qaRunId ?? null, // R13-F3-P1-01: exact target QA preserved
+          releaseApprovalId: targetDep.releaseApprovalId,
+          candidateRoutes: targetDep.candidateRoutes,
+          artifactDirectory: targetDep.artifactDirectory,
+          executionOrigin,
+          operationId: `rb-${rollbackDepId}`,
+          snapshotData: {
+            operationType: "ROLLBACK",
+            targetDeploymentId: targetDep.id,
+            fromVersionId: input.deployment.versionId,
+            toVersionId: input.targetVersionId,
+            initiatingActor: input.initiatingActor ?? null,
+            targetQaRunId: targetDep.qaRunId ?? null,
+            targetCandidateId: targetDep.candidateId,
+            targetArtifactDigest: targetDep.artifactDigest,
+          },
+          promotedAt: new Date(),
+        });
+      }
+
       await this.wrangler.rollback(input.deployment.workerName, input.targetVersionId);
+
+      if (rollbackDep) {
+        rollbackDep = await this.store.updateDeployment({
+          id: rollbackDep.id,
+          status: "promoted",
+          promotedAt: new Date(),
+        });
+      }
 
       // P0-C: Independent verification that Cloudflare actually switched to target version
       const activeAfterRollback = await this.wrangler.currentProductionVersion(input.deployment.workerName);
@@ -310,6 +371,14 @@ export class ProductionDelivery {
 
       const rollbackQa = await this.runtime.qa(input.deployment.productionUrl, "rollback");
       if (!rollbackQa.passed) {
+        if (rollbackDep) {
+          return await this.store.updateDeployment({
+            id: rollbackDep.id,
+            status: "needs_review",
+            errorCode: "rollback_qa_failed",
+            errorMessage: "Manual rollback completed but production verification failed.",
+          });
+        }
         return await this.store.updateDeployment({
           id: input.deployment.id,
           status: "needs_review",
@@ -319,40 +388,35 @@ export class ProductionDelivery {
       }
 
       // P0-D & P0-02 & P1-01: Preserve historical publication facts and restore target release identity.
-      // The new rollback deployment event strictly inherits the target release's candidate,
-      // source commit, artifact digest, qaRunId, routes, and approval lineage.
-      if (typeof this.store.createDeployment === "function") {
-        const rollbackDepId = `dep-rb-${randomUUID()}`;
+      if (rollbackDep) {
         const executionOrigin =
-          targetDep.executionOrigin ??
+          (targetDep.executionOrigin as "REAL_CLOUDFLARE" | "TEST_SIMULATION" | "UNKNOWN" | null) ??
           ((this.wrangler as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
-        return await this.store.createDeployment({
-          id: rollbackDepId,
-          siteId: input.deployment.siteId,
-          sourceCommit: targetDep.sourceCommit,
-          artifactDigest: targetDep.artifactDigest,
-          versionId: input.targetVersionId,
-          previousVersionId: input.deployment.versionId,
-          workerName: targetDep.workerName || input.deployment.workerName,
-          productionUrl: targetDep.productionUrl || input.deployment.productionUrl,
-          status: input.deferFinalization ? "promoted" : "rolled_back",
-          previewVerified: true,
+        if (input.deferFinalization) {
+          return {
+            ...rollbackDep,
+            status: "promoted",
+            productionVerified: true,
+            executionOrigin,
+            snapshotData: {
+              ...(rollbackDep.snapshotData as any),
+              rollbackQaPassed: rollbackQa.passed,
+              rollbackQaRunId: (rollbackQa as any)?.qaRunId ?? null,
+            },
+            verifiedAt: new Date(),
+          };
+        }
+        return await this.store.updateDeployment({
+          id: rollbackDep.id,
+          status: "rolled_back",
           productionVerified: true,
-          rolledBack: true,
-          candidateId: targetDep.candidateId,
-          qaRunId: targetDep.qaRunId ?? null, // R13-F3-P1-01: exact target QA preserved
-          releaseApprovalId: targetDep.releaseApprovalId,
-          candidateRoutes: targetDep.candidateRoutes,
-          artifactDirectory: targetDep.artifactDirectory,
           executionOrigin,
-          operationId: `rb-${rollbackDepId}`,
           snapshotData: {
-            targetDeploymentId: targetDep.id,
+            ...(rollbackDep.snapshotData as any),
             rollbackQaPassed: rollbackQa.passed,
             rollbackQaRunId: (rollbackQa as any)?.qaRunId ?? null,
           },
           verifiedAt: new Date(),
-          promotedAt: new Date(),
         });
       }
 
@@ -365,6 +429,14 @@ export class ProductionDelivery {
       });
     } catch (error) {
       const info = errorInfo(error);
+      if (rollbackDep) {
+        return await this.store.updateDeployment({
+          id: rollbackDep.id,
+          status: "needs_review",
+          errorCode: info.code === "delivery_internal_error" ? "rollback_failed" : info.code,
+          errorMessage: info.message,
+        });
+      }
       return await this.store.updateDeployment({
         id: input.deployment.id,
         status: "needs_review",

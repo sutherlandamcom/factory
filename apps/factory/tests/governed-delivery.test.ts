@@ -100,7 +100,8 @@ test("governed delivery lifecycle: preview -> approval -> publish -> rollback", 
   const profile = JSON.parse(await readFile(path.join(sourceRepoRoot, "sites/starter/site-profile.json"), "utf8"));
   await writeFile(path.join(repoRoot, "sites/starter/site-profile.json"), JSON.stringify(profile));
   const acceptedIdentity = { siteName: profile.siteName, candidateDomain: "sutherlandam.com", language: profile.language, locale: "en-GB" };
-  const acceptedSnapshot = { id: "intake-unit", version: 1, digest: "e".repeat(64), payload: { siteIdentity: acceptedIdentity }, acceptanceState: "human_accepted" };
+  const acceptedPayload = { siteIdentity: acceptedIdentity };
+  const acceptedSnapshot = { id: "intake-unit", version: 1, digest: deterministicDigest(acceptedPayload), payload: acceptedPayload, acceptanceState: "human_accepted" };
   const binding = { version: "project-site-binding-v1", projectKey: "delivery-unit", siteKey: "main", profileDigest: deterministicDigest(profile), acceptedSiteIdentityDigest: deterministicDigest(acceptedIdentity), delivery: { workerName: "test-worker", productionUrl: profile.canonicalOrigin } };
   await writeFile(path.join(repoRoot, "sites/starter/project-site-binding.json"), JSON.stringify(binding));
   const buildIdentity = await loadProductionBuildIdentity(repoRoot, { projectKey: binding.projectKey, siteKey: binding.siteKey, acceptedSiteIdentity: acceptedIdentity });

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
 import { createTestDatabase } from "./helpers.js";
 import {
   projects,
@@ -367,6 +368,7 @@ test("P0-01 & P0-02 Fault-injection and crash recovery matrix", async () => {
     versionId: previewA.versionId!,
     status: "promoting",
     candidateRoutes: SUTHERLAND_SIX_ROUTES,
+    executionOrigin: "TEST_SIMULATION",
   });
 
   const recon5 = await governedDelivery.reconcilePendingDeployments(siteId);
@@ -1158,7 +1160,9 @@ test("P0 & P1 Rollback Crash Recovery Matrix (Separate Semantics, Pre-Mutation I
       const before = (await store.listDeployments(siteId, 100)).length;
       const transitionsBefore = (await store.listEffectiveTransitions(siteId, 100)).length;
       const mutationsBefore = simulatedWrangler.rolledBack.length;
-      await store.updateDeployment({ id: publishedA.id, status: "verified", candidateRoutes: routes });
+      // Inject damaged historical evidence directly; the application API correctly
+      // forbids rewriting an already-finalized deployment's status.
+      await db.update(deployments).set({ candidateRoutes: routes }).where(eq(deployments.id, publishedA.id));
       try {
         await assert.rejects(governedDelivery.rollbackExplicit({ projectId, targetVersionId: previewA.versionId!, sessionToken: rollbackSessionToken }),
           (error: any) => error.code === "rollback_target_invalid");
@@ -1166,7 +1170,7 @@ test("P0 & P1 Rollback Crash Recovery Matrix (Separate Semantics, Pre-Mutation I
         assert.equal((await store.listDeployments(siteId, 100)).length, before);
         assert.equal((await store.listEffectiveTransitions(siteId, 100)).length, transitionsBefore);
       } finally {
-        await store.updateDeployment({ id: publishedA.id, status: "verified", candidateRoutes: SUTHERLAND_SIX_ROUTES });
+        await db.update(deployments).set({ candidateRoutes: SUTHERLAND_SIX_ROUTES }).where(eq(deployments.id, publishedA.id));
       }
     });
   }
@@ -1175,7 +1179,7 @@ test("P0 & P1 Rollback Crash Recovery Matrix (Separate Semantics, Pre-Mutation I
       const before = (await store.listDeployments(siteId, 100)).length;
       const mutationsBefore = simulatedWrangler.rolledBack.length;
       const transitionsBefore = (await store.listEffectiveTransitions(siteId, 100)).length;
-      await store.updateDeployment({ id: publishedA.id, status: "verified", executionOrigin: origin });
+      await db.update(deployments).set({ executionOrigin: origin }).where(eq(deployments.id, publishedA.id));
       try {
         await assert.rejects(governedDelivery.rollbackExplicit({ projectId, targetVersionId: previewA.versionId!, sessionToken: rollbackSessionToken }),
           (error: any) => error.code === "rollback_target_invalid");
@@ -1184,7 +1188,7 @@ test("P0 & P1 Rollback Crash Recovery Matrix (Separate Semantics, Pre-Mutation I
         assert.equal((await store.listEffectiveTransitions(siteId, 100)).length, transitionsBefore);
         assert.equal((await governedDelivery.resolveCurrentEffectiveProduction(siteId)).executionOrigin, "TEST_SIMULATION");
       } finally {
-        await store.updateDeployment({ id: publishedA.id, status: "verified", executionOrigin: "TEST_SIMULATION" });
+        await db.update(deployments).set({ executionOrigin: "TEST_SIMULATION" }).where(eq(deployments.id, publishedA.id));
       }
     });
   }

@@ -369,8 +369,8 @@ test("Run 13 execute rejects governed candidate deployments without approval (le
 });
 
 test("Run 13 rollbackExplicit restores known-good version and rejects untrusted target", async () => {
-  const known = record({ id: "known", status: "verified", versionId: "known-v1", productionVerified: true });
-  const activeDeployment = record({ id: "active", status: "verified", versionId: "candidate-v2" });
+  const known = record({ id: "known", status: "verified", versionId: "known-v1", productionVerified: true, candidateRoutes: ["/"], executionOrigin: "REAL_CLOUDFLARE" });
+  const activeDeployment = record({ id: "active", status: "verified", versionId: "candidate-v2", executionOrigin: "REAL_CLOUDFLARE" });
   const store = new MemoryStore(activeDeployment, known);
   const provider = new FakeWrangler("candidate-v2");
   const delivery = new ProductionDelivery(store, provider, runtime([true]));

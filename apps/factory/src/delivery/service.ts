@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { requireHistoricalRollbackRoutes, requireRollbackExecutionOrigin } from "./rollback-authority.js";
 import type { DeploymentStatus } from "@factory/contracts";
 import type { DeploymentRecord, ReleaseApprovalRecord } from "../persistence/schema.js";
 import { FactoryError } from "../executor/errors.js";
@@ -6,6 +7,7 @@ import type { RemoteQaResult } from "./qa.js";
 import type { UploadedVersion } from "./wrangler.js";
 
 export interface DeliveryStore {
+  getCurrentEffectiveTransition?(siteId: string): Promise<{ executionOrigin: string | null } | null>;
   createDeployment?(input: any): Promise<DeploymentRecord>;
   updateDeployment(input: {
     id: string;
@@ -44,6 +46,7 @@ export interface DeliveryStore {
 
 /** Test seam for the concrete Wrangler command set; not a provider abstraction. */
 export interface WranglerOperations {
+  readonly isSimulated?: boolean;
   assertTargetExists(workerName: string): Promise<void>;
   upload(workerName: string): Promise<UploadedVersion>;
   currentProductionVersion(workerName: string): Promise<string | null>;
@@ -308,14 +311,22 @@ export class ProductionDelivery {
       throw new FactoryError("rollback_target_invalid", "Target rollback version does not belong to the same site.");
     }
 
+    requireHistoricalRollbackRoutes(targetDep.candidateRoutes);
+    const currentTransition = await this.store.getCurrentEffectiveTransition?.(input.deployment.siteId);
+    const currentOrigin = this.store.getCurrentEffectiveTransition
+      ? currentTransition?.executionOrigin
+      : input.deployment.executionOrigin;
+    const executionOrigin = requireRollbackExecutionOrigin(this.wrangler, [
+      targetDep.executionOrigin,
+      currentOrigin,
+      ...(input.pendingDeployment ? [input.pendingDeployment.executionOrigin] : []),
+    ]);
+
     let rollbackDep = input.pendingDeployment ?? null;
     try {
       // P1: Persist durable rollback intent before external mutation if not already provided
       if (!rollbackDep && typeof this.store.createDeployment === "function") {
         const rollbackDepId = `dep-rb-${randomUUID()}`;
-        const executionOrigin =
-          (targetDep.executionOrigin as "REAL_CLOUDFLARE" | "TEST_SIMULATION" | "UNKNOWN" | null) ??
-          ((this.wrangler as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
         rollbackDep = await this.store.createDeployment({
           id: rollbackDepId,
           siteId: input.deployment.siteId,
@@ -389,9 +400,6 @@ export class ProductionDelivery {
 
       // P0-D & P0-02 & P1-01: Preserve historical publication facts and restore target release identity.
       if (rollbackDep) {
-        const executionOrigin =
-          (targetDep.executionOrigin as "REAL_CLOUDFLARE" | "TEST_SIMULATION" | "UNKNOWN" | null) ??
-          ((this.wrangler as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
         if (input.deferFinalization) {
           return {
             ...rollbackDep,

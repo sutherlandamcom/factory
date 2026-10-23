@@ -1151,6 +1151,44 @@ test("P0 & P1 Rollback Crash Recovery Matrix (Separate Semantics, Pre-Mutation I
   assert.equal(initialTransitions[1]!.eventType, "PUBLISH");
   assert.equal(initialTransitions[1]!.toVersionId, previewA.versionId);
 
+  // SF-F02/F03 exercise ordinary rollback against persisted PostgreSQL authority,
+  // not only the reconciler. Each corruption is restored before the next case.
+  for (const routes of [null, [], ["bad"], ["/", "/"], Array.from({ length: 201 }, (_, i) => `/page-${i}`)]) {
+    await t.test(`SF-F03 ordinary rollback rejects persisted manifest ${JSON.stringify(routes).slice(0, 50)}`, async () => {
+      const before = (await store.listDeployments(siteId, 100)).length;
+      const transitionsBefore = (await store.listEffectiveTransitions(siteId, 100)).length;
+      const mutationsBefore = simulatedWrangler.rolledBack.length;
+      await store.updateDeployment({ id: publishedA.id, status: "verified", candidateRoutes: routes });
+      try {
+        await assert.rejects(governedDelivery.rollbackExplicit({ projectId, targetVersionId: previewA.versionId!, sessionToken: rollbackSessionToken }),
+          (error: any) => error.code === "rollback_target_invalid");
+        assert.equal(simulatedWrangler.rolledBack.length, mutationsBefore);
+        assert.equal((await store.listDeployments(siteId, 100)).length, before);
+        assert.equal((await store.listEffectiveTransitions(siteId, 100)).length, transitionsBefore);
+      } finally {
+        await store.updateDeployment({ id: publishedA.id, status: "verified", candidateRoutes: SUTHERLAND_SIX_ROUTES });
+      }
+    });
+  }
+  for (const origin of ["REAL_CLOUDFLARE", "UNKNOWN", null] as const) {
+    await t.test(`SF-F02 ordinary rollback rejects persisted origin ${origin}`, async () => {
+      const before = (await store.listDeployments(siteId, 100)).length;
+      const mutationsBefore = simulatedWrangler.rolledBack.length;
+      const transitionsBefore = (await store.listEffectiveTransitions(siteId, 100)).length;
+      await store.updateDeployment({ id: publishedA.id, status: "verified", executionOrigin: origin });
+      try {
+        await assert.rejects(governedDelivery.rollbackExplicit({ projectId, targetVersionId: previewA.versionId!, sessionToken: rollbackSessionToken }),
+          (error: any) => error.code === "rollback_target_invalid");
+        assert.equal(simulatedWrangler.rolledBack.length, mutationsBefore);
+        assert.equal((await store.listDeployments(siteId, 100)).length, before);
+        assert.equal((await store.listEffectiveTransitions(siteId, 100)).length, transitionsBefore);
+        assert.equal((await governedDelivery.resolveCurrentEffectiveProduction(siteId)).executionOrigin, "TEST_SIMULATION");
+      } finally {
+        await store.updateDeployment({ id: publishedA.id, status: "verified", executionOrigin: "TEST_SIMULATION" });
+      }
+    });
+  }
+
   // ---------------------------------------------------------------------------
   // Case 1 (P0 Core): A -> B -> interrupted rollback A -> recovery
   // Assert: eventType === "ROLLBACK" (NEVER "PUBLISH"), actor is rollback operator
@@ -1545,6 +1583,20 @@ test("P0 & P1 Rollback Crash Recovery Matrix (Separate Semantics, Pre-Mutation I
     });
   }
 
+  await t.test("SF-F02 recovery rejects changed provider mode without a false real transition", async () => {
+    const id = `dep-mode-mismatch-${suffix}`;
+    await pendingRollback(id, { executionOrigin: "REAL_CLOUDFLARE" });
+    const before = (await store.listEffectiveTransitions(siteId, 100)).length;
+    const qaBefore = recoveryQaCalls.length;
+    await governedDelivery.reconcilePendingDeployments(siteId);
+    const recovered = await store.getDeployment(id);
+    assert.equal(recovered?.status, "needs_review");
+    assert.equal(recovered?.executionOrigin, "REAL_CLOUDFLARE", "Preserve conflicting evidence rather than relabeling it");
+    assert.equal(recovered?.errorCode, "recovery_execution_origin_mismatch");
+    assert.equal(recoveryQaCalls.length, qaBefore);
+    assert.equal((await store.listEffectiveTransitions(siteId, 100)).length, before);
+  });
+
   await t.test("P0 complete historical routes reach rollback QA and finalize exactly once", async () => {
     const id = `dep-complete-routes-${suffix}`;
     await pendingRollback(id, { candidateRoutes: [...SUTHERLAND_SIX_ROUTES].reverse() });
@@ -1559,6 +1611,8 @@ test("P0 & P1 Rollback Crash Recovery Matrix (Separate Semantics, Pre-Mutation I
     assert.equal(transitions.length, before + 1);
     assert.deepEqual(transitions[0]!.candidateRoutes, SUTHERLAND_SIX_ROUTES);
     assert.equal(transitions[0]!.eventType, "ROLLBACK");
+    assert.equal(transitions[0]!.executionOrigin, "TEST_SIMULATION");
+    assert.equal((await store.getDeployment(id))?.executionOrigin, "TEST_SIMULATION");
     await governedDelivery.reconcilePendingDeployments(siteId);
     assert.equal((await store.listEffectiveTransitions(siteId, 100)).length, before + 1);
   });

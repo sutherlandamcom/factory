@@ -5,7 +5,6 @@ import { eq, sql } from "drizzle-orm";
 import {
   DEPLOYMENT_PUBLISH_PERMISSION,
   qaRunPublicationEligible,
-  productionRouteSchema,
   type ExecutionOrigin,
   type GovernedDeploymentView,
   type MonitoringSummary,
@@ -44,6 +43,7 @@ import {
   removeWorktree,
 } from "./source.js";
 import { WranglerClient } from "./wrangler.js";
+import { requireHistoricalRollbackRoutes, requireRollbackExecutionOrigin } from "./rollback-authority.js";
 
 export interface EffectivePageReleaseLineage {
   siteId: string;
@@ -805,7 +805,7 @@ export class GovernedDeliveryService {
         );
       }
 
-      const targetRoutes = (targetDeployment.candidateRoutes as string[]) ?? ["/"];
+      const targetRoutes = requireHistoricalRollbackRoutes(targetDeployment.candidateRoutes);
 
       const rollbackDepId = `dep-rb-${randomUUID()}`;
       const operationId = `rb-${rollbackDepId}`;
@@ -815,9 +815,10 @@ export class GovernedDeliveryService {
       await mkdir(fullArtifactDir, { recursive: true });
 
       const tempProvider = this.wranglerFactory(this.repoRoot, fullArtifactDir);
-      const executionOrigin: ExecutionOrigin =
-        (targetDeployment.executionOrigin as ExecutionOrigin) ??
-        ((tempProvider as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
+      const effective = await this.store.getCurrentEffectiveTransition(site.id);
+      const executionOrigin = requireRollbackExecutionOrigin(tempProvider, [
+        targetDeployment.executionOrigin, effective?.executionOrigin,
+      ]);
 
       // P1: Create durable pending rollback operation in PostgreSQL before external Cloudflare mutation
       const pendingRollbackDeployment = await this.store.createDeployment({
@@ -869,6 +870,7 @@ export class GovernedDeliveryService {
         }
 
         const provider = this.wranglerFactory(worktree || this.repoRoot, fullArtifactDir);
+        requireRollbackExecutionOrigin(provider, [executionOrigin]);
         const deliveryRuntime: DeliveryRuntime = {
           build: async () => path.join(worktree || this.repoRoot, "sites", "starter", "dist"),
           digest: async () => targetDeployment.artifactDigest || "target-digest",
@@ -900,10 +902,7 @@ export class GovernedDeliveryService {
         });
 
         if (rolledBack.productionVerified && rolledBack.versionId) {
-          const effectiveExecutionOrigin =
-            (rolledBack.executionOrigin as any) ??
-            targetDeployment.executionOrigin ??
-            ((provider as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
+          const effectiveExecutionOrigin = requireRollbackExecutionOrigin(provider, [executionOrigin, rolledBack.executionOrigin]);
           const finalized = await this.store.finalizeDeploymentAndTransitionAtomic({
             deploymentId: rolledBack.id,
             expectedStatus: ["promoting", "promoted", "rolled_back"],
@@ -1362,11 +1361,9 @@ export class GovernedDeliveryService {
     const routesMissing = [pendingRoutes, targetRoutes].some(
       (routes) => routes == null || (Array.isArray(routes) && routes.length === 0),
     );
-    const validRoutes = (routes: unknown): routes is string[] =>
-      Array.isArray(routes) &&
-      routes.length > 0 && routes.length <= 200 &&
-      routes.every((route) => productionRouteSchema.safeParse(route).success) &&
-      new Set(routes).size === routes.length;
+    const validRoutes = (routes: unknown): routes is string[] => {
+      try { requireHistoricalRollbackRoutes(routes); return true; } catch { return false; }
+    };
 
     if (
       !validRoutes(pendingRoutes) || !validRoutes(targetRoutes) ||
@@ -1435,6 +1432,22 @@ export class GovernedDeliveryService {
       unverified.artifactDirectory || targetDep.artifactDirectory || ".factory/deployments/rollback",
     );
     const provider = this.wranglerFactory(this.repoRoot, fullArtifactDir);
+    let executionOrigin: ExecutionOrigin;
+    try {
+      const effective = await this.store.getCurrentEffectiveTransition(site.id);
+      executionOrigin = requireRollbackExecutionOrigin(provider, [
+        targetDep.executionOrigin, unverified.executionOrigin, effective?.executionOrigin,
+      ]);
+    } catch {
+      await this.store.updateDeployment({
+        id: unverified.id,
+        status: "needs_review",
+        errorCode: "recovery_execution_origin_mismatch",
+        errorMessage: "Rollback recovery provider and persisted target, operation and effective provenance must agree.",
+      });
+      return { reconciled: true, details: `Deployment '${unverified.id}' moved to needs_review: execution provenance mismatch.` };
+    }
+
     let cfActiveVersion: string | null = null;
     try {
       cfActiveVersion = await provider.currentProductionVersion(site.cloudflareWorkerName!);
@@ -1509,11 +1522,6 @@ export class GovernedDeliveryService {
     }
 
     // 7. Atomic finalization: status=rolled_back + ROLLBACK effective transition
-    const executionOrigin: ExecutionOrigin =
-      (unverified.executionOrigin as ExecutionOrigin) ??
-      targetDep.executionOrigin ??
-      ((provider as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
-
     const opId = unverified.operationId || `rec-rb-${unverified.id}`;
 
     await this.store.finalizeDeploymentAndTransitionAtomic({

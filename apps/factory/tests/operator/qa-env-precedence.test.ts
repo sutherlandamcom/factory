@@ -79,7 +79,7 @@ test("QA env precedence runtime: real LocalTrustedQaEvidenceExecutor overrides p
     args: string[],
     opts: RunProcessOptions,
   ) => {
-    if (command === "node") {
+    if (command === "node" && args[0] !== path.join(repoRoot, "sites", "starter", "node_modules", "@lhci", "cli", "src", "cli.js")) {
       // Execute a real child process with opts.env (constructed by LocalTrustedQaEvidenceExecutor)
       // to prove the child process actually receives the trusted values, overriding poisoned ambient env.
       const probe = await runProcess("node", ["-e", `
@@ -106,14 +106,14 @@ test("QA env precedence runtime: real LocalTrustedQaEvidenceExecutor overrides p
       };
     }
 
-    if (command === "pnpm") {
+    if (args.includes("autorun")) {
       // Lighthouse: provide minimal manifest so collectLighthouse parses safely without expensive full run
-      const outDir = path.join(repoRoot, "qa-artifacts", "lhci-e2e");
+      const outDir = args.find(arg => arg.startsWith("--upload.outputDir="))!.slice("--upload.outputDir=".length);
       await mkdir(outDir, { recursive: true });
       const reportPath = path.join(outDir, "report.json");
       await writeFile(reportPath, JSON.stringify({
         categories: { performance: { score: 1 }, seo: { score: 1 }, "best-practices": { score: 1 } },
-        audits: {},
+        audits: { "largest-contentful-paint": { numericValue: 100 }, "cumulative-layout-shift": { numericValue: 0 }, "total-blocking-time": { numericValue: 0 } },
       }));
       await writeFile(path.join(outDir, "manifest.json"), JSON.stringify([
         { url: "http://localhost/homepage", jsonPath: reportPath },

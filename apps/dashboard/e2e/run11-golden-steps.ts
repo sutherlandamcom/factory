@@ -147,10 +147,38 @@ async function buildAndQa(page: Page, pageSlug: string): Promise<void> {
   await page.getByPlaceholder("home").fill(pageSlug);
   await page.getByRole("button", { name: "Prepare candidate" }).click();
   await expect(page.getByRole("button", { name: "Build", exact: true })).toBeVisible({ timeout: 30_000 });
+  const projectId = await currentProjectId(page);
+  const candidatePath = `/api/projects/${encodeURIComponent(projectId)}/production/candidates/`;
+  const buildResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === "POST" &&
+      new URL(response.url()).pathname.startsWith(candidatePath) &&
+      new URL(response.url()).pathname.endsWith("/build"),
+    { timeout: 120_000 },
+  );
   await page.getByRole("button", { name: "Build", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Run QA" }).first()).toBeEnabled({ timeout: 120_000 });
-  await page.getByRole("button", { name: "Run QA" }).first().click();
-  await expect(page.getByText(/qa_passed|qa_failed|PASS|FAIL/).first()).toBeVisible({ timeout: 300_000 });
+  const buildResponse = await buildResponsePromise;
+  expect(buildResponse.ok(), await buildResponse.text()).toBeTruthy();
+  const { candidateId } = await buildResponse.json() as { candidateId: string };
+  expect(candidateId).toBeTruthy();
+  const candidateRow = page.getByRole("row").filter({ hasText: candidateId.slice(0, 12) });
+  const runQa = candidateRow.getByRole("button", { name: "Run QA", exact: true });
+  await expect(runQa).toBeEnabled({ timeout: 120_000 });
+  const qaResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === "POST" &&
+      new URL(response.url()).pathname === `${candidatePath}${encodeURIComponent(candidateId)}/qa`,
+    { timeout: 300_000 },
+  );
+  await runQa.click();
+  const qaResponse = await qaResponsePromise;
+  expect(qaResponse.ok(), await qaResponse.text()).toBeTruthy();
+  const qa = await qaResponse.json() as {
+    overall: string;
+    checks: Array<{ checkId: string; subject?: string; verdict: string; detail?: string }>;
+  };
+  const failures = qa.checks.filter((check) => check.verdict !== "PASS")
+    .map(({ checkId, subject, verdict, detail }) => ({ checkId, subject, verdict, detail }));
+  expect(qa.overall, `Candidate ${candidateId} QA: ${JSON.stringify(failures, null, 2)}`).toBe("PASS");
+  await expect(candidateRow.getByText("qa_passed", { exact: true })).toBeVisible({ timeout: 30_000 });
 }
 
 /** Deterministic hero photograph fixture (same approach as the Run 5/7 journeys). */

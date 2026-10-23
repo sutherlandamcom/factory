@@ -417,7 +417,7 @@ test("E2E-P1-03: accepted CTA text in a paragraph cannot pass actionable convers
   const governed = Object.assign(structuredClone(manifest), {
     conversion: { mode: "action", href: "https://contact.example.test/", projectId: manifest.input.projectId,
       acceptedInput: { id: "intake", version: 1, digest: "c".repeat(64) },
-      acceptedContentDigest: manifest.content.acceptedDigest },
+      acceptedContentDigest: manifest.content.acceptedDigest, ctaText: manifest.content.cta },
   });
   const result = validateContentIntegrity({ route: "/", html: renderFaithfulPage(governed), manifest: governed });
   assert.equal(verdictOf(result.checks, "content.cta_intent"), "FAIL");
@@ -426,7 +426,7 @@ test("E2E-P1-03: accepted CTA text in a paragraph cannot pass actionable convers
 test("E2E-P1-03: exact accepted CTA anchor passes and wrong destination fails", () => {
   const governed = Object.assign(structuredClone(manifest), {
     conversion: { mode: "action" as const, href: "https://contact.example.test/", projectId: manifest.input.projectId,
-      acceptedInput: { id: "intake", version: 1, digest: "c".repeat(64) }, acceptedContentDigest: manifest.content.acceptedDigest },
+      acceptedInput: { id: "intake", version: 1, digest: "c".repeat(64) }, acceptedContentDigest: manifest.content.acceptedDigest, ctaText: manifest.content.cta },
   });
   const html = renderFaithfulPage(governed).replace(`<p>${manifest.content.cta}</p>`, `<section data-component="page-cta"><a href="https://contact.example.test/">${manifest.content.cta}</a></section>`);
   assert.equal(verdictOf(validateContentIntegrity({ route: "/", html, manifest: governed }).checks, "content.cta_intent"), "PASS");

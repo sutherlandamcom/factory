@@ -1,4 +1,4 @@
-import { provisionTestSiteBinding } from "../fixtures/project-site-binding.js";
+import { createIsolatedProductionRoot, provisionTestSiteBinding } from "../fixtures/project-site-binding.js";
 import { EvidenceStitchProvider } from "../fixtures/stitch-evidence.js";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -273,7 +273,7 @@ async function setupV2Chain(
     await acceptFixturePage(dbInst, projectId, slug, false, slug === "offer-x92" ? "service" : undefined);
     acceptedPages.push(slug);
   }
-  const root = await mkdtemp(path.join(tmpdir(), "pre-run12-"));
+  const root = await createIsolatedProductionRoot(await resolveRepositoryRoot());
   boundTestIdentity = await provisionTestSiteBinding(dbInst.db, root, projectId, { siteId: "site-fixture", canonicalOrigin: "https://example.com" });
   const designStore = new DesignStore(dbInst.db);
   const snapshot = await designStore.deriveInputSnapshotDraft({ projectId });
@@ -487,7 +487,7 @@ test("PG pre-run12: two pages of one archetype classify independently; represent
     }
 
     // Run real Astro build
-    const siteDir = path.join(repoRoot, "sites", "starter");
+    const siteDir = path.join(env.root, "sites", "starter");
     const buildResult = await runProcess("pnpm", ["run", "build"], {
       cwd: siteDir,
       env: {
@@ -657,7 +657,7 @@ test("PG pre-run12: adding a page after design acceptance does NOT stale a v2 de
       await compiler.writeManifest(m, manifestDir);
     }
 
-    const siteDir = path.join(repoRoot, "sites", "starter");
+    const siteDir = path.join(env.root, "sites", "starter");
     const buildResult = await runProcess("pnpm", ["run", "build"], {
       cwd: siteDir,
       env: {

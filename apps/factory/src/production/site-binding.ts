@@ -55,6 +55,9 @@ export async function requireProjectSiteAuthority(db: FactoryDb, repoRoot: strin
   const [snapshot] = await db.select().from(projectInputSnapshots).where(eq(projectInputSnapshots.projectId, projectId))
     .orderBy(desc(projectInputSnapshots.version)).limit(1);
   if (!project || !snapshot) throw new FactoryError("production_authority_stale", "Project/site binding requires current accepted project inputs.");
+  if (snapshot.acceptanceState !== "human_accepted" || deterministicDigest(snapshot.payload) !== snapshot.digest) {
+    throw new FactoryError("production_authority_stale", "Accepted project input identity is invalid or its payload no longer matches its digest.");
+  }
   const profile = await loadWorktreeSiteProfile(repoRoot);
   const payload = snapshot.payload as { siteIdentity: SiteIdentity };
   const raw = await loadProjectSiteBinding(repoRoot, profile, {

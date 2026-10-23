@@ -19,6 +19,7 @@ import { usePolling } from "../hooks/usePolling";
 export function SearchPage({ projectId }: { projectId: string }) {
   const activeProjectId = useRef(projectId);
   activeProjectId.current = projectId;
+  const requestGeneration = useRef(0);
   const [ws, setWs] = useState<SearchWorkspaceReadModel | null>(null);
   const [lastRun, setLastRun] = useState<SearchRunReadModel | null>(null);
   const [query, setQuery] = useState("");
@@ -35,7 +36,7 @@ export function SearchPage({ projectId }: { projectId: string }) {
       setWs(w);
       setError(null);
     } catch (e) {
-      setError(searchErrorMessage(e, "Search workspace failed to load."));
+      if (activeProjectId.current === projectId) setError(searchErrorMessage(e, "Search workspace failed to load."));
     }
   }, [projectId]);
 
@@ -45,11 +46,13 @@ export function SearchPage({ projectId }: { projectId: string }) {
   usePolling(loadWorkspace, 5000);
 
   useEffect(() => {
-    setQuery(""); setLocation(""); setLanguage(""); setLastRun(null);
+    requestGeneration.current++;
+    setQuery(""); setLocation(""); setLanguage(""); setLastRun(null); setBusy(false); setError(null);
   }, [projectId, ws?.acceptedInput?.digest]);
 
   const run = async (refresh = false) => {
     if (!ws) return;
+    const generation = requestGeneration.current;
     setBusy(true);
     setError(null);
     try {
@@ -60,24 +63,25 @@ export function SearchPage({ projectId }: { projectId: string }) {
         device,
         refresh,
       });
-      setLastRun(result);
+      if (activeProjectId.current === projectId && requestGeneration.current === generation) setLastRun(result);
     } catch (e) {
-      setError(searchErrorMessage(e, "Search run failed."));
+      if (activeProjectId.current === projectId && requestGeneration.current === generation) setError(searchErrorMessage(e, "Search run failed."));
     } finally {
-      setBusy(false);
+      if (activeProjectId.current === projectId && requestGeneration.current === generation) setBusy(false);
     }
   };
 
   const openRun = async (runId: string) => {
+    const generation = requestGeneration.current;
     setBusy(true);
     setError(null);
     try {
       const detail = await api.getSearchRun(projectId, runId);
-      setLastRun(detail);
+      if (activeProjectId.current === projectId && requestGeneration.current === generation) setLastRun(detail);
     } catch (e) {
-      setError(searchErrorMessage(e, "Could not load run."));
+      if (activeProjectId.current === projectId && requestGeneration.current === generation) setError(searchErrorMessage(e, "Could not load run."));
     } finally {
-      setBusy(false);
+      if (activeProjectId.current === projectId && requestGeneration.current === generation) setBusy(false);
     }
   };
 
@@ -498,6 +502,8 @@ export function searchErrorMessage(error: unknown, fallback: string): string {
     switch (error.code) {
       case "search_input_not_accepted":
         return "No accepted project inputs. Complete Intake acceptance before running searches.";
+      case "search_context_invalid":
+        return "Search targeting needs clarification. Select a supported language and an unambiguous location before running search.";
       case "search_query_invalid":
         return "That query is not valid. Check length and characters, then try again.";
       case "search_provider_not_configured":

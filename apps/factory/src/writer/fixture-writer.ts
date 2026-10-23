@@ -38,9 +38,20 @@ export class FixtureWriterProvider {
     snapshotDigest: string;
     title: string;
     slug: string;
+    language?: string;
+    ctaText?: string;
   }): PageContentProposalData {
     const slugKey = input.slug.trim().replace(/^\/+/, "").replace(/\/+$/, "") || "home";
     const label = input.title || slugKey.replace(/[-_/]/g, " ");
+    if (input.language?.toLowerCase().startsWith("ru")) return {
+      schemaVersion: "writer-content-v1", snapshotId: input.snapshotId, snapshotVersion: input.snapshotVersion, snapshotDigest: input.snapshotDigest,
+      title: input.title,
+      metaDescription: `Изолированный тестовый материал: ${label}. Синтетический пример без производственных полномочий.`,
+      introduction: `Это тестовый материал о теме «${label}». Он не подтверждает факты о предприятии или его сотрудниках.`,
+      sections: [{ heading: `${label}: задача`, body: "Тестовый пример структуры для обсуждения производственной задачи." }, { heading: `${label}: порядок обсуждения`, body: "Описание задачи требует проверки оператором и подтверждённых источников." }],
+      conclusion: "Тестовый пример не является подтверждением производственных показателей.",
+      cta: input.ctaText ?? "Обсудить производственную задачу", internalLinks: [],
+    };
     return {
       schemaVersion: "writer-content-v1",
       snapshotId: input.snapshotId,

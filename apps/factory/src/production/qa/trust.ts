@@ -798,7 +798,7 @@ function extractMaterialSentences(
   return sentences;
 }
 
-function isSentenceCoveredByClaims(sentence: string, claims: ReadonlyArray<ClaimLineage>): boolean {
+export function isSentenceCoveredByClaims(sentence: string, claims: ReadonlyArray<ClaimLineage>): boolean {
   if (sentence.startsWith("Reviewed by:") || sentence.includes("data-review-authority")) {
     return true;
   }
@@ -810,12 +810,12 @@ function isSentenceCoveredByClaims(sentence: string, claims: ReadonlyArray<Claim
   for (const claim of claims) {
     const normClaim = normalizeAlphaNum(claim.claimText);
     if (!normClaim) continue;
-    if (normSentence.includes(normClaim) || normClaim.includes(normSentence)) {
-      return true;
-    }
     const claimNumbers = new Set(extractNumbers(claim.claimText));
     const allNumbersCovered = sentenceNumbers.every((n) => claimNumbers.has(n));
     if (!allNumbersCovered) continue;
+    if (normSentence.includes(normClaim) || normClaim.includes(normSentence)) {
+      return true;
+    }
 
     const claimTokens = normClaim.split(" ").filter((t) => t.length >= 4);
     if (claimTokens.length === 0) continue;

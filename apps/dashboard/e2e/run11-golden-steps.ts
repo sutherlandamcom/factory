@@ -82,8 +82,8 @@ async function currentProjectId(page: Page): Promise<string> {
 }
 
 /** Content pipeline through the governed writer: policy → brief → snapshot → proposal → QA → accept. */
-async function acceptContent(page: Page, pageSlug: string): Promise<void> {
-  await acceptSearchGap(page);
+export async function acceptContent(page: Page, pageSlug: string, context?: { query: string; title: string; objective: string; audience: string; structure: string; cta: string }): Promise<void> {
+  await acceptSearchGap(page, context ? { query: context.query } : undefined);
   await gotoSubsection(page, "Content", "Pipeline");
   await expect(page.getByText("Factory Writer Policy")).toBeVisible({ timeout: 10_000 });
   await page.getByRole("button", { name: "Derive draft" }).click();
@@ -92,11 +92,11 @@ async function acceptContent(page: Page, pageSlug: string): Promise<void> {
   await expect(page.getByText("Writer policy v1 approved and immutable.")).toBeVisible({ timeout: 15_000 });
 
   await page.locator('input[placeholder="roof-replacement-denver"]').fill(pageSlug);
-  await page.getByLabel("Title", { exact: false }).first().fill("Roof Restoration in Austin");
-  await page.getByLabel("Objective", { exact: false }).fill("Convert homeowners researching roof restoration into inspection requests.");
-  await page.getByLabel("Audience", { exact: false }).fill("Austin homeowners comparing local roofers");
-  await page.getByLabel("Structure guidance (one per line)").fill("Storm damage context\nRepair process\nWarranty and trust signals");
-  await page.getByLabel("CTA intent", { exact: false }).fill("Book a free roof inspection");
+  await page.getByLabel("Title", { exact: false }).first().fill(context?.title ?? "Roof Restoration in Austin");
+  await page.getByLabel("Objective", { exact: false }).fill(context?.objective ?? "Convert homeowners researching roof restoration into inspection requests.");
+  await page.getByLabel("Audience", { exact: false }).fill(context?.audience ?? "Austin homeowners comparing local roofers");
+  await page.getByLabel("Structure guidance (one per line)").fill(context?.structure ?? "Storm damage context\nRepair process\nWarranty and trust signals");
+  await page.getByLabel("CTA intent", { exact: false }).fill(context?.cta ?? "Book a free roof inspection");
 
   await page.getByRole("button", { name: "Create draft" }).click();
   await expect(page.getByText(/Brief draft v1 saved/)).toBeVisible({ timeout: 15_000 });
@@ -117,7 +117,7 @@ async function acceptContent(page: Page, pageSlug: string): Promise<void> {
 }
 
 /** Derivatives: enable policy → generate summary → accept → accept set (Run 10). */
-async function acceptDerivatives(page: Page, pageSlug: string): Promise<void> {
+export async function acceptDerivatives(page: Page, pageSlug: string): Promise<void> {
   await gotoSubsection(page, "Content", "Derivatives");
   // Wait until the derivatives workspace read model is loaded (the per-page
   // section renders only after the workspace query resolves).

@@ -169,7 +169,7 @@ const server = http.createServer(async (req, res) => {
       await stopOperator();
       return send(200, { ok: true });
     }
-    if (req.method === "POST" && req.url?.startsWith("/seed-synthetic-authority")) {
+    if (req.method === "POST" && (req.url === "/seed-synthetic-authority" || req.url === "/configure-test-site")) {
       // Run 11 test bootstrap ONLY (§53): seeds test-only synthetic
       // production authority into the DEDICATED test database so the
       // browser journey can exercise downstream workflow mechanics. The
@@ -188,13 +188,13 @@ const server = http.createServer(async (req, res) => {
         'import { createDatabaseInstance } from "./src/persistence/db.js";',
         'import { seedRun11SyntheticDesignAuthorityForTest } from "./src/production/qa/run11-synthetic-authority.js";',
         "const db = createDatabaseInstance({ connectionString: process.env.FACTORY_TEST_DATABASE_URL, isTest: true }).db;",
-        "const result = await seedRun11SyntheticDesignAuthorityForTest(db, { projectId: process.argv[2], pageSlug: process.argv[3] });",
+        req.url === "/seed-synthetic-authority" ? "const result = await seedRun11SyntheticDesignAuthorityForTest(db, { projectId: process.argv[2], pageSlug: process.argv[3] });" : "const result = {};",
         'import { createIsolatedProductionRoot, provisionTestSiteBinding } from "./tests/fixtures/project-site-binding.js";',
         'import { mkdir, symlink } from "node:fs/promises";',
         'import path from "node:path";',
         'const sourceRoot = path.resolve(process.cwd(), "../..");',
         'const worktreeRoot = await createIsolatedProductionRoot(sourceRoot, false);',
-        'await provisionTestSiteBinding(db, worktreeRoot, process.argv[2], { route: `/${process.argv[3]}` });',
+        `await provisionTestSiteBinding(db, worktreeRoot, process.argv[2], { route: \`/\${process.argv[3]}\`, informational: ${req.url === "/seed-synthetic-authority"} });`,
         'await mkdir(path.join(worktreeRoot, ".factory"), { recursive: true });',
         'await symlink(path.join(sourceRoot, ".factory/assets"), path.join(worktreeRoot, ".factory/assets"));',
         "process.stdout.write(JSON.stringify({ ...result, worktreeRoot }));",

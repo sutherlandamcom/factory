@@ -14,3 +14,14 @@ test("E2E-P1-01: missing, ambiguous and unsupported markets/languages require cl
   }
   for (const language of ["xx-ZZ", "not_a_locale", ""]) assert.throws(() => resolveSearchContext({ ...payload, siteIdentity: { ...payload.siteIdentity, language } }, {}));
 });
+
+test("E2E-P1-01: country suffixes normalize consistently for provider adapters", () => {
+  for (const [location, expected] of [["Moscow,RU", "Moscow,Russia"], ["Paris,FR", "Paris,France"], ["Austin,Texas,US", "Austin,Texas,United States"]]) {
+    assert.equal(resolveSearchContext(payload, { location }).location, expected);
+  }
+});
+test("E2E-P1-01: conflicting accepted geography and priority target require clarification", () => {
+  const conflict = { ...payload, markets: { geographies: ["France"], priorityLocations: ["Moscow,Russia"] } };
+  assert.throws(() => resolveSearchContext(conflict, {}), /conflict/i);
+  assert.equal(resolveSearchContext(conflict, { location: "Russia" }).location, "Russia");
+});

@@ -28,7 +28,15 @@ export function resolveSearchContext(payload: Pick<ProjectIntakePayload, "siteId
   // Provider location names require a canonical, country-qualified location.
   // No arbitrary bare city or marketing hypothesis is passed as a precise target.
   const tail = normalizedLocation.split(",").at(-1)!.trim().toLowerCase();
-  const location = country ?? (normalizedLocation.includes(",") && countries[tail] ? normalizedLocation : reject("Unsupported location. Select a supported country or a canonical city,region,country location."));
+  const segments = normalizedLocation.split(",").map(part => part.trim());
+  const canonicalCountry = countries[tail];
+  const structured = segments.length >= 2 && segments.length <= 3 && segments.every(Boolean) && canonicalCountry;
+  const location = country ?? (structured ? [...segments.slice(0, -1), canonicalCountry].join(",") : reject("Unsupported location. Select a supported country or a canonical city,region,country location."));
+  if (!overrides.location?.trim() && priorities.length && geographies.length) {
+    const marketCountries = geographies.map(value => countries[value.toLowerCase()]);
+    const targetCountry = location.split(",").at(-1)!;
+    if (marketCountries.some(value => !value) || !marketCountries.includes(targetCountry)) reject("Accepted priority location conflicts with the accepted market. Select explicit targeting to clarify.");
+  }
   return { policyVersion: SEARCH_CONTEXT_POLICY, language, location,
     languageSource: overrides.language?.trim() ? "operator_override" : "accepted_input",
     locationSource: overrides.location?.trim() ? "operator_override" : "accepted_input" };

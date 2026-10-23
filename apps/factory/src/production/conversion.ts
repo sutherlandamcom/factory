@@ -9,15 +9,17 @@ export function verifiedConversionHref(conversion: Conversion): string {
   if (!raw || /[\u0000-\u0020\u007f]/u.test(raw)) return reject();
   if (conversion.ctaDestinationType === "email") {
     const address = raw.replace(/^mailto:/i, "");
-    return /^[A-Za-z0-9.!#$%&'*+\-/=^_`{|}~]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(address) ? `mailto:${address}` : reject();
+    if (!/^[A-Za-z0-9.!#$%&'*+\-/=^_`{|}~]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(address)) return reject();
+    const at = address.lastIndexOf("@");
+    return `mailto:${encodeURIComponent(address.slice(0, at))}@${address.slice(at + 1)}`;
   }
   if (conversion.ctaDestinationType === "phone") {
     const phone = raw.replace(/^tel:/i, "");
     return /^\+[1-9][0-9]{6,14}$/.test(phone) ? `tel:${phone}` : reject();
   }
-  if (conversion.ctaDestinationType === "url" || conversion.ctaDestinationType === "form") {
+  if (conversion.ctaDestinationType === "form") throw new FactoryError("production_authority_stale", "A governed form capability is not available; select a supported verified destination instead.");
+  if (conversion.ctaDestinationType === "url") {
     if (/^\/(?:[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?)(?:\/[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?)*$/.test(raw) || raw === "/") return raw;
-    if (conversion.ctaDestinationType === "form") return reject();
     try {
       const url = new URL(raw);
       if (url.protocol === "https:" && !url.username && !url.password && !raw.includes("\\")) return raw;
@@ -40,6 +42,7 @@ export function deriveConversionAuthority(input: {
     projectId: input.projectId,
     acceptedInput: { id: input.snapshot.id, version: input.snapshot.version, digest: input.snapshot.digest },
     acceptedContentDigest: input.acceptedContentDigest,
+    ctaText: input.ctaText,
     mode: informational ? "informational" : "action",
     href: informational ? null : verifiedConversionHref(input.conversion),
   };

@@ -280,10 +280,6 @@ export class ProductionStore {
     rendererVersion: string;
     rendererPolicyVersion: string;
   }): Promise<ProductionPageInputRecord> {
-    const bundle = await new ProductionStore(this.db, this.evidenceOptions).deriveAuthorityBundle({
-      projectId: input.projectId,
-      pageSlug: input.pageSlug,
-    });
     const authority = await requireProjectSiteAuthority(this.db, this.evidenceOptions.repoRoot ?? path.resolve(import.meta.dirname, "../../../.."), input.projectId);
     const expectedIdentity = {
       siteId: authority.profile.siteId, siteName: authority.profile.siteName,
@@ -293,6 +289,10 @@ export class ProductionStore {
     if (deterministicDigest(input.siteIdentity) !== deterministicDigest(expectedIdentity)) {
       throw productionError("production_authority_stale", "Production identity does not match the current project/site binding.");
     }
+    const bundle = await new ProductionStore(this.db, this.evidenceOptions).deriveAuthorityBundle({
+      projectId: input.projectId,
+      pageSlug: input.pageSlug,
+    });
 
     // Pre-Run-12 page→archetype authority: design-v2 classifies every page
     // through the durable typed PageArchetypeAuthority (requireAuthority).
@@ -495,6 +495,10 @@ export class ProductionStore {
       await tx.execute(
         sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`,
       );
+      const finalAuthority = await requireProjectSiteAuthority(tx as unknown as FactoryDb, this.evidenceOptions.repoRoot ?? path.resolve(import.meta.dirname, "../../../.."), input.projectId);
+      if (finalAuthority.bindingDigest !== authority.bindingDigest || finalAuthority.snapshot.digest !== authority.snapshot.digest) {
+        throw new FactoryError("production_authority_stale", "Project/site configuration changed during production derivation.");
+      }
       // Idempotency: identical upstream authority + identical renderer config
       // returns the existing latest input for this page identity.
       const [latest] = await tx

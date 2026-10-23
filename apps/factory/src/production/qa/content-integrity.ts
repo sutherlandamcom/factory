@@ -172,8 +172,8 @@ export function validateContentIntegrity(input: ContentIntegrityInput): ContentI
     const conversion = input.manifest.conversion;
     const matches = (main ?? root).querySelectorAll('[data-component="page-cta"] a[href]');
     const ctaActionValid = !conversion || conversion.mode === "informational" || (
-      conversion.projectId === input.manifest.input.projectId &&
-      conversion.acceptedContentDigest === content.acceptedDigest && matches.length === 1 &&
+      conversion.ctaText === content.cta && conversion.projectId === input.manifest.input.projectId &&
+      conversion.acceptedContentDigest === (input.manifest.input.acceptedContent?.digest ?? content.acceptedDigest) && matches.length === 1 &&
       normalizeText(matches[0]!.text) === acceptedCta && matches[0]!.getAttribute("href") === conversion.href &&
       !matches[0]!.hasAttribute("hidden") && matches[0]!.getAttribute("aria-disabled") !== "true" && matches[0]!.getAttribute("tabindex") !== "-1"
     );

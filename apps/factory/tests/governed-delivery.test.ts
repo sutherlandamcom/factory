@@ -233,6 +233,8 @@ test("governed delivery lifecycle: preview -> approval -> publish -> rollback", 
   let releaseApprovals: ReleaseApprovalRecord[] = [];
 
   const store: any = {
+    async getProjectById(pId: string) { return pId === projectId ? { id: projectId, key: binding.projectKey } : null; },
+    async getSiteByKey(projectKey: string, siteKey: string) { return projectKey === binding.projectKey && siteKey === site.key ? site : null; },
     async findSiteByProjectId(pId: string) {
       return pId === projectId ? site : null;
     },

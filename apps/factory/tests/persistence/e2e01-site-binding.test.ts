@@ -50,7 +50,7 @@ test("E2E-P0-01 PG: two isolated project configurations, wrong-project rejection
     assert.equal(authorityB!.profile.language, "ru-RU");
     assert.notEqual(authorityA!.bindingDigest, authorityB!.bindingDigest);
     await assert.rejects(() => requireProjectSiteAuthority(dbInst.db, a.root, b.project.id), /binding/i);
-    await assert.rejects(() => new ProductionStore(dbInst.db, { repoRoot: a.root }).deriveProductionInput({ projectId: b.project.id, pageSlug: "home", siteIdentity: { ...authorityA!.profile, profileDigest: deterministicDigest(a.profile) } as never, rendererVersion: "7.3.3", rendererPolicyVersion: "production-policy-v4" }), /binding|authority|content/i);
+    await assert.rejects(() => new ProductionStore(dbInst.db, { repoRoot: a.root }).deriveProductionInput({ projectId: b.project.id, pageSlug: "home", siteIdentity: { ...authorityA!.profile, profileDigest: deterministicDigest(a.profile) } as never, rendererVersion: "7.3.3", rendererPolicyVersion: "production-policy-v4" }), /binding/i);
     await dbInst.db.update(sites).set({ cloudflareWorkerName: a.binding.delivery.workerName }).where(eq(sites.id, b.site.id));
     await assert.rejects(() => requireProjectSiteAuthority(dbInst.db, b.root, b.project.id), /destination/i);
     const changed = structuredClone(a.payload); changed.siteIdentity.language = "fr";

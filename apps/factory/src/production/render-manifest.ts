@@ -64,6 +64,7 @@ export interface ProductionRenderManifest {
     digest: string;
     projectId: string;
     pageIdentity: string;
+    acceptedContent?: { id: string; version: number; digest: string };
     pageType: string;
     route: string;
     siteIdentity: {
@@ -497,6 +498,7 @@ export class ProductionRenderCompiler {
         projectId: input.projectId,
         pageIdentity: productionInput.pageIdentity,
         pageType: productionInput.pageType,
+        acceptedContent: { id: productionInput.acceptedContentId, version: productionInput.acceptedContentVersion, digest: productionInput.acceptedContentDigest },
         route: productionInput.route,
         siteIdentity: {
           siteId: productionInput.siteId,

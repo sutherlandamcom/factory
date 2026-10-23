@@ -16,9 +16,9 @@ the domain model.
 
 Every meaningful implementation PR ends at `IMPLEMENTATION COMPLETE — PENDING INDEPENDENT QA`; independent QA reviews an exact SHA, frozen P0/P1 findings are remediated narrowly, then the exact candidate is re-reviewed before merge.
 
-## Observed implementation status — 2026-09-19
+## Observed implementation status — 2026-10-23
 
-Verified main: `5eeffadbbd928f4a03644d6e8ff267a6d5795316` (PR #43 merged; Run 11 closed and post-merge verified). Recheck live Git/PR state at session start. Merge, executed checks and independent acceptance remain distinct facts; the table below is navigation, not a substitute for exact-SHA evidence.
+Verified remediation baseline: `82741c600aae5af1dd79f867374789b101a5b5cf` (PR #47 merged). Recheck live Git/PR state at session start. Merge, executed checks and independent acceptance remain distinct facts; the table below is navigation, not a substitute for exact-SHA evidence.
 
 | Workstream | Observed state | Evidence / next gate |
 | --- | --- | --- |
@@ -34,9 +34,9 @@ Verified main: `5eeffadbbd928f4a03644d6e8ff267a6d5795316` (PR #43 merged; Run 11
 | Macro Run 9 — Production + SEO + Performance Engine | Implemented, independently QA'd and merged | [PR #39](https://github.com/sutherlandamcom/factory/pull/39), merge `637bcb4fcb9fcc20d15dba5fb4fc9d94e6584f0f`; post-merge CI green |
 | Macro Run 10 — Page Derivatives: Summary + Audio | Implemented, remediated and merged | [PR #40](https://github.com/sutherlandamcom/factory/pull/40), merge `93d8d33cb26476b6d9b245ed2b312d83ca5e872e`; multi-page uniqueness remediation [PR #41](https://github.com/sutherlandamcom/factory/pull/41), merge `f11fd0f6b1b60e2f56b9aba98cc219ca092056b8`; closure-evidence correction [PR #42](https://github.com/sutherlandamcom/factory/pull/42), merge `c4ef30eda6eff25251ec4cb65ddc0f5243433586` |
 | Macro Run 11 — Full Operator Workflow | Implemented, independently QA'd, merged and post-merge verified | [PR #43](https://github.com/sutherlandamcom/factory/pull/43), approved candidate `0c77e5dfba5c51fc99e47a762729ba01a3726e96`, merge `5eeffadbbd928f4a03644d6e8ff267a6d5795316`, post-merge [CI run 35448825801](https://github.com/sutherlandamcom/factory/actions/runs/35448825801) SUCCESS |
-| Pre-Run-12 — Design System Implementation Hardening | In implementation (PR open, pending independent exact-SHA QA) | Governed by `docs/design-system-implementation-policy.md` (merged via PR #44); implementation branch from post-PR44 verified `main` |
-| Macro Run 12 — High-quality Multi-page Proof | Planned | Requires accepted Design System Implementation Hardening first |
-| Macro Run 13 — Production Delivery vNext | Planned | Follows Run 12 proof |
+| Pre-Run-12 — Design System Implementation Hardening | Implemented and merged | [PR #45](https://github.com/sutherlandamcom/factory/pull/45), merge `3e93227ca9f78ffaa5f460ef6dc914f9f1e873b3` |
+| Macro Run 12 — High-quality Multi-page Proof | Implemented and merged | [PR #46](https://github.com/sutherlandamcom/factory/pull/46), merge `bc39a165ce6002cd8e51268bbfea42bcf76d282b` |
+| Macro Run 13 — Production Delivery vNext | Implemented and merged; external provider verification remains a distinct gate | [PR #47](https://github.com/sutherlandamcom/factory/pull/47), merge `82741c600aae5af1dd79f867374789b101a5b5cf` |
 
 Run 8 was intentionally resolved as an evidence-based architecture decision
 rather than by building two throwaway production stacks. The decision used the
@@ -58,7 +58,7 @@ code exists -> required checks verified -> independent GO at exact SHA -> merged
 | Sutherland one-page proof | Merged (PR #16); historical QA and P2 carry-forward recorded | [PR #16](https://github.com/sutherlandamcom/factory/pull/16), [QA summary](./handoffs/2026-09-04-pr16-independent-qa-summary.md); not proof of the entire vNext pipeline |
 | vNext governance | Merged (PR #17) | [PR #17](https://github.com/sutherlandamcom/factory/pull/17) |
 | Macro Run 1 — Operator Kernel / Intake | Implementation candidate; open, awaiting independent QA | [PR #18](https://github.com/sutherlandamcom/factory/pull/18), head `7ef24e55417038d4b53201944f83fd13d7d34c06`; [CI success](https://github.com/sutherlandamcom/factory/actions/runs/33987804364); no GitHub review GO observed, not merged |
-| Macro Runs 2–13 | Planned vNext capabilities; reuse existing foundation | Exit criteria below; current v0 planning/eval/delivery code is not proof of these complete operator workflows |
+| Macro Runs 2–13 | Implementation status is recorded above | Exit criteria below remain the acceptance requirements; merged code does not by itself prove live provider execution |
 
 PR #18 now contains the restored site-starter test invocation, dedicated
 Operator API/preparation suites and a real-browser E2E file wired into CI.
@@ -259,7 +259,7 @@ Implemented, independently QA'd, merged and post-merge verified via [PR #43](htt
 
 ### Pre-Run-12 — Design System Implementation Hardening
 
-Status: In implementation (branch `feat/pre-run12-design-system-hardening`); Run 11 and PR #44 are merged and post-merge verified. The hardening implementation base is the post-PR44 verified `main` SHA (`303066df27ceb0fff55e541018ba93a07e119af3` at branch creation); the Phase 0 inventory/gap matrix from `docs/design-system-implementation-policy.md` was performed against that exact state. The resulting PR remains OPEN and UNMERGED pending independent exact-SHA QA.
+Status: Implemented and merged through [PR #45](https://github.com/sutherlandamcom/factory/pull/45), merge `3e93227ca9f78ffaa5f460ef6dc914f9f1e873b3`. The Phase 0 inventory remains historical evidence against its recorded base; current remediation evidence belongs in `docs/evidence/E2E01_QA_EVIDENCE.md`.
 
 The governing policy is `docs/design-system-implementation-policy.md`.
 
@@ -284,6 +284,8 @@ Run 12. Builder completion still requires independent exact-SHA QA before merge.
 
 ### Macro Run 12 — High-quality Multi-page Proof
 
+Status: implemented and merged through PR #46; see the observed-status table for exact merge identity.
+
 Produce a small coherent Sutherland set such as homepage + service + location + editorial/research page using one accepted design system and multiple archetypes.
 
 Prove search/content strategy, internal links, no cannibalization, accepted content quality, authentic/generated asset discipline, SEO/performance and cheap template/archetype reuse.
@@ -307,6 +309,8 @@ Report factual reuse evidence rather than a subjective design score.
 Measure per-page/provider cost. The desired steady state is that a typical page using an accepted archetype does not require a new design or coding-model call.
 
 ### Macro Run 13 — Production Delivery vNext
+
+Status: implemented and merged through PR #47. Live provider acceptance and publication remain explicit external gates.
 
 Expose governed Candidate -> Preview -> Approve -> Publish -> Verify -> Rollback through the operator workflow while preserving exact source/input/content/design/asset/QA/deployment lineage.
 

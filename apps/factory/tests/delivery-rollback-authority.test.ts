@@ -95,3 +95,12 @@ test("SF-F03 genuine root-only and six-page manifests remain exact through rollb
     await f.recover(); assert.deepEqual(f.qaCalls.at(-1).candidateRoutes, manifest);
   });
 });
+
+test("E2E-P0-01: historical rollback remains available when latest Intake identity is stale", async t => {
+  const f = await fixture(t);
+  Object.assign(f.service, { resolveSite: async () => { throw new Error("Latest accepted site identity is stale"); } });
+  const result = await f.service.rollbackExplicit({ projectId: "project", targetVersionId: "A", sessionToken: "test" });
+  assert.equal(result.status, "rolled_back");
+  assert.equal(result.versionId, "A");
+  assert.deepEqual(f.qaCalls[0].candidateRoutes, routes);
+});

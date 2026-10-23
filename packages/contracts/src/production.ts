@@ -108,12 +108,20 @@ export const productionConversionAuthoritySchema = z.object({
   projectId: productionIdSchema,
   acceptedInput: productionAuthorityRefSchema,
   acceptedContentDigest: productionDigestSchema,
+  ctaText: z.string().max(2000),
   mode: z.enum(["action", "informational"]),
   href: z.string().min(1).max(2000).refine(value => {
     if (/[\u0000-\u0020\u007f\\]/u.test(value)) return false;
     if (/^\/(?:[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?)(?:\/[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?)*$/.test(value) || value === "/") return true;
     if (/^tel:\+[1-9][0-9]{6,14}$/.test(value)) return true;
-    if (/^mailto:[A-Za-z0-9.!#$%&'*+\-/=^_`{|}~]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(value)) return true;
+    if (value.startsWith("mailto:")) {
+      try {
+        const address = decodeURIComponent(value.slice(7));
+        if (!/^[A-Za-z0-9.!#$%&'*+\-/=^_`{|}~]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(address)) return false;
+        const at = address.lastIndexOf("@");
+        return value === `mailto:${encodeURIComponent(address.slice(0, at))}@${address.slice(at + 1)}`;
+      } catch { return false; }
+    }
     try { const url = new URL(value); return url.protocol === "https:" && !url.username && !url.password; }
     catch { return false; }
   }, "Unsafe conversion destination").nullable(),
@@ -611,6 +619,7 @@ export const renderManifestBodySchema = z
         pageType: designArchetypeKindSchema,
         route: productionRouteSchema,
         siteIdentity: productionSiteIdentitySchema,
+        acceptedContent: productionAuthorityRefSchema.optional(),
       })
       .strict(),
     conversion: productionConversionAuthoritySchema.optional(),
@@ -744,10 +753,10 @@ export function parseRenderManifestAnyVersion(input: unknown): z.infer<typeof re
   if (parsed.schemaVersion !== PRODUCTION_SCHEMA_VERSION_V3 && (parsed.design as { designImplementation?: unknown }).designImplementation !== undefined) {
     throw new TypeError("Only production-v3 manifests may carry designImplementation evidence.");
   }
-  if (parsed.conversion && (parsed.conversion.projectId !== parsed.input.projectId || parsed.conversion.acceptedContentDigest !== parsed.content.acceptedDigest || (parsed.conversion.mode === "action" && !parsed.content.cta.trim()))) {
+  if (parsed.conversion && (parsed.conversion.ctaText !== parsed.content.cta || parsed.conversion.projectId !== parsed.input.projectId || parsed.conversion.acceptedContentDigest !== (parsed.input.acceptedContent?.digest ?? parsed.content.acceptedDigest) || (parsed.conversion.mode === "action" && !parsed.content.cta.trim()))) {
     throw new TypeError("Conversion authority must bind this exact project and accepted content with actionable copy.");
   }
-  if (parsed.input.siteIdentity.bindingDigest && (!parsed.conversion || !parsed.navigation)) {
+  if (parsed.input.siteIdentity.bindingDigest && (!parsed.conversion || !parsed.navigation || !parsed.input.acceptedContent)) {
     throw new TypeError("Bound project manifests require conversion and navigation authority.");
   }
   return parsed;

@@ -2,7 +2,7 @@ import { sutherlandIntakePayload } from "./sutherland-intake.js";
 import { ProjectIntakeStore } from "../../src/operator/intake-store.js";
 /** Test-only explicit configuration. Never writes the shared repository profile. */
 import path from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { desc, eq } from "drizzle-orm";
 import type { FactoryDb } from "../../src/persistence/db.js";
 import { projects, projectInputSnapshots, sites } from "../../src/persistence/schema.js";
@@ -10,7 +10,7 @@ import { FactoryStore } from "../../src/persistence/store.js";
 import { deterministicDigest } from "../../src/intelligence/digest.js";
 import type { ProjectIntakePayload, SiteProfile } from "@factory/contracts";
 
-export async function provisionTestSiteBinding(db: FactoryDb, root: string, projectId: string, options: { siteId?: string; canonicalOrigin?: string; route?: string } = {}) {
+export async function provisionTestSiteBinding(db: FactoryDb, root: string, projectId: string, options: { siteId?: string; canonicalOrigin?: string; route?: string; informational?: boolean } = {}) {
   const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
   let [snapshot] = await db.select().from(projectInputSnapshots).where(eq(projectInputSnapshots.projectId, projectId)).orderBy(desc(projectInputSnapshots.version)).limit(1);
   if (!project) throw new Error("Test binding requires a real project.");
@@ -32,7 +32,7 @@ export async function provisionTestSiteBinding(db: FactoryDb, root: string, proj
   // no-verified-contact semantics; it grants no live provider/review authority.
   const binding = { version: "project-site-binding-v1", projectKey: project.key, siteKey: site.key,
     profileDigest: deterministicDigest(profile), acceptedSiteIdentityDigest: deterministicDigest(payload.siteIdentity), delivery,
-    informationalConversion: { acceptedInputDigest: snapshot.digest, reason: "Explicit isolated regression-fixture informational page" } };
+    ...(options.informational === false ? {} : { informationalConversion: { acceptedInputDigest: snapshot.digest, reason: "Explicit isolated regression-fixture informational page" } }) };
   await mkdir(path.join(root, "sites/starter"), { recursive: true });
   await writeFile(path.join(root, "sites/starter/site-profile.json"), JSON.stringify(profile));
   await writeFile(path.join(root, "sites/starter/project-site-binding.json"), JSON.stringify(binding));
@@ -49,9 +49,12 @@ export async function createIsolatedProductionRoot(sourceRoot: string, cleanup =
   const root = await mkdtemp(path.join(tmpdir(), "e2e01-production-copy-"));
   if (cleanup) after(() => rm(root, { recursive: true, force: true }));
   await mkdir(path.join(root, "sites/starter"), { recursive: true });
-  for (const relative of [".git", "pnpm-lock.yaml", "pnpm-workspace.yaml", "package.json", "node_modules", "packages", "docs"]) {
+  for (const relative of [".git", "pnpm-lock.yaml", "package.json", "node_modules", "packages", "docs"]) {
     await symlink(path.join(sourceRoot, relative), path.join(root, relative));
   }
+  // Dependencies are preinstalled and shared read-only. Never let pnpm auto-install
+  // (and mutate the source checkout) merely because the isolated workspace moved.
+  await writeFile(path.join(root, "pnpm-workspace.yaml"), `${await readFile(path.join(sourceRoot, "pnpm-workspace.yaml"), "utf8")}\nverifyDepsBeforeRun: false\n`);
   for (const relative of ["src", "public", "astro.config.ts", "package.json", "tsconfig.json", "site-profile.json"]) {
     await cp(path.join(sourceRoot, "sites/starter", relative), path.join(root, "sites/starter", relative), { recursive: true });
   }

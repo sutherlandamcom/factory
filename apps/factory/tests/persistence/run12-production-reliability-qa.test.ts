@@ -1693,7 +1693,7 @@ test("STALE-07 through STALE-12: Fail-closed behavior on missing evidence, sourc
       projectId: seeded.projectId,
       productionInputId: pInput.id,
       currentEnvironment: {
-        siteProfileDigest: "0".repeat(64),
+        siteProfileDigest: pInput.siteProfileDigest,
         rendererVersion: "astro-7.2.9",
         rendererPolicyVersion: "production-policy-v1",
       },
@@ -2084,7 +2084,7 @@ test("SEQ-01 through SEQ-05: Sequential revocation and tampering under advisory 
       projectId: seeded.projectId,
       productionInputId: input.id,
       currentEnvironment: {
-        siteProfileDigest: "0".repeat(64),
+        siteProfileDigest: input.siteProfileDigest,
         rendererVersion: "astro-7.2.9",
         rendererPolicyVersion: "production-policy-v1",
       },
@@ -2506,7 +2506,7 @@ test("RACE-06 through RACE-10: Genuine concurrency with independent PostgreSQL c
       projectId: seeded.projectId,
       productionInputId: input.id,
       currentEnvironment: {
-        siteProfileDigest: "0".repeat(64),
+        siteProfileDigest: input.siteProfileDigest,
         rendererVersion: "astro-7.2.9",
         rendererPolicyVersion: "production-policy-v1",
       },

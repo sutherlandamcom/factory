@@ -277,7 +277,9 @@ test("PG: production input derivation fails closed without accepted content", as
   const dbInst = await setupMigratedTestDatabase();
   try {
     const { projectId } = await seedProject(dbInst, "prod-empty");
-    const production = new ProductionStore(dbInst.db);
+    const root = await mkdtemp(path.join(tmpdir(), "production-empty-"));
+    boundTestIdentity = await provisionTestSiteBinding(dbInst.db, root, projectId, { siteId: "site-fixture", canonicalOrigin: "https://example.com" });
+    const production = new ProductionStore(dbInst.db, { repoRoot: root });
     await assert.rejects(
       production.deriveProductionInput({
         projectId,
@@ -376,6 +378,7 @@ async function setupVisualFixtureOnly(
     expectedCandidateDigest: candidate.candidateDigest,
     reviewNotes: "fixture acceptance",
   });
+  boundTestIdentity = await provisionTestSiteBinding(dbInst.db, root, projectId, { siteId: "site-fixture", canonicalOrigin: "https://example.com" });
   return { projectId, root, production: new ProductionStore(dbInst.db, { repoRoot: root }) };
 }
 

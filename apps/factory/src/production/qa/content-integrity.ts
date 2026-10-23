@@ -169,17 +169,25 @@ export function validateContentIntegrity(input: ContentIntegrityInput): ContentI
   // Accepted CTA survives (text + destination).
   const acceptedCta = normalizeText(content.cta);
   if (acceptedCta !== "") {
-    const ctaPresent = pageText.includes(acceptedCta);
+    const conversion = input.manifest.conversion;
+    const matches = (main ?? root).querySelectorAll('[data-component="page-cta"] a[href]');
+    const ctaActionValid = !conversion || conversion.mode === "informational" || (
+      conversion.projectId === input.manifest.input.projectId &&
+      conversion.acceptedContentDigest === content.acceptedDigest && matches.length === 1 &&
+      normalizeText(matches[0]!.text) === acceptedCta && matches[0]!.getAttribute("href") === conversion.href &&
+      !matches[0]!.hasAttribute("hidden") && matches[0]!.getAttribute("aria-disabled") !== "true" && matches[0]!.getAttribute("tabindex") !== "-1"
+    );
+    const ctaPresent = pageText.includes(acceptedCta) && ctaActionValid;
     checks.push(
       check(
         "content.cta_intent",
         "content",
         ctaPresent ? "PASS" : "FAIL",
-        ctaPresent ? "Accepted CTA copy present verbatim." : "Accepted CTA copy missing or altered.",
+        ctaPresent ? "Accepted CTA copy present verbatim." : "Accepted CTA copy or required actionable destination is missing or altered.",
       ),
     );
   } else {
-    checks.push(check("content.cta_intent", "content", "PASS", "No CTA accepted for this page (nothing to verify)."));
+    checks.push(check("content.cta_intent", "content", input.manifest.conversion?.mode === "action" ? "FAIL" : "PASS", "No accepted CTA copy; required actions cannot pass without copy."));
   }
 
   // Provider placeholder copy must never appear.

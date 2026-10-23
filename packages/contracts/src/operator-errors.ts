@@ -45,6 +45,7 @@ export const OPERATOR_ERROR_CODES = [
   "search_input_not_accepted",
   /** Search query failed deterministic validation/normalization. */
   "search_query_invalid",
+  "search_context_invalid",
   /** Search provider credentials or settings are missing. */
   "search_provider_not_configured",
   /** Search analyst credentials (e.g. OpenRouter API key) are missing in production mode. */
@@ -254,6 +255,7 @@ export const OPERATOR_ERROR_STATUS: Readonly<Record<OperatorErrorCode, number>> 
   intake_draft_not_found: 404,
   intake_schema_invalid: 422,
   search_input_not_accepted: 409,
+  search_context_invalid: 422,
   search_query_invalid: 400,
   search_provider_not_configured: 409,
   search_analyst_not_configured: 409,

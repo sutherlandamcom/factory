@@ -373,6 +373,8 @@ export const searchRuns = pgTable(
     language: text("language"),
     device: text("device").notNull(),
     provider: text("provider").notNull(),
+    /** Effective targeting and derived/override provenance; null only for historical runs. */
+    requestContext: jsonb("request_context"),
     sourceRunId: text("source_run_id"),
     /** Cache/dedupe key: provider + normalized inputs + lineage + request version. */
     requestDigest: text("request_digest").notNull(),

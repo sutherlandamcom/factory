@@ -205,6 +205,7 @@ export class BrightDataSerpProvider implements StructuredSerpProvider {
 }
 
 const KNOWN_COUNTRY_CODES: Record<string, string> = {
+  russia: "ru",
   france: "fr",
   "united states": "us",
   usa: "us",

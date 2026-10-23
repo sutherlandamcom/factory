@@ -7,11 +7,14 @@ import { loadWorktreeSiteProfile } from "../executor/site-profile.js";
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
 
-const execFileAsync = promisify(execFile);
-export const PRODUCTION_RENDERER_POLICY_VERSION = "production-policy-v3";
+import { loadProjectSiteBinding, type ProjectSiteContext } from "./site-binding.js";
 
-export async function loadProductionBuildIdentity(repoRoot: string) {
+const execFileAsync = promisify(execFile);
+export const PRODUCTION_RENDERER_POLICY_VERSION = "production-policy-v4";
+
+export async function loadProductionBuildIdentity(repoRoot: string, context?: ProjectSiteContext) {
   const profile = await loadWorktreeSiteProfile(repoRoot);
+  const bound = context ? await loadProjectSiteBinding(repoRoot, profile, context) : null;
   const packagePath = path.join(repoRoot, "sites", "starter", "package.json");
   const packageData = JSON.parse(await readFile(packagePath, "utf8")) as { dependencies?: Record<string, string> };
   const declared = packageData.dependencies?.astro;
@@ -30,6 +33,7 @@ export async function loadProductionBuildIdentity(repoRoot: string) {
       canonicalOrigin: profile.canonicalOrigin,
       language: profile.language,
       profileDigest: deterministicDigest(profile),
+      ...(bound ? { bindingDigest: bound.bindingDigest } : {}),
     },
     rendererVersion: installedData.version,
     rendererPolicyVersion: PRODUCTION_RENDERER_POLICY_VERSION,

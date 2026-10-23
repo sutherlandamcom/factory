@@ -36,6 +36,8 @@ async function fixture(t: { after(fn: () => Promise<void>): void }, options: { s
   const original = provider.rollback.bind(provider);
   provider.rollback = async (worker, version) => { mutations.push(version); return original(worker, version); };
   const service = new GovernedDeliveryService({ db: {} as any, repoRoot: root, store: store as any, productionStore: { getQaRun: async () => ({ overall: "PASS", candidateId: "candidate-A", candidateArtifactDigest: target.artifactDigest }) } as any, releaseBoundary: { verifyActorPermission: async () => ({ actorId: "operator", actorName: "Operator", actorRole: "ADMIN", sessionId: "session" }) } as any, wranglerFactory: () => provider, worktreeProvider: { prepare: async () => root, remove: async () => {} }, qaRunner: async input => { qaCalls.push(input); return { passed: true, exitCode: 0, timedOut: false }; } });
+  // Unit-test dependency boundary: project/site binding has dedicated real-PG coverage.
+  Object.assign(service, { resolveSite: store.findSiteByProjectId });
   return { service, store, provider, target, latest, records, mutations, transitions, qaCalls, intents, recover: async () => { recovering = true; return service.reconcilePendingDeployments("site"); } };
 }
 

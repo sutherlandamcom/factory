@@ -1,3 +1,4 @@
+import { requireProjectSiteAuthority } from "../production/site-binding.js";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -295,54 +296,16 @@ export class GovernedDeliveryService {
     }
   }
 
+  private async projectBuildIdentity(projectId: string) {
+    const authority = await requireProjectSiteAuthority(this.db, this.repoRoot, projectId);
+    return loadProductionBuildIdentity(this.repoRoot, {
+      projectKey: authority.binding.projectKey, siteKey: authority.site.key,
+      acceptedSiteIdentity: (authority.snapshot.payload as { siteIdentity: import("@factory/contracts").SiteIdentity }).siteIdentity,
+    });
+  }
+
   private async resolveSite(projectId: string): Promise<SiteRecord> {
-    let site = await this.store.findSiteByProjectId(projectId);
-    if (!site) {
-      const project = await this.store.getProjectById(projectId);
-      if (!project) {
-        throw new FactoryError("unknown_project", `Project '${projectId}' not found.`);
-      }
-      const profile = await loadWorktreeSiteProfile(this.repoRoot).catch(() => null);
-      try {
-        const registered = await this.store.registerSite({
-          projectKey: project.key,
-          key: project.key,
-          name: project.name,
-        });
-        await this.db
-          .update(sites)
-          .set({
-            cloudflareWorkerName: `factory-${project.key}`,
-            productionUrl: profile?.canonicalOrigin ?? `https://${project.key}.pages.dev`,
-          })
-          .where(eq(sites.id, registered.id));
-        site = (await this.store.getSiteById(registered.id))!;
-      } catch (err) {
-        site = await this.store.findSiteByProjectId(projectId);
-        if (!site) throw err;
-      }
-    }
-    if (!site.cloudflareWorkerName || !site.productionUrl) {
-      const project = await this.store.getProjectById(projectId);
-      const profile = await loadWorktreeSiteProfile(this.repoRoot).catch(() => null);
-      if (this.db && project) {
-        await this.db
-          .update(sites)
-          .set({
-            cloudflareWorkerName: site.cloudflareWorkerName ?? `factory-${project.key}`,
-            productionUrl: site.productionUrl ?? profile?.canonicalOrigin ?? `https://${project.key}.pages.dev`,
-          })
-          .where(eq(sites.id, site.id));
-        site = (await this.store.getSiteById(site.id)) ?? site;
-      }
-    }
-    if (!site.cloudflareWorkerName || !site.productionUrl) {
-      throw new FactoryError(
-        "delivery_target_unconfigured",
-        `Site '${site.key}' does not have Cloudflare Worker and production URL configured.`,
-      );
-    }
-    return site;
+    return (await requireProjectSiteAuthority(this.db, this.repoRoot, projectId)).site;
   }
 
   /**
@@ -395,7 +358,7 @@ export class GovernedDeliveryService {
       const currentInputs = await this.productionStore.listProductionInputs(input.projectId);
       const currentPageInputIds = currentInputs.map((i) => i.id);
 
-      const buildIdentity = await loadProductionBuildIdentity(this.repoRoot);
+      const buildIdentity = await this.projectBuildIdentity(input.projectId);
 
       // 3. Assert candidate release proof
       if (!site.productionUrl) {
@@ -596,7 +559,7 @@ export class GovernedDeliveryService {
       const latestQa = await this.productionStore.latestQaRun(input.projectId, candidate.id);
       const candidateInputs = await this.productionStore.listCandidateInputs(input.projectId, candidate.id);
       const currentInputs = await this.productionStore.listProductionInputs(input.projectId);
-      const buildIdentity = await loadProductionBuildIdentity(this.repoRoot);
+      const buildIdentity = await this.projectBuildIdentity(input.projectId);
 
       if (!site.productionUrl) {
         throw new FactoryError("invalid_site_configuration", `Site '${site.id}' does not have a configured productionUrl.`);

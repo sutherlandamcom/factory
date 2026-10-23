@@ -905,3 +905,7 @@ export type {
   MonitoringSummary,
 } from "./monitoring.js";
 
+
+export { productionConversionAuthoritySchema, type ProductionConversionAuthority } from "./production.js";
+
+export type { Conversion } from "./project-intake.js";

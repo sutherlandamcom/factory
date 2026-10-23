@@ -1,3 +1,4 @@
+import { createIsolatedProductionRoot, provisionTestSiteBinding } from "../fixtures/project-site-binding.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
@@ -47,7 +48,7 @@ test("P0-01 & P0-02 Fault-injection and crash recovery matrix", async () => {
   const dbInst = await createTestDatabase();
   const db = dbInst.db;
   const store = new FactoryStore(db);
-  const repoRoot = await resolveRepositoryRoot();
+  const repoRoot = await createIsolatedProductionRoot(await resolveRepositoryRoot());
   const prodStore = new ProductionStore(db, { repoRoot });
 
   const suffix = randomUUID().slice(0, 8);
@@ -137,6 +138,7 @@ test("P0-01 & P0-02 Fault-injection and crash recovery matrix", async () => {
     actorRole: "DEPLOYMENT_ADMIN",
   });
 
+  await provisionTestSiteBinding(db, repoRoot, projectId, { siteId: "sutherland-private-office", canonicalOrigin: "https://sutherlandam.com" });
   const buildIdentity = await loadProductionBuildIdentity(repoRoot);
   const shaA = buildIdentity.repositorySha;
   const candidateIdA = `cand-fault-A-${suffix}`;
@@ -897,7 +899,7 @@ test("P0 & P1 Rollback Crash Recovery Matrix (Separate Semantics, Pre-Mutation I
   t.after(() => dbInst.close());
   const db = dbInst.db;
   const store = new FactoryStore(db);
-  const repoRoot = await resolveRepositoryRoot();
+  const repoRoot = await createIsolatedProductionRoot(await resolveRepositoryRoot());
   const prodStore = new ProductionStore(db, { repoRoot });
 
   const suffix = randomUUID().slice(0, 8);
@@ -1002,6 +1004,7 @@ test("P0 & P1 Rollback Crash Recovery Matrix (Separate Semantics, Pre-Mutation I
     actorRole: "DEPLOYMENT_ADMIN",
   });
 
+  await provisionTestSiteBinding(db, repoRoot, projectId, { siteId: "sutherland-private-office", canonicalOrigin: "https://sutherlandam.com" });
   const buildIdentity = await loadProductionBuildIdentity(repoRoot);
   const sha = buildIdentity.repositorySha;
 

@@ -86,6 +86,8 @@ export const productionSiteIdentitySchema = z
     canonicalOrigin: canonicalOriginSchema,
     language: siteProfileLanguageSchema,
     profileDigest: productionDigestSchema,
+    /** Trusted project/worktree/delivery binding; absent only on historical inputs. */
+    bindingDigest: productionDigestSchema.optional(),
   })
   .strict();
 export type ProductionSiteIdentity = z.infer<typeof productionSiteIdentitySchema>;
@@ -101,6 +103,25 @@ export const productionRendererIdentitySchema = z
   .strict();
 export type ProductionRendererIdentity = z.infer<typeof productionRendererIdentitySchema>;
 
+/** Accepted conversion projected without editorial or destination invention. */
+export const productionConversionAuthoritySchema = z.object({
+  projectId: productionIdSchema,
+  acceptedInput: productionAuthorityRefSchema,
+  acceptedContentDigest: productionDigestSchema,
+  mode: z.enum(["action", "informational"]),
+  href: z.string().min(1).max(2000).refine(value => {
+    if (/[\u0000-\u0020\u007f\\]/u.test(value)) return false;
+    if (/^\/(?:[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?)(?:\/[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?)*$/.test(value) || value === "/") return true;
+    if (/^tel:\+[1-9][0-9]{6,14}$/.test(value)) return true;
+    if (/^mailto:[A-Za-z0-9.!#$%&'*+\-/=^_`{|}~]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(value)) return true;
+    try { const url = new URL(value); return url.protocol === "https:" && !url.username && !url.password; }
+    catch { return false; }
+  }, "Unsafe conversion destination").nullable(),
+}).strict().superRefine((value, ctx) => {
+  if ((value.mode === "action") !== (value.href !== null)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Action requires a destination; informational authority must have none." });
+});
+export type ProductionConversionAuthority = z.infer<typeof productionConversionAuthoritySchema>;
+
 export const productionPageInputDataSchema = z
   .object({
     schemaVersion: z.literal(PRODUCTION_SCHEMA_VERSION),
@@ -113,6 +134,7 @@ export const productionPageInputDataSchema = z
     route: productionRouteSchema,
     /** Exact validated repository-owned site identity used by the build. */
     siteIdentity: productionSiteIdentitySchema,
+    conversion: productionConversionAuthoritySchema.optional(),
     acceptedContent: productionAuthorityRefSchema,
     acceptedDesign: productionAuthorityRefSchema,
     acceptedVisualSet: productionAuthorityRefSchema,
@@ -591,6 +613,8 @@ export const renderManifestBodySchema = z
         siteIdentity: productionSiteIdentitySchema,
       })
       .strict(),
+    conversion: productionConversionAuthoritySchema.optional(),
+    navigation: z.array(z.object({ label: boundedText(50), targetSlug: productionRouteSchema }).strict()).max(12).optional(),
     seo: z
       .object({
         fullTitle: boundedText(400),
@@ -719,6 +743,12 @@ export function parseRenderManifestAnyVersion(input: unknown): z.infer<typeof re
   }
   if (parsed.schemaVersion !== PRODUCTION_SCHEMA_VERSION_V3 && (parsed.design as { designImplementation?: unknown }).designImplementation !== undefined) {
     throw new TypeError("Only production-v3 manifests may carry designImplementation evidence.");
+  }
+  if (parsed.conversion && (parsed.conversion.projectId !== parsed.input.projectId || parsed.conversion.acceptedContentDigest !== parsed.content.acceptedDigest || (parsed.conversion.mode === "action" && !parsed.content.cta.trim()))) {
+    throw new TypeError("Conversion authority must bind this exact project and accepted content with actionable copy.");
+  }
+  if (parsed.input.siteIdentity.bindingDigest && (!parsed.conversion || !parsed.navigation)) {
+    throw new TypeError("Bound project manifests require conversion and navigation authority.");
   }
   return parsed;
 }

@@ -1,3 +1,4 @@
+import { normalizeLexicalText } from "../../text/lexical.js";
 import { readFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -691,12 +692,7 @@ function normalizeWhitespace(text: string): string {
 }
 
 function normalizeAlphaNum(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
+  return normalizeLexicalText(text);
 }
 
 function extractNumbers(text: string): string[] {
@@ -807,6 +803,7 @@ function isSentenceCoveredByClaims(sentence: string, claims: ReadonlyArray<Claim
     return true;
   }
   const normSentence = normalizeAlphaNum(sentence);
+  if (!normSentence) return false;
   const sentenceNumbers = extractNumbers(sentence);
   const sentenceTokens = new Set(normSentence.split(" ").filter((t) => t.length >= 4));
 

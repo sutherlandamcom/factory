@@ -1,3 +1,5 @@
+import { resolveSearchContext, type EffectiveSearchContext } from "./context.js";
+import type { ProjectIntakePayload } from "@factory/contracts";
 import { InvocationFailure } from "../models/invocation-failure.js";
 import {
   normalizeSearchQuery,
@@ -25,7 +27,7 @@ import type { SearchAnalystModel } from "./analyst.js";
  * configuration; the browser never controls provider plumbing.
  */
 
-export const SEARCH_REQUEST_VERSION = "search-request-v2";
+export const SEARCH_REQUEST_VERSION = "search-request-v3";
 
 export interface SearchServiceConfig {
   /** Freshness window for cache reuse (hours). */
@@ -73,6 +75,7 @@ export interface SearchRunReadModel {
     language: string | null;
     device: SearchDevice;
     provider: string;
+    requestContext: EffectiveSearchContext | null;
     cacheReused: boolean;
     refreshRequested: boolean;
     startedAt: string;
@@ -120,6 +123,8 @@ export interface SearchRunReadModel {
 }
 
 export interface SearchWorkspaceReadModel {
+  effectiveContext: EffectiveSearchContext | null;
+  contextError: string | null;
   acceptedInput: {
     snapshotId: string;
     version: number;
@@ -205,6 +210,12 @@ export class SearchIntelligenceService {
     // Grounded research is optional in v0; absence is surfaced honestly in
     // run details, never treated as a blocker.
 
+    let effectiveContext: EffectiveSearchContext | null = null;
+    let contextError: string | null = null;
+    if (latest) {
+      try { effectiveContext = resolveSearchContext(latest.payload as ProjectIntakePayload, {}); }
+      catch (error) { contextError = error instanceof Error ? error.message : "Select search targeting."; }
+    }
     const recentRuns = await this.deps.searchStore.listRuns(projectId, 20);
 
     return {
@@ -217,6 +228,7 @@ export class SearchIntelligenceService {
           }
         : null,
       seeds,
+      effectiveContext, contextError,
       readiness: {
         canRun:
           Boolean(latest) &&
@@ -303,8 +315,8 @@ export class SearchIntelligenceService {
       throw new FactoryError("search_provider_not_configured", providerReadiness.reason);
     }
 
-    const location = input.location?.trim() || null;
-    const language = input.language?.trim() || null;
+    const requestContext = resolveSearchContext(accepted.payload as ProjectIntakePayload, input);
+    const { location, language } = requestContext;
 
     // Normalize request + cache key.
     const requestDigest = deterministicDigest({
@@ -316,6 +328,7 @@ export class SearchIntelligenceService {
       device: input.device,
       acceptedInputDigest: accepted.digest,
       requestVersion: SEARCH_REQUEST_VERSION,
+      contextPolicyVersion: requestContext.policyVersion,
     });
 
     // ---- Cache check (no accidental duplicate spend) ---------------------
@@ -338,6 +351,7 @@ export class SearchIntelligenceService {
           device: input.device,
           provider: provider.id,
           requestDigest,
+          requestContext,
           refreshRequested: false,
         });
         const read = await this.buildReadModel(
@@ -363,6 +377,7 @@ export class SearchIntelligenceService {
       device: input.device,
       provider: provider.id,
       requestDigest,
+      requestContext,
       refreshRequested: Boolean(input.refresh),
     });
 
@@ -535,6 +550,7 @@ export class SearchIntelligenceService {
         language: run.language,
         device: run.device as SearchDevice,
         provider: run.provider,
+        requestContext: (run.requestContext as EffectiveSearchContext | null) ?? null,
         cacheReused,
         refreshRequested,
         startedAt: run.startedAt.toISOString(),

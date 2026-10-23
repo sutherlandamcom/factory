@@ -82,11 +82,9 @@ test.describe("Run 11 golden operator journey", () => {
     await expect(page.getByText(/READY FOR DEPLOYMENT/i).first()).toBeVisible({ timeout: 30_000 });
     await gotoArea(page, "Deployment");
     await expect(page.getByText(/READY_FOR_DEPLOYMENT/i).first()).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText(/Production delivery lifecycle — implemented in Macro Run 13/)).toBeVisible();
-    // No publish action exists in Run 11 (the header next-action button is
-    // navigation only; lifecycle steps render as non-interactive spans).
-    const deploymentArea = page.locator("main");
-    await expect(deploymentArea.getByRole("button", { name: /Publish|Rollback/i })).toHaveCount(0);
-    await expect(deploymentArea.getByRole("button", { name: /^Deploy/ })).toHaveCount(0);
+    // In Run 13, Deployment area renders the live governed production delivery controls
+    await expect(page.getByText(/Governed Production Delivery/i)).toBeVisible();
+    await expect(page.getByRole("button", { name: /Prepare Candidate Preview/i })).toBeVisible();
+    await expect(page.getByText(/Production Monitoring & Search Quality/i)).toBeVisible();
   });
 });

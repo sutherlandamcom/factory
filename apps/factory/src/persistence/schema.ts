@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { sql, desc } from "drizzle-orm";
 import {
   pgTable,
   text,
@@ -63,6 +63,13 @@ export const deployments = pgTable(
     errorCode: text("error_code"),
     errorMessage: text("error_message"),
     artifactDirectory: text("artifact_directory"),
+    candidateId: text("candidate_id").references(() => productionCandidates.id, { onDelete: "set null" }),
+    qaRunId: text("qa_run_id").references(() => productionQaRuns.id, { onDelete: "set null" }),
+    releaseApprovalId: text("release_approval_id"),
+    candidateRoutes: jsonb("candidate_routes"),
+    snapshotData: jsonb("snapshot_data"),
+    executionOrigin: text("execution_origin"),
+    operationId: text("operation_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
     promotedAt: timestamp("promoted_at", { withTimezone: true }),
@@ -70,6 +77,8 @@ export const deployments = pgTable(
   },
   (table) => [
     index("deployments_site_id_created_at_idx").on(table.siteId, table.createdAt),
+    index("deployments_candidate_id_idx").on(table.candidateId),
+    index("deployments_release_approval_id_idx").on(table.releaseApprovalId),
     check(
       "deployments_status_valid",
       sql`${table.status} IN ('preparing', 'uploaded', 'preview_verified', 'promoting', 'promoted', 'verified', 'rolled_back', 'failed', 'needs_review')`,
@@ -2928,4 +2937,153 @@ export type OriginalValueRecordRow = typeof originalValueRecords.$inferSelect;
 export type EditorialApprovalAuditEventRecord = typeof editorialApprovalAuditEvents.$inferSelect;
 export type ProjectReviewerMembershipRecord = typeof projectReviewerMemberships.$inferSelect;
 export type EditorialSessionRevocationRecord = typeof editorialSessionRevocations.$inferSelect;
+
+export const releaseApprovals = pgTable(
+  "release_approvals",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    siteId: text("site_id")
+      .notNull()
+      .references(() => sites.id, { onDelete: "cascade" }),
+    candidateId: text("candidate_id")
+      .notNull()
+      .references(() => productionCandidates.id, { onDelete: "cascade" }),
+    qaRunId: text("qa_run_id")
+      .notNull()
+      .references(() => productionQaRuns.id, { onDelete: "cascade" }),
+    artifactDigest: text("artifact_digest").notNull(),
+    previewVersionId: text("preview_version_id").notNull(),
+    targetWorkerName: text("target_worker_name").notNull(),
+    targetProductionUrl: text("target_production_url").notNull(),
+    actorId: text("actor_id").notNull(),
+    actorName: text("actor_name").notNull(),
+    actorRole: text("actor_role").notNull(),
+    sessionId: text("session_id").notNull(),
+    isSynthetic: boolean("is_synthetic").default(false).notNull(),
+    verificationSeal: text("verification_seal"),
+    sealKeyId: text("seal_key_id").default("v1").notNull(),
+    sealStatus: text("seal_status").default("SEALED").notNull(),
+    revoked: boolean("revoked").default(false).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("release_approvals_candidate_preview_unique").on(
+      table.candidateId,
+      table.previewVersionId,
+    ),
+    check(
+      "release_approvals_artifact_digest_shape",
+      sql`${table.artifactDigest} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "release_approvals_verification_seal_shape",
+      sql`(${table.sealStatus} = 'LEGACY_UNSEALED' AND ${table.verificationSeal} IS NULL) OR (${table.sealStatus} = 'SEALED' AND ${table.verificationSeal} IS NOT NULL AND ${table.verificationSeal} ~ '^[0-9a-f]{64}$')`,
+    ),
+    index("release_approvals_project_site_idx").on(
+      table.projectId,
+      table.siteId,
+      table.createdAt,
+    ),
+    index("release_approvals_candidate_idx").on(table.candidateId),
+  ],
+);
+
+export type ReleaseApprovalRecord = typeof releaseApprovals.$inferSelect;
+export type InsertReleaseApproval = typeof releaseApprovals.$inferInsert;
+
+export const monitoringObservations = pgTable(
+  "monitoring_observations",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    siteId: text("site_id")
+      .notNull()
+      .references(() => sites.id, { onDelete: "cascade" }),
+    route: text("route").notNull(),
+    deploymentId: text("deployment_id").references(() => deployments.id, {
+      onDelete: "set null",
+    }),
+    versionId: text("version_id"),
+    observationType: text("observation_type").notNull(),
+    source: text("source").notNull(),
+    status: text("status").notNull(),
+    collectionWindow: text("collection_window").default("realtime").notNull(),
+    freshness: text("freshness").default("fresh").notNull(),
+    metrics: jsonb("metrics"),
+    evidenceRef: text("evidence_ref"),
+    errorMessage: text("error_message"),
+    observedAt: timestamp("observed_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("monitoring_observations_project_site_idx").on(
+      table.projectId,
+      table.siteId,
+      table.observedAt,
+    ),
+    index("monitoring_observations_route_idx").on(
+      table.siteId,
+      table.route,
+      table.observedAt,
+    ),
+    index("monitoring_observations_deployment_idx").on(table.deploymentId),
+  ],
+);
+
+export type MonitoringObservationRecord = typeof monitoringObservations.$inferSelect;
+export type InsertMonitoringObservation = typeof monitoringObservations.$inferInsert;
+
+export const productionEffectiveTransitions = pgTable(
+  "production_effective_transitions",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    siteId: text("site_id")
+      .notNull()
+      .references(() => sites.id, { onDelete: "cascade" }),
+    deploymentId: text("deployment_id")
+      .notNull()
+      .references(() => deployments.id, { onDelete: "cascade" }),
+    versionId: text("version_id").notNull(),
+    candidateId: text("candidate_id"),
+    eventType: text("event_type").notNull(), // 'PUBLISH' | 'ROLLBACK'
+    fromVersionId: text("from_version_id"),
+    toVersionId: text("to_version_id").notNull(),
+    actorId: text("actor_id"),
+    actorName: text("actor_name"),
+    actorRole: text("actor_role"),
+    sessionId: text("session_id"),
+    candidateRoutes: jsonb("candidate_routes"),
+    artifactDigest: text("artifact_digest"),
+    evidenceRef: text("evidence_ref"),
+    effectiveAt: timestamp("effective_at", { withTimezone: true }).notNull(),
+    executionOrigin: text("execution_origin"),
+    operationId: text("operation_id"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("prod_eff_trans_site_effective_idx").on(table.siteId, desc(table.effectiveAt)),
+    index("prod_eff_trans_project_site_idx").on(table.projectId, table.siteId),
+    unique("prod_eff_trans_operation_id_unique").on(table.operationId),
+  ],
+);
+
+export type ProductionEffectiveTransitionRecord = typeof productionEffectiveTransitions.$inferSelect;
+export type InsertProductionEffectiveTransition = typeof productionEffectiveTransitions.$inferInsert;
+
+
+
 

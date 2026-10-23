@@ -425,15 +425,88 @@ export async function startOperatorServer(): Promise<http.Server> {
       new LocalTrustedQaEvidenceExecutor(),
     );
   }
+  const { GovernedDeliveryService } = await import("../delivery/governed-service.js");
+  const { ProductionStore } = await import("../production/store.js");
+  const { ReleaseApprovalBoundary } = await import("../trust/release-approval-boundary.js");
+  const isDedicatedTestDatabase = Boolean(
+    process.env.FACTORY_DATABASE_URL?.includes("factory_test") ||
+    process.env.FACTORY_TEST_DATABASE_URL?.includes("factory_test"),
+  );
+  const isE2ETestHarness =
+    isDedicatedTestDatabase &&
+    (process.env.FACTORY_DELIVERY_MODE === "test" || process.env.FACTORY_DELIVERY_MODE === "fixture");
+
+  const prodStore = new ProductionStore(dbInstance.db, { repoRoot });
+  const releaseBoundary = new ReleaseApprovalBoundary(dbInstance.db, {
+    allowSimulation: isE2ETestHarness,
+  });
+
+  const rawDeliveryMode = process.env.FACTORY_DELIVERY_MODE?.trim().toLowerCase();
+  const deliveryMode = rawDeliveryMode || "production";
+
+  let wranglerFactory;
+  let qaRunner;
+  let worktreeProvider;
+  if (deliveryMode === "fixture" || deliveryMode === "test" || deliveryMode === "simulation") {
+    const { SimulatedWrangler } = await import("../delivery/simulated-wrangler.js");
+    const { mkdir, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { randomUUID } = await import("node:crypto");
+    const simulated = new SimulatedWrangler();
+    wranglerFactory = () => simulated;
+    qaRunner = async () => ({ passed: true, exitCode: 0, timedOut: false });
+    worktreeProvider = {
+      async prepare(_root: string, _commit: string, id: string) {
+        const wtDir = path.join(tmpdir(), `factory-fixture-wt-${id}-${randomUUID()}`);
+        await mkdir(path.join(wtDir, "sites", "starter"), { recursive: true });
+        return wtDir;
+      },
+      async remove(_root: string, wt: string) {
+        await rm(wt, { recursive: true, force: true }).catch(() => {});
+      },
+    };
+  } else if (deliveryMode === "production") {
+    // Governed production: only real Wrangler with credentials.
+    // If credentials are not set, wranglerFactory remains undefined and any delivery attempt fails closed.
+  } else {
+    throw new FactoryError(
+      "invalid_configuration",
+      `Unrecognized FACTORY_DELIVERY_MODE '${rawDeliveryMode}'. Allowed values: 'production', 'fixture', 'test'.`,
+    );
+  }
+
+  const { HttpOperationalVerifier } = await import("../monitoring/operational-verifier.js");
+  const { MonitoringService } = await import("../monitoring/service.js");
+  const monitoringService = new MonitoringService({
+    db: dbInstance.db,
+    store,
+    adapters: {
+      operationalVerifier: new HttpOperationalVerifier(),
+    },
+  });
+
+  const governedDelivery = new GovernedDeliveryService({
+    db: dbInstance.db,
+    pool: dbInstance.pool,
+    repoRoot,
+    store,
+    productionStore: prodStore,
+    releaseBoundary,
+    monitoringService,
+    wranglerFactory,
+    qaRunner,
+    worktreeProvider,
+    allowSimulation: isE2ETestHarness,
+  });
+
   const deps: OperatorApiDeps = {
     store, intake, search, competitors, writer, assets, design, visual,
     production: new ProductionApiFacade(dbInstance.db, repoRoot, {
-      // Trusted backend config only: synthetic fixture content is tolerated
-      // solely when the deterministic fixture writer is wired.
       syntheticFixtureContent: writerMode === "fixture",
     }),
     derivatives: new DerivativesApiFacade(dbInstance.db, repoRoot, summaryMode === "fixture" ? { summaryInvoke: fixtureSummaryInvoke } : {}),
     qaCollector,
+    governedDelivery,
   };
   const server = createOperatorServer(deps);
   const host = process.env.FACTORY_OPERATOR_HOST ?? "127.0.0.1";

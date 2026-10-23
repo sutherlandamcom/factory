@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readFile, realpath, stat } from "node:fs/promises";
+import { readFile, realpath, stat, mkdir, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { type ProductionQaCheckResult } from "@factory/contracts";
 type ProductionQaScope = "page" | "site" | "repository";
@@ -314,25 +314,45 @@ export class LocalTrustedQaEvidenceExecutor implements TrustedQaEvidenceExecutor
     input: { distDir: string; routes: string[]; repoRoot: string; manifestSetDigest: string },
     versions: Map<string, string>,
   ): Promise<ProductionQaCheckResult[]> {
-    const outDir = path.join(input.repoRoot, "qa-artifacts", "lhci-e2e");
-    const result = await this.runner("pnpm", [
-      "exec", "lhci", "autorun",
-      `--collect.staticDistDir=${input.distDir}`,
-      "--collect.numberOfRuns=1",
-      `--upload.outputDir=${outDir}`,
-      "--upload.target=filesystem",
-    ], { cwd: path.join(input.repoRoot, "sites", "starter"), env: { ...process.env }, timeoutMs: TOOL_TIMEOUT_MS });
-    const manifestPath = path.join(outDir, "manifest.json");
-    if (result.timedOut) throw new FactoryError("qa_tool_timeout", "Lighthouse CI exceeded its time budget.");
-    if (result.exitCode !== 0 && !(await exists(manifestPath))) {
-      throw new FactoryError("qa_tool_unavailable", `Lighthouse CI failed: ${(result.stderr || result.stdout).slice(-300)}`);
-    }
+    const evidenceRoot = path.join(input.repoRoot, "qa-artifacts");
+    await mkdir(evidenceRoot, { recursive: true });
+    // LHCI stores intermediate reports relative to cwd as well as exported output.
+    // Isolate both so concurrent or interrupted executions cannot supply evidence.
+    const workDir = await mkdtemp(path.join(evidenceRoot, "lhci-execution-"));
+    const outDir = path.join(workDir, "reports");
     const out: ProductionQaCheckResult[] = [];
     try {
-      const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Array<{ url: string; jsonPath: string }>;
+      await mkdir(outDir);
+      const result = await this.runner(process.execPath, [
+        path.join(input.repoRoot, "sites", "starter", "node_modules", "@lhci", "cli", "src", "cli.js"),
+        "autorun",
+        `--config=${path.join(input.repoRoot, "sites", "starter", "lighthouserc.json")}`,
+        `--collect.staticDistDir=${path.resolve(input.distDir)}`,
+        "--collect.numberOfRuns=1",
+        `--upload.outputDir=${outDir}`,
+        "--upload.target=filesystem",
+      ], { cwd: workDir, env: { ...process.env }, timeoutMs: TOOL_TIMEOUT_MS });
+      if (result.timedOut) throw new FactoryError("qa_tool_timeout", "Lighthouse CI exceeded its time budget.");
+      if (result.exitCode !== 0) {
+        throw new FactoryError("qa_tool_unavailable", `Lighthouse CI failed: ${(result.stderr || result.stdout).slice(-300)}`);
+      }
+      const manifest: unknown = JSON.parse(await readFile(path.join(outDir, "manifest.json"), "utf8"));
+      if (!Array.isArray(manifest) || manifest.length === 0) throw new Error("Lighthouse manifest is empty or malformed.");
+      const canonicalOut = await realpath(outDir);
       const byRoute = new Map<string, Array<Record<string, any>>>();
       for (const entry of manifest) {
-        const report = JSON.parse(await readFile(entry.jsonPath, "utf8")) as Record<string, any>;
+        if (!entry || typeof entry.url !== "string" || typeof entry.jsonPath !== "string") {
+          throw new Error("Lighthouse manifest entry is malformed.");
+        }
+        const reportPath = await realpath(path.resolve(outDir, entry.jsonPath));
+        if (!reportPath.startsWith(canonicalOut + path.sep)) throw new Error("Lighthouse report is outside this execution.");
+        const report = JSON.parse(await readFile(reportPath, "utf8")) as Record<string, any>;
+        const scores = ["performance", "seo", "best-practices"].map(key => report?.categories?.[key]?.score);
+        const metrics = ["largest-contentful-paint", "cumulative-layout-shift", "total-blocking-time"].map(key => report?.audits?.[key]?.numericValue);
+        if (scores.some(value => typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) ||
+            metrics.some(value => typeof value !== "number" || !Number.isFinite(value) || value < 0)) {
+          throw new Error("Lighthouse report lacks complete valid scores or measurements.");
+        }
         const rawPath = entry.url.replace(/^https?:\/\/[^/]+/, "");
         let route = rawPath.replace(/\/index\.html$/, "/").replace(/\/$/, "");
         if (route === "") route = "/";
@@ -360,9 +380,11 @@ export class LocalTrustedQaEvidenceExecutor implements TrustedQaEvidenceExecutor
           route, versions, [{ kind: "artifact" as const, ref: "lhci" }],
         ));
       }
+    } catch (error) {
+      if (error instanceof FactoryError) throw error;
+      throw new FactoryError("qa_tool_unavailable", "Current Lighthouse execution evidence is missing, malformed or incomplete.");
     } finally {
-      // Cleanup temp artifacts (gitignored qa-artifacts dir).
-      await import("node:fs/promises").then((fs) => fs.rm(outDir, { recursive: true, force: true }));
+      await rm(workDir, { recursive: true, force: true });
     }
     return out;
   }

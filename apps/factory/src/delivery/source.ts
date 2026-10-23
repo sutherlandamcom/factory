@@ -133,9 +133,10 @@ export async function prepareAcceptedWorktree(repoRoot: string, sourceCommit: st
   });
   if (install.timedOut || install.exitCode !== 0) {
     await removeWorktree(repoRoot, worktree);
+    const errorOutput = [install.stderr.trim(), install.stdout.trim()].filter(Boolean).join(" | ");
     throw new FactoryError(
       install.timedOut ? "dependency_prepare_timeout" : "dependency_prepare_failed",
-      `Trusted delivery dependency preparation failed: ${install.stderr.trim() || `exit ${install.exitCode}`}`,
+      `Trusted delivery dependency preparation failed: ${errorOutput || `exit ${install.exitCode}`}`,
     );
   }
   return worktree;

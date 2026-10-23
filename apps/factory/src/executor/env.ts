@@ -18,6 +18,9 @@ const ALLOWED_ENV_VARS = [
   "TERM",
   "TZ",
   "CODEX_HOME",
+  "PNPM_HOME",
+  "npm_config_store_dir",
+  "CI",
 ] as const;
 
 export function buildChildEnv(

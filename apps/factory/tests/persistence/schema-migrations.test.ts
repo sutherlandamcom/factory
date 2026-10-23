@@ -32,6 +32,7 @@ test("schema & migrations: clean DB migration succeeds and is idempotent", async
       "model_invocations",
       "projects",
       "quality_results",
+      "release_approvals",
       "runs",
       "sites",
       "tasks",

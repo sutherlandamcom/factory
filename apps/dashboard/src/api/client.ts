@@ -4,7 +4,12 @@
  * and renders the canonical ProjectOperatorWorkspace read-model.
  */
 
-import { OPERATOR_ERROR_CODES, type OperatorErrorCode } from "@factory/contracts";
+import {
+  OPERATOR_ERROR_CODES,
+  type OperatorErrorCode,
+  type GovernedDeploymentView,
+  type MonitoringSummary,
+} from "@factory/contracts";
 
 export interface ApiErrorBody {
   error?: { code?: string; message?: string };
@@ -81,8 +86,9 @@ function isOperatorErrorCode(value: string): value is OperatorErrorCode {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const isMutation = Boolean(init.method && ["POST", "PUT", "PATCH"].includes(init.method.toUpperCase()));
   const headers: Record<string, string> = {
-    ...(init.body ? { "Content-Type": "application/json" } : {}),
+    ...(init.body || isMutation ? { "Content-Type": "application/json" } : {}),
     ...((init.headers as Record<string, string>) ?? {}),
   };
   let res: Response;
@@ -1696,5 +1702,78 @@ export const workflowApi = {
   getCosts: (projectId: string) =>
     request<ProjectCostsReadModel>(
       `/api/projects/${encodeURIComponent(projectId)}/workflow-costs`,
+    ),
+};
+
+// ---------------------------------------------------------------------------
+// Run 13 — Governed Production Delivery
+// ---------------------------------------------------------------------------
+
+export const deploymentApi = {
+  getView: (projectId: string) =>
+    request<GovernedDeploymentView>(
+      `/api/projects/${encodeURIComponent(projectId)}/deployment`,
+    ),
+
+  preparePreview: (
+    projectId: string,
+    input: { candidateId: string; sessionToken: string },
+  ) =>
+    request<{ id: string; status: string; versionId: string | null; previewUrl: string | null }>(
+      `/api/projects/${encodeURIComponent(projectId)}/deployment/preview`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    ),
+
+  approveRelease: (
+    projectId: string,
+    input: { candidateId: string; previewVersionId: string; sessionToken: string },
+  ) =>
+    request<{ id: string; verificationSeal: string | null }>(
+      `/api/projects/${encodeURIComponent(projectId)}/deployment/approve`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    ),
+
+  publishRelease: (
+    projectId: string,
+    input: { candidateId: string; previewVersionId: string; approvalId: string; sessionToken: string },
+  ) =>
+    request<{ id: string; status: string; versionId: string | null }>(
+      `/api/projects/${encodeURIComponent(projectId)}/deployment/publish`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    ),
+
+  rollbackRelease: (
+    projectId: string,
+    input: { sessionToken: string; targetVersionId?: string },
+  ) =>
+    request<{ id: string; status: string; rolledBack: boolean }>(
+      `/api/projects/${encodeURIComponent(projectId)}/deployment/rollback`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    ),
+
+  getMonitoring: (projectId: string) =>
+    request<MonitoringSummary>(
+      `/api/projects/${encodeURIComponent(projectId)}/deployment/monitoring`,
+    ),
+
+  runMonitoringCheck: (projectId: string, sessionToken: string) =>
+    request<MonitoringSummary>(
+      `/api/projects/${encodeURIComponent(projectId)}/deployment/monitoring/check`,
+      {
+        method: "POST",
+        body: JSON.stringify({ sessionToken }),
+      },
     ),
 };

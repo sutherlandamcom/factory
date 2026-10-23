@@ -22,18 +22,26 @@ import { writeFileSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import net from "node:net";
+import { generateKeyPairSync, createPrivateKey, sign } from "node:crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const OPERATOR_PORT = Number(process.env.FACTORY_OPERATOR_PORT || 4175);
 const SUPERVISOR_PORT = Number(process.env.FACTORY_E2E_SUPERVISOR_PORT || 4177);
 const FACTORY_ROOT = path.resolve(__dirname, "../../factory");
+
+// Generate local Ed25519 IdP keypair for E2E release governance testing
+const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
+const privateKeyObj = createPrivateKey(privateKey.export({ type: "pkcs8", format: "pem" }));
+
 // The operator server reads FACTORY_DATABASE_URL in production mode; the E2E
 // targets the dedicated test database validated by operator-e2e-setup.mjs.
 // The port is passed explicitly so the child always matches the port the
 // supervisor and Playwright wait on.
 const CHILD_ENV = {
   ...process.env,
+  FACTORY_IDP_PUBLIC_KEY_PEM: publicKeyPem,
   // Trusted QA scanners may be installed in the user bin dir (osv-scanner is
   // environment tooling, not a repo dependency); extend PATH so the operator
   // child's executor can resolve them.
@@ -61,6 +69,14 @@ const CHILD_ENV = {
   // Derivatives (Macro Run 10): fixture summary provider so the full
   // journey never touches a paid provider. Trusted backend config only.
   FACTORY_SUMMARY_MODE: process.env.FACTORY_SUMMARY_MODE || "fixture",
+  // Governed production delivery (Macro Run 13): strict production trust mode
+  // for publication eligibility in E2E delivery journeys.
+  FACTORY_TRUST_MODE: process.env.FACTORY_TRUST_MODE || "STRICT_PRODUCTION",
+  // Governed delivery provider mode: explicitly set to fixture for automated browser testing
+  FACTORY_DELIVERY_MODE: process.env.FACTORY_DELIVERY_MODE || "fixture",
+  // Release approval cryptographic HMAC seal keyring
+  FACTORY_AUDIT_SEAL_KEY: process.env.FACTORY_AUDIT_SEAL_KEY || "e2e-audit-seal-key-32-bytes-long-secret-key-12345",
+  FACTORY_AUDIT_SEAL_KEY_ID: process.env.FACTORY_AUDIT_SEAL_KEY_ID || "v1",
 };
 
 /** @type {import('node:child_process').ChildProcess | null} */
@@ -107,7 +123,7 @@ async function startOperator() {
     log(`operator exited code=${code} signal=${signal}`);
     child = null;
   });
-  await waitForPort(OPERATOR_PORT, "127.0.0.1", 30_000);
+  await waitForPort(OPERATOR_PORT, "127.0.0.1", 90_000);
   log(`operator ready on 127.0.0.1:${OPERATOR_PORT}`);
 }
 
@@ -182,13 +198,68 @@ const server = http.createServer(async (req, res) => {
           { cwd: FACTORY_ROOT, env: { ...process.env }, encoding: "utf8", timeout: 180_000 },
         );
         if (seedRes.status !== 0) {
-          throw new Error(`synthetic seed failed: ${(seedRes.stderr || seedRes.stdout).slice(-300)}`);
+          const detail = seedRes.error?.message || seedRes.stderr || seedRes.stdout || `signal=${seedRes.signal} status=${seedRes.status}`;
+          throw new Error(`synthetic seed failed: ${detail}`);
         }
         const result = JSON.parse(seedRes.stdout.trim().split("\n").filter(Boolean).pop());
         return send(200, { ok: true, ...result });
       } finally {
         rmSync(seedFile, { force: true });
       }
+    }
+    if (req.method === "POST" && req.url === "/create-release-token") {
+      let raw = "";
+      req.on("data", (chunk) => (raw += chunk));
+      await new Promise((resolve) => req.on("end", resolve));
+      const { actorId, actorName, actorRole, permissions, projectId, audience, ttlMs } = JSON.parse(raw || "{}");
+
+      if (projectId && Array.isArray(permissions)) {
+        const seedScript = [
+          'import { createDatabaseInstance } from "./src/persistence/db.js";',
+          'import { projectReviewerMemberships } from "./src/persistence/schema.js";',
+          'const db = createDatabaseInstance({ connectionString: process.env.FACTORY_TEST_DATABASE_URL, isTest: true }).db;',
+          'await db.insert(projectReviewerMemberships).values({',
+          '  id: "rev-" + Math.random().toString(36).slice(2),',
+          '  projectId: process.argv[2],',
+          '  actorId: process.argv[3],',
+          '  actorRole: process.argv[4],',
+          '  permissions: JSON.parse(process.argv[5]),',
+          '}).onConflictDoUpdate({ target: [projectReviewerMemberships.projectId, projectReviewerMemberships.actorId], set: { permissions: JSON.parse(process.argv[5]), actorRole: process.argv[4], revokedAt: null } });',
+          'process.exit(0);',
+        ].join("\n");
+        const seedFile = path.join(FACTORY_ROOT, ".factory-seed-membership.mts");
+        writeFileSync(seedFile, seedScript);
+        try {
+          const res = spawnSync(
+            process.execPath,
+            [path.join(FACTORY_ROOT, "node_modules", "tsx", "dist", "cli.mjs"), seedFile, projectId, actorId, actorRole, JSON.stringify(permissions)],
+            { cwd: FACTORY_ROOT, env: { ...process.env }, encoding: "utf8" }
+          );
+          if (res.status !== 0) {
+            const detail = res.error?.message || res.stderr || res.stdout || `signal=${res.signal} status=${res.status}`;
+            console.error(`[operator-supervisor] seed membership error: ${detail}`);
+          }
+        } finally {
+          rmSync(seedFile, { force: true });
+        }
+      }
+
+      const now = Date.now();
+      const payload = {
+        iss: "trusted-external-idp",
+        aud: audience ?? "factory-release-governance",
+        sub: actorId,
+        name: actorName,
+        role: actorRole,
+        iat: now,
+        exp: now + (ttlMs ?? 3600_000),
+        jti: "jti-" + Math.random().toString(36).slice(2),
+      };
+
+      const payloadB64 = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+      const signatureB64 = sign(null, Buffer.from(payloadB64, "utf8"), privateKeyObj).toString("base64url");
+      const token = `ext-idp-v1.${payloadB64}.${signatureB64}`;
+      return send(200, { ok: true, token });
     }
     if (req.method === "GET" && req.url === "/health") {
       return send(200, { ok: true, running: Boolean(child) });
@@ -197,6 +268,11 @@ const server = http.createServer(async (req, res) => {
   } catch (err) {
     return send(500, { error: { code: "supervisor_error", message: err instanceof Error ? err.message : String(err) } });
   }
+});
+
+server.on("error", (err) => {
+  console.error(`[operator-supervisor] server error: ${err.message}`);
+  process.exit(1);
 });
 
 server.listen(SUPERVISOR_PORT, "127.0.0.1", () => {

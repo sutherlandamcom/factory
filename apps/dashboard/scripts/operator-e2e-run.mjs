@@ -38,9 +38,12 @@ function supervisorCall(pathname, timeoutMs = 60_000) {
   });
 }
 
-async function waitForSupervisor(timeoutMs) {
+async function waitForSupervisor(supervisor, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
+    if (supervisor.exitCode !== null) {
+      throw new Error(`supervisor process exited early with code ${supervisor.exitCode}`);
+    }
     try {
       await new Promise((resolve, reject) => {
         const req = http.get(`http://127.0.0.1:${SUPERVISOR_PORT}/health`, (res) => {
@@ -51,8 +54,11 @@ async function waitForSupervisor(timeoutMs) {
         req.setTimeout(1_000, () => req.destroy(new Error("timeout")));
       });
       return;
-    } catch {
-      if (Date.now() > deadline) throw new Error("supervisor did not become ready");
+    } catch (err) {
+      if (supervisor.exitCode !== null) {
+        throw new Error(`supervisor process exited early with code ${supervisor.exitCode}`);
+      }
+      if (Date.now() > deadline) throw new Error(`supervisor did not become ready: ${err.message}`);
       await new Promise((r) => setTimeout(r, 250));
     }
   }
@@ -63,10 +69,16 @@ const supervisor = spawn(
   [path.join(DASHBOARD_ROOT, "scripts", "operator-e2e-server.mjs")],
   { stdio: "inherit", env: process.env },
 );
+supervisor.on("error", (err) => console.error("[e2e-run] supervisor spawn error:", err));
+supervisor.on("exit", (code, signal) => {
+  if (code !== 0 && code !== null) {
+    console.error(`[e2e-run] supervisor process exited early: code=${code} signal=${signal}`);
+  }
+});
 
 let playwrightExit = 1;
 try {
-  await waitForSupervisor(15_000);
+  await waitForSupervisor(supervisor, 60_000);
   // Start the real operator service child (serves built dashboard dist).
   await supervisorCall("/start");
   const args = ["exec", "playwright", "test", "--config=playwright.e2e.config.ts"];

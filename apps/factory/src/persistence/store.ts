@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { eq, and, asc, desc, inArray, isNotNull } from "drizzle-orm";
+import { eq, and, asc, desc, inArray, isNotNull, ne, lte } from "drizzle-orm";
 import type { DeploymentStatus } from "@factory/contracts";
 import type { FactoryDb } from "./db.js";
 import {
@@ -11,6 +11,9 @@ import {
   attempts,
   qualityResults,
   modelInvocations,
+  releaseApprovals,
+  monitoringObservations,
+  productionEffectiveTransitions,
   type ProjectRecord,
   type SiteRecord,
   type DeploymentRecord,
@@ -20,6 +23,12 @@ import {
   type QualityResultRecord,
   type ModelInvocationRecord,
   type InsertQualityResult,
+  type ReleaseApprovalRecord,
+  type InsertReleaseApproval,
+  type MonitoringObservationRecord,
+  type InsertMonitoringObservation,
+  type ProductionEffectiveTransitionRecord,
+  type InsertProductionEffectiveTransition,
 } from "./schema.js";
 import { FactoryError } from "../executor/errors.js";
 
@@ -30,12 +39,24 @@ const DEPLOYMENT_TRANSITIONS: Record<DeploymentStatus, readonly DeploymentStatus
   preparing: ["preparing", "uploaded", "promoting", "failed"],
   uploaded: ["preview_verified", "failed"],
   preview_verified: ["promoting", "failed"],
-  promoting: ["promoted", "verified", "rolled_back", "needs_review"],
-  promoted: ["verified", "rolled_back", "needs_review"],
-  verified: [],
+  promoting: ["promoted", "verified", "rolled_back", "needs_review", "failed"],
+  promoted: ["verified", "rolled_back", "needs_review", "failed"],
+  verified: ["rolled_back"],
   rolled_back: [],
   failed: [],
   needs_review: [],
+};
+
+const VALID_PRIOR_STATUSES: Record<DeploymentStatus, readonly DeploymentStatus[]> = {
+  preparing: ["preparing"],
+  uploaded: ["preparing"],
+  preview_verified: ["uploaded"],
+  promoting: ["preparing", "preview_verified"],
+  promoted: ["promoting"],
+  verified: ["promoting", "promoted"],
+  rolled_back: ["promoting", "promoted", "verified"],
+  failed: ["preparing", "uploaded", "preview_verified", "promoting", "promoted"],
+  needs_review: ["promoting", "promoted", "verified"],
 };
 
 export function assertDeploymentTransition(from: string, to: DeploymentStatus): void {
@@ -201,6 +222,23 @@ export class FactoryStore {
     return resolved.site;
   }
 
+  async findSiteByProjectId(projectId: string): Promise<SiteRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(sites)
+      .where(eq(sites.projectId, projectId))
+      .limit(1);
+    return row ?? null;
+  }
+
+  async getSiteById(siteId: string): Promise<SiteRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(sites)
+      .where(eq(sites.id, siteId));
+    return row ?? null;
+  }
+
   async findSiteByGlobalKey(siteKey: string): Promise<{ site: SiteRecord; project: ProjectRecord } | null> {
     const rows = await this.db
       .select({
@@ -253,11 +291,38 @@ export class FactoryStore {
     sourceCommit: string;
     workerName: string;
     productionUrl: string;
-    artifactDirectory: string;
+    artifactDirectory?: string | null;
+    status?: DeploymentStatus;
+    versionId?: string | null;
+    previousVersionId?: string | null;
+    artifactDigest?: string | null;
+    previewUrl?: string | null;
+    previewVerified?: boolean;
+    productionVerified?: boolean;
+    rolledBack?: boolean;
+    candidateId?: string | null;
+    qaRunId?: string | null;
+    releaseApprovalId?: string | null;
+    candidateRoutes?: unknown;
+    snapshotData?: unknown;
+    executionOrigin?: "REAL_CLOUDFLARE" | "TEST_SIMULATION" | "UNKNOWN" | null;
+    operationId?: string | null;
+    verifiedAt?: Date | null;
+    promotedAt?: Date | null;
   }): Promise<DeploymentRecord> {
     const [created] = await this.db
       .insert(deployments)
-      .values({ ...input, status: "preparing" })
+      .values({
+        ...input,
+        status: input.status ?? "preparing",
+        candidateId: input.candidateId ?? null,
+        qaRunId: input.qaRunId ?? null,
+        releaseApprovalId: input.releaseApprovalId ?? null,
+        candidateRoutes: input.candidateRoutes ?? null,
+        snapshotData: input.snapshotData ?? null,
+        executionOrigin: input.executionOrigin ?? null,
+        operationId: input.operationId ?? null,
+      })
       .returning();
     if (!created) throw new FactoryError("persistence_write_failed", "Failed to create deployment");
     return created;
@@ -268,6 +333,47 @@ export class FactoryStore {
     return row ?? null;
   }
 
+  async listDeployments(siteId: string, limit = 50): Promise<DeploymentRecord[]> {
+    return await this.db
+      .select()
+      .from(deployments)
+      .where(eq(deployments.siteId, siteId))
+      .orderBy(desc(deployments.createdAt))
+      .limit(limit);
+  }
+
+  async findDeploymentByVersion(
+    siteId: string,
+    versionId: string,
+  ): Promise<DeploymentRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(deployments)
+      .where(
+        and(
+          eq(deployments.siteId, siteId),
+          eq(deployments.versionId, versionId),
+        ),
+      )
+      .limit(1);
+    return row ?? null;
+  }
+
+  async findLatestDeploymentByCandidate(siteId: string, candidateId: string): Promise<DeploymentRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(deployments)
+      .where(
+        and(
+          eq(deployments.siteId, siteId),
+          eq(deployments.candidateId, candidateId),
+        ),
+      )
+      .orderBy(desc(deployments.createdAt))
+      .limit(1);
+    return row ?? null;
+  }
+
   async findLatestUnverifiedDeployment(siteId: string): Promise<DeploymentRecord | null> {
     const [row] = await this.db
       .select()
@@ -275,7 +381,7 @@ export class FactoryStore {
       .where(
         and(
           eq(deployments.siteId, siteId),
-          inArray(deployments.status, ["promoting", "promoted"]),
+          inArray(deployments.status, ["preparing", "uploaded", "promoting", "promoted"]),
         ),
       )
       .orderBy(desc(deployments.createdAt))
@@ -285,20 +391,22 @@ export class FactoryStore {
 
   async findLatestKnownGoodDeployment(
     siteId: string,
-    workerName: string,
-    productionUrl: string,
+    workerName?: string,
+    productionUrl?: string,
+    excludeDeploymentId?: string,
   ): Promise<DeploymentRecord | null> {
+    const conditions = [
+      eq(deployments.siteId, siteId),
+      inArray(deployments.status, ["verified", "rolled_back"]),
+    ];
+    if (workerName) conditions.push(eq(deployments.workerName, workerName));
+    if (productionUrl) conditions.push(eq(deployments.productionUrl, productionUrl));
+    if (excludeDeploymentId) conditions.push(ne(deployments.id, excludeDeploymentId));
+
     const [row] = await this.db
       .select()
       .from(deployments)
-      .where(
-        and(
-          eq(deployments.siteId, siteId),
-          eq(deployments.workerName, workerName),
-          eq(deployments.productionUrl, productionUrl),
-          inArray(deployments.status, ["verified", "rolled_back"]),
-        ),
-      )
+      .where(and(...conditions))
       .orderBy(desc(deployments.verifiedAt), desc(deployments.createdAt))
       .limit(1);
     return row ?? null;
@@ -329,10 +437,18 @@ export class FactoryStore {
   async updateDeployment(input: {
     id: string;
     status: DeploymentStatus;
+    expectedStatus?: DeploymentStatus | readonly DeploymentStatus[];
     artifactDigest?: string | null;
     versionId?: string | null;
     previewUrl?: string | null;
     previousVersionId?: string | null;
+    candidateId?: string | null;
+    qaRunId?: string | null;
+    releaseApprovalId?: string | null;
+    candidateRoutes?: unknown;
+    snapshotData?: unknown;
+    executionOrigin?: "REAL_CLOUDFLARE" | "TEST_SIMULATION" | "UNKNOWN" | null;
+    operationId?: string | null;
     errorCode?: string | null;
     errorMessage?: string | null;
     promotedAt?: Date | null;
@@ -341,9 +457,10 @@ export class FactoryStore {
     productionVerified?: boolean;
     rolledBack?: boolean;
   }): Promise<DeploymentRecord> {
-    const existing = await this.getDeployment(input.id);
-    if (!existing) throw new FactoryError("persistence_write_failed", `Deployment '${input.id}' not found`);
-    assertDeploymentTransition(existing.status, input.status);
+    const allowedPriors = input.expectedStatus
+      ? (Array.isArray(input.expectedStatus) ? input.expectedStatus : [input.expectedStatus])
+      : VALID_PRIOR_STATUSES[input.status] ?? [];
+
     const [updated] = await this.db
       .update(deployments)
       .set({
@@ -353,6 +470,13 @@ export class FactoryStore {
         ...(input.versionId !== undefined ? { versionId: input.versionId } : {}),
         ...(input.previewUrl !== undefined ? { previewUrl: input.previewUrl } : {}),
         ...(input.previousVersionId !== undefined ? { previousVersionId: input.previousVersionId } : {}),
+        ...(input.candidateId !== undefined ? { candidateId: input.candidateId } : {}),
+        ...(input.qaRunId !== undefined ? { qaRunId: input.qaRunId } : {}),
+        ...(input.releaseApprovalId !== undefined ? { releaseApprovalId: input.releaseApprovalId } : {}),
+        ...(input.candidateRoutes !== undefined ? { candidateRoutes: input.candidateRoutes } : {}),
+        ...(input.snapshotData !== undefined ? { snapshotData: input.snapshotData } : {}),
+        ...(input.executionOrigin !== undefined ? { executionOrigin: input.executionOrigin } : {}),
+        ...(input.operationId !== undefined ? { operationId: input.operationId } : {}),
         ...(input.errorCode !== undefined ? { errorCode: input.errorCode } : {}),
         ...(input.errorMessage !== undefined
           ? { errorMessage: truncateBounded(input.errorMessage, MAX_ERROR_MESSAGE_LENGTH) }
@@ -363,10 +487,354 @@ export class FactoryStore {
         ...(input.productionVerified !== undefined ? { productionVerified: input.productionVerified } : {}),
         ...(input.rolledBack !== undefined ? { rolledBack: input.rolledBack } : {}),
       })
-      .where(eq(deployments.id, input.id))
+      .where(
+        and(
+          eq(deployments.id, input.id),
+          inArray(deployments.status, allowedPriors as DeploymentStatus[]),
+        ),
+      )
       .returning();
-    if (!updated) throw new FactoryError("persistence_write_failed", `Deployment '${input.id}' not found`);
+
+    if (!updated) {
+      const current = await this.getDeployment(input.id);
+      if (!current) throw new FactoryError("persistence_write_failed", `Deployment '${input.id}' not found`);
+      throw new FactoryError(
+        "deployment_transition_invalid",
+        `Atomic status transition conflict: deployment '${input.id}' is currently in state '${current.status}', cannot transition to '${input.status}' (allowed priors: ${allowedPriors.join(", ")}).`,
+      );
+    }
     return updated;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Release approvals
+  // ---------------------------------------------------------------------------
+
+  async insertReleaseApproval(input: InsertReleaseApproval): Promise<ReleaseApprovalRecord> {
+    const [created] = await this.db
+      .insert(releaseApprovals)
+      .values(input)
+      .returning();
+    if (!created) throw new FactoryError("persistence_write_failed", "Failed to insert release approval");
+    return created;
+  }
+
+  async getReleaseApproval(id: string): Promise<ReleaseApprovalRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(releaseApprovals)
+      .where(eq(releaseApprovals.id, id));
+    return row ?? null;
+  }
+
+  async findReleaseApproval(
+    candidateId: string,
+    previewVersionId: string,
+  ): Promise<ReleaseApprovalRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(releaseApprovals)
+      .where(
+        and(
+          eq(releaseApprovals.candidateId, candidateId),
+          eq(releaseApprovals.previewVersionId, previewVersionId),
+        ),
+      );
+    return row ?? null;
+  }
+
+  async revokeReleaseApproval(id: string): Promise<void> {
+    await this.db
+      .update(releaseApprovals)
+      .set({ revoked: true })
+      .where(eq(releaseApprovals.id, id));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Monitoring Observations (Run 13)
+  // ---------------------------------------------------------------------------
+
+  async insertMonitoringObservation(
+    input: InsertMonitoringObservation,
+  ): Promise<MonitoringObservationRecord> {
+    const [created] = await this.db
+      .insert(monitoringObservations)
+      .values(input)
+      .returning();
+    if (!created) {
+      throw new FactoryError(
+        "persistence_write_failed",
+        "Failed to insert monitoring observation",
+      );
+    }
+    return created;
+  }
+
+  async listMonitoringObservations(
+    siteId: string,
+    limit = 50,
+  ): Promise<MonitoringObservationRecord[]> {
+    return await this.db
+      .select()
+      .from(monitoringObservations)
+      .where(eq(monitoringObservations.siteId, siteId))
+      .orderBy(desc(monitoringObservations.observedAt))
+      .limit(limit);
+  }
+
+  async getLatestMonitoringObservationsByType(
+    siteId: string,
+  ): Promise<Map<string, MonitoringObservationRecord>> {
+    const list = await this.listMonitoringObservations(siteId, 100);
+    const map = new Map<string, MonitoringObservationRecord>();
+    for (const obs of list) {
+      if (!map.has(obs.observationType)) {
+        map.set(obs.observationType, obs);
+      }
+    }
+    return map;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Production Effective Transitions (Run 13 Remediation)
+  // ---------------------------------------------------------------------------
+
+  async getEffectiveTransition(id: string): Promise<ProductionEffectiveTransitionRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(productionEffectiveTransitions)
+      .where(eq(productionEffectiveTransitions.id, id));
+    return row ?? null;
+  }
+
+  async getEffectiveTransitionByDeploymentId(
+    deploymentId: string,
+  ): Promise<ProductionEffectiveTransitionRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(productionEffectiveTransitions)
+      .where(eq(productionEffectiveTransitions.deploymentId, deploymentId));
+    return row ?? null;
+  }
+
+  async getEffectiveTransitionByOperationId(
+    operationId: string,
+  ): Promise<ProductionEffectiveTransitionRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(productionEffectiveTransitions)
+      .where(eq(productionEffectiveTransitions.operationId, operationId));
+    return row ?? null;
+  }
+
+  async insertEffectiveTransition(
+    input: InsertProductionEffectiveTransition,
+  ): Promise<ProductionEffectiveTransitionRecord> {
+    const existing = await this.getEffectiveTransition(input.id);
+    if (existing) {
+      return existing;
+    }
+    if (input.operationId) {
+      const existingByOp = await this.getEffectiveTransitionByOperationId(input.operationId);
+      if (existingByOp) {
+        return existingByOp;
+      }
+    }
+    const [created] = await this.db
+      .insert(productionEffectiveTransitions)
+      .values(input)
+      .onConflictDoNothing()
+      .returning();
+    if (!created) {
+      if (input.operationId) {
+        const fallback = await this.getEffectiveTransitionByOperationId(input.operationId);
+        if (fallback) return fallback;
+      }
+      const fallbackById = await this.getEffectiveTransition(input.id);
+      if (fallbackById) return fallbackById;
+      throw new FactoryError(
+        "persistence_write_failed",
+        "Failed to insert production effective transition",
+      );
+    }
+    return created;
+  }
+
+  /**
+   * P0-02: Atomically and idempotently finalizes a deployment and commits its
+   * authoritative production_effective_transitions record in a single PostgreSQL transaction.
+   *
+   * Invariants:
+   * 1. CAS check: verifies deployment status is within expected priors.
+   * 2. Atomic: deployment status=verified/rolled_back and transition insert commit together.
+   * 3. Idempotent: retrying an already finalized deployment returns existing records without duplicate rows or altered timestamps.
+   */
+  async finalizeDeploymentAndTransitionAtomic(params: {
+    deploymentId: string;
+    expectedStatus?: DeploymentStatus | readonly DeploymentStatus[];
+    status?: "verified" | "rolled_back";
+    transition: InsertProductionEffectiveTransition;
+    executionOrigin?: "REAL_CLOUDFLARE" | "TEST_SIMULATION" | "UNKNOWN";
+    operationId?: string;
+  }): Promise<{
+    deployment: DeploymentRecord;
+    transition: ProductionEffectiveTransitionRecord;
+    alreadyFinalized: boolean;
+  }> {
+    const targetStatus = params.status ?? "verified";
+    return await this.db.transaction(async (tx) => {
+      // 1. Inspect existing deployment and transition state
+      const opId = params.operationId ?? params.transition.operationId;
+      let existingTrans: ProductionEffectiveTransitionRecord | undefined;
+      if (opId) {
+        const [byOp] = await tx
+          .select()
+          .from(productionEffectiveTransitions)
+          .where(eq(productionEffectiveTransitions.operationId, opId));
+        existingTrans = byOp;
+      }
+      if (!existingTrans) {
+        const [byDep] = await tx
+          .select()
+          .from(productionEffectiveTransitions)
+          .where(eq(productionEffectiveTransitions.deploymentId, params.deploymentId));
+        existingTrans = byDep;
+      }
+
+      const [existingDep] = await tx
+        .select()
+        .from(deployments)
+        .where(eq(deployments.id, params.deploymentId));
+
+      if (!existingDep) {
+        throw new FactoryError("deployment_not_found", `Deployment '${params.deploymentId}' not found.`);
+      }
+
+      // 2. Safe idempotent return on retry: if already in terminal verified state with transition
+      if (existingDep.status === targetStatus && existingTrans) {
+        return {
+          deployment: existingDep,
+          transition: existingTrans,
+          alreadyFinalized: true,
+        };
+      }
+
+      // 3. CAS status validation
+      const allowedPriors = params.expectedStatus
+        ? (Array.isArray(params.expectedStatus) ? params.expectedStatus : [params.expectedStatus])
+        : VALID_PRIOR_STATUSES[targetStatus] ?? [];
+
+      if (!allowedPriors.includes(existingDep.status as DeploymentStatus) && existingDep.status !== targetStatus) {
+        throw new FactoryError(
+          "deployment_invalid_transition",
+          `Cannot finalize deployment '${params.deploymentId}' from status '${existingDep.status}'. Expected: ${allowedPriors.join(", ")}`,
+        );
+      }
+
+      const verifiedAt = existingDep.verifiedAt ?? new Date();
+
+      // 4. Update deployment to target status
+      const [updatedDep] = await tx
+        .update(deployments)
+        .set({
+          status: targetStatus,
+          productionVerified: true,
+          ...(targetStatus === "rolled_back" ? { rolledBack: true } : {}),
+          verifiedAt,
+          errorCode: null,
+          errorMessage: null,
+          updatedAt: new Date(),
+          ...(params.executionOrigin ? { executionOrigin: params.executionOrigin } : {}),
+          ...(params.operationId ? { operationId: params.operationId } : {}),
+        })
+        .where(eq(deployments.id, params.deploymentId))
+        .returning();
+
+      // 5. Insert effective transition atomically within same transaction
+      let transitionRecord = existingTrans;
+      if (!transitionRecord) {
+        const [createdTrans] = await tx
+          .insert(productionEffectiveTransitions)
+          .values({
+            ...params.transition,
+            deploymentId: params.deploymentId,
+            executionOrigin: params.executionOrigin ?? params.transition.executionOrigin ?? existingDep.executionOrigin ?? null,
+            operationId: params.operationId ?? params.transition.operationId ?? null,
+            effectiveAt: params.transition.effectiveAt ?? verifiedAt,
+          })
+          .onConflictDoNothing()
+          .returning();
+        transitionRecord = createdTrans;
+        if (!transitionRecord && opId) {
+          const [byOp] = await tx
+            .select()
+            .from(productionEffectiveTransitions)
+            .where(eq(productionEffectiveTransitions.operationId, opId));
+          transitionRecord = byOp;
+        }
+      }
+
+      if (!updatedDep || !transitionRecord) {
+        throw new FactoryError(
+          "persistence_write_failed",
+          `Failed to finalize deployment '${params.deploymentId}' atomically.`,
+        );
+      }
+
+      return {
+        deployment: updatedDep,
+        transition: transitionRecord,
+        alreadyFinalized: false,
+      };
+    });
+  }
+
+  async listEffectiveTransitions(
+    siteId: string,
+    limit = 50,
+  ): Promise<ProductionEffectiveTransitionRecord[]> {
+    return await this.db
+      .select()
+      .from(productionEffectiveTransitions)
+      .where(eq(productionEffectiveTransitions.siteId, siteId))
+      .orderBy(desc(productionEffectiveTransitions.effectiveAt))
+      .limit(limit);
+  }
+
+  async getEffectiveTransitionAsOf(
+    siteId: string,
+    asOf: Date,
+  ): Promise<ProductionEffectiveTransitionRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(productionEffectiveTransitions)
+      .where(
+        and(
+          eq(productionEffectiveTransitions.siteId, siteId),
+          lte(productionEffectiveTransitions.effectiveAt, asOf),
+        ),
+      )
+      .orderBy(
+        desc(productionEffectiveTransitions.effectiveAt),
+        desc(productionEffectiveTransitions.createdAt),
+      )
+      .limit(1);
+    return row ?? null;
+  }
+
+  async getCurrentEffectiveTransition(
+    siteId: string,
+  ): Promise<ProductionEffectiveTransitionRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(productionEffectiveTransitions)
+      .where(eq(productionEffectiveTransitions.siteId, siteId))
+      .orderBy(
+        desc(productionEffectiveTransitions.effectiveAt),
+        desc(productionEffectiveTransitions.createdAt),
+      )
+      .limit(1);
+    return row ?? null;
   }
 
   // ---------------------------------------------------------------------------

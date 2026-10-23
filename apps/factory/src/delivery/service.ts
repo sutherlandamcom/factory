@@ -1,10 +1,14 @@
+import { randomUUID } from "node:crypto";
+import { requireHistoricalRollbackRoutes, requireRollbackExecutionOrigin } from "./rollback-authority.js";
 import type { DeploymentStatus } from "@factory/contracts";
-import type { DeploymentRecord } from "../persistence/schema.js";
+import type { DeploymentRecord, ReleaseApprovalRecord } from "../persistence/schema.js";
 import { FactoryError } from "../executor/errors.js";
 import type { RemoteQaResult } from "./qa.js";
 import type { UploadedVersion } from "./wrangler.js";
 
 export interface DeliveryStore {
+  getCurrentEffectiveTransition?(siteId: string): Promise<{ executionOrigin: string | null } | null>;
+  createDeployment?(input: any): Promise<DeploymentRecord>;
   updateDeployment(input: {
     id: string;
     status: DeploymentStatus;
@@ -12,6 +16,11 @@ export interface DeliveryStore {
     versionId?: string | null;
     previewUrl?: string | null;
     previousVersionId?: string | null;
+    candidateId?: string | null;
+    qaRunId?: string | null;
+    releaseApprovalId?: string | null;
+    candidateRoutes?: unknown;
+    snapshotData?: unknown;
     errorCode?: string | null;
     errorMessage?: string | null;
     promotedAt?: Date | null;
@@ -19,16 +28,25 @@ export interface DeliveryStore {
     previewVerified?: boolean;
     productionVerified?: boolean;
     rolledBack?: boolean;
+    executionOrigin?: "REAL_CLOUDFLARE" | "TEST_SIMULATION" | "UNKNOWN" | null;
+    operationId?: string | null;
   }): Promise<DeploymentRecord>;
   findLatestKnownGoodDeployment(
     siteId: string,
+    workerName?: string,
+    productionUrl?: string,
+    excludeDeploymentId?: string,
+  ): Promise<DeploymentRecord | null>;
+  listCanonicalVerifiedDeployments?(
+    siteId: string,
     workerName: string,
     productionUrl: string,
-  ): Promise<DeploymentRecord | null>;
+  ): Promise<DeploymentRecord[]>;
 }
 
 /** Test seam for the concrete Wrangler command set; not a provider abstraction. */
 export interface WranglerOperations {
+  readonly isSimulated?: boolean;
   assertTargetExists(workerName: string): Promise<void>;
   upload(workerName: string): Promise<UploadedVersion>;
   currentProductionVersion(workerName: string): Promise<string | null>;
@@ -51,7 +69,17 @@ function errorInfo(error: unknown): { code: string; message: string } {
 
 export function knownGoodVersion(record: DeploymentRecord | null): string | null {
   if (!record) return null;
-  return record.status === "rolled_back" ? record.previousVersionId : record.versionId;
+  if (record.status === "rolled_back") {
+    if (
+      record.operationId?.startsWith("rb-") ||
+      (record.snapshotData as any)?.targetDeploymentId ||
+      (record.productionVerified && record.errorCode !== "production_qa_failed_rolled_back")
+    ) {
+      return record.versionId;
+    }
+    return record.previousVersionId ?? record.versionId;
+  }
+  return record.versionId;
 }
 
 export class ProductionDelivery {
@@ -61,10 +89,19 @@ export class ProductionDelivery {
     private readonly runtime: DeliveryRuntime,
   ) {}
 
-  async execute(initial: DeploymentRecord): Promise<DeploymentRecord> {
+  /**
+   * Prepare and remotely QA a preview without changing production.
+   *
+   * Run 13 uses this existing delivery application service after supplying
+   * candidate-bound immutable bytes. Merely reaching preview_verified NEVER
+   * conveys human release authority or permission to call promote().
+   */
+  async preparePreview(initial: DeploymentRecord): Promise<DeploymentRecord> {
+    if (initial.status !== "preparing" || initial.versionId !== null || initial.previewVerified) {
+      throw new FactoryError("deployment_transition_invalid", "Preview preparation requires a fresh, unuploaded deployment.");
+    }
     let current = initial;
     try {
-      // Read-only target validation happens before the one and only build.
       await this.wrangler.assertTargetExists(initial.workerName);
 
       const dist = await this.runtime.build();
@@ -76,6 +113,9 @@ export class ProductionDelivery {
       });
 
       const uploaded = await this.wrangler.upload(initial.workerName);
+      if (uploaded.workerName !== initial.workerName) {
+        throw new FactoryError("provider_identity_mismatch", "Uploaded version belongs to another Worker.");
+      }
       current = await this.store.updateDeployment({
         id: initial.id,
         status: "uploaded",
@@ -92,51 +132,113 @@ export class ProductionDelivery {
           errorMessage: "Cloudflare version preview failed the existing Playwright quality oracle.",
         });
       }
-      current = await this.store.updateDeployment({
+      return await this.store.updateDeployment({
         id: initial.id,
         status: "preview_verified",
         previewVerified: true,
       });
+    } catch (error) {
+      const info = errorInfo(error);
+      return await this.store.updateDeployment({
+        id: initial.id,
+        status: "failed",
+        errorCode: info.code,
+        errorMessage: info.message,
+      });
+    }
+  }
 
-      const providerVersion = await this.wrangler.currentProductionVersion(initial.workerName);
+  /**
+   * Run 13: Governed publication of an approved preview.
+   * Promotes the exact approved preview version, verifies production,
+   * and automatically rolls back to known-good version if production QA fails.
+   */
+  async publishApproved(input: {
+    previewDeployment: DeploymentRecord;
+    approval: ReleaseApprovalRecord;
+    deferFinalization?: boolean;
+  }): Promise<DeploymentRecord> {
+    const { previewDeployment: preview, approval } = input;
+    if (preview.status !== "preview_verified" || !preview.previewVerified || !preview.versionId) {
+      throw new FactoryError("deployment_transition_invalid", "Cannot promote an unverified preview.");
+    }
+    if (preview.versionId !== approval.previewVersionId) {
+      throw new FactoryError("release_version_mismatch", "Approved version does not match preview version.");
+    }
+    if (preview.candidateId && approval.candidateId !== preview.candidateId) {
+      throw new FactoryError("release_candidate_mismatch", "Approved candidate does not match preview candidate.");
+    }
+    if (preview.artifactDigest && approval.artifactDigest !== preview.artifactDigest) {
+      throw new FactoryError("release_digest_mismatch", "Approved artifact digest does not match preview digest.");
+    }
+    if (approval.revoked) {
+      throw new FactoryError("release_approval_revoked", "Release approval has been revoked.");
+    }
+
+    let current = preview;
+    try {
+      const providerVersion = await this.wrangler.currentProductionVersion(preview.workerName);
       const knownGood = knownGoodVersion(await this.store.findLatestKnownGoodDeployment(
-        initial.siteId,
-        initial.workerName,
-        initial.productionUrl,
+        preview.siteId,
+        preview.workerName,
+        preview.productionUrl,
       ));
       if (knownGood !== null && providerVersion !== knownGood) {
         throw new FactoryError(
           "deployment_drift",
-          `Cloudflare production version does not match Factory's latest known-good version.`,
+          "Cloudflare production version does not match Factory's latest known-good version.",
         );
       }
-      // On the first Factory-managed delivery, the version currently serving
-      // 100% of production is the only possible rollback candidate. It is not
-      // declared known-good until a rollback to it passes production QA.
       const previousVersionId = knownGood ?? providerVersion;
+      await this.runtime.assertSourceStillAccepted(preview.sourceCommit);
 
-      await this.runtime.assertSourceStillAccepted(initial.sourceCommit);
-
-      // Durable crash boundary: this write completes before the production mutation.
       current = await this.store.updateDeployment({
-        id: initial.id,
+        id: preview.id,
         status: "promoting",
         previousVersionId,
+        releaseApprovalId: approval.id,
+        operationId: `pub-${preview.id}`,
+        snapshotData: {
+          ...((preview.snapshotData as any) ?? {}),
+          operationType: "PUBLISH",
+        },
       });
-      await this.wrangler.promote(initial.workerName, uploaded.versionId);
+      await this.wrangler.promote(preview.workerName, preview.versionId);
       current = await this.store.updateDeployment({
-        id: initial.id,
+        id: preview.id,
         status: "promoted",
         promotedAt: new Date(),
       });
 
-      const productionQa = await this.runtime.qa(initial.productionUrl, "production");
+      const productionQa = await this.runtime.qa(preview.productionUrl, "production");
+      const activeAfter = await this.wrangler.currentProductionVersion(preview.workerName);
+      if (activeAfter !== preview.versionId) {
+        throw new FactoryError(
+          "deployment_drift",
+          "Cloudflare active version after promotion does not match candidate version.",
+        );
+      }
+
       if (productionQa.passed) {
+        const executionOrigin =
+          (preview.executionOrigin as "REAL_CLOUDFLARE" | "TEST_SIMULATION" | "UNKNOWN" | null) ??
+          ((this.wrangler as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
+        if (input.deferFinalization) {
+          return {
+            ...current,
+            status: "promoted",
+            productionVerified: true,
+            executionOrigin,
+            errorCode: null,
+            errorMessage: null,
+          };
+        }
         return await this.store.updateDeployment({
-          id: initial.id,
+          id: preview.id,
           status: "verified",
           verifiedAt: new Date(),
           productionVerified: true,
+          executionOrigin,
           errorCode: null,
           errorMessage: null,
         });
@@ -146,7 +248,283 @@ export class ProductionDelivery {
       const info = errorInfo(error);
       const dangerous = current.status === "promoting" || current.status === "promoted";
       return await this.store.updateDeployment({
-        id: initial.id,
+        id: preview.id,
+        status: dangerous ? "needs_review" : "failed",
+        errorCode: info.code,
+        errorMessage: info.message,
+      });
+    }
+  }
+
+  async rollbackExplicit(input: {
+    deployment: DeploymentRecord;
+    targetVersionId: string;
+    targetDeployment?: DeploymentRecord;
+    deferFinalization?: boolean;
+    pendingDeployment?: DeploymentRecord;
+    initiatingActor?: {
+      actorId: string;
+      actorName: string;
+      actorRole: string;
+      sessionId?: string;
+    };
+  }): Promise<DeploymentRecord> {
+    const knownGoodRaw = await this.store.findLatestKnownGoodDeployment(
+      input.deployment.siteId,
+      input.deployment.workerName,
+      input.deployment.productionUrl,
+      input.deployment.id,
+    );
+    const knownGood = knownGoodVersion(knownGoodRaw);
+
+    const canonicals = typeof this.store.listCanonicalVerifiedDeployments === "function"
+      ? await this.store.listCanonicalVerifiedDeployments(
+          input.deployment.siteId,
+          input.deployment.workerName,
+          input.deployment.productionUrl,
+        )
+      : [];
+
+    const isCanonical =
+      canonicals.some((d: DeploymentRecord) => d.versionId === input.targetVersionId) ||
+      (input.deployment.versionId === input.targetVersionId && input.deployment.productionVerified);
+
+    if (!knownGood && !isCanonical) {
+      throw new FactoryError("rollback_target_invalid", "Target rollback version is not a verified known-good version.");
+    }
+
+    if (knownGood && knownGood !== input.targetVersionId && !isCanonical) {
+      throw new FactoryError("rollback_target_invalid", "Target rollback version is not a verified known-good version.");
+    }
+
+    const targetDep =
+      input.targetDeployment ??
+      canonicals.find((d: DeploymentRecord) => d.versionId === input.targetVersionId) ??
+      (input.deployment.versionId === input.targetVersionId && input.deployment.productionVerified ? input.deployment : null) ??
+      (knownGoodRaw && typeof knownGoodRaw === "object" && knownGoodRaw.versionId === input.targetVersionId ? knownGoodRaw : null);
+
+    if (!targetDep || !targetDep.versionId) {
+      throw new FactoryError("rollback_target_invalid", "Target rollback deployment record could not be resolved.");
+    }
+
+    if (targetDep.siteId !== input.deployment.siteId) {
+      throw new FactoryError("rollback_target_invalid", "Target rollback version does not belong to the same site.");
+    }
+
+    requireHistoricalRollbackRoutes(targetDep.candidateRoutes);
+    const currentTransition = await this.store.getCurrentEffectiveTransition?.(input.deployment.siteId);
+    const currentOrigin = this.store.getCurrentEffectiveTransition
+      ? currentTransition?.executionOrigin
+      : input.deployment.executionOrigin;
+    const executionOrigin = requireRollbackExecutionOrigin(this.wrangler, [
+      targetDep.executionOrigin,
+      currentOrigin,
+      ...(input.pendingDeployment ? [input.pendingDeployment.executionOrigin] : []),
+    ]);
+
+    let rollbackDep = input.pendingDeployment ?? null;
+    try {
+      // P1: Persist durable rollback intent before external mutation if not already provided
+      if (!rollbackDep && typeof this.store.createDeployment === "function") {
+        const rollbackDepId = `dep-rb-${randomUUID()}`;
+        rollbackDep = await this.store.createDeployment({
+          id: rollbackDepId,
+          siteId: input.deployment.siteId,
+          sourceCommit: targetDep.sourceCommit,
+          artifactDigest: targetDep.artifactDigest,
+          versionId: input.targetVersionId,
+          previousVersionId: input.deployment.versionId,
+          workerName: targetDep.workerName || input.deployment.workerName,
+          productionUrl: targetDep.productionUrl || input.deployment.productionUrl,
+          status: "promoting",
+          previewVerified: true,
+          productionVerified: false,
+          rolledBack: true,
+          candidateId: targetDep.candidateId,
+          qaRunId: targetDep.qaRunId ?? null, // R13-F3-P1-01: exact target QA preserved
+          releaseApprovalId: targetDep.releaseApprovalId,
+          candidateRoutes: targetDep.candidateRoutes,
+          artifactDirectory: targetDep.artifactDirectory,
+          executionOrigin,
+          operationId: `rb-${rollbackDepId}`,
+          snapshotData: {
+            operationType: "ROLLBACK",
+            targetDeploymentId: targetDep.id,
+            fromVersionId: input.deployment.versionId,
+            toVersionId: input.targetVersionId,
+            initiatingActor: input.initiatingActor ?? null,
+            targetQaRunId: targetDep.qaRunId ?? null,
+            targetCandidateId: targetDep.candidateId,
+            targetArtifactDigest: targetDep.artifactDigest,
+          },
+          promotedAt: new Date(),
+        });
+      }
+
+      await this.wrangler.rollback(input.deployment.workerName, input.targetVersionId);
+
+      if (rollbackDep) {
+        rollbackDep = await this.store.updateDeployment({
+          id: rollbackDep.id,
+          status: "promoted",
+          promotedAt: new Date(),
+        });
+      }
+
+      // P0-C: Independent verification that Cloudflare actually switched to target version
+      const activeAfterRollback = await this.wrangler.currentProductionVersion(input.deployment.workerName);
+      if (activeAfterRollback !== input.targetVersionId) {
+        throw new FactoryError(
+          "rollback_drift",
+          `Cloudflare active version after rollback ('${activeAfterRollback}') does not match expected target version ('${input.targetVersionId}').`,
+        );
+      }
+
+      const rollbackQa = await this.runtime.qa(input.deployment.productionUrl, "rollback");
+      if (!rollbackQa.passed) {
+        if (rollbackDep) {
+          return await this.store.updateDeployment({
+            id: rollbackDep.id,
+            status: "needs_review",
+            errorCode: "rollback_qa_failed",
+            errorMessage: "Manual rollback completed but production verification failed.",
+          });
+        }
+        return await this.store.updateDeployment({
+          id: input.deployment.id,
+          status: "needs_review",
+          errorCode: "rollback_qa_failed",
+          errorMessage: "Manual rollback completed but production verification failed.",
+        });
+      }
+
+      // P0-D & P0-02 & P1-01: Preserve historical publication facts and restore target release identity.
+      if (rollbackDep) {
+        if (input.deferFinalization) {
+          return {
+            ...rollbackDep,
+            status: "promoted",
+            productionVerified: true,
+            executionOrigin,
+            snapshotData: {
+              ...(rollbackDep.snapshotData as any),
+              rollbackQaPassed: rollbackQa.passed,
+              rollbackQaRunId: (rollbackQa as any)?.qaRunId ?? null,
+            },
+            verifiedAt: new Date(),
+          };
+        }
+        return await this.store.updateDeployment({
+          id: rollbackDep.id,
+          status: "rolled_back",
+          productionVerified: true,
+          executionOrigin,
+          snapshotData: {
+            ...(rollbackDep.snapshotData as any),
+            rollbackQaPassed: rollbackQa.passed,
+            rollbackQaRunId: (rollbackQa as any)?.qaRunId ?? null,
+          },
+          verifiedAt: new Date(),
+        });
+      }
+
+      return await this.store.updateDeployment({
+        id: input.deployment.id,
+        status: input.deferFinalization ? "promoted" : "rolled_back",
+        previousVersionId: input.targetVersionId,
+        rolledBack: true,
+        verifiedAt: new Date(),
+      });
+    } catch (error) {
+      const info = errorInfo(error);
+      if (rollbackDep) {
+        return await this.store.updateDeployment({
+          id: rollbackDep.id,
+          status: "needs_review",
+          errorCode: info.code === "delivery_internal_error" ? "rollback_failed" : info.code,
+          errorMessage: info.message,
+        });
+      }
+      return await this.store.updateDeployment({
+        id: input.deployment.id,
+        status: "needs_review",
+        errorCode: info.code === "delivery_internal_error" ? "rollback_failed" : info.code,
+        errorMessage: info.message,
+      });
+    }
+  }
+
+  /**
+   * Historic CLI one-shot delivery entrypoint. Governed sites MUST NOT
+   * reach this entrypoint until it is gated by Run 13 release authority.
+   * Never expose this method directly through the Dashboard.
+   */
+  async execute(initial: DeploymentRecord): Promise<DeploymentRecord> {
+    if (initial.candidateId) {
+      throw new FactoryError(
+        "governed_site_requires_release_approval",
+        "Governed candidate releases require explicit human release approval. Legacy execute() bypass is prohibited.",
+      );
+    }
+    const preview = await this.preparePreview(initial);
+    if (preview.status !== "preview_verified") return preview;
+    return await this.promoteLegacyPreview(preview);
+  }
+
+  private async promoteLegacyPreview(preview: DeploymentRecord): Promise<DeploymentRecord> {
+    let current = preview;
+    try {
+      if (preview.status !== "preview_verified" || !preview.previewVerified || !preview.versionId) {
+        throw new FactoryError("deployment_transition_invalid", "Cannot promote an unverified preview.");
+      }
+      const providerVersion = await this.wrangler.currentProductionVersion(preview.workerName);
+      const knownGood = knownGoodVersion(await this.store.findLatestKnownGoodDeployment(
+        preview.siteId,
+        preview.workerName,
+        preview.productionUrl,
+      ));
+      if (knownGood !== null && providerVersion !== knownGood) {
+        throw new FactoryError(
+          "deployment_drift",
+          "Cloudflare production version does not match Factory's latest known-good version.",
+        );
+      }
+      const previousVersionId = knownGood ?? providerVersion;
+      await this.runtime.assertSourceStillAccepted(preview.sourceCommit);
+
+      current = await this.store.updateDeployment({
+        id: preview.id,
+        status: "promoting",
+        previousVersionId,
+      });
+      await this.wrangler.promote(preview.workerName, preview.versionId);
+      current = await this.store.updateDeployment({
+        id: preview.id,
+        status: "promoted",
+        promotedAt: new Date(),
+      });
+
+      const productionQa = await this.runtime.qa(preview.productionUrl, "production");
+      if (productionQa.passed) {
+        const executionOrigin =
+          (preview.executionOrigin as "REAL_CLOUDFLARE" | "TEST_SIMULATION" | "UNKNOWN" | null) ??
+          ((this.wrangler as any)?.isSimulated ? "TEST_SIMULATION" : "REAL_CLOUDFLARE");
+        return await this.store.updateDeployment({
+          id: preview.id,
+          status: "verified",
+          verifiedAt: new Date(),
+          productionVerified: true,
+          executionOrigin,
+          errorCode: null,
+          errorMessage: null,
+        });
+      }
+      return await this.rollbackAfterFailedProductionQa(current);
+    } catch (error) {
+      const info = errorInfo(error);
+      const dangerous = current.status === "promoting" || current.status === "promoted";
+      return await this.store.updateDeployment({
+        id: preview.id,
         status: dangerous ? "needs_review" : "failed",
         errorCode: info.code,
         errorMessage: info.message,

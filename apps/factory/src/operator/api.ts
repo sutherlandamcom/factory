@@ -56,6 +56,8 @@ export interface OperatorApiDeps {
    * qa_tool_unavailable; fail closed — never treated as PASS).
    */
   readonly qaCollector?: import("../production/qa/collector.js").ProductionQaEvidenceCollector;
+  /** Governed production delivery (Macro Run 13); optional. */
+  readonly governedDelivery?: import("../delivery/governed-service.js").GovernedDeliveryService;
 }
 
 const projectKeySchema = z
@@ -1391,8 +1393,150 @@ export function createOperatorApi(deps: OperatorApiDeps) {
         return sendError(res, "not_found", "Unknown endpoint.");
       }
 
+      // ------------------------------------------------------------------
+      // Governed Production Delivery (Macro Run 13):
+      // Preview -> Human Approval -> Governed Publish -> Explicit Rollback.
+      // ------------------------------------------------------------------
+      if (segments[2] === "deployment") {
+        const project = await deps.store.getProjectById(segments[1]!);
+        if (!project) return sendError(res, "not_found", "Project not found.");
+        if (!deps.governedDelivery) {
+          return sendError(
+            res,
+            "delivery_service_unavailable",
+            "Governed production delivery is not configured in this environment.",
+          );
+        }
+        const delivery = deps.governedDelivery;
+
+        // GET /projects/:id/deployment: full governed deployment view
+        if (req.method === "GET" && segments.length === 3) {
+          const view = await delivery.getGovernedDeploymentView(project.id);
+          return sendJson(res, 200, view);
+        }
+
+        // GET /projects/:id/deployment/lineage: historical as-of lineage query
+        if (req.method === "GET" && segments.length === 4 && segments[3] === "lineage") {
+          const site = await deps.store.findSiteByProjectId(project.id);
+          if (!site) return sendError(res, "not_found", "Site not found for project.");
+          const url = new URL(req.url ?? "/", "http://localhost");
+          const route = url.searchParams.get("route") || "/";
+          const asOfRaw = url.searchParams.get("asOf");
+          const asOf = asOfRaw ? new Date(asOfRaw) : new Date();
+          if (isNaN(asOf.getTime())) {
+            return sendError(res, "validation_error", "Invalid asOf timestamp.");
+          }
+          const lineage = await delivery.getEffectiveReleaseAsOf({
+            siteId: site.id,
+            route,
+            asOf,
+          });
+          return sendJson(res, 200, lineage);
+        }
+
+        // GET /projects/:id/deployment/monitoring: current monitoring summary
+        if (req.method === "GET" && segments.length === 4 && segments[3] === "monitoring") {
+          const summary = await delivery.getMonitoringSummary(project.id);
+          return sendJson(res, 200, summary);
+        }
+
+        // POST /projects/:id/deployment/monitoring/check: trigger operational monitoring check
+        if (req.method === "POST" && segments.length === 5 && segments[3] === "monitoring" && segments[4] === "check") {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(
+            z.object({
+              sessionToken: z.string().trim().min(1),
+            }).strict(),
+            parsed,
+          );
+          const summary = await delivery.runMonitoringCheck(project.id, input.sessionToken);
+          return sendJson(res, 200, summary);
+        }
+
+        // POST /projects/:id/deployment/preview
+        if (req.method === "POST" && segments.length === 4 && segments[3] === "preview") {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(
+            z.object({
+              candidateId: z.string().trim().min(1).max(200),
+              sessionToken: z.string().trim().min(1),
+            }).strict(),
+            parsed,
+          );
+          const result = await delivery.prepareCandidatePreview({
+            projectId: project.id,
+            candidateId: input.candidateId,
+            sessionToken: input.sessionToken,
+          });
+          return sendJson(res, 200, result);
+        }
+
+        // POST /projects/:id/deployment/approve
+        if (req.method === "POST" && segments.length === 4 && segments[3] === "approve") {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(
+            z.object({
+              candidateId: z.string().trim().min(1).max(200),
+              previewVersionId: z.string().trim().min(1).max(200),
+              sessionToken: z.string().trim().min(1),
+            }).strict(),
+            parsed,
+          );
+          const result = await delivery.approveRelease({
+            projectId: project.id,
+            candidateId: input.candidateId,
+            previewVersionId: input.previewVersionId,
+            sessionToken: input.sessionToken,
+          });
+          return sendJson(res, 201, result);
+        }
+
+        // POST /projects/:id/deployment/publish
+        if (req.method === "POST" && segments.length === 4 && segments[3] === "publish") {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(
+            z.object({
+              candidateId: z.string().trim().min(1).max(200),
+              previewVersionId: z.string().trim().min(1).max(200),
+              approvalId: z.string().trim().min(1).max(200),
+              sessionToken: z.string().trim().min(1),
+            }).strict(),
+            parsed,
+          );
+          const result = await delivery.publishApprovedRelease({
+            projectId: project.id,
+            candidateId: input.candidateId,
+            previewVersionId: input.previewVersionId,
+            approvalId: input.approvalId,
+            sessionToken: input.sessionToken,
+          });
+          return sendJson(res, 200, result);
+        }
+
+        // POST /projects/:id/deployment/rollback
+        if (req.method === "POST" && segments.length === 4 && segments[3] === "rollback") {
+          const parsed = parseJsonBody(body);
+          const input = parseOr400(
+            z.object({
+              sessionToken: z.string().trim().min(1),
+              targetVersionId: z.string().trim().min(1).max(200).optional(),
+            }).strict(),
+            parsed,
+          );
+          const result = await delivery.rollbackExplicit({
+            projectId: project.id,
+            sessionToken: input.sessionToken,
+            targetVersionId: input.targetVersionId,
+          });
+          return sendJson(res, 200, result);
+        }
+
+        return sendError(res, "not_found", "Unknown endpoint.");
+      }
+
       return sendError(res, "not_found", "Unknown endpoint.");
     } catch (error) {
+      console.error("[operator] API error:", error);
       if (error instanceof FactoryError && CONTRACT_ERROR_CODES.has(error.code)) {
         return sendError(res, error.code as OperatorErrorCode, error.message);
       }

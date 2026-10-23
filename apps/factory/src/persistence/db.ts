@@ -29,6 +29,11 @@ export function createDatabaseInstance(config?: DatabaseConfig | string): Factor
     connectionTimeoutMillis: 5000,
   });
 
+  pool.on("error", (err) => {
+    // Prevent unhandled error event on idle pool clients from crashing the process
+    console.error("[factory-db-pool] idle client error:", err.message);
+  });
+
   const db = drizzle(pool, { schema });
 
   return {

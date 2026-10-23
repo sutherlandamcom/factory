@@ -59,23 +59,26 @@ test("SF-F04 malformed and incomplete current Lighthouse evidence fails closed",
 });
 test("SF-F04 overlapping executions isolate internal storage, reports and cleanup", async t => {
   const input = await fixture(t);
-  const calls: Array<{ args: string[]; cwd: string }> = [];
+  const calls: Partial<Record<"first" | "second", { args: string[]; cwd: string }>> = {};
   let release!: () => void;
   const wait = new Promise<void>(resolve => { release = resolve; });
   let secondStarted!: () => void;
   const started = new Promise<void>(resolve => { secondStarted = resolve; });
   const first = execute(input, async (_command, args, opts) => {
-    calls.push({ args, cwd: opts.cwd }); await output(exportDir(args)); await started; return ok;
+    // Deliberately let the second invocation produce evidence first: invocation
+    // identity must not depend on filesystem scheduling or runner arrival order.
+    await started;
+    calls.first = { args, cwd: opts.cwd }; await output(exportDir(args)); return ok;
   });
   const second = execute(input, async (_command, args, opts) => {
-    calls.push({ args, cwd: opts.cwd }); await output(exportDir(args)); secondStarted(); await wait; return ok;
+    calls.second = { args, cwd: opts.cwd }; await output(exportDir(args)); secondStarted(); await wait; return ok;
   });
   try {
     assert.equal((await first)[0]!.verdict, "PASS");
-    assert.notEqual(calls[0]!.cwd, calls[1]!.cwd, "LHCI internal storage must be execution-local");
-    assert.notEqual(exportDir(calls[0]!.args), exportDir(calls[1]!.args));
-    await access(path.join(exportDir(calls[1]!.args), "manifest.json"));
+    assert.notEqual(calls.first!.cwd, calls.second!.cwd, "LHCI internal storage must be execution-local");
+    assert.notEqual(exportDir(calls.first!.args), exportDir(calls.second!.args));
+    await access(path.join(exportDir(calls.second!.args), "manifest.json"));
   } finally { release(); }
   assert.equal((await second)[0]!.verdict, "PASS");
-  for (const call of calls) await assert.rejects(access(exportDir(call.args)), "own output must be cleaned");
+  for (const call of Object.values(calls)) await assert.rejects(access(exportDir(call.args)), "own output must be cleaned");
 });

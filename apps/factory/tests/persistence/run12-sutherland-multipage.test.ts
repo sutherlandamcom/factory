@@ -1921,7 +1921,9 @@ test(
       await cp(path.join(last6, "manifests"), path.join(qaEvidenceRoot, "manifests"), { recursive: true });
 
       // ---- Real-browser Playwright E2E, Responsive, Axe & Keyboard QA against the preserved 6-page Sutherland site ----
-      const starterDir = path.join(repoRoot, "sites", "starter");
+      // Test/config oracles stay in the source checkout; only candidate build
+      // configuration/output is isolated. The built artifact path stays exact.
+      const starterDir = path.join(sourceRoot, "sites", "starter");
       const pwRun = await runProcess(
         "pnpm",
         [

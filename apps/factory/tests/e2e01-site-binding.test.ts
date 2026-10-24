@@ -15,7 +15,7 @@ test("E2E-P0-01: a Stark project cannot derive the shared Sutherland build ident
   );
 });
 
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { loadProjectSiteBinding } from "../src/production/site-binding.js";
 import { deterministicDigest } from "../src/intelligence/digest.js";
@@ -45,3 +45,13 @@ for (const company of ["Sutherland", "Stark"] as const) {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 }
+
+import { createIsolatedProductionRoot } from "./fixtures/project-site-binding.js";
+
+test("E2E-P0-01: isolated production copies retain exact trusted QA configuration", async () => {
+  const sourceRoot = path.resolve(import.meta.dirname, "../../..");
+  const root = await createIsolatedProductionRoot(sourceRoot);
+  for (const relative of [".gitleaks.toml", "osv-scanner.toml", "sites/starter/lighthouserc.json"]) {
+    assert.equal(await readFile(path.join(root, relative), "utf8"), await readFile(path.join(sourceRoot, relative), "utf8"), relative);
+  }
+});

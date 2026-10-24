@@ -49,13 +49,13 @@ export async function createIsolatedProductionRoot(sourceRoot: string, cleanup =
   const root = await mkdtemp(path.join(tmpdir(), "e2e01-production-copy-"));
   if (cleanup) after(() => rm(root, { recursive: true, force: true }));
   await mkdir(path.join(root, "sites/starter"), { recursive: true });
-  for (const relative of [".git", "pnpm-lock.yaml", "package.json", "node_modules", "packages", "docs"]) {
+  for (const relative of [".git", ".gitleaks.toml", "osv-scanner.toml", "pnpm-lock.yaml", "package.json", "node_modules", "packages", "docs"]) {
     await symlink(path.join(sourceRoot, relative), path.join(root, relative));
   }
   // Dependencies are preinstalled and shared read-only. Never let pnpm auto-install
   // (and mutate the source checkout) merely because the isolated workspace moved.
   await writeFile(path.join(root, "pnpm-workspace.yaml"), `${await readFile(path.join(sourceRoot, "pnpm-workspace.yaml"), "utf8")}\nverifyDepsBeforeRun: false\n`);
-  for (const relative of ["src", "public", "astro.config.ts", "package.json", "tsconfig.json", "site-profile.json"]) {
+  for (const relative of ["src", "public", "astro.config.ts", "lighthouserc.json", "package.json", "tsconfig.json", "site-profile.json"]) {
     await cp(path.join(sourceRoot, "sites/starter", relative), path.join(root, "sites/starter", relative), { recursive: true });
   }
   await mkdir(path.join(root, "apps/dashboard"), { recursive: true });

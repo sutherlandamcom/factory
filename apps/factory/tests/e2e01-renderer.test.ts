@@ -4,7 +4,7 @@ import path from "node:path";
 import http from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, readFile, writeFile, cp } from "node:fs/promises";
+import { mkdir, readFile, writeFile, cp, rm } from "node:fs/promises";
 import { chromium } from "@playwright/test";
 import { parse } from "node-html-parser";
 import { createIsolatedProductionRoot } from "./fixtures/project-site-binding.js";
@@ -89,8 +89,12 @@ for (const company of ["Sutherland", "Stark"]) {
       assert.equal(new URL(page.url()).pathname, "/contact");
       const evidence = path.join(sourceRoot, ".factory/e2e01/renderer", projectKey);
       await mkdir(evidence, { recursive: true });
-      await cp(dist, path.join(evidence, "dist"), { recursive: true });
-      await writeFile(path.join(evidence, "evidence.json"), JSON.stringify({ classification: "SYNTHETIC_RENDERER_FIXTURE_NOT_PUBLICATION_AUTHORITY", projectKey, profile, bindingDigest: verified.bindingDigest, manifestDigests: manifests.map(m => m.manifestDigest), repositorySha, sourceWorkingTreeClean, artifactDigest: await computeArtifactDigest(dist), htmlPath: path.join(evidence, "dist/index.html"), rendererAssertions: "PASS", keyboardNavigation: "/contact", productionQaVerdict: "NOT_RUN_FIXTURE_ONLY" }, null, 2));
+      const preservedDist = path.join(evidence, "dist");
+      await rm(preservedDist, { recursive: true, force: true });
+      await cp(dist, preservedDist, { recursive: true });
+      const artifactDigest = await computeArtifactDigest(preservedDist);
+      assert.equal(artifactDigest, await computeArtifactDigest(dist), "preserved artifact must exactly match the tested build");
+      await writeFile(path.join(evidence, "evidence.json"), JSON.stringify({ classification: "SYNTHETIC_RENDERER_FIXTURE_NOT_PUBLICATION_AUTHORITY", projectKey, profile, bindingDigest: verified.bindingDigest, manifestDigests: manifests.map(m => m.manifestDigest), repositorySha, sourceWorkingTreeClean, artifactDigest, htmlPath: path.join(evidence, "dist/index.html"), rendererAssertions: "PASS", keyboardNavigation: "/contact", productionQaVerdict: "NOT_RUN_FIXTURE_ONLY" }, null, 2));
     } finally { await browser.close(); await new Promise<void>(resolve => server.close(() => resolve())); }
   });
 }

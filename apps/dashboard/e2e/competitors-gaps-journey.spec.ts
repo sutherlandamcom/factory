@@ -74,6 +74,7 @@ async function createAndAcceptProject(page: Page) {
 async function runSearch(page: Page) {
   await gotoSubsection(page, "Research", "Search");
   await page.getByLabel("Query", { exact: false }).first().fill("roof repair austin");
+  await page.getByLabel("Location", { exact: true }).fill("United States");
   await page.getByTestId("search-workspace").getByRole("button", { name: "Run Search" }).click();
   await expect(page.locator("text=SERP", { hasText: "SERP" }).first()).toBeVisible({ timeout: 30_000 });
 }
@@ -204,6 +205,7 @@ test.describe("Competitors + Content Gap journey", () => {
     // Search
     await gotoSubsection(pageA, "Research", "Search");
     await pageA.getByLabel("Query", { exact: false }).first().fill("roof repair austin");
+    await pageA.getByLabel("Location", { exact: true }).fill("United States");
     await pageA.getByTestId("search-workspace").getByRole("button", { name: "Run Search" }).click();
     await expect(pageA.locator("text=SERP", { hasText: "SERP" }).first()).toBeVisible({ timeout: 30_000 });
 

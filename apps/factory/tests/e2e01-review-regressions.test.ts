@@ -20,7 +20,7 @@ test("E2E-P1-03: URI-reserved mailbox characters preserve the accepted recipient
 
 test("E2E-P1-03: malformed email atoms/domains fail closed and encoded mailto preserves its recipient", () => {
   const input = { primaryObjective: "Contact", ctaType: "email", ctaDestinationType: "email" as const, verificationState: "VERIFIED" as const };
-  for (const ctaDestination of [".sales@example.com", "sales.@example.com", "sales..eu@example.com", "sales@-example.com", "sales@example-.com", "mailto:sales@example.com?subject=unapproved", "mailto:sales#eu@example.com"]) {
+  for (const ctaDestination of [".sales@example.com", "sales.@example.com", "sales..eu@example.com", "sales@-example.com", "sales@example-.com", "mailto:sales@example.com?subject=unapproved", "mailto:sales#eu@example.com", "mailto://ignored.example/sales@example.com", "MAILTO://ignored.example/sales@example.com"]) {
     assert.throws(() => verifiedConversionHref({ ...input, ctaDestination }), /CTA destination/, ctaDestination);
   }
   assert.equal(verifiedConversionHref({ ...input, ctaDestination: "mailto:sales%23eu@example.com" }), "mailto:sales%23eu@example.com");

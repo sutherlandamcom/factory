@@ -13,7 +13,7 @@ export function verifiedConversionHref(conversion: Conversion): string {
     if (/^mailto:/i.test(raw)) {
       try {
         const uri = new URL(raw);
-        if (uri.search || uri.hash) return reject();
+        if (/^mailto:\/\//i.test(raw) || uri.host || uri.search || uri.hash) return reject();
         address = decodeURIComponent(uri.pathname);
       } catch { return reject(); }
     }

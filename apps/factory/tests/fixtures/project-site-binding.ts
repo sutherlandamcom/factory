@@ -58,6 +58,8 @@ export async function createIsolatedProductionRoot(sourceRoot: string, cleanup =
   for (const relative of ["src", "public", "astro.config.ts", "package.json", "tsconfig.json", "site-profile.json"]) {
     await cp(path.join(sourceRoot, "sites/starter", relative), path.join(root, "sites/starter", relative), { recursive: true });
   }
+  await mkdir(path.join(root, "apps/dashboard"), { recursive: true });
+  await symlink(path.join(sourceRoot, "apps/dashboard/node_modules"), path.join(root, "apps/dashboard/node_modules"));
   await symlink(path.join(sourceRoot, "sites/starter/node_modules"), path.join(root, "sites/starter/node_modules"));
   return root;
 }

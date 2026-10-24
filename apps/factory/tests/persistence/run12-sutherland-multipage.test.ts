@@ -1923,7 +1923,7 @@ test(
       // ---- Real-browser Playwright E2E, Responsive, Axe & Keyboard QA against the preserved 6-page Sutherland site ----
       // Test/config oracles stay in the source checkout; only candidate build
       // configuration/output is isolated. The built artifact path stays exact.
-      const starterDir = path.join(sourceRoot, "sites", "starter");
+      const starterDir = path.join(sourceRepoRoot, "sites", "starter");
       const pwRun = await runProcess(
         "pnpm",
         [

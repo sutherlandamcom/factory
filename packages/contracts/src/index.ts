@@ -906,6 +906,6 @@ export type {
 } from "./monitoring.js";
 
 
-export { productionConversionAuthoritySchema, type ProductionConversionAuthority } from "./production.js";
+export { productionConversionAuthoritySchema, isSupportedConversionMailbox, type ProductionConversionAuthority } from "./production.js";
 
 export type { Conversion } from "./project-intake.js";

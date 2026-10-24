@@ -1,4 +1,5 @@
 import type { Conversion, ProductionConversionAuthority } from "@factory/contracts";
+import { isSupportedConversionMailbox } from "@factory/contracts";
 import { FactoryError } from "../executor/errors.js";
 
 export function verifiedConversionHref(conversion: Conversion): string {
@@ -8,8 +9,15 @@ export function verifiedConversionHref(conversion: Conversion): string {
   const raw = conversion.ctaDestination;
   if (!raw || /[\u0000-\u0020\u007f]/u.test(raw)) return reject();
   if (conversion.ctaDestinationType === "email") {
-    const address = raw.replace(/^mailto:/i, "");
-    if (!/^[A-Za-z0-9.!#$%&'*+\-/=^_`{|}~]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(address)) return reject();
+    let address = raw;
+    if (/^mailto:/i.test(raw)) {
+      try {
+        const uri = new URL(raw);
+        if (uri.search || uri.hash) return reject();
+        address = decodeURIComponent(uri.pathname);
+      } catch { return reject(); }
+    }
+    if (!isSupportedConversionMailbox(address)) return reject();
     const at = address.lastIndexOf("@");
     return `mailto:${encodeURIComponent(address.slice(0, at))}@${address.slice(at + 1)}`;
   }

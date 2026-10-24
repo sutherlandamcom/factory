@@ -103,6 +103,17 @@ export const productionRendererIdentitySchema = z
   .strict();
 export type ProductionRendererIdentity = z.infer<typeof productionRendererIdentitySchema>;
 
+/** Bounded ASCII dot-atom mailbox syntax; deliverability requires operator verification. */
+export function isSupportedConversionMailbox(address: string): boolean {
+  const parts = address.split("@");
+  if (parts.length !== 2 || address.length > 254) return false;
+  const [local, domain] = parts as [string, string];
+  const atom = /^[A-Za-z0-9!#$%&'*+\-/=?^_\x60{|}~]+$/;
+  const label = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+  return local.length > 0 && local.length <= 64 && local.split(".").every(part => atom.test(part)) &&
+    domain.length <= 253 && domain.split(".").length >= 2 && domain.split(".").every(part => label.test(part));
+}
+
 /** Accepted conversion projected without editorial or destination invention. */
 export const productionConversionAuthoritySchema = z.object({
   projectId: productionIdSchema,
@@ -117,7 +128,7 @@ export const productionConversionAuthoritySchema = z.object({
     if (value.startsWith("mailto:")) {
       try {
         const address = decodeURIComponent(value.slice(7));
-        if (!/^[A-Za-z0-9.!#$%&'*+\-/=^_`{|}~]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(address)) return false;
+        if (!isSupportedConversionMailbox(address)) return false;
         const at = address.lastIndexOf("@");
         return value === `mailto:${encodeURIComponent(address.slice(0, at))}@${address.slice(at + 1)}`;
       } catch { return false; }

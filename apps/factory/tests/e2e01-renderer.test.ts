@@ -12,6 +12,7 @@ import { computeRenderManifestDigest, assertManifest, type ProductionRenderManif
 import { deterministicDigest } from "../src/intelligence/digest.js";
 import { loadProjectSiteBinding } from "../src/production/site-binding.js";
 import { validateContentIntegrity } from "../src/production/qa/content-integrity.js";
+import { computeArtifactDigest } from "../src/production/build-service.js";
 import type { SiteProfile } from "@factory/contracts";
 const exec = promisify(execFile);
 const sourceRoot = path.resolve(import.meta.dirname, "../../..");
@@ -20,6 +21,8 @@ const sourceRoot = path.resolve(import.meta.dirname, "../../..");
 for (const company of ["Sutherland", "Stark"]) {
   test(`E2E-P0-01/P1-03 renderer fixture: isolated ${company} build and keyboard-actionable CTA`, { timeout: 300_000 }, async () => {
     const root = await createIsolatedProductionRoot(sourceRoot);
+    const repositorySha = (await exec("git", ["rev-parse", "HEAD"], { cwd: sourceRoot })).stdout.trim();
+    const sourceWorkingTreeClean = !(await exec("git", ["status", "--porcelain"], { cwd: sourceRoot })).stdout.trim();
     const russian = company === "Stark";
     const projectKey = company.toLowerCase();
     const identity = { siteName: russian ? "Stark Engineering" : "Sutherland Private Office", language: russian ? "ru-RU" : "en", locale: russian ? "ru-RU" : "en-GB", candidateDomain: russian ? "stark.example.test" : "sutherlandam.com" };
@@ -87,7 +90,7 @@ for (const company of ["Sutherland", "Stark"]) {
       const evidence = path.join(sourceRoot, ".factory/e2e01/renderer", projectKey);
       await mkdir(evidence, { recursive: true });
       await cp(dist, path.join(evidence, "dist"), { recursive: true });
-      await writeFile(path.join(evidence, "evidence.json"), JSON.stringify({ classification: "SYNTHETIC_RENDERER_FIXTURE_NOT_PUBLICATION_AUTHORITY", projectKey, profile, bindingDigest: verified.bindingDigest, manifestDigests: manifests.map(m => m.manifestDigest), keyboardNavigation: "/contact" }, null, 2));
+      await writeFile(path.join(evidence, "evidence.json"), JSON.stringify({ classification: "SYNTHETIC_RENDERER_FIXTURE_NOT_PUBLICATION_AUTHORITY", projectKey, profile, bindingDigest: verified.bindingDigest, manifestDigests: manifests.map(m => m.manifestDigest), repositorySha, sourceWorkingTreeClean, artifactDigest: await computeArtifactDigest(dist), htmlPath: path.join(evidence, "dist/index.html"), rendererAssertions: "PASS", keyboardNavigation: "/contact", productionQaVerdict: "NOT_RUN_FIXTURE_ONLY" }, null, 2));
     } finally { await browser.close(); await new Promise<void>(resolve => server.close(() => resolve())); }
   });
 }

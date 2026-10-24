@@ -37,10 +37,10 @@ Paths above are under `apps/factory/src`, `apps/factory/tests`, `packages/contra
 `apps/dashboard` or `sites/starter/src` as named. See the QA report for exact
 commands, results and candidate identity.
 
-Final candidate: `e63d83938ca9ae2cb5681feb2ad04df1984a7db2` (exact local battery:
+Final candidate: `49a223c2e1df56c2f18e7b6a9c3a951560454f85` (exact local battery:
 `pnpm qa` 1150+51+35 zero-fail, persistence 418/418, operator 149/149,
 production 60/60, browser 17/17, axe/keyboard PASS, Lighthouse PASS, gitleaks
-clean, `osv-scanner` exit 0). CI run `40127181397` executes the same commit.
+clean, `osv-scanner` exit 0). CI run `40128660807` executes the same commit.
 The P1-04 attribution fix (actorActionAlignmentProblems) also regressed clean
 across the full 418-test persistence suite (405→418 green after backfilling
 fixtures, then re-verified at the final SHA).

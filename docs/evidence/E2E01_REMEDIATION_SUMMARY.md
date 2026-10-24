@@ -10,7 +10,7 @@ production database access, no merge.
 
 Baseline: clean local and remote `main` at
 `82741c600aae5af1dd79f867374789b101a5b5cf`. Final functional candidate:
-`e63d83938ca9ae2cb5681feb2ad04df1984a7db2` (clean tree, exact local battery,
+`49a223c2e1df56c2f18e7b6a9c3a951560454f85` (clean tree, exact local battery,
 superseding the earlier `794c3f4` checkpoint).
 
 ## Changes
@@ -47,7 +47,7 @@ Final updates:
   misattributed actor. Deterministic, close to the existing M26 pattern, no
   AI, no new provenance tables.
 
-## Verification summary (exact SHA `e63d839`)
+## Verification summary (exact SHA `49a223c`)
 
 | Suite | Result |
 |---|---|
@@ -62,8 +62,14 @@ Final updates:
 | `osv-scanner` | exit 0 |
 | Attribution matrix | 17/17 across two layers |
 
-CI run `40127181397` executes this exact commit (windows: single `qa` job —
-OSV step previously SKIPPED must now execute after the green browser suite).
+CI run `40128660807` executes this exact final commit end-to-end (every step
+PASS, including the previously-SKIPPED OSV step). Rows 1–2, 4–6, 9 were
+executed at the byte-equal functional tree `e63d839…`; rows 3, 10, 11 and
+`pnpm check` were re-executed at `49a223c…` (final delta = the RACE barrier
+test file). An additional CI finding was fixed in-session: the RACE-06/07/08
+test barriers flipped before advisory-lock acquisition, making outcomes
+scheduler-dependent; they now flip after the lock (product code unchanged;
+419-test persistence suite and CI re-proven green).
 
 ## Migration and compatibility
 

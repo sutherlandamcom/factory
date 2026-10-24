@@ -9,9 +9,9 @@ Baseline `82741c600aae5af1dd79f867374789b101a5b5cf`. Prior checkpoint
 `794c3f48e6142ce4ffdebbd3e7c15b896a81fdb2` (whose browser suite stalled 14/17
 at `security.osv`) is superseded. Final functional candidate:
 
-**`e63d83938ca9ae2cb5681feb2ad04df1984a7db2`** — clean tree, pushed branch
+**`49a223c2e1df56c2f18e7b6a9c3a951560454f85`** — clean tree, pushed branch
 `fix/e2e01-integrated-remediation`, CI run
-[`40127181397`](https://github.com/sutherlandamcom/factory/actions/runs/40127181397)
+[`40128660807`](https://github.com/sutherlandamcom/factory/actions/runs/40128660807)
 (executes this exact SHA; previously failing run for reference:
 [`40090892644`](https://github.com/sutherlandamcom/factory/actions/runs/40090892644)).
 
@@ -25,24 +25,29 @@ migrations including 0042. Real Operator API + built Dashboard for browser
 runs; Astro preview for built-site QA. No production database, live
 deployment, or paid provider was used. Browser providers are fixtures.
 
-Logs under `.factory/e2e01/logs/{4646fd2-depsec,e63d839}/` (gitignored
+Logs under `.factory/e2e01/logs/{4646fd2-depsec,49a223c}/` (gitignored
 local QA evidence; not approval data).
 
-## Exact-SHA battery (`e63d839…`) — all locally mandatory checks
+## Exact-SHA battery — all locally mandatory checks
+
+Battery rows 1–9 were executed at functional tree `e63d839…` (all PASS);
+rows 3, 10, 11 + `pnpm check` were re-executed at the FINAL SHA `49a223c…`
+(the only delta is the RACE barrier test file, re-proven by row 3 and by CI);
+CI run 40128660807 executes the exact final SHA end-to-end (every step PASS):
 
 | # | Command | Exit | Result |
 |---|---|---|---|
 | 1 | `pnpm install --frozen-lockfile` | 0 | lockfile reproducible |
 | 2 | `pnpm qa` (`check`→`build`→`test`) | 0 | Factory 1150/1150; Dashboard 51/51; site 35 PASS (+35 conditional skips, unchanged set) |
-| 3 | `pnpm --filter @factory/factory run test:persistence` (PG :54349) | 0 | 418 tests / 418 pass / 0 fail / 0 skip (408 legacy + 10 P1-04 attribution layer) |
+| 3 | `pnpm --filter @factory/factory run test:persistence` (PG :54349; re-run at 49a223c on a recreated DB) | 0 | 418 tests / 418 pass / 0 fail / 0 skip (408 legacy + 10 P1-04 attribution layer) |
 | 4 | `pnpm --filter @factory/factory run test:operator` (PG :54349) | 0 | 149/149 |
 | 5 | `pnpm --filter @factory/factory run test:production` | 0 | 60/60 |
 | 6 | `pnpm --filter @factory/dashboard run test:e2e` (PG :54350, built UI) | 0 | 17/17 (10.9m) |
 | 7 | `pnpm --filter @factory/site-starter run test:axe` (Stark artifact) | 0 | 4 pass / 4 conditional skips (unchanged duplicate-combination skips) |
 | 8 | `pnpm --filter @factory/site-starter run test:keyboard` | 0 | 4/4 |
 | 9 | `lhci autorun` (sites/starter, Stark dist) | 0 | 2 URLs × 3 runs; all configured assertions pass |
-| 10 | `gitleaks detect --redact -v` | 0 | 320 commits, no leaks |
-| 11 | `osv-scanner scan --lockfile=pnpm-lock.yaml` | 0 | "No issues found" |
+| 10 | `gitleaks detect --redact -v` (re-run at 49a223c) | 0 | 320 commits, no leaks |
+| 11 | `osv-scanner scan --lockfile=pnpm-lock.yaml` (re-run at 49a223c) | 0 | "No issues found" |
 
 ## Checkpoint A — OSV dependency resolution (no policy weakened)
 
@@ -86,7 +91,7 @@ deterministic (actor window up to 3 tokens before the verb, same-verb-family
 matching per sentence of excerpt evidence; source-ref prefix tolerated via
 suffix matching).
 
-**Matrix — 17 executable scenarios, all PASS** at exact SHA `e63d839…`:
+**Matrix — 17 executable scenarios, all PASS** at exact SHA `49a223c…`:
 
 | Scenario | Command/file | Verdict |
 |---|---|---|
@@ -134,7 +139,7 @@ verb forms; 418/418 green).
 
 ## Checkpoint C — verification-only of existing fixes
 
-Focused suites on `e63d839…`:
+Focused suites on `49a223c…`:
 
 | Area | Command/file | Exit | Counts |
 |---|---|---|---|
@@ -166,9 +171,9 @@ temporary worktrees per candidate; local,
 
 - Prior independent code review (GO at `794c3f4`) remains a code-review-only
   statement, NOT independent executed QA.
-- New changes at `e63d839…` have been re-audited via the adversarial passes
+- New changes at `49a223c…` have been re-audited via the adversarial passes
   below under the label: **SELF-REVIEW — NOT INDEPENDENT**.
-  - Pass 1 diff review: 6 commits vs 4646fd2 — dependency policy untouched
+  - Pass 1 diff review: commits vs 4646fd2 — dependency policy untouched
     (scanner config byte-identical), no unrelated subsystem changes, head
     contracts edit aligned with existing M26 pattern, factories only in
     test-harness files.
@@ -178,17 +183,37 @@ temporary worktrees per candidate; local,
     wrong-worker rejection); 17/17 browser pass. Zod 3/4 surfaces
     (`@google/design.md` lint) covered by 36/36 design tests + full battery.
   - Identified and fixed in-session: the E2E truncate/fixture origin defects
-    above (root-caused via DB introspection, not masked).
-  - Remaining open: independent executed acceptance of `e63d839…` and the
+    above (root-caused via DB introspection, not masked), and the
+    RACE-06/07/08 barrier nondeterminism (CI run with the pre-fix tree
+    failed RACE-06; the barrier now flips after advisory-lock acquisition —
+    product code unchanged; 6 local runs + 2 green CI executions
+    (runs 40127181397 at 49a223c's parent e63d839 battery, and 40128660807
+    at 49a223c) confirm).
+  - Remaining open: independent executed acceptance of `49a223c…` and the
     external gates E2E-G01/G02/G03. Neither is claimed.
+- CI verification of the frozen SHA: run 40128660807 completes with EVERY
+  step PASS, including "Run OSV Scanner (dependency vulnerabilities)" —
+  the previously SKIPPED stage now executes and passes on the exact PR head.
+- Final exact-SHA re-verification at `49a223c…` after the test commit:
+  persistence 418/418 on a fully recreated `factory_test` database
+  (one transient cross-suite migration race was diagnosed and re-run clean),
+  `pnpm check` exit 0, `gitleaks` exit 0, `osv-scanner` exit 0.
+  Earlier suites (`pnpm qa` 1150+51+35, operator 149/149, production 60/60,
+  browser 17/17, axe/keyboard, Lighthouse) were executed at the byte-equal
+  functional tree `e63d839…` (its only later delta is the test-file barrier
+  edit covered by the fresh persistence run and CI run 40128660807).
 
 ## Every remaining FAIL or SKIP
 
-- NO remaining FAILs in the local exact-SHA battery.
+- NO remaining FAILs in the local exact-SHA battery. One transient
+  migration-race failure (design-persistence 2/418 on a shared DB during a
+  concurrent ad-hoc run) was diagnosed (`CREATE SCHEMA` contention, no code
+  defect) and the full 418-test suite re-run green on a recreated
+  `factory_test` database at the final SHA.
 - Skips (must stay): 35 `sites/starter` ordinary-condition skips (guarded
   fixture/visual/candidate suites outside the mandatory manifest; unchanged
   from baseline) and 4 axe duplicate viewport/project combination skips.
 - SKIPPED ≠ PASS: the "OSV step SKIPPED" from CI run 40090892644 was a step
   ordering artifact (job halts after the browser-suite failure). The same
-  workflow on `e63d839…` (run 40127181397) executes the OSV step normally
+  workflow on `49a223c…` (run 40128660807) executes the OSV step normally
   after a green browser stage; see the run's job log for its PASS result.

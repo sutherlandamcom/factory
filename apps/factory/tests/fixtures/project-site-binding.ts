@@ -26,7 +26,13 @@ export async function provisionTestSiteBinding(db: FactoryDb, root: string, proj
   const existingSites = await db.select().from(sites).where(eq(sites.projectId, projectId));
   if (existingSites.length > 1) throw new Error("Test fixture must explicitly select among multiple registered sites.");
   const site = existingSites[0] ?? await new FactoryStore(db).registerSite({ projectKey: project.key, key: `${project.key}-site`, name: profile.siteName });
-  const delivery = { workerName: site.cloudflareWorkerName ?? `test-${project.key}`.slice(0, 63), productionUrl: site.productionUrl ?? "https://delivery.example.test" };
+  // Delivery target stays explicit (no implicit provisioning), but when the
+  // test harness does not choose one it must agree with the worktree
+  // site-profile canonical origin: candidate preview/publication preflight
+  // compares the candidate canonical URL (derived from the binding's site
+  // profile) against the registered delivery target and fails closed on a
+  // mismatch (delivery_target/configured-production-origin authority).
+  const delivery = { workerName: site.cloudflareWorkerName ?? `test-${project.key}`.slice(0, 63), productionUrl: site.productionUrl ?? profile.canonicalOrigin };
   await db.update(sites).set({ cloudflareWorkerName: delivery.workerName, productionUrl: delivery.productionUrl }).where(eq(sites.id, site.id));
   // Explicit test-only informational approval preserves existing fixture tests'
   // no-verified-contact semantics; it grants no live provider/review authority.

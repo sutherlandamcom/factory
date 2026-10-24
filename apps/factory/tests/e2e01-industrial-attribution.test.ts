@@ -12,8 +12,9 @@ import {
   type ClaimLineage,
   type PageIntentAuthority,
   type ReviewAuthority,
-  type ProductionRenderManifest,
 } from "@factory/contracts";
+import type { ProductionRenderManifest } from "../src/production/render-manifest.js";
+import type { FactoryDatabaseInstance } from "../src/persistence/db.js";
 
 /**
  * E2E-P1-04 — industrial claim-attribution acceptance matrix.

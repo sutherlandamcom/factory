@@ -2650,13 +2650,18 @@ test("RACE-06 through RACE-10: Genuine concurrency with independent PostgreSQL c
     }
 
     // ---- RACE-06: Concurrent approval revocation with two independent PostgreSQL connections ----
+    // The "started" barrier flips AFTER the revoker holds the project advisory
+    // lock: the QA transaction is then guaranteed to contend on the lock while
+    // revocation is in flight, which is the concurrency window under test.
+    // (Flagging before the lock made the outcome scheduler-dependent: QA could
+    // win the lock and validate pre-revocation state.)
     let barrierBStarted = false;
     let barrierAReadyToLock = false;
 
     const taskRevoke = async () => {
       await dbInstB.db.transaction(async (tx) => {
-        barrierBStarted = true;
         await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${seeded.projectId}, 104))`);
+        barrierBStarted = true;
         while (!barrierAReadyToLock) {
           await new Promise((r) => setTimeout(r, 10));
         }
@@ -2713,13 +2718,14 @@ test("RACE-06 through RACE-10: Genuine concurrency with independent PostgreSQL c
       reviewAction: "APPROVED",
     });
 
+    // Same lock-acquisition barrier discipline as RACE-06.
     let barrierRevokeMembershipStarted = false;
     let barrierQa7Waiting = false;
 
     const taskRevokeMembership = async () => {
       await dbInstB.db.transaction(async (tx) => {
-        barrierRevokeMembershipStarted = true;
         await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${seeded.projectId}, 104))`);
+        barrierRevokeMembershipStarted = true;
         while (!barrierQa7Waiting) {
           await new Promise((r) => setTimeout(r, 10));
         }
@@ -2768,13 +2774,14 @@ test("RACE-06 through RACE-10: Genuine concurrency with independent PostgreSQL c
       reviewAction: "APPROVED",
     });
 
+    // Same lock-acquisition barrier discipline as RACE-06.
     let barrierSourceMutationStarted = false;
     let barrierQa8Waiting = false;
 
     const taskMutateSource = async () => {
       await dbInstB.db.transaction(async (tx) => {
-        barrierSourceMutationStarted = true;
         await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${seeded.projectId}, 104))`);
+        barrierSourceMutationStarted = true;
         while (!barrierQa8Waiting) {
           await new Promise((r) => setTimeout(r, 10));
         }

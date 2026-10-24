@@ -10,6 +10,7 @@ import {
 } from "../../src/operator/workflow.js";
 import { deterministicDigest } from "../../src/intelligence/digest.js";
 import { buildIntakePayload } from "../fixtures/intake-payloads.js";
+import { provisionTestSiteBinding } from "../fixtures/project-site-binding.js";
 import {
   acceptedPageContent,
   acceptedDerivativeSets,
@@ -1349,14 +1350,10 @@ test("workflow: READY_FOR_DEPLOYMENT is a readiness label only — publicationEl
       ],
     });
 
-    const prodStore = new ProductionStore(dbInst.db);
-    const siteIdentity = {
-      siteId: "site-fixture",
-      siteName: "Fixture Site",
-      canonicalOrigin: "https://example.com",
-      language: "en",
-      profileDigest: "4".repeat(64),
-    };
+    const prodStore = new ProductionStore(dbInst.db, { repoRoot: root });
+    const siteIdentity = await provisionTestSiteBinding(dbInst.db, root, projectId, {
+      siteId: "site-fixture", canonicalOrigin: "https://example.com",
+    });
     const prodInput = await prodStore.deriveProductionInput({
       projectId,
       pageSlug: "home",

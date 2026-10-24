@@ -1,3 +1,4 @@
+import { createIsolatedProductionRoot, provisionTestSiteBinding } from "../fixtures/project-site-binding.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import http from "node:http";
@@ -124,6 +125,7 @@ function candidateData(pageSlug: string): DesignCandidateData {
 async function setupGoldenEnvironment(dbInst: FactoryDatabaseInstance, repoRoot: string, key: string, pageSlug: string) {
   const { projectId } = await seedProjectWithAcceptedInputs(dbInst, key);
   await acceptFixturePage(dbInst, projectId, pageSlug);
+  await provisionTestSiteBinding(dbInst.db, repoRoot, projectId, { route: `/${pageSlug.replace(/^\//, "")}` });
 
   const assetsModule = await import("../../src/assets/service.js");
   const assets = new assetsModule.AssetService({
@@ -184,7 +186,7 @@ async function setupGoldenEnvironment(dbInst: FactoryDatabaseInstance, repoRoot:
     ],
   });
 
-  return { projectId, production: new ProductionStore(dbInst.db) };
+  return { projectId, production: new ProductionStore(dbInst.db, { repoRoot }) };
 }
 
 function fixtureSummaryInvoke(request: { prompt: string }) {
@@ -251,7 +253,7 @@ function serveStatic(distDir: string): Promise<{ url: string; close: () => Promi
 // -----------------------------------------------------------------------------
 
 test("GOLDEN SEAM: real DB → AcceptedDerivativeSet → production-v2 → manifest → Astro build → QA → Playwright browser", async () => {
-  const repoRoot = await resolveRepositoryRoot();
+  const repoRoot = await createIsolatedProductionRoot(await resolveRepositoryRoot());
   const dbInst = await setupMigratedTestDatabase();
   const pageSlug = "home";
   const env = await setupGoldenEnvironment(dbInst, repoRoot, "gold-e2e-1", pageSlug);
@@ -292,7 +294,7 @@ test("GOLDEN SEAM: real DB → AcceptedDerivativeSet → production-v2 → manif
     pageSlug,
   });
 
-  const store = new ProductionStore(dbInst.db);
+  const store = new ProductionStore(dbInst.db, { repoRoot });
   const inputRow = await store.latestProductionInput(env.projectId, pageSlug);
   assert.ok(inputRow);
   const inputData = parseProductionPageInputV2Data(inputRow.data);
@@ -399,7 +401,7 @@ test("GOLDEN SEAM: real DB → AcceptedDerivativeSet → production-v2 → manif
 // -----------------------------------------------------------------------------
 
 test("DETERMINISM: Re-compiling manifest without authority changes yields identical digests", async () => {
-  const repoRoot = await resolveRepositoryRoot();
+  const repoRoot = await createIsolatedProductionRoot(await resolveRepositoryRoot());
   const dbInst = await setupMigratedTestDatabase();
   const pageSlug = "services/roof-repair";
   const env = await setupGoldenEnvironment(dbInst, repoRoot, "gold-det-1", pageSlug);
@@ -465,7 +467,7 @@ test("DETERMINISM: Re-compiling manifest without authority changes yields identi
 // -----------------------------------------------------------------------------
 
 test("NEGATIVE SEAM: requireProductionDerivativeSet rejects fixture summary", async () => {
-  const repoRoot = await resolveRepositoryRoot();
+  const repoRoot = await createIsolatedProductionRoot(await resolveRepositoryRoot());
   const dbInst = await setupMigratedTestDatabase();
   const pageSlug = "services/roof-repair";
   const env = await setupGoldenEnvironment(dbInst, repoRoot, "gold-neg-1", pageSlug);
@@ -516,7 +518,7 @@ test("NEGATIVE SEAM: requireProductionDerivativeSet rejects fixture summary", as
 });
 
 test("NEGATIVE SEAM: requireProductionDerivativeSet rejects fixture audio", async () => {
-  const repoRoot = await resolveRepositoryRoot();
+  const repoRoot = await createIsolatedProductionRoot(await resolveRepositoryRoot());
   const dbInst = await setupMigratedTestDatabase();
   const pageSlug = "services/roof-repair";
   const env = await setupGoldenEnvironment(dbInst, repoRoot, "gold-neg-2", pageSlug);
@@ -566,7 +568,7 @@ test("NEGATIVE SEAM: requireProductionDerivativeSet rejects fixture audio", asyn
 });
 
 test("NEGATIVE SEAM: forged set digest is rejected", async () => {
-  const repoRoot = await resolveRepositoryRoot();
+  const repoRoot = await createIsolatedProductionRoot(await resolveRepositoryRoot());
   const dbInst = await setupMigratedTestDatabase();
   const pageSlug = "services/roof-repair";
   const env = await setupGoldenEnvironment(dbInst, repoRoot, "gold-neg-3", pageSlug);
@@ -630,7 +632,7 @@ test("NEGATIVE SEAM: forged set digest is rejected", async () => {
 });
 
 test("NEGATIVE SEAM: stale policy makes deriveProductionInput fail immediately with production_authority_stale", async () => {
-  const repoRoot = await resolveRepositoryRoot();
+  const repoRoot = await createIsolatedProductionRoot(await resolveRepositoryRoot());
   const dbInst = await setupMigratedTestDatabase();
   const pageSlug = "services/roof-repair";
   const env = await setupGoldenEnvironment(dbInst, repoRoot, "gold-neg-4", pageSlug);
@@ -681,7 +683,7 @@ test("NEGATIVE SEAM: stale policy makes deriveProductionInput fail immediately w
 });
 
 test("NEGATIVE SEAM: stale content makes requireProductionDerivativeSet reject", async () => {
-  const repoRoot = await resolveRepositoryRoot();
+  const repoRoot = await createIsolatedProductionRoot(await resolveRepositoryRoot());
   const dbInst = await setupMigratedTestDatabase();
   const pageSlug = "services/roof-repair";
   const env = await setupGoldenEnvironment(dbInst, repoRoot, "gold-neg-5", pageSlug);
@@ -727,7 +729,7 @@ test("NEGATIVE SEAM: stale content makes requireProductionDerivativeSet reject",
 });
 
 test("NEGATIVE SEAM: audio binary byte mutation in storage fails closed", async () => {
-  const repoRoot = await resolveRepositoryRoot();
+  const repoRoot = await createIsolatedProductionRoot(await resolveRepositoryRoot());
   const dbInst = await setupMigratedTestDatabase();
   const pageSlug = "services/roof-repair";
   const env = await setupGoldenEnvironment(dbInst, repoRoot, "gold-neg-6", pageSlug);

@@ -1,3 +1,4 @@
+import { provisionTestSiteBinding } from "../fixtures/project-site-binding.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { eq, sql } from "drizzle-orm";
@@ -43,7 +44,9 @@ function isCode(err: unknown, code: string): boolean {
   return err instanceof FactoryError && err.code === code;
 }
 
+let boundTestIdentity: { siteId: string; siteName: string; canonicalOrigin: string; language: string; profileDigest: string; bindingDigest?: string } | undefined;
 function siteIdentity() {
+  if (boundTestIdentity) return boundTestIdentity;
   return { siteId: "site-fixture", siteName: "Fixture Site", canonicalOrigin: "https://example.com", language: "en", profileDigest: "4".repeat(64) };
 }
 
@@ -135,6 +138,7 @@ async function setupLiveAuthority(dbInst: FactoryDatabaseInstance, key: string, 
   const { projectId } = await seedProjectWithAcceptedInputs(dbInst, key);
   await acceptFixturePage(dbInst, projectId, pageSlug);
   const root = await mkdtemp(path.join(tmpdir(), "run10-live-"));
+  boundTestIdentity = await provisionTestSiteBinding(dbInst.db, root, projectId, { siteId: "site-fixture", canonicalOrigin: "https://example.com" });
 
   const assetsModule = await import("../../src/assets/service.js");
   const assets = new assetsModule.AssetService({
@@ -192,7 +196,7 @@ async function setupLiveAuthority(dbInst: FactoryDatabaseInstance, key: string, 
     ],
   });
 
-  return { dbInst, projectId, production: new ProductionStore(dbInst.db) };
+  return { dbInst, projectId, production: new ProductionStore(dbInst.db, { repoRoot: root }) };
 }
 
 async function makeDerivativesService(dbInst: FactoryDatabaseInstance, repoRoot: string) {

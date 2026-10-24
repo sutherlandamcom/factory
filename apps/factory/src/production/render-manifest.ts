@@ -1,3 +1,4 @@
+import { requireProjectSiteAuthority } from "./site-binding.js";
 import { and, eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
@@ -25,7 +26,8 @@ import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
 import { createAssetStorage, type AssetStorage } from "../assets/storage.js";
 import { requireProductionDerivativeSet } from "../derivatives/production-verifier.js";
-import { ProductionStore } from "./store.js";
+import { ProductionStore, normalizeProductionRoute } from "./store.js";
+import { PageAuthorityReader } from "../writer/page-authority.js";
 import { TrustGovernanceStore, type TrustEvidenceOptions } from "../trust/store.js";
 import { deriveDesignImplementationContract } from "./design-implementation.js";
 import type { DesignImplementationContract } from "@factory/contracts";
@@ -62,6 +64,7 @@ export interface ProductionRenderManifest {
     digest: string;
     projectId: string;
     pageIdentity: string;
+    acceptedContent?: { id: string; version: number; digest: string };
     pageType: string;
     route: string;
     siteIdentity: {
@@ -70,8 +73,11 @@ export interface ProductionRenderManifest {
       canonicalOrigin: string;
       language: string;
       profileDigest: string;
+      bindingDigest?: string;
     };
   };
+  conversion?: import("@factory/contracts").ProductionConversionAuthority;
+  navigation?: Array<{ label: string; targetSlug: string }>;
   seo: {
     fullTitle: string;
     description: string;
@@ -402,7 +408,12 @@ export class ProductionRenderCompiler {
     if (!productionInput.siteId || !productionInput.siteName || !productionInput.siteLanguage || !productionInput.siteProfileDigest) {
       throw renderError("production_build_rejected", "Production input has no immutable site identity.");
     }
-    const registry = input.registry ?? [{ route: productionInput.route, title: content.title }];
+    const registry = input.registry ?? (await new PageAuthorityReader(this.db).currentPages(input.projectId)).map(page => {
+      const data = page.data as { content?: { title?: string }; title?: string };
+      const title = data.content?.title ?? data.title;
+      if (!title) throw renderError("production_build_rejected", "Accepted page registry has no accepted title.");
+      return { route: normalizeProductionRoute(page.slug), title };
+    });
     const titleByRoute = new Map(registry.map((entry) => [entry.route, entry.title]));
     const links = content.internalLinks.map((href) => {
       const route = normalizeInternalRoute(href);
@@ -467,8 +478,19 @@ export class ProductionRenderCompiler {
             result: "APPROVED",
           }
         : undefined;
+    const authority = await requireProjectSiteAuthority(this.db, this.repoRoot, input.projectId);
+    const conversion = (productionInput.data as { conversion?: import("@factory/contracts").ProductionConversionAuthority }).conversion;
+    if (!conversion) throw renderError("production_authority_stale", "Production input requires accepted conversion authority.");
+    const navigation = authority.profile.navigation;
+    for (const entry of navigation) {
+      if (!titleByRoute.has(entry.targetSlug)) throw renderError("production_build_rejected", `Navigation target ${entry.targetSlug} is missing from the candidate route set.`);
+    }
+    if (conversion.mode === "action" && conversion.href?.startsWith("/") && !titleByRoute.has(conversion.href)) {
+      throw renderError("production_build_rejected", "Accepted CTA internal destination is missing from the candidate route set.");
+    }
     const manifest: ProductionRenderManifest = {
       schemaVersion: manifestVersion,
+      conversion, navigation,
       input: {
         id: productionInput.id,
         version: productionInput.version,
@@ -476,6 +498,7 @@ export class ProductionRenderCompiler {
         projectId: input.projectId,
         pageIdentity: productionInput.pageIdentity,
         pageType: productionInput.pageType,
+        acceptedContent: { id: productionInput.acceptedContentId, version: productionInput.acceptedContentVersion, digest: productionInput.acceptedContentDigest },
         route: productionInput.route,
         siteIdentity: {
           siteId: productionInput.siteId,
@@ -483,6 +506,7 @@ export class ProductionRenderCompiler {
           canonicalOrigin: productionInput.canonicalOrigin,
           language: productionInput.siteLanguage,
           profileDigest: productionInput.siteProfileDigest,
+          bindingDigest: (productionInput.data as { siteIdentity: { bindingDigest?: string } }).siteIdentity.bindingDigest,
         },
       },
       seo: { fullTitle, description: content.metaDescription, canonicalUrl, ogTitle: fullTitle, ogDescription: content.metaDescription, ogUrl: canonicalUrl },
@@ -747,6 +771,8 @@ export function computeRenderManifestDigest(manifest: ProductionRenderManifest):
     })),
     ...(manifest.derivatives ? { derivatives: manifest.derivatives } : {}),
     ...(manifest.reviewAuthority ? { reviewAuthority: manifest.reviewAuthority } : {}),
+    ...(manifest.conversion ? { conversion: manifest.conversion } : {}),
+    ...(manifest.navigation ? { navigation: manifest.navigation } : {}),
   });
 }
 

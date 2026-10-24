@@ -581,6 +581,8 @@ export interface AcceptedGapDetail {
 // ---- Search read-model shapes (mirror the Operator API exactly) ----------
 
 export interface SearchWorkspaceReadModel {
+  effectiveContext?: { policyVersion: string; language: string; location: string; languageSource: string; locationSource: string } | null;
+  contextError?: string | null;
   acceptedInput: {
     snapshotId: string;
     version: number;

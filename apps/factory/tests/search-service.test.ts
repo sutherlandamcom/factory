@@ -334,6 +334,8 @@ function makeService(
 const RUN = {
   projectId: "p1",
   query: "roof repair austin",
+  location: "Austin,Texas,United States",
+  language: "en",
   device: "desktop" as const,
 };
 
@@ -552,4 +554,21 @@ test("P1-D: unknown cost and submitted failures consume reservations; pre-submis
   provider.acquire = async request => ({ ...await acquire(request), usage: null });
   await makeService(stores, provider).runSearch(RUN);
   assert.equal((await stores.searchStore.budget.getWriterBudgetSummary()).accountedTodayMicros, 30000);
+});
+
+test("E2E-P1-01: accepted Russian market is sent to the provider and overrides stay attributable", async () => {
+  const stores = makeStores();
+  const accepted = (await stores.intake.listSnapshots("p1"))[0]!;
+  accepted.payload.siteIdentity.language = "ru-RU";
+  accepted.payload.markets = { geographies: ["Russia"], priorityLocations: [] };
+  let request: SerpAcquisitionRequest | undefined;
+  const serp = fakeSerp({ acquire: async r => {
+    request = r;
+    return { data: { organic: [] }, rawPayload: { fixture: true }, providerRequestId: null, observedAt: new Date(), usage: null };
+  } });
+  const result = await makeService(stores, serp).runSearch({ ...RUN, location: undefined, language: undefined, query: "модернизация промышленного производства" });
+  assert.equal(request?.language, "ru");
+  assert.equal(request?.location, "Russia");
+  assert.equal(result.run.language, "ru");
+  assert.equal((stores.state.runs[0]?.requestContext as { languageSource: string })?.languageSource, "accepted_input");
 });

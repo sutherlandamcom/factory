@@ -1,3 +1,4 @@
+import { createIsolatedProductionRoot, provisionTestSiteBinding } from "../fixtures/project-site-binding.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
@@ -199,7 +200,7 @@ test("Run 13 P1-03: Six-page end-to-end integration test with real artifacts, un
   const dbInst = await createTestDatabase();
   const db = dbInst.db;
   const store = new FactoryStore(db);
-  const repoRoot = await resolveRepositoryRoot();
+  const repoRoot = await createIsolatedProductionRoot(await resolveRepositoryRoot());
   const prodStore = new ProductionStore(db, { repoRoot });
 
   const suffix = randomUUID().slice(0, 8);
@@ -351,6 +352,7 @@ test("Run 13 P1-03: Six-page end-to-end integration test with real artifacts, un
     actorRole: "DEPLOYMENT_ADMIN",
   });
 
+  await provisionTestSiteBinding(db, repoRoot, projectId, { siteId: "sutherland-private-office", canonicalOrigin: "https://sutherlandam.com" });
   const buildIdentity = await loadProductionBuildIdentity(repoRoot);
   const shaA = buildIdentity.repositorySha;
   const candidateIdA = `cand-suth-A-${suffix}`;

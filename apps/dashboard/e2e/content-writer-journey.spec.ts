@@ -84,6 +84,7 @@ async function createAndAcceptProject(page: Page, project: { key: string; name: 
 async function acceptGapSnapshot(page: Page) {
   await gotoSubsection(page, "Research", "Search");
   await page.getByLabel("Query", { exact: false }).first().fill("roof repair austin");
+  await page.getByLabel("Location", { exact: true }).fill("United States");
   await page.getByTestId("search-workspace").getByRole("button", { name: "Run Search" }).click();
   await expect(page.locator("text=SERP").first()).toBeVisible({ timeout: 30_000 });
 

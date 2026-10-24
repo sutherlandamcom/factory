@@ -614,6 +614,93 @@ function extractSubstantiveTokens(text: string): string[] {
 }
 
 /**
+ * P1-04 — industrial actor/action attribution alignment.
+ *
+ * Financial-industrial verbs assign responsibility to a specific actor. A
+ * source sentence "The FACILITY received 500M investment" does not authorize
+ * a claim "The CONTRACTOR invested 500M" even when every number matches.
+ * This check is deliberately narrow and deterministic (no AI, no semantics
+ * engine): for each claim clause `<actor> <actional-verb> ... <object?>`,
+ * the combined supporting evidence must contain the same actor token within
+ * a short window before the same verb family (or the excerpt's own actor-verb
+ * pairing of that verb family). Exemptions keep first-person/facility-neutral
+ * restatement and explicitly-paired quote edits working:
+ *  - the evidence pairs the same actor with the same verb family anywhere;
+ *  - the evidence names the claim actor at all AND the verb family, in the
+ *    same sentence segment ("Vendor Ltd" + "engineering review").
+ */
+const ACTIONAL_VERB_FAMILIES: ReadonlyArray<{ family: string; pattern: RegExp }> = [
+  { family: "invest", pattern: /\b(invests?|invested|investing|funded|financed)\b/i },
+  { family: "construct", pattern: /\b(constructs?|constructed|constructing|builds?|built|building|erected)\b/i },
+  { family: "engineer", pattern: /\b(engineers?|engineered|engineering)\b/i },
+  { family: "operate", pattern: /\b(operates?|operated|operating|runs?)\b/i },
+  { family: "own", pattern: /\b(owns?|owned|holding|owner|owner of)\b/i },
+  { family: "deliver_contract", pattern: /\b(contract(ed|ing|s)|commissioned|carried\s+out|performed)\b/i },
+];
+
+/**
+ * Extract `<actor-token(s)> VERB` candidate pairs from a sentence. The actor
+ * is the closest preceding capital-cased or known-entity token(s) (1–4 tokens)
+ * immediately before the verb, deterministic without NLP: take up to 4 words
+ * before the verb that are not determiners/auxiliaries/prepositions.
+ */
+const ACTOR_STOPWORDS = new Set([
+  "the", "a", "an", "of", "to", "for", "and", "or", "was", "were", "is", "in",
+  "on", "at", "by", "with", "from", "that", "this", "its", "their", "facility",
+  "plant", "site", "project", "contract", "unit", "units", "million", "billion",
+]);
+
+function claimActorVerbPairs(text: string): Array<{ actor: string; family: string }> {
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  const pairs: Array<{ actor: string; family: string }> = [];
+  for (const sentence of sentences) {
+    for (const { family, pattern } of ACTIONAL_VERB_FAMILIES) {
+      const match = pattern.exec(sentence);
+      if (!match || match.index === undefined) continue;
+      const before = normKey(sentence.slice(0, match.index)).split(" ").filter(Boolean);
+      const actorTokens: string[] = [];
+      for (let i = before.length - 1; i >= 0 && actorTokens.length < 3; i--) {
+        const tok = before[i]!;
+        if (ACTOR_STOPWORDS.has(tok)) break;
+        actorTokens.unshift(tok);
+      }
+      if (actorTokens.length > 0) pairs.push({ actor: actorTokens.join(" "), family });
+    }
+  }
+  return pairs;
+}
+
+/**
+ * The evidence must pair the claim's actor with the same verb family: the
+ * excerpt sentence must contain the same verb family AND the same actor
+ * token(s) in the actor window before that verb (same pairing rule as
+ * claimActorVerbPairs). A mere co-occurrence of actor and verb anywhere in
+ * the sentence is NOT sufficient: "Vendor Ltd performed the engineering
+ * review ... building two" pairs Vendor Ltd with "performed", not with
+ * "building" (which belongs to the facility's building count).
+ */
+function actorActionAlignmentProblems(claimText: string, combinedEvidence: string): string[] {
+  const problems: string[] = [];
+  const evidenceSentences = combinedEvidence.split(/(?<=[.!?])\s+/);
+  for (const pair of claimActorVerbPairs(claimText)) {
+    const supported = evidenceSentences.some((es) =>
+      claimActorVerbPairs(es)
+        .filter((p) => p.family === pair.family)
+        // Excerpt actor tokens can carry a source-ref prefix (the evidence
+        // string starts with `ref ` text); match on suffix containment so
+        // "intake:x vendor ltd" still pairs with claim actor "vendor ltd".
+        .some((p) => p.actor.endsWith(pair.actor) || pair.actor.endsWith(p.actor)),
+    );
+    if (!supported) {
+      problems.push(
+        `SOURCE_ATTRIBUTION_UNSUPPORTED: claimText assigns ${pair.family} responsibility to "${pair.actor}", but no cited supportingExcerpt sentence pairs that actor with that action. A shared figure, facility name or nearby verb does not establish actor responsibility.`,
+      );
+    }
+  }
+  return problems;
+}
+
+/**
  * Independent recalculation of a calculationRef (Block 8: M16, M17).
  * Verifies unit coherence, formula reproducibility, and rounding discipline.
  */
@@ -729,6 +816,14 @@ export function claimLineageProblems(lineage: ClaimLineage): string[] {
     if (!hasLexicalOverlap) {
       problems.push("Claim text has no lexical overlap with cited supportingExcerpt evidence.");
     }
+    // P1-04 industrial attribution: actional verbs bind a SPECIFIC actor. An
+    // excerpt may cite the same figures and the same facility without naming
+    // the claim's actor performing that action; a shared number never proves
+    // responsibility (investment/construction/engineering/operation/ownership
+    // belong to whoever the source says performed them). Deterministic check:
+    // for any actional actor-verb pair in the claim, the supporting excerpt
+    // must pair the same actor token with the same verb family.
+    problems.push(...actorActionAlignmentProblems(lineage.claimText, combinedEvidence));
     // M26: Excerpt discusses same domain (e.g. Chamonix property) but does not entail the substantive proposition
     const domainTerms = ["chamonix", "megeve", "alpine", "property", "housing", "chalet", "investment"];
     const claimLower = lineage.claimText.toLowerCase();

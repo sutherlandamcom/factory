@@ -1,8 +1,9 @@
+import { deterministicDigest } from "../src/intelligence/digest.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir, readFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
   DEPLOYMENT_APPROVE_PERMISSION,
@@ -28,6 +29,7 @@ import {
   type SessionRevocationStore,
 } from "../src/trust/release-approval-boundary.js";
 import {
+  projects as projectsTable, sites as sitesTable, projectInputSnapshots,
   projectReviewerMemberships,
   productionCandidates,
   deployments as deploymentsTable,
@@ -41,7 +43,7 @@ import { inspect } from "node:util";
 import { loadProductionBuildIdentity } from "../src/production/identity.js";
 import { computeArtifactDigest } from "../src/production/build-service.js";
 
-const repoRoot = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
+const sourceRepoRoot = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
 
 function makeToken(subject: string, roles: string[] = []): string {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
@@ -89,7 +91,20 @@ class FakeWrangler implements WranglerOperations {
 }
 
 test("governed delivery lifecycle: preview -> approval -> publish -> rollback", async (t) => {
-  const buildIdentity = await loadProductionBuildIdentity(repoRoot);
+  const repoRoot = await mkdtemp(path.join(tmpdir(), "e2e01-delivery-unit-"));
+  t.after(() => rm(repoRoot, { recursive: true, force: true }));
+  await mkdir(path.join(repoRoot, "sites/starter"), { recursive: true });
+  for (const relative of [".git", "pnpm-lock.yaml", "sites/starter/package.json", "sites/starter/node_modules"]) {
+    await symlink(path.join(sourceRepoRoot, relative), path.join(repoRoot, relative));
+  }
+  const profile = JSON.parse(await readFile(path.join(sourceRepoRoot, "sites/starter/site-profile.json"), "utf8"));
+  await writeFile(path.join(repoRoot, "sites/starter/site-profile.json"), JSON.stringify(profile));
+  const acceptedIdentity = { siteName: profile.siteName, candidateDomain: "sutherlandam.com", language: profile.language, locale: "en-GB" };
+  const acceptedPayload = { siteIdentity: acceptedIdentity };
+  const acceptedSnapshot = { id: "intake-unit", version: 1, digest: deterministicDigest(acceptedPayload), payload: acceptedPayload, acceptanceState: "human_accepted" };
+  const binding = { version: "project-site-binding-v1", projectKey: "delivery-unit", siteKey: "main", profileDigest: deterministicDigest(profile), acceptedSiteIdentityDigest: deterministicDigest(acceptedIdentity), delivery: { workerName: "test-worker", productionUrl: profile.canonicalOrigin } };
+  await writeFile(path.join(repoRoot, "sites/starter/project-site-binding.json"), JSON.stringify(binding));
+  const buildIdentity = await loadProductionBuildIdentity(repoRoot, { projectKey: binding.projectKey, siteKey: binding.siteKey, acceptedSiteIdentity: acceptedIdentity });
   const projectId = "proj-gov-1";
   const siteId = "site-gov-1";
   const candidateId = "cand-1";
@@ -219,6 +234,8 @@ test("governed delivery lifecycle: preview -> approval -> publish -> rollback", 
   let releaseApprovals: ReleaseApprovalRecord[] = [];
 
   const store: any = {
+    async getProjectById(pId: string) { return pId === projectId ? { id: projectId, key: binding.projectKey } : null; },
+    async getSiteByKey(projectKey: string, siteKey: string) { return projectKey === binding.projectKey && siteKey === site.key ? site : null; },
     async findSiteByProjectId(pId: string) {
       return pId === projectId ? site : null;
     },
@@ -397,6 +414,9 @@ test("governed delivery lifecycle: preview -> approval -> publish -> rollback", 
         from(table: any) {
           let queriedActor: string | null = null;
           const resolveData = () => {
+            if (table === projectsTable) return [{ id: projectId, key: binding.projectKey }];
+            if (table === sitesTable) return [site];
+            if (table === projectInputSnapshots) return [acceptedSnapshot];
             if (table === projectReviewerMemberships) {
               if (queriedActor === "bob") {
                 return [

@@ -1,5 +1,6 @@
+import { requireProjectSiteAuthority, projectSiteBindingSchema, SITE_BINDING_PATH } from "../production/site-binding.js";
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { eq, sql } from "drizzle-orm";
 import {
@@ -295,54 +296,38 @@ export class GovernedDeliveryService {
     }
   }
 
-  private async resolveSite(projectId: string): Promise<SiteRecord> {
-    let site = await this.store.findSiteByProjectId(projectId);
-    if (!site) {
+  private async projectBuildIdentity(projectId: string) {
+    const authority = await requireProjectSiteAuthority(this.db, this.repoRoot, projectId);
+    return loadProductionBuildIdentity(this.repoRoot, {
+      projectKey: authority.binding.projectKey, siteKey: authority.site.key,
+      acceptedSiteIdentity: (authority.snapshot.payload as { siteIdentity: import("@factory/contracts").SiteIdentity }).siteIdentity,
+    });
+  }
+
+  /** Historical recovery uses registered target + immutable deployment evidence,
+   * never readiness of a newly accepted project identity. No defaults or provisioning. */
+  private async resolveHistoricalSite(projectId: string): Promise<SiteRecord> {
+    let site: SiteRecord | null;
+    let raw: string | null = null;
+    try { raw = await readFile(path.join(this.repoRoot, SITE_BINDING_PATH), "utf8"); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    if (raw !== null) {
+      const binding = projectSiteBindingSchema.parse(JSON.parse(raw));
       const project = await this.store.getProjectById(projectId);
-      if (!project) {
-        throw new FactoryError("unknown_project", `Project '${projectId}' not found.`);
-      }
-      const profile = await loadWorktreeSiteProfile(this.repoRoot).catch(() => null);
-      try {
-        const registered = await this.store.registerSite({
-          projectKey: project.key,
-          key: project.key,
-          name: project.name,
-        });
-        await this.db
-          .update(sites)
-          .set({
-            cloudflareWorkerName: `factory-${project.key}`,
-            productionUrl: profile?.canonicalOrigin ?? `https://${project.key}.pages.dev`,
-          })
-          .where(eq(sites.id, registered.id));
-        site = (await this.store.getSiteById(registered.id))!;
-      } catch (err) {
-        site = await this.store.findSiteByProjectId(projectId);
-        if (!site) throw err;
-      }
+      if (!project || project.key !== binding.projectKey) throw new FactoryError("delivery_target_unconfigured", "Historical target binding belongs to another project.");
+      site = await this.store.getSiteByKey(project.key, binding.siteKey);
+      if (!site || site.cloudflareWorkerName !== binding.delivery.workerName || site.productionUrl !== binding.delivery.productionUrl) throw new FactoryError("delivery_target_unconfigured", "Historical registered target differs from explicit worktree target binding.");
+    } else {
+      site = await this.store.findSiteByProjectId(projectId);
     }
-    if (!site.cloudflareWorkerName || !site.productionUrl) {
-      const project = await this.store.getProjectById(projectId);
-      const profile = await loadWorktreeSiteProfile(this.repoRoot).catch(() => null);
-      if (this.db && project) {
-        await this.db
-          .update(sites)
-          .set({
-            cloudflareWorkerName: site.cloudflareWorkerName ?? `factory-${project.key}`,
-            productionUrl: site.productionUrl ?? profile?.canonicalOrigin ?? `https://${project.key}.pages.dev`,
-          })
-          .where(eq(sites.id, site.id));
-        site = (await this.store.getSiteById(site.id)) ?? site;
-      }
-    }
-    if (!site.cloudflareWorkerName || !site.productionUrl) {
-      throw new FactoryError(
-        "delivery_target_unconfigured",
-        `Site '${site.key}' does not have Cloudflare Worker and production URL configured.`,
-      );
+    if (!site || site.projectId !== projectId || !site.cloudflareWorkerName || !site.productionUrl) {
+      throw new FactoryError("delivery_target_unconfigured", "Historical recovery requires one explicitly configured registered project target.");
     }
     return site;
+  }
+
+  private async resolveSite(projectId: string): Promise<SiteRecord> {
+    return (await requireProjectSiteAuthority(this.db, this.repoRoot, projectId)).site;
   }
 
   /**
@@ -395,7 +380,7 @@ export class GovernedDeliveryService {
       const currentInputs = await this.productionStore.listProductionInputs(input.projectId);
       const currentPageInputIds = currentInputs.map((i) => i.id);
 
-      const buildIdentity = await loadProductionBuildIdentity(this.repoRoot);
+      const buildIdentity = await this.projectBuildIdentity(input.projectId);
 
       // 3. Assert candidate release proof
       if (!site.productionUrl) {
@@ -596,7 +581,7 @@ export class GovernedDeliveryService {
       const latestQa = await this.productionStore.latestQaRun(input.projectId, candidate.id);
       const candidateInputs = await this.productionStore.listCandidateInputs(input.projectId, candidate.id);
       const currentInputs = await this.productionStore.listProductionInputs(input.projectId);
-      const buildIdentity = await loadProductionBuildIdentity(this.repoRoot);
+      const buildIdentity = await this.projectBuildIdentity(input.projectId);
 
       if (!site.productionUrl) {
         throw new FactoryError("invalid_site_configuration", `Site '${site.id}' does not have a configured productionUrl.`);
@@ -734,7 +719,7 @@ export class GovernedDeliveryService {
     sessionToken: string;
   }): Promise<DeploymentRecord> {
     return await this.withProjectLock(input.projectId, async () => {
-      const site = await this.resolveSite(input.projectId);
+      const site = await this.resolveHistoricalSite(input.projectId);
 
       // Verify publisher permission
       const session = await this.releaseBoundary.verifyActorPermission({
@@ -1628,7 +1613,7 @@ export class GovernedDeliveryService {
   }
 
   async getGovernedDeploymentView(projectId: string): Promise<GovernedDeploymentView> {
-    const site = await this.resolveSite(projectId);
+    const site = await this.resolveHistoricalSite(projectId);
 
     const candidates = await this.productionStore.listCandidates(projectId);
     const currentCandidate = candidates.find((c) => c.state === "qa_passed") ?? candidates[0] ?? null;
@@ -1696,6 +1681,9 @@ export class GovernedDeliveryService {
     const effectiveProd = await this.resolveCurrentEffectiveProduction(site.id);
 
     const blockers: Array<{ code: string; message: string; area: string }> = [];
+    try { await requireProjectSiteAuthority(this.db, this.repoRoot, projectId); }
+    catch (error) { blockers.push({ code: "PROJECT_SITE_BINDING_UNCONFIGURED", message: error instanceof Error ? error.message : "Project/site binding requires review.", area: "production" }); }
+
     if (!currentCandidate) {
       blockers.push({
         code: "NO_PRODUCTION_CANDIDATE",

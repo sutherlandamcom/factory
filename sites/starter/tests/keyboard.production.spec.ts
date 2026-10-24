@@ -38,9 +38,11 @@ for (const route of collectRoutes()) {
       const marker = await page.evaluate(() => {
         const active = document.activeElement as HTMLElement | null;
         if (!active || active === document.body) return "";
-        return `${active.tagName}:${active.getAttribute("href") ?? active.id ?? active.textContent?.trim() ?? ""}`;
+        const elements = Array.from(document.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+        return String(elements.indexOf(active));
       });
       expect(marker, `focus disappeared at tab ${index + 1}`).not.toBe("");
+      expect(marker, "Tab must follow distinct elements in DOM order").toBe(String(index));
       visited.add(marker);
     }
     expect(visited.size).toBe(expected);

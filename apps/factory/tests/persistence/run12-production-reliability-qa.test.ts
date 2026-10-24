@@ -1,3 +1,4 @@
+import { createIsolatedProductionRoot, provisionTestSiteBinding } from "../fixtures/project-site-binding.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
@@ -1455,6 +1456,7 @@ test("STALE-01 through STALE-06: Full authority chain staleness and historical i
 });
 
 test("STALE-07 through STALE-12: Fail-closed behavior on missing evidence, source unavailability, and non-YMYL policy", async () => {
+  const repoRoot = await createIsolatedProductionRoot(path.resolve(__dirname, "../../../.."));
   const dbInst = await setupMigratedTestDatabase();
   const seeded = await seedSutherlandProject(dbInst, `stale7-${Date.now()}`);
   const testKeyring = new AuditSealKeyring({ keys: { v1: TEST_SEAL_KEY_V1 }, activeKeyId: "v1" });
@@ -1677,7 +1679,7 @@ test("STALE-07 through STALE-12: Fail-closed behavior on missing evidence, sourc
     const pInput = await prodStore.deriveProductionInput({
       projectId: seeded.projectId,
       pageSlug,
-      siteIdentity: { siteId: "site-1", siteName: "Site", canonicalOrigin: "https://example.com", language: "en", profileDigest: "0".repeat(64) },
+      siteIdentity: await provisionTestSiteBinding(dbInst.db, repoRoot, seeded.projectId, { siteId: "site-1", canonicalOrigin: "https://example.com" }),
       rendererVersion: "astro-7.2.9",
       rendererPolicyVersion: "production-policy-v1",
     });
@@ -1691,7 +1693,7 @@ test("STALE-07 through STALE-12: Fail-closed behavior on missing evidence, sourc
       projectId: seeded.projectId,
       productionInputId: pInput.id,
       currentEnvironment: {
-        siteProfileDigest: "0".repeat(64),
+        siteProfileDigest: pInput.siteProfileDigest,
         rendererVersion: "astro-7.2.9",
         rendererPolicyVersion: "production-policy-v1",
       },
@@ -1965,6 +1967,7 @@ test("STALE-07 through STALE-12: Fail-closed behavior on missing evidence, sourc
 // ---------------------------------------------------------------------------
 
 test("SEQ-01 through SEQ-05: Sequential revocation and tampering under advisory locks", async () => {
+  const repoRoot = await createIsolatedProductionRoot(path.resolve(__dirname, "../../../.."));
   const dbInst = await setupMigratedTestDatabase();
   const seeded = await seedSutherlandProject(dbInst, `race-${Date.now()}`);
   const testKeyring = new AuditSealKeyring({ keys: { v1: TEST_SEAL_KEY_V1 }, activeKeyId: "v1" });
@@ -2071,7 +2074,7 @@ test("SEQ-01 through SEQ-05: Sequential revocation and tampering under advisory 
     const input = await prodStore.deriveProductionInput({
       projectId: seeded.projectId,
       pageSlug,
-      siteIdentity: { siteId: "site-1", siteName: "Site", canonicalOrigin: "https://example.com", language: "en", profileDigest: "0".repeat(64) },
+      siteIdentity: await provisionTestSiteBinding(dbInst.db, repoRoot, seeded.projectId, { siteId: "site-1", canonicalOrigin: "https://example.com" }),
       rendererVersion: "astro-7.2.9",
       rendererPolicyVersion: "production-policy-v1",
     });
@@ -2081,7 +2084,7 @@ test("SEQ-01 through SEQ-05: Sequential revocation and tampering under advisory 
       projectId: seeded.projectId,
       productionInputId: input.id,
       currentEnvironment: {
-        siteProfileDigest: "0".repeat(64),
+        siteProfileDigest: input.siteProfileDigest,
         rendererVersion: "astro-7.2.9",
         rendererPolicyVersion: "production-policy-v1",
       },
@@ -2385,6 +2388,7 @@ test("SEQ-01 through SEQ-05: Sequential revocation and tampering under advisory 
 });
 
 test("RACE-06 through RACE-10: Genuine concurrency with independent PostgreSQL connections and synchronization barriers", async () => {
+  const repoRoot = await createIsolatedProductionRoot(path.resolve(__dirname, "../../../.."));
   const dbInstA = await createTestDatabase();
   const dbInstB = await createTestDatabase();
   const seeded = await seedSutherlandProject(dbInstA, `race-real-${Date.now()}`);
@@ -2493,7 +2497,7 @@ test("RACE-06 through RACE-10: Genuine concurrency with independent PostgreSQL c
     const input = await prodStoreA.deriveProductionInput({
       projectId: seeded.projectId,
       pageSlug,
-      siteIdentity: { siteId: "site-1", siteName: "Site", canonicalOrigin: "https://example.com", language: "en", profileDigest: "0".repeat(64) },
+      siteIdentity: await provisionTestSiteBinding(dbInstA.db, repoRoot, seeded.projectId, { siteId: "site-1", canonicalOrigin: "https://example.com" }),
       rendererVersion: "astro-7.2.9",
       rendererPolicyVersion: "production-policy-v1",
     });
@@ -2502,7 +2506,7 @@ test("RACE-06 through RACE-10: Genuine concurrency with independent PostgreSQL c
       projectId: seeded.projectId,
       productionInputId: input.id,
       currentEnvironment: {
-        siteProfileDigest: "0".repeat(64),
+        siteProfileDigest: input.siteProfileDigest,
         rendererVersion: "astro-7.2.9",
         rendererPolicyVersion: "production-policy-v1",
       },
@@ -2646,13 +2650,18 @@ test("RACE-06 through RACE-10: Genuine concurrency with independent PostgreSQL c
     }
 
     // ---- RACE-06: Concurrent approval revocation with two independent PostgreSQL connections ----
+    // The "started" barrier flips AFTER the revoker holds the project advisory
+    // lock: the QA transaction is then guaranteed to contend on the lock while
+    // revocation is in flight, which is the concurrency window under test.
+    // (Flagging before the lock made the outcome scheduler-dependent: QA could
+    // win the lock and validate pre-revocation state.)
     let barrierBStarted = false;
     let barrierAReadyToLock = false;
 
     const taskRevoke = async () => {
       await dbInstB.db.transaction(async (tx) => {
-        barrierBStarted = true;
         await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${seeded.projectId}, 104))`);
+        barrierBStarted = true;
         while (!barrierAReadyToLock) {
           await new Promise((r) => setTimeout(r, 10));
         }
@@ -2709,13 +2718,14 @@ test("RACE-06 through RACE-10: Genuine concurrency with independent PostgreSQL c
       reviewAction: "APPROVED",
     });
 
+    // Same lock-acquisition barrier discipline as RACE-06.
     let barrierRevokeMembershipStarted = false;
     let barrierQa7Waiting = false;
 
     const taskRevokeMembership = async () => {
       await dbInstB.db.transaction(async (tx) => {
-        barrierRevokeMembershipStarted = true;
         await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${seeded.projectId}, 104))`);
+        barrierRevokeMembershipStarted = true;
         while (!barrierQa7Waiting) {
           await new Promise((r) => setTimeout(r, 10));
         }
@@ -2764,13 +2774,14 @@ test("RACE-06 through RACE-10: Genuine concurrency with independent PostgreSQL c
       reviewAction: "APPROVED",
     });
 
+    // Same lock-acquisition barrier discipline as RACE-06.
     let barrierSourceMutationStarted = false;
     let barrierQa8Waiting = false;
 
     const taskMutateSource = async () => {
       await dbInstB.db.transaction(async (tx) => {
-        barrierSourceMutationStarted = true;
         await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${seeded.projectId}, 104))`);
+        barrierSourceMutationStarted = true;
         while (!barrierQa8Waiting) {
           await new Promise((r) => setTimeout(r, 10));
         }

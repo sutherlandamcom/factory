@@ -317,18 +317,23 @@ export class WriterService {
     if (!brief || brief.briefDigest !== snapshot.briefDigest) {
       throw new FactoryError("writer_artifact_stale", "Snapshot brief binding mismatch.");
     }
-    const briefData = brief.data as { pageTarget: PageTarget };
+    const briefData = parseContentBriefData(brief.data);
 
     // Fixture provider mode (trusted config): deterministic proposal, zero
     // paid calls, zero budget movement. The provider field records "fixture"
     // so fixture output can never masquerade as champion output.
     if (this.fixtureProvider) {
+      const acceptedInput = await this.store.acceptedInputSnapshotByLineage(input.projectId, briefData.lineage.acceptedInputSnapshotId, briefData.lineage.acceptedInputSnapshotVersion);
+      if (!acceptedInput || acceptedInput.digest !== briefData.lineage.acceptedInputDigest) throw new FactoryError("writer_artifact_stale", "Fixture input snapshot binding changed.");
+      const fixtureLanguage = (acceptedInput.data as { siteIdentity: { language: string } }).siteIdentity.language;
       const fixtureData = FixtureWriterProvider.deterministicProposal({
         snapshotId: snapshot.id,
         snapshotVersion: snapshot.version,
         snapshotDigest: snapshot.snapshotDigest,
         title: briefData.pageTarget.title,
         slug: briefData.pageTarget.slug,
+        language: fixtureLanguage,
+        ctaText: briefData.pageTarget.ctaIntent,
       });
       const fixtureSaved = await this.snapshotStore.saveProposal({
         projectId: input.projectId,

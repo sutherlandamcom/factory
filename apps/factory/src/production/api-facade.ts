@@ -1,3 +1,4 @@
+import { requireProjectSiteAuthority } from "./site-binding.js";
 import type { FactoryDb } from "../persistence/db.js";
 import path from "node:path";
 import { and, eq } from "drizzle-orm";
@@ -69,6 +70,14 @@ export class ProductionApiFacade {
     this.build = new ProductionBuildService(db, repoRoot, { evidenceRoot: trustPolicy.evidenceRoot });
   }
 
+  private async projectBuildIdentity(projectId: string) {
+    const authority = await requireProjectSiteAuthority(this.db, this.repoRoot, projectId);
+    return loadProductionBuildIdentity(this.repoRoot, {
+      projectKey: authority.binding.projectKey, siteKey: authority.site.key,
+      acceptedSiteIdentity: (authority.snapshot.payload as { siteIdentity: import("@factory/contracts").SiteIdentity }).siteIdentity,
+    });
+  }
+
   async workspace(projectId: string): Promise<ProductionWorkspaceView> {
     const identity = await loadProductionBuildIdentity(this.repoRoot);
     const inputs = await this.store.listProductionInputs(projectId);
@@ -112,7 +121,7 @@ export class ProductionApiFacade {
   }
 
   async deriveInput(input: { projectId: string; pageSlug: string }) {
-    const identity = await loadProductionBuildIdentity(this.repoRoot);
+    const identity = await this.projectBuildIdentity(input.projectId);
     const productionInput = await this.store.deriveProductionInput({
       projectId: input.projectId,
       pageSlug: input.pageSlug,
@@ -163,7 +172,7 @@ export class ProductionApiFacade {
     if (!candidate.artifactDigest || !candidate.manifestSetDigest || !candidate.redirectSnapshotDigest || !candidate.repositorySha || !candidate.lockfileDigest) {
       throw new FactoryError("production_qa_failed", "Candidate is missing immutable build identity.");
     }
-    const currentIdentity = await loadProductionBuildIdentity(this.repoRoot);
+    const currentIdentity = await this.projectBuildIdentity(input.projectId);
     const candidateStaleness = this.store.candidateStaleness(candidate, currentIdentity);
     if (candidateStaleness.stale) {
       throw new FactoryError("production_authority_stale", candidateStaleness.reason ?? "Candidate repository, site profile, renderer, or lockfile identity is no longer current.");

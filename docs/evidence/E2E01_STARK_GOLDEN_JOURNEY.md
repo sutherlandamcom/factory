@@ -1,8 +1,31 @@
 # E2E-01 Stark golden journey
 
 Classification: **FIXTURE_ONLY_NOT_PUBLICATION_AUTHORITY**.
-Functional candidate: `794c3f48e6142ce4ffdebbd3e7c15b896a81fdb2`. No continuous Stark production HTML,
-artifact digest or production QA PASS exists beyond the genuine-evidence gate.
+Functional candidate: `e63d83938ca9ae2cb5681feb2ad04df1984a7db2` (browser
+17/17 including this journey); earlier trace artifacts below were captured at
+`794c3f48e6142ce4ffdebbd3e7c15b896a81fdb2` and remain labeled with their
+capture SHA. No continuous Stark production HTML, artifact digest or
+production QA PASS exists beyond the genuine-evidence gate.
+
+## Scope separation (mandatory reading)
+
+1. **Genuine Stark fixture-mode operator journey** (below): real built
+   Dashboard, real Operator API, real PostgreSQL persistence; every provider
+   decision node (Search/Competitor/Writer/Design/Visual) explicitly runs in
+   fixture mode and stays classified as evidence, never authority. This is
+   the Tier-2 objective the brief defines — and it stops at the
+   `design_approval_failed` boundary BY DESIGN.
+2. **Isolated renderer fixture builds** (below): standalone Astro builds for
+   Sutherland/Stark rendered from synthetic manifests. They test the
+   renderer, navigation, sitemap and keyboard CTA mechanics only.
+3. **Real-provider Stark production journey (Tier 3)**: NOT EXECUTED. It
+   requires E2E-G01 (authorized live Russian SERP/Writer/Stitch/Visual pilot),
+   E2E-G02 (authorized Cloudflare operations) and E2E-G03 (Stark legal/
+   source approval). No stage of this tier has run; nothing in this report
+   substitutes or seeds it.
+4. **External approval/source requirements** (below, unchanged): exact human
+   approvals and primary documents per gate definitions restored in the
+   issue register.
 
 ## Executed operator journey
 
@@ -286,11 +309,34 @@ sitemap, configured navigation and exact CTA text/destination; Chromium Enter
 activation reaches `/contact`. `NOT_RUN_FIXTURE_ONLY` is the actual production
 QA verdict for these renderer fixtures, not PASS.
 
-## External boundary
+## External boundary (restated with gate definitions)
 
-Appropriate genuine source evidence and exact-content review, required live
-accepted design/visual authority, explicit real project/site authorization, new
-production input/candidate and successful mandatory QA are required to proceed.
+Proceeding beyond this report requires, in order:
+
+1. **E2E-G01** — Real Russian SERP, Writer, Stitch and Visual provider
+   execution (behavior AND cost), through an explicitly authorized live
+   provider pilot with actual evidence. Fixture/mock/synthetic providers do
+   NOT close this.
+2. **E2E-G02** — Real Cloudflare preview, production and rollback executed at
+   the correct route/target under authorized controlled deployment and a
+   verified domain/worker binding. Local simulated-wrangler control flow
+   (17/17 browser suite) does NOT close this.
+3. **E2E-G03** — Stark legal, brand, client, intellectual-property,
+   photography and claim authority, via primary documents and legitimate
+   human approval. In particular, the personnel-experience percentage and
+   any RusSilica project responsibility attribution (P1-06) stay excluded
+   from production-approved content until their primary source and
+   publication permission are independently verified.
+4. Genuine live accepted design/visual authority bound to an authorized
+   project/site (`project-site-binding-v1` with a real delivery target), new
+   production inputs/candidate and successful mandatory candidate QA.
+
+Additionally, configuring a FRESH Stark site remains an operator-manual task
+(isolated worktree + reserved `.example.test` origin + `site-profile.json` +
+registered project/site + `sites/starter/project-site-binding.json`); no
+automatic one-click provisioning exists and none is claimed. Workspace
+inspection never provisions a target.
+
 No paid provider call, deployment, production database operation or merge was
 performed. Producer/consumer/contracts/store validation mappings are preserved
 in the remediation summary.

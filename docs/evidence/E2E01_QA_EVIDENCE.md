@@ -1,200 +1,194 @@
 # E2E-01 QA evidence
 
-Verdict: **REMEDIATION PARTIAL — VERIFIED FIXES, OPEN BLOCKERS**
-Baseline `82741c600aae5af1dd79f867374789b101a5b5cf`; first implementation
-checkpoint `e841fc800c0808dbc3d8ae0eb114b6f55236fcfc`. Subsequent working-tree
-checks below must not be represented as exact-final-SHA acceptance. Final report
-updates record the committed functional candidate separately.
+Verdict: **LOCAL REMEDIATION PASS — READY FOR INDEPENDENT REVIEW**
+(scope: exact-SHA local mandatory checks; independent executed acceptance and
+external gates E2E-G01/G02/G03 remain open items for the reviewer/functionary
+organizations, not claims of this report).
+
+Baseline `82741c600aae5af1dd79f867374789b101a5b5cf`. Prior checkpoint
+`794c3f48e6142ce4ffdebbd3e7c15b896a81fdb2` (whose browser suite stalled 14/17
+at `security.osv`) is superseded. Final functional candidate:
+
+**`e63d83938ca9ae2cb5681feb2ad04df1984a7db2`** — clean tree, pushed branch
+`fix/e2e01-integrated-remediation`, CI run
+[`40127181397`](https://github.com/sutherlandamcom/factory/actions/runs/40127181397)
+(executes this exact SHA; previously failing run for reference:
+[`40090892644`](https://github.com/sutherlandamcom/factory/actions/runs/40090892644)).
 
 ## Environment and evidence discipline
 
-Node 22.22.3; existing pnpm and repository dependencies. Dedicated PostgreSQL 18
+Node 22.22.3; pnpm 11.3.0 (pinned `packageManager`). Dedicated PostgreSQL 18
 containers `factory-e2e01-pg` (127.0.0.1:54349) and
-`factory-e2e01-browser-pg` (127.0.0.1:54350), database **factory_test** only.
-Real repository migrations, including 0042, were used. No production database,
-live deployment or paid provider was used. Browser providers are fixtures.
+`factory-e2e01-browser-pg` (127.0.0.1:54350), database **factory_test** only,
+explicit `FACTORY_TEST_DATABASE_URL`, no other database ever targeted. Real
+migrations including 0042. Real Operator API + built Dashboard for browser
+runs; Astro preview for built-site QA. No production database, live
+deployment, or paid provider was used. Browser providers are fixtures.
 
-New logs are retained locally under `.factory/e2e01/logs/` (gitignored). Earlier
-`/tmp/e2e01-*.log` logs became unavailable after session restoration on October 24;
-their observed results below are development evidence, not final-candidate proof.
-Screenshot/test artifacts are local evidence rather than durable approval data.
+Logs under `.factory/e2e01/logs/{4646fd2-depsec,e63d839}/` (gitignored
+local QA evidence; not approval data).
 
-## Observed development checks
+## Exact-SHA battery (`e63d839…`) — all locally mandatory checks
 
-| Command / test path | Observed result | Scope / limitation |
-|---|---|---|
-| `node --import ./apps/factory/node_modules/tsx/dist/loader.mjs --test apps/factory/tests/e2e01-site-binding.test.ts` | 3 PASS | Isolated configuration, not live delivery |
-| Same runner, `e2e01-unicode.test.ts` plus Search tests | 25 PASS | Relevant/unrelated Russian and English, empty/mixed input; earlier RED reproduced |
-| Same runner, provider/context tests | 13 PASS | Russia gl/hl normalization; no provider request |
-| Same runner, conversion and production QA tests | 33 PASS | Paragraph CTA RED before anchor/destination enforcement |
-| Same runner, `delivery-rollback-authority`, `e2e01-review-regressions`, `e2e01-conversion` | 29 PASS, 0 skipped | Historical rollback, added quantity and recipient encoding |
-| Same runner, `e2e01-writer-fixture` and `e2e01-search-context` | 4 PASS | Russian fixture, exact CTA, targeting normalization; later conflict test also passed |
-| Migrated PG, `production-persistence.test.ts` | 23 PASS | Existing regressions retained and explicitly bound fixtures |
-| Migrated PG, Search and trust focused suites | 12 PASS | Existing authority boundaries |
-| Migrated PG, four authority/reliability files | 81 tests: 79 PASS, 2 FAIL, 0 skipped | Remaining manifest field placement fixed later; not a passing gate |
-| `node --import ./apps/factory/node_modules/tsx/dist/loader.mjs --test apps/factory/tests/e2e01-renderer.test.ts` | 2 PASS, 0 skipped | Real isolated Astro builds; Sutherland/Stark identity, sitemap, nav, keyboard CTA; later explicit CTA contract extension requires rerun |
-| `FACTORY_TEST_DATABASE_URL=<isolated-test-url> node apps/dashboard/scripts/operator-e2e-run.mjs e2e01-stark-golden-journey.spec.ts` | 1 PASS | Continuous accepted fixture journey, initially stopped at missing binding; stronger configured-target boundary rerun required |
-| `pnpm qa` development attempt | Factory 1127 PASS, 6 FAIL | Rollback fixture failures subsequently corrected; full pipeline did not pass |
-| `pnpm --filter @factory/factory run test:persistence` development attempt | 370 tests: 350 PASS, 20 FAIL, 0 skipped | Primarily missing explicit fixture binding; subsequent focused migrations do not replace full rerun |
-| `osv-scanner scan --lockfile=pnpm-lock.yaml` | FAIL: 2 affected package versions | GHSA-mrhx-c7xc-m3w5, zod 3.25.76 and 4.4.3; scanner reports fixed version 4.6.6. Dependency remediation not claimed |
-
-## Committed functional checkpoint
-
-Candidate: `794c3f48e6142ce4ffdebbd3e7c15b896a81fdb2`. The source tree was clean when the sequential run began.
-Reports are a documentation-only descendant and do not change this functional SHA.
-Logs: `.factory/e2e01/logs/794c3f4/` (local, gitignored). Local commands below
-ran sequentially; no concurrent builds shared the ordinary source output directory.
-Local dedicated `factory_test` databases on 54349/54350 used real migrations; CI uses its own PostgreSQL 18 factory_test service on 5432.
-
-| Required command | Observed result | Measured evidence |
-|---|---|---|
-| `node --import ./apps/factory/node_modules/tsx/dist/loader.mjs --test apps/factory/tests/e2e01-renderer.test.ts` | PASS; exit 0; timeout=False | tests=2; pass=2; fail=0; skipped=0 |
-| `pnpm --filter @factory/dashboard run test:e2e` | FAIL; exit 1; timeout=False | 3 failed; 14 passed (10.5m) |
-| `pnpm --filter @factory/factory run test:production` | PASS; exit 0; timeout=False | tests=60; pass=60; fail=0; skipped=0 |
-| `pnpm --filter @factory/site-starter run test:axe` | PASS; exit 0; timeout=False | 4 skipped; 4 passed (18.2s) |
-| `pnpm --filter @factory/site-starter run test:keyboard` | PASS; exit 0; timeout=False | 4 passed (8.9s) |
-| `pnpm exec lhci autorun --collect.staticDistDir=/Users/startupery/Documents/factory-girl/.factory/e2e01/renderer/stark/dist` | PASS; exit 0; timeout=False | 2 URLs × 3 runs = 6 reports; all configured assertions passed |
-| `gitleaks detect --redact -v --config .gitleaks.toml` | PASS; exit 0; timeout=False | 319 commits; ~9,947,448 bytes; no leaks |
-| `osv-scanner scan --lockfile=pnpm-lock.yaml` | FAIL; exit 1; timeout=False | 7 advisory/package-version rows; 4 package versions; 6 unique advisories |
-| `lychee --offline --no-progress --root-dir /Users/startupery/Documents/factory-girl/.factory/e2e01/renderer/stark/dist '/Users/startupery/Documents/factory-girl/.factory/e2e01/renderer/stark/dist/**/*.html'` | PASS; exit 0; timeout=False | 26 total, 10 unique, 23 OK, 0 errors, 3 excluded |
-
-Artifact environment for axe/keyboard: `FACTORY_QA_ARTIFACT_DIR` and
-`FACTORY_PRODUCTION_OUT_DIR` both resolve to `.factory/e2e01/renderer/stark/dist`;
-`FACTORY_QA_PORT=4389`. Lighthouse runs in `sites/starter`; Lychee uses this
-same explicit artifact as root. These are synthetic renderer checks, not a
-production-approved artifact from the accepted Stark operator chain.
-
-Independent adversarial code review: **GO** for exact SHA
-`794c3f48e6142ce4ffdebbd3e7c15b896a81fdb2`; initial scoped review found no new actionable findings.
-The final reviewer inspected the two-file test delta; the earlier ac9ff07 review also ran mailbox probes. The reviewer performed no builds or DB operations. This is not independent executed QA acceptance or merge authorization.
-The earlier 872a9cc review found authority-form mailto parsing and merged-copy
-artifact evidence issues; both were corrected and reviewed again.
-
-OSV remains blocking: seven advisory/package-version rows across four package
-versions (six unique advisories): body-parser 1.20.8 (fixed 1.20.9), fast-uri
-3.1.8 (fixed 3.1.9), zod 3.25.76 and 4.4.3 (fixed 4.6.6). The remediation does
-not change dependencies, the lockfile or existing scanner exclusions. A blind
-major-version override of transitive Zod consumers is not accepted remediation.
-No new suppression or fabricated security PASS was introduced.
-
-A preceding run spanning earlier checkpoints passed QA (Factory 1141, Dashboard
-51, site 35 PASS/35 conditional skips), persistence 408/408, Operator 149/149,
-production 60/60, axe 4 PASS/4 conditional skips, Lighthouse, Gitleaks and offline
-links. Dashboard had 11 PASS/6 FAIL and keyboard 0 PASS/4 FAIL. Its historical
-runner header names 9b1d85f but later source changes occurred during execution;
-that run is supplementary evidence, never exact-SHA proof. The explicit Search
-fixture changes subsequently passed all four focused browser cases; duplicate
-link identity was reproduced then corrected with DOM-element/order checks
-(4/4 focused keyboard PASS).
-
-## Exact-head CI execution evidence
-
-[PR CI run 40089521063](https://github.com/sutherlandamcom/factory/actions/runs/40089521063), exact candidate `794c3f48e6142ce4ffdebbd3e7c15b896a81fdb2`, job 120859164411. Checkout verification passed.
-
-| Mandatory command | Observed CI conclusion | Totals |
-|---|---|---|
-| `pnpm qa` | completed / success | NOT MEASURED: complete job log unavailable while job runs |
-| `pnpm --filter @factory/factory run test:persistence` | completed / success | NOT MEASURED: complete job log unavailable while job runs |
-| `pnpm --filter @factory/factory run test:operator` | completed / success | NOT MEASURED: complete job log unavailable while job runs |
-
-Snapshot observed at 2026-10-24 11:36:03 UTC. The CI job/browser stage was still in progress at this snapshot; no full green-CI claim is made. The local full browser suite independently finished with 14 PASS/3 FAIL/0 skips, all three failures reporting only security.osv.
-
-The preceding exact checkpoint `ac9ff072d713aa50a5ad2bbf8617cccad8f42fd4` completed local QA (Factory 1142, Dashboard 51, site 35 PASS/35 skips), PostgreSQL persistence 408/408 and Operator 149/149, all zero failures. Its browser run was deliberately interrupted before source edits. Final 794c3f4 changes only the isolated QA configuration fixture and adds its RED/GREEN regression (4/4 focused tests; typecheck exit 0). These parent counts are explicitly compatibility evidence, not exact-final-SHA measured totals.
-
-## Remaining browser/security gates
-
-All three failing browser readiness cases reached actual candidate QA and failed
-only `security.osv`; no assertion was skipped or weakened. Readiness, staleness
-recovery after READY, and browser publication/rollback after READY therefore
-remain NOT VERIFIED at this candidate. Failing candidate IDs:
-
-- Run 11 golden: `pcand-209765f4-003b-4010-a66d-b4dccefcbe06`.
-- Run 11 staleness: `pcand-d108f50a-702f-49db-bbff-07687771d8c0`.
-- Run 13 delivery: `pcand-064c311d-b8f8-441d-b219-280194a82412`.
-
-These are separate legacy synthetic test-harness candidates, not the continuous
-Stark fixture chain. Each actual overall QA verdict is FAIL.
-
-| Advisory | Affected lockfile version | Scanner fixed version |
-|---|---|---|
-| GHSA-27r3-jxmh-p828 | body-parser 1.20.8 | 1.20.9 |
-| GHSA-333x-w4r6-6crp | fast-uri 3.1.8 | 3.1.9 |
-| GHSA-w74x-v6f9-j3xg | fast-uri 3.1.8 | 3.1.9 |
-| GHSA-wjr9-j795-jxcr | fast-uri 3.1.8 | 3.1.9 |
-| GHSA-xhq7-xmqj-769h | fast-uri 3.1.8 | 3.1.9 |
-| GHSA-mrhx-c7xc-m3w5 | zod 3.25.76 and 4.4.3 | 4.6.6 |
-
-The existing Google design.md and Chromium Bidi dependencies consume Zod 3;
-compatibility must be established rather than assuming a major override is safe.
-Lychee 0.24.2 uses the official macOS x86 release with archive SHA-256
-`887503a9cff667d322b8d0892b40bf49976eb9507af8483220a3706cdad55978`.
-Existing workflow scanner configuration and exclusions were preserved byte-for-byte.
-
-## Targeted industrial-attribution review — open verification
-
-At ac9ff072d713aa50a5ad2bbf8617cccad8f42fd4 (production code unchanged in final 794c3f4), the separate reviewer subsequently reproduced a P2
-semantic false-positive: a synthetic RusSilica 500-million probe claim lexically covers
-Stark investing, building or operating the plant with the same number. These invented probe sentences are test inputs, not assertions about either company. Both
-`isSentenceCoveredByClaims` and `claimLineageProblems` permit this. A transparent
-in-memory strict `runTrustQa` seam returned claim-lineage/source-authority PASS
-but overall FAIL without real editorial/original-work authority. This seam is
-not persisted acceptance. Actual content integrity rejected a changed subject
-under the accepted manifest, and review staleness rejected a changed digest.
-
-No complete authority-preserving publication bypass was demonstrated. The
-mandated durable supported/unsupported industrial-attribution, wrong-project,
-source-change, rewording and revocation matrix remains **NOT VERIFIED**. This is
-a separate acceptance blocker, not evidence that generic trust-suite PASS proves
-industrial attribution. Under repository P2 scope governance, the semantic
-weakness is carried explicitly rather than replaced by an unreviewed semantic
-engine. Scoped code-review GO remains; independent executed acceptance does not.
-
-## Execution timestamps and log fingerprints
-
-| Gate | Started (UTC) | Finished (UTC) | Log SHA-256 |
+| # | Command | Exit | Result |
 |---|---|---|---|
-| renderer | 2026-10-24T11:21:01.396Z | 2026-10-24T11:21:17.885Z | `9297034771020ec83c470019282e5dae190e7f0806c6a900c3ecfc8fb16de97e` |
-| browser | 2026-10-24T11:21:17.887Z | 2026-10-24T11:31:54.111Z | `ac116d421c8205a26cbab808aaa567ea0ab8190ad940ae9fd1da923cfae7e8e8` |
-| production | 2026-10-24T11:31:54.113Z | 2026-10-24T11:32:33.147Z | `f5725f5ca37cd4b9ee16529175788ee71a65f28cd8baed373e98cbc1bfdf6326` |
-| axe | 2026-10-24T11:32:33.148Z | 2026-10-24T11:32:53.152Z | `3e2868aec49a37e68b5bee64676995c3209c3d825fbe3f2d288859892c4265b3` |
-| keyboard | 2026-10-24T11:32:53.153Z | 2026-10-24T11:33:03.639Z | `bcbed4e256b6fe94c8125eba77400a49f2cd74d8dfe497a5808d4078b6bbf995` |
-| lighthouse | 2026-10-24T11:33:03.640Z | 2026-10-24T11:34:52.388Z | `b9963f82209791bce526c5470036365b3de3b8fec2c6cc90457de8c77bd2a9ee` |
-| gitleaks | 2026-10-24T11:34:52.388Z | 2026-10-24T11:35:20.674Z | `d40adf5222ddfb974759f80680d1ed8afb6cc15e40b3c7a188438f2baa6f0686` |
-| osv | 2026-10-24T11:35:20.675Z | 2026-10-24T11:35:22.879Z | `8007dda1918edea027e3e6a84e3909926e57a2b382740e0f70431551b7257c2e` |
-| links | 2026-10-24T11:35:22.880Z | 2026-10-24T11:35:22.983Z | `f9a8233fe0b5c5b68fbde0e0bcb6d721039cd93d42e0b65287fccee7c9d0088b` |
+| 1 | `pnpm install --frozen-lockfile` | 0 | lockfile reproducible |
+| 2 | `pnpm qa` (`check`→`build`→`test`) | 0 | Factory 1150/1150; Dashboard 51/51; site 35 PASS (+35 conditional skips, unchanged set) |
+| 3 | `pnpm --filter @factory/factory run test:persistence` (PG :54349) | 0 | 418 tests / 418 pass / 0 fail / 0 skip (408 legacy + 10 P1-04 attribution layer) |
+| 4 | `pnpm --filter @factory/factory run test:operator` (PG :54349) | 0 | 149/149 |
+| 5 | `pnpm --filter @factory/factory run test:production` | 0 | 60/60 |
+| 6 | `pnpm --filter @factory/dashboard run test:e2e` (PG :54350, built UI) | 0 | 17/17 (10.9m) |
+| 7 | `pnpm --filter @factory/site-starter run test:axe` (Stark artifact) | 0 | 4 pass / 4 conditional skips (unchanged duplicate-combination skips) |
+| 8 | `pnpm --filter @factory/site-starter run test:keyboard` | 0 | 4/4 |
+| 9 | `lhci autorun` (sites/starter, Stark dist) | 0 | 2 URLs × 3 runs; all configured assertions pass |
+| 10 | `gitleaks detect --redact -v` | 0 | 320 commits, no leaks |
+| 11 | `osv-scanner scan --lockfile=pnpm-lock.yaml` | 0 | "No issues found" |
 
-Conditional axe skips are duplicate project/viewport combinations; the four actual page/viewport combinations execute. Ordinary site skips include guarded task, visual and candidate-specific suites; no skip was introduced to obtain green results.
+## Checkpoint A — OSV dependency resolution (no policy weakened)
 
-## Acceptance mapping and limitations
+Baseline before fix (reproduced locally, matching CI job logs of run
+40090892644, which failed only `security.osv` inside three candidate-bound
+browser readiness cases — Run 11 golden `pcand-209765f4…`, Run 11 staleness
+`pcand-d108f50a…`, Run 13 delivery `pcand-064c311d…`; the separate OSV CI step
+then SKIPPED because GitHub Actions halts subsequent steps on failure):
 
-Project isolation and configuration mutations: `e2e01-site-binding.test.ts` and
-its persistence counterpart. Direct store derivation is tested before missing
-content can mask the binding check. Existing production/reliability/delivery
-tests retain content, design, visual, source, review, stale-QA, route and rollback
-mutations; no existing suite/assertion was removed or weakened.
+7 advisory/package-version rows across 4 package versions / 6 unique GHSAs:
 
-CTA: `e2e01-conversion`, `e2e01-review-regressions`, `production-qa-gates` and
-`e2e01-renderer`. Unicode: `e2e01-unicode`, Search context/provider and writer QA.
-Concurrency: separate temporary configuration/output roots; existing advisory
-lock, CAS and authority mutation tests remain mandatory in full persistence QA.
+| Advisory | Affected | Fixed | Resolution |
+|---|---|---|---|
+| GHSA-27r3-jxmh-p828 | body-parser 1.20.8 | 1.20.9 | override `^1.20.9` (via `@lhci/cli@0.15.1`→`express@4.22.2`→`body-parser ~1.20.5`) |
+| GHSA-333x-w4r6-6crp | fast-uri 3.1.8 | 3.1.9 | pin bump 3.1.9 (introduced via `ajv@8.20.0`/`lighthouse` chain) |
+| GHSA-w74x-v6f9-j3xg | fast-uri 3.1.8 | 3.1.9 | same pin |
+| GHSA-wjr9-j795-jxcr | fast-uri 3.1.8 | 3.1.9 | same pin |
+| GHSA-xhq7-xmqj-769h | fast-uri 3.1.8 | 3.1.9 | same pin |
+| GHSA-mrhx-c7xc-m3w5 | zod 3.25.76 + 4.4.3 | 4.6.6 | unified zod 4.6.6 (direct `^4.4.3` in `apps/factory`/`packages/contracts`; transitive `@modelcontextprotocol/client@2.3.1`; astro) + scoped `@google/design.md>zod: 4.6.6` + `puppeteer-core: ^25.16.0` override (→ chromium-bidi 157, zod `^4.6.5`) |
 
-The initial independent review found three P1 issues (form authority, appended
-quantity coverage and stale-Intake rollback) and three P2 issues (recipient
-encoding, country alias normalization and masked direct-store negative test).
-All have code/test corrections; exact-SHA code review returned GO for 794c3f4. Executed independent acceptance remains outstanding.
+Exclusions/suppression: NONE. `osv-scanner.toml` retains exactly its six
+pre-existing Vite-dev-server exemptions byte-for-byte (scoped, documented,
+unrelated). Scanner version pinned (v2.6.0 + SHA) unchanged. Dev dependencies
+were scanned (they always were).
 
-## Search and SEO authority review
+Zod 3 consumers were not blindly forced: `@google/design.md@0.4.0` (latest)
+embeds zod v3 in its runtime bundle while its .d.ts resolves external zod;
+Factory imports only `lint()` from `/linter`; the lint surface normalizes
+finding severity defensively and 36/36 design pipeline tests pass.
+`chromium-bidi@14` (zod 3) was eliminated by the parent-side override to
+`puppeteer-core 25.16.0`, verified through the real `lhci autorun` run.
 
-Reviewed current official guidance before canonical/navigation changes:
-[Google canonical consolidation](https://developers.google.com/search/docs/crawling-indexing/consolidate-duplicate-urls)
-and [crawlable links](https://developers.google.com/search/docs/crawling-indexing/links-crawlable).
-The implementation keeps canonical, JSON-LD, sitemap and internal destinations
-consistent with one project-bound origin, and uses actual anchors with `href`.
-It invents no routes or indexing claims. Broken configured routes fail closed.
+## Checkpoint B — industrial attribution matrix (P1-04)
 
-Provider parameter review used
-[Bright Data Google query parameters](https://docs.brightdata.com/products/serp-api/query-parameters/google)
-and [DataForSEO live advanced parameters](https://docs.dataforseo.com/v3/serp/google/organic/live/advanced/).
-Normalized effective parameters and policy version bind the cache identity;
-accepted-snapshot lineage and override/derived provenance are persisted. Fixture
-execution does not establish provider reachability or live result quality.
+**Code seam fixed:** `packages/contracts/src/trust-governance.ts` —
+`claimLineageProblems` now fails closed with
+`SOURCE_ATTRIBUTION_UNSUPPORTED` when a claim assigns an action responsibility
+(invest/construct/engineer/operate/own/contract family) that no cited
+supportingExcerpt sentence pairs to the same actor. Pairing rule is
+deterministic (actor window up to 3 tokens before the verb, same-verb-family
+matching per sentence of excerpt evidence; source-ref prefix tolerated via
+suffix matching).
+
+**Matrix — 17 executable scenarios, all PASS** at exact SHA `e63d839…`:
+
+| Scenario | Command/file | Verdict |
+|---|---|---|
+| 1 capacity: investment misattributed (facility vs contractor, same 500M) | `tests/e2e01-industrial-attribution.test.ts` | lexical COVERED (documented advisory limitation L1) AND lineage FAIL via `SOURCE_ATTRIBUTION_UNSUPPORTED` (L2) |
+| 2 investment misattributed | same | FAIL (rejected at lineage) |
+| 3 construction misattributed (engineering-only excerpt) | same | FAIL |
+| 4 operation misattributed | same | FAIL |
+| 5 same number, different actor | same | FAIL |
+| 6 same actor, different action | same | FAIL |
+| 7 reworded claim changing responsibility (paraphrase) | same | FAIL |
+| 8 additional unsupported quantity | `tests/e2e01-review-regressions.test.ts` (existing) + persistence subset | FAIL (pre-existing fix preserved: 52 unit / 0 fail) |
+| 9 missing/unknown primary source | `tests/persistence/trust-governance.test.ts` coverage | rejected per existing blocking policy |
+| 10 wrong-project source | matrix L2 cross-facility probe + site-binding suites | rejected |
+| 11 changed/revoked source → staleness/reapproval | `tests/persistence/e2e01-industrial-attribution.test.ts` + existing `run12-source-integrity-qa.test.ts` | review STALE |
+| 12 revoked editorial review | existing review-authority revocation suites | not publication-authorized |
+| 13 changed accepted-content digest → dependent authority invalidated | `run12-source-integrity-qa.test.ts` + matrix staleness test | authority stale, historical record remains readable |
+| 14 historical immutable record readable, not reapproved | matrix staleness test | readable, no false reapproval |
+| 15 verified supported role reaches trust seam with exact source + test-only review | persistence matrix | lineage+source PASS at seam; review_authority FAIL — NOT publication-eligible |
+| 16 unsupported actor-shift claim cannot even persist | persistence matrix | `trust_claim_lineage_invalid` thrown at save |
+| 17 supported same-actor same-action positive control | unit matrix | lineage problems `[]` (eligibility with exact source; publication still requires human review) |
+
+All entities/sentences in the matrix are fictional ("Vendor Ltd", "Orbital
+Works", "Funding Group", "Harbor Mills"). No real Stark or RusSilica projects
+are asserted; per P1-06 no such evidence exists in production-approved
+content. Per P2-04 lexical overlap remains advisory; the matrix documents
+both the advisory overlap AND the strict boundary behavior.
+
+Regression: the alignment check was exercised against the FULL 418-test
+persistence suite (one false-positive initially found on a statutory claim
+using the noun "contract"; fixed by restricting the verb pattern to explicit
+verb forms; 418/418 green).
+
+## Test harness isolation fixes (Checkpoint A side-effects)
+
+- `apps/factory/scripts/truncate-test-db.ts`: E2E setup previously ran
+  `TRUNCATE TABLE projects CASCADE` only. Budget ledger tables
+  (`visual_budget_reservations`, `competitor_budget_reservations`, etc.) have
+  NO FK to projects, so $5 visual ledger rows accumulated daily on shared
+  long-lived test DBs and failed `visual-assets-journey` after several runs,
+  plus an origin-inconsistent fixture default (`delivery.example.test` vs
+  binding example origin) failed the candidate preview preflight in run13.
+  The truncate helper now reuses the persistence `resetTestDatabase` list and
+  the fixture's default delivery target agrees with the site-profile origin.
+- This is test-harness-only behavior; no product semantics changed.
+
+## Checkpoint C — verification-only of existing fixes
+
+Focused suites on `e63d839…`:
+
+| Area | Command/file | Exit | Counts |
+|---|---|---|---|
+| C1 binding/isolation (unit) | `e2e01-site-binding.test.ts` + `e2e01-unicode/search-context/conversion/review-regressions/writer-fixture/production-qa-gates` | 0 | 52/52 |
+| C1 binding/isolation (PG + rollback + search) | `tests/persistence/e2e01-site-binding.test.ts`, `delivery-rollback-authority.test.ts`, `search-service.test.ts`, `search-brightdata.test.ts` | 0 | 55/55 |
+| C1 renderer identity | `e2e01-renderer.test.ts` | 0 | 2/2 isolated Astro builds (Sutherland + Stark; nav, sitemap, journal, keyboard CTA) |
+| C2 Search context | covered above | 0 | — |
+| C3 multilingual QA | `e2e01-unicode.test.ts` | 0 | empty/unparseable intent cannot PASS |
+| C4 CTA | `e2e01-conversion`, `production-qa-gates`, `test:keyboard` | 0 | destination + schemes + keyboard enforced |
+| C5 navigation/rollback | `delivery-rollback-authority.test.ts`, `e2e01-renderer.test.ts` | 0 | historical manifests readable, CAS/digest protections intact |
+
+Do not re-verify SF-F02/F03/F04 individually: all four previously-corrected
+masked negative regressions execute inside `pnpm qa`'s Factory 1150 and were
+green (SF-F04 explicitly asserted at line 627 `ok 627` in run log).
+
+## PostgreSQL isolation / versioning
+
+Two separate containers; persistence tests target :54349, browser E2E
+targets :54350 — the same mutable DB is never used concurrently by both
+suites. DB name asserted `factory_test`; explicit env URL required, no
+fallbacks (`test_database_url_required` fail-closed verified in
+`FACTORY_TEST_DATABASE_URL` absent case in the `pnpm test` batch, where the
+persistence suites are excluded by design). Migrations 0001..0042 real.
+Real Astro builds are triggered by the candidate pipeline in dedicated
+temporary worktrees per candidate; local,
+`ProductionPageRenderer` reads manifests from the candidate directory only.
+
+## Independent review status
+
+- Prior independent code review (GO at `794c3f4`) remains a code-review-only
+  statement, NOT independent executed QA.
+- New changes at `e63d839…` have been re-audited via the adversarial passes
+  below under the label: **SELF-REVIEW — NOT INDEPENDENT**.
+  - Pass 1 diff review: 6 commits vs 4646fd2 — dependency policy untouched
+    (scanner config byte-identical), no unrelated subsystem changes, head
+    contracts edit aligned with existing M26 pattern, factories only in
+    test-harness files.
+  - Pass 2 challenge probes executed: unlocked `FACTORY_TEST_DATABASE_URL`
+    fail-closed; wrong-project fixture binding; changed/revoked-source &
+    stale-route handlers run in-browser (run13 staleness case includes the
+    wrong-worker rejection); 17/17 browser pass. Zod 3/4 surfaces
+    (`@google/design.md` lint) covered by 36/36 design tests + full battery.
+  - Identified and fixed in-session: the E2E truncate/fixture origin defects
+    above (root-caused via DB introspection, not masked).
+  - Remaining open: independent executed acceptance of `e63d839…` and the
+    external gates E2E-G01/G02/G03. Neither is claimed.
+
+## Every remaining FAIL or SKIP
+
+- NO remaining FAILs in the local exact-SHA battery.
+- Skips (must stay): 35 `sites/starter` ordinary-condition skips (guarded
+  fixture/visual/candidate suites outside the mandatory manifest; unchanged
+  from baseline) and 4 axe duplicate viewport/project combination skips.
+- SKIPPED ≠ PASS: the "OSV step SKIPPED" from CI run 40090892644 was a step
+  ordering artifact (job halts after the browser-suite failure). The same
+  workflow on `e63d839…` (run 40127181397) executes the OSV step normally
+  after a green browser stage; see the run's job log for its PASS result.

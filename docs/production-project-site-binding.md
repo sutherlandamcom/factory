@@ -47,3 +47,35 @@ one unambiguous, already registered project destination. It never provisions one
 The test harness writes bindings only inside disposable source-isolated copies,
 using reserved `.example.test` targets. Fixture approvals authorize test mechanics,
 not production publication or live provider evidence.
+
+## Manual setup of a fresh project (e.g. Stark) in an isolated test worktree
+
+This is a MANUAL operator task. There is no one-click automatic site
+provisioning; none of these steps happen merely by opening the Dashboard or
+inspecting a workspace.
+
+1. Create a fresh Git worktree or copy of the repository (isolated working
+   directory; never mutate another project's files).
+2. Register the project and its site in the dedicated test/config database
+   (project row + sites row with explicit `cloudflareWorkerName` and
+   `productionUrl` — both must be exact; the registered delivery target must
+   equal the binding to be written).
+3. Accept Intake for the project (exact `siteIdentity`: names, `language`,
+   canonical origin reserved for tests, e.g. `https://stark.example.test`).
+   Sutherland/Stark must stay separate in names, languages and origins; a
+   wrong-project profile fails closed at every production mutation.
+4. Write `sites/starter/site-profile.json` (SiteProfile `v0` with
+   `canonicalOrigin`, `language`, `navigation`) inside that worktree.
+5. Compute the binding: `deterministicDigest` of the parsed SiteProfile and of
+   the exact accepted `siteIdentity`, explicit `workerName` and
+   `productionUrl` (same origin family as the profile; candidate preview
+   preflight compares the candidate canonical URL with the registered target
+   and rejects a mismatch), then write
+   `sites/starter/project-site-binding.json` (`project-site-binding-v1`).
+6. Verify with the isolated-regression suites (`e2e01-site-binding` unit +
+   persistence) and only then exercise the production pipeline for that
+   project. Any later change to profile, accepted identity, delivery target
+   or binding invalidates derived authority and forces rederivation.
+
+Sutherland's reviewed informational mode (step 5 alternative) applies only via
+`informationalConversion` bound to its exact accepted snapshot.

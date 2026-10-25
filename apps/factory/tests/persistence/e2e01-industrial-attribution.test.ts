@@ -157,6 +157,73 @@ async function runTrustBoundary(opts: {
   }
 }
 
+const RU_ENGINEERING_SOURCE =
+  "ООО «ИнжПроект» выполнило инженерное проектирование завода «Орбита» в 2025 году.";
+
+test("P1-04 L3 RU: unsupported Russian construction claim cannot persist (trust_claim_lineage_invalid)", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  try {
+    const trust = new TrustGovernanceStore(dbInst.db);
+    const { projectId } = await seedSutherlandProject(dbInst, `p104-ru-block-${Math.random().toString(36).slice(2, 8)}`);
+    await trust.setPageIntentAuthority({ projectId, intent: intent(projectId, "vendor/homepage") });
+    const attempt = await trust
+      .saveClaimLineage({
+        projectId,
+        pageIdentity: "vendor/homepage",
+        contentDigest: "a".repeat(64),
+        claims: [
+          claim({
+            claimId: "c-ru-wrong-action",
+            claimText: "ООО «ИнжПроект» построило завод «Орбита» в 2025 году.",
+            claimType: "FIRST_PARTY_FACT",
+            sourceRefs: [intakeSourceRef(RU_ENGINEERING_SOURCE)],
+          }),
+        ],
+      })
+      .then(() => ({ persisted: true }))
+      .catch((err: { code?: string }) => ({ code: err?.code, persisted: false }));
+    assert.equal((attempt as { persisted: boolean }).persisted, false);
+    assert.equal((attempt as { code?: string }).code, "trust_claim_lineage_invalid");
+  } finally {
+    await dbInst.close();
+  }
+});
+
+test("P1-04 L3 RU: supported Russian engineering claim persists and passes lineage QA at the trust seam", async () => {
+  const dbInst = await setupMigratedTestDatabase();
+  try {
+    const trust = new TrustGovernanceStore(dbInst.db);
+    const { projectId } = await seedSutherlandProject(dbInst, `p104-ru-ok-${Math.random().toString(36).slice(2, 8)}`);
+    const result = await runTrustBoundary({
+      trust,
+      projectId,
+      sections: [
+        {
+          heading: "Инженерный отчет",
+          body: "ООО «ИнжПроект» выполнило инженерное проектирование завода «Орбита» в 2025 году. Проект охватывал несущие конструкции.",
+        },
+      ],
+      claims: [
+        claim({
+          claimId: "c-ru-engineered",
+          claimText: RU_ENGINEERING_SOURCE,
+          claimType: "FIRST_PARTY_FACT",
+          sourceRefs: [intakeSourceRef(RU_ENGINEERING_SOURCE)],
+        }),
+      ],
+      review: { authorityKind: "TEST_ONLY_REVIEW_AUTHORITY" },
+    });
+    assert.equal(result.claimLineage.verdict, "PASS", result.claimLineage.detail);
+    assert.equal(result.sourceAuthority.verdict, "PASS", result.sourceAuthority.detail);
+    // TEST_ONLY review is never a publication authority (same policy floor
+    // as the English path).
+    assert.equal(result.reviewAuthority.verdict, "FAIL");
+    assert.match(result.reviewAuthority.detail, /TEST_ONLY|test-only|review/i);
+  } finally {
+    await dbInst.close();
+  }
+});
+
 test("P1-04 L3: unsupported actor-shift claim cannot even persist (no production authorization path)", async () => {
   const dbInst = await setupMigratedTestDatabase();
   const trust = new TrustGovernanceStore(dbInst.db);
@@ -213,8 +280,7 @@ test("P1-04 L3: supported role with exact source + test-only review passes trust
   }
 });
 
-test("P1-04 L3: changed accepted-content digest invalidates the review (stale); historical record stays readable", async () => {
-  const dbInst = await setupMigratedTestDatabase();
+test("P1-04 L3: changed accepted-content digest invalidates the review (stale); historical record stays readable", async () => {  const dbInst = await setupMigratedTestDatabase();
   const trust = new TrustGovernanceStore(dbInst.db);
   const { projectId } = await seedSutherlandProject(dbInst, `p104-stale-${Math.random().toString(36).slice(2, 8)}`);
   const digestA = "a".repeat(64);

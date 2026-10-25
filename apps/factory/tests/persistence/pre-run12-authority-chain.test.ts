@@ -1,3 +1,4 @@
+import { createIsolatedProductionRoot, provisionTestSiteBinding } from "../fixtures/project-site-binding.js";
 import { EvidenceStitchProvider } from "../fixtures/stitch-evidence.js";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -144,7 +145,9 @@ function runProcess(
 const REPOSITORY_SHA = "1".repeat(40);
 const LOCKFILE_DIGEST = "2".repeat(64);
 
+let boundTestIdentity: { siteId: string; siteName: string; canonicalOrigin: string; language: string; profileDigest: string; bindingDigest?: string } | undefined;
 function siteIdentity() {
+  if (boundTestIdentity) return boundTestIdentity;
   return { siteId: "site-fixture", siteName: "Fixture Site", canonicalOrigin: "https://example.com", language: "en", profileDigest: "4".repeat(64) };
 }
 
@@ -270,7 +273,8 @@ async function setupV2Chain(
     await acceptFixturePage(dbInst, projectId, slug, false, slug === "offer-x92" ? "service" : undefined);
     acceptedPages.push(slug);
   }
-  const root = await mkdtemp(path.join(tmpdir(), "pre-run12-"));
+  const root = await createIsolatedProductionRoot(await resolveRepositoryRoot());
+  boundTestIdentity = await provisionTestSiteBinding(dbInst.db, root, projectId, { siteId: "site-fixture", canonicalOrigin: "https://example.com" });
   const designStore = new DesignStore(dbInst.db);
   const snapshot = await designStore.deriveInputSnapshotDraft({ projectId });
   const snapshotData = parseDesignInputSnapshotAnyVersion(snapshot.data);
@@ -409,7 +413,7 @@ async function setupV2Chain(
     visualSetId: visualRecord.id,
     visualSetDigest: visualRecord.setDigest,
     planId: plan.id,
-    production: new ProductionStore(dbInst.db),
+    production: new ProductionStore(dbInst.db, { repoRoot: root }),
     designStore,
     visualStore,
     visualService,
@@ -483,7 +487,7 @@ test("PG pre-run12: two pages of one archetype classify independently; represent
     }
 
     // Run real Astro build
-    const siteDir = path.join(repoRoot, "sites", "starter");
+    const siteDir = path.join(env.root, "sites", "starter");
     const buildResult = await runProcess("pnpm", ["run", "build"], {
       cwd: siteDir,
       env: {
@@ -653,7 +657,7 @@ test("PG pre-run12: adding a page after design acceptance does NOT stale a v2 de
       await compiler.writeManifest(m, manifestDir);
     }
 
-    const siteDir = path.join(repoRoot, "sites", "starter");
+    const siteDir = path.join(env.root, "sites", "starter");
     const buildResult = await runProcess("pnpm", ["run", "build"], {
       cwd: siteDir,
       env: {
@@ -1391,6 +1395,7 @@ test("pre-run12 ordinary path: fresh project enters hardened design-v2 path with
     await acceptFixturePage(dbInst, projectId, "offer-x92");
 
     root = await mkdtemp(path.join(tmpdir(), "pre-run12-fresh-"));
+    boundTestIdentity = await provisionTestSiteBinding(dbInst.db, root, projectId, { siteId: "site-fixture", canonicalOrigin: "https://example.com" });
     const designStore = new DesignStore(dbInst.db);
 
     // 1. Derive snapshot draft with NO explicit schemaVersion
@@ -1534,7 +1539,7 @@ test("pre-run12 ordinary path: fresh project enters hardened design-v2 path with
     assert.ok(!acceptedSlots.some((s) => s.slot === "supporting.offer-x92"), "unresolved optional slot omitted");
 
     // 6. Derive production input and compile production-v3 manifest
-    const production = new ProductionStore(dbInst.db);
+    const production = new ProductionStore(dbInst.db, { repoRoot: root });
     const prodInput = await production.deriveProductionInput({
       projectId,
       pageSlug: "offer-x92",

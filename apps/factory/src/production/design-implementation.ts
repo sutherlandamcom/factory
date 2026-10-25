@@ -110,7 +110,7 @@ const REGISTRY_FAMILIES: ReadonlyArray<ComponentFamily> = Object.freeze([
     allowedArchetypes: ["homepage", "service", "location", "editorial", "investment_advisory"],
     allowedPatterns: ["cta"],
     responsiveProfile: "Single column, centered at all breakpoints.",
-    accessibilityContract: "CTA text is plain content; link semantics come from accepted content links.",
+    accessibilityContract: "Optional destinationHref is supplied only by bound conversion authority; action renders a keyboard-accessible anchor with verbatim accepted CTA text, informational authority renders prose.",
   },
   {
     componentId: "related-links",

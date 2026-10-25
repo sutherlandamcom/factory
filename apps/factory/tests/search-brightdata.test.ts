@@ -236,3 +236,9 @@ describe("Bright Data SERP adapter", () => {
     );
   });
 });
+
+test("E2E-P1-01: Russia targeting sets explicit country and Russian language", () => {
+  const url = new URL(buildBrightDataGoogleUrl({ query: "модернизация промышленного производства", location: "Russia", language: "ru", device: "desktop" }));
+  assert.equal(url.searchParams.get("gl"), "ru");
+  assert.equal(url.searchParams.get("hl"), "ru");
+});

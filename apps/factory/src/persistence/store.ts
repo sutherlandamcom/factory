@@ -223,12 +223,9 @@ export class FactoryStore {
   }
 
   async findSiteByProjectId(projectId: string): Promise<SiteRecord | null> {
-    const [row] = await this.db
-      .select()
-      .from(sites)
-      .where(eq(sites.projectId, projectId))
-      .limit(1);
-    return row ?? null;
+    const rows = await this.db.select().from(sites).where(eq(sites.projectId, projectId)).limit(2);
+    if (rows.length > 1) throw new FactoryError("delivery_target_unconfigured", "Project has multiple registered sites; an explicit historical target is required.");
+    return rows[0] ?? null;
   }
 
   async getSiteById(siteId: string): Promise<SiteRecord | null> {

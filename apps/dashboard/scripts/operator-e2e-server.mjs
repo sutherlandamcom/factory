@@ -29,6 +29,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OPERATOR_PORT = Number(process.env.FACTORY_OPERATOR_PORT || 4175);
 const SUPERVISOR_PORT = Number(process.env.FACTORY_E2E_SUPERVISOR_PORT || 4177);
 const FACTORY_ROOT = path.resolve(__dirname, "../../factory");
+let operatorCwd = FACTORY_ROOT;
+const isolatedRoots = [];
+process.on("exit", () => { for (const root of isolatedRoots) rmSync(root, { recursive: true, force: true }); });
 
 // Generate local Ed25519 IdP keypair for E2E release governance testing
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -110,9 +113,9 @@ async function startOperator() {
   if (child) throw new Error("operator already running");
   child = spawn(
     process.execPath,
-    [path.join(FACTORY_ROOT, "node_modules", "tsx", "dist", "cli.mjs"), "src/operator/server.ts"],
+    [path.join(FACTORY_ROOT, "node_modules", "tsx", "dist", "cli.mjs"), path.join(FACTORY_ROOT, "src/operator/server.ts")],
     {
-      cwd: FACTORY_ROOT,
+      cwd: operatorCwd,
       env: CHILD_ENV,
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -166,7 +169,7 @@ const server = http.createServer(async (req, res) => {
       await stopOperator();
       return send(200, { ok: true });
     }
-    if (req.method === "POST" && req.url?.startsWith("/seed-synthetic-authority")) {
+    if (req.method === "POST" && (req.url === "/seed-synthetic-authority" || req.url === "/configure-test-site")) {
       // Run 11 test bootstrap ONLY (§53): seeds test-only synthetic
       // production authority into the DEDICATED test database so the
       // browser journey can exercise downstream workflow mechanics. The
@@ -185,8 +188,16 @@ const server = http.createServer(async (req, res) => {
         'import { createDatabaseInstance } from "./src/persistence/db.js";',
         'import { seedRun11SyntheticDesignAuthorityForTest } from "./src/production/qa/run11-synthetic-authority.js";',
         "const db = createDatabaseInstance({ connectionString: process.env.FACTORY_TEST_DATABASE_URL, isTest: true }).db;",
-        "const result = await seedRun11SyntheticDesignAuthorityForTest(db, { projectId: process.argv[2], pageSlug: process.argv[3] });",
-        "process.stdout.write(JSON.stringify(result));",
+        req.url === "/seed-synthetic-authority" ? "const result = await seedRun11SyntheticDesignAuthorityForTest(db, { projectId: process.argv[2], pageSlug: process.argv[3] });" : "const result = {};",
+        'import { createIsolatedProductionRoot, provisionTestSiteBinding } from "./tests/fixtures/project-site-binding.js";',
+        'import { mkdir, symlink } from "node:fs/promises";',
+        'import path from "node:path";',
+        'const sourceRoot = path.resolve(process.cwd(), "../..");',
+        'const worktreeRoot = await createIsolatedProductionRoot(sourceRoot, false);',
+        `await provisionTestSiteBinding(db, worktreeRoot, process.argv[2], { route: \`/\${process.argv[3]}\`, informational: ${req.url === "/seed-synthetic-authority"} });`,
+        'await mkdir(path.join(worktreeRoot, ".factory"), { recursive: true });',
+        'await symlink(path.join(sourceRoot, ".factory/assets"), path.join(worktreeRoot, ".factory/assets"));',
+        "process.stdout.write(JSON.stringify({ ...result, worktreeRoot }));",
         "process.exit(0);",
       ].join("\n");
       const seedFile = path.join(FACTORY_ROOT, ".factory-seed-run11.mts");
@@ -202,6 +213,10 @@ const server = http.createServer(async (req, res) => {
           throw new Error(`synthetic seed failed: ${detail}`);
         }
         const result = JSON.parse(seedRes.stdout.trim().split("\n").filter(Boolean).pop());
+        await stopOperator();
+        operatorCwd = result.worktreeRoot;
+        isolatedRoots.push(operatorCwd);
+        await startOperator();
         return send(200, { ok: true, ...result });
       } finally {
         rmSync(seedFile, { force: true });

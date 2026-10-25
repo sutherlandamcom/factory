@@ -1,3 +1,4 @@
+import { provisionTestSiteBinding } from "../fixtures/project-site-binding.js";
 import { assignmentPage, acceptFixturePage } from "../fixtures/accepted-page.js";
 import { seedProjectWithAcceptedInputs } from "../fixtures/writer-seeds.js";
 import assert from "node:assert/strict";
@@ -54,7 +55,9 @@ const LOCKFILE_DIGEST = "2".repeat(64);
 const MANIFEST_SET_DIGEST = "3".repeat(64);
 const REDIRECT_DIGEST = deterministicDigest({ projectId: "fixture", rules: [] });
 const CANDIDATE_IDENTITY = { repositorySha: REPOSITORY_SHA, lockfileDigest: LOCKFILE_DIGEST };
-function siteIdentity() {
+let boundTestIdentity: ReturnType<typeof siteIdentity> | undefined;
+function siteIdentity(): { siteId: string; siteName: string; canonicalOrigin: string; language: string; profileDigest: string; bindingDigest?: string } {
+  if (boundTestIdentity) return boundTestIdentity;
   return { siteId: "site-fixture", siteName: "Fixture Site", canonicalOrigin: "https://example.com", language: "en", profileDigest: "4".repeat(64) };
 }
 function defaultCandidateEnv(overrides?: { siteProfileDigest?: string; rendererVersion?: string; rendererPolicyVersion?: string }) {
@@ -170,6 +173,7 @@ async function setupLiveAuthority(
   const { projectId } = await seedProjectWithAcceptedInputs(dbInst, key);
   await acceptFixturePage(dbInst, projectId, pageSlug);
   const root = await mkdtemp(path.join(tmpdir(), "production-live-"));
+  boundTestIdentity = await provisionTestSiteBinding(dbInst.db, root, projectId, { siteId: "site-fixture", canonicalOrigin: "https://example.com" });
 
   // Real approved asset version (exact binary + governance digests).
   const assetsModule = await import("../../src/assets/service.js");
@@ -260,7 +264,7 @@ async function setupLiveAuthority(
     designDigest: "a".repeat(64),
     setId: set.id,
     setDigest: set.setDigest,
-    production: new ProductionStore(dbInst.db),
+    production: new ProductionStore(dbInst.db, { repoRoot: root }),
   };
 }
 
@@ -273,7 +277,9 @@ test("PG: production input derivation fails closed without accepted content", as
   const dbInst = await setupMigratedTestDatabase();
   try {
     const { projectId } = await seedProject(dbInst, "prod-empty");
-    const production = new ProductionStore(dbInst.db);
+    const root = await mkdtemp(path.join(tmpdir(), "production-empty-"));
+    boundTestIdentity = await provisionTestSiteBinding(dbInst.db, root, projectId, { siteId: "site-fixture", canonicalOrigin: "https://example.com" });
+    const production = new ProductionStore(dbInst.db, { repoRoot: root });
     await assert.rejects(
       production.deriveProductionInput({
         projectId,
@@ -317,7 +323,7 @@ test("PG: production input derives from the exact accepted authority chain and i
     assert.equal(input2.id, input1.id);
 
     // Restart durability: fresh store instance over the same DB.
-    const fresh = new ProductionStore(env.dbInst.db);
+    const fresh = new ProductionStore(env.dbInst.db, { repoRoot: env.root });
     const latest = await fresh.latestProductionInput(env.projectId, "home");
     assert.equal(latest?.id, input1.id);
   } finally {
@@ -372,7 +378,8 @@ async function setupVisualFixtureOnly(
     expectedCandidateDigest: candidate.candidateDigest,
     reviewNotes: "fixture acceptance",
   });
-  return { projectId, root, production: new ProductionStore(dbInst.db) };
+  boundTestIdentity = await provisionTestSiteBinding(dbInst.db, root, projectId, { siteId: "site-fixture", canonicalOrigin: "https://example.com" });
+  return { projectId, root, production: new ProductionStore(dbInst.db, { repoRoot: root }) };
 }
 
 test("PG: route authority conflict — a different page identity cannot claim a claimed route", async () => {
@@ -552,7 +559,7 @@ test("PG: candidate lifecycle — create, build-record, QA record, state transit
     assert.equal(failed.state, "qa_failed");
 
     // Restart durability.
-    const fresh = new ProductionStore(env.dbInst.db);
+    const fresh = new ProductionStore(env.dbInst.db, { repoRoot: env.root });
     const latest = await fresh.latestQaRun(env.projectId, candidate.id);
     assert.equal(latest?.overall, "FAIL");
   } finally {
@@ -671,6 +678,7 @@ async function setupLiveVisualService(
   const { projectId } = await seedProjectWithAcceptedInputs(dbInst, key);
   await acceptFixturePage(dbInst, projectId, pageSlug);
   const root = await mkdtemp(path.join(tmpdir(), `prod-vis-svc-${key}-`));
+  boundTestIdentity = await provisionTestSiteBinding(dbInst.db, root, projectId, { siteId: "site-fixture", canonicalOrigin: "https://example.com" });
 
   const assetsModule = await import("../../src/assets/service.js");
   const assetStorageModule = await import("../../src/assets/storage.js");
@@ -766,7 +774,7 @@ async function setupLiveVisualService(
     acceptedDesign,
     visual,
     store,
-    production: new ProductionStore(dbInst.db),
+    production: new ProductionStore(dbInst.db, { repoRoot: root }),
   };
 }
 

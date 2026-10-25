@@ -1,3 +1,4 @@
+import { normalizeLexicalText } from "../../text/lexical.js";
 import { readFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -691,12 +692,7 @@ function normalizeWhitespace(text: string): string {
 }
 
 function normalizeAlphaNum(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
+  return normalizeLexicalText(text);
 }
 
 function extractNumbers(text: string): string[] {
@@ -802,23 +798,24 @@ function extractMaterialSentences(
   return sentences;
 }
 
-function isSentenceCoveredByClaims(sentence: string, claims: ReadonlyArray<ClaimLineage>): boolean {
+export function isSentenceCoveredByClaims(sentence: string, claims: ReadonlyArray<ClaimLineage>): boolean {
   if (sentence.startsWith("Reviewed by:") || sentence.includes("data-review-authority")) {
     return true;
   }
   const normSentence = normalizeAlphaNum(sentence);
+  if (!normSentence) return false;
   const sentenceNumbers = extractNumbers(sentence);
   const sentenceTokens = new Set(normSentence.split(" ").filter((t) => t.length >= 4));
 
   for (const claim of claims) {
     const normClaim = normalizeAlphaNum(claim.claimText);
     if (!normClaim) continue;
-    if (normSentence.includes(normClaim) || normClaim.includes(normSentence)) {
-      return true;
-    }
     const claimNumbers = new Set(extractNumbers(claim.claimText));
     const allNumbersCovered = sentenceNumbers.every((n) => claimNumbers.has(n));
     if (!allNumbersCovered) continue;
+    if (normSentence.includes(normClaim) || normClaim.includes(normSentence)) {
+      return true;
+    }
 
     const claimTokens = normClaim.split(" ").filter((t) => t.length >= 4);
     if (claimTokens.length === 0) continue;

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { api, OperatorApiError } from "../api/client";
 import type {
   SearchWorkspaceReadModel,
@@ -17,6 +17,9 @@ import { usePolling } from "../hooks/usePolling";
  * Intelligence. No raw JSON, no provider plumbing, no secrets.
  */
 export function SearchPage({ projectId }: { projectId: string }) {
+  const activeProjectId = useRef(projectId);
+  activeProjectId.current = projectId;
+  const requestGeneration = useRef(0);
   const [ws, setWs] = useState<SearchWorkspaceReadModel | null>(null);
   const [lastRun, setLastRun] = useState<SearchRunReadModel | null>(null);
   const [query, setQuery] = useState("");
@@ -29,10 +32,11 @@ export function SearchPage({ projectId }: { projectId: string }) {
   const loadWorkspace = useCallback(async () => {
     try {
       const w = await api.getSearchWorkspace(projectId);
+      if (activeProjectId.current !== projectId) return;
       setWs(w);
       setError(null);
     } catch (e) {
-      setError(searchErrorMessage(e, "Search workspace failed to load."));
+      if (activeProjectId.current === projectId) setError(searchErrorMessage(e, "Search workspace failed to load."));
     }
   }, [projectId]);
 
@@ -41,8 +45,14 @@ export function SearchPage({ projectId }: { projectId: string }) {
   }, [loadWorkspace]);
   usePolling(loadWorkspace, 5000);
 
+  useEffect(() => {
+    requestGeneration.current++;
+    setQuery(""); setLocation(""); setLanguage(""); setLastRun(null); setBusy(false); setError(null);
+  }, [projectId, ws?.acceptedInput?.digest]);
+
   const run = async (refresh = false) => {
     if (!ws) return;
+    const generation = requestGeneration.current;
     setBusy(true);
     setError(null);
     try {
@@ -53,35 +63,37 @@ export function SearchPage({ projectId }: { projectId: string }) {
         device,
         refresh,
       });
-      setLastRun(result);
+      if (activeProjectId.current === projectId && requestGeneration.current === generation) setLastRun(result);
     } catch (e) {
-      setError(searchErrorMessage(e, "Search run failed."));
+      if (activeProjectId.current === projectId && requestGeneration.current === generation) setError(searchErrorMessage(e, "Search run failed."));
     } finally {
-      setBusy(false);
+      if (activeProjectId.current === projectId && requestGeneration.current === generation) setBusy(false);
     }
   };
 
   const openRun = async (runId: string) => {
+    const generation = requestGeneration.current;
     setBusy(true);
     setError(null);
     try {
       const detail = await api.getSearchRun(projectId, runId);
-      setLastRun(detail);
+      if (activeProjectId.current === projectId && requestGeneration.current === generation) setLastRun(detail);
     } catch (e) {
-      setError(searchErrorMessage(e, "Could not load run."));
+      if (activeProjectId.current === projectId && requestGeneration.current === generation) setError(searchErrorMessage(e, "Could not load run."));
     } finally {
-      setBusy(false);
+      if (activeProjectId.current === projectId && requestGeneration.current === generation) setBusy(false);
     }
   };
 
   const pickSeed = (q: string) => {
     setQuery(q);
-    const loc = ws?.seeds.marketHints.at(0);
-    if (loc && !location) setLocation(loc);
+
   };
 
   return (
     <div className="space-y-6" data-testid="search-workspace">
+      {ws?.effectiveContext && <p className="text-sm text-gray-600">Accepted search defaults: {ws.effectiveContext.language} · {ws.effectiveContext.location}. Filled targeting fields override these defaults.</p>}
+      {ws?.contextError && <p role="status" className="text-sm text-amber-800">{ws.contextError} Enter explicit targeting below.</p>}
       {/* Accepted-input lineage */}
       <Section title="Accepted Inputs">
         {ws?.acceptedInput ? (
@@ -166,6 +178,12 @@ export function SearchPage({ projectId }: { projectId: string }) {
             />
           </div>
           <div>
+            <label htmlFor="search-language" className="mb-1 block text-sm font-medium text-gray-700">Search language</label>
+            <input id="search-language" value={language} onChange={event => setLanguage(event.target.value)} maxLength={35}
+              placeholder={ws?.effectiveContext?.language ?? "Select language (e.g. ru)"}
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
+          </div>
+          <div>
             <label htmlFor="search-device" className="mb-1 block text-sm font-medium text-gray-700">Device</label>
             <select
               id="search-device"
@@ -196,7 +214,7 @@ export function SearchPage({ projectId }: { projectId: string }) {
             Refresh (new observation)
           </button>
           <span className="text-xs text-gray-400">
-            Language: {language.trim() || "provider default"}
+            Language: {language.trim() || ws?.effectiveContext?.language || "selection required"}
           </span>
         </div>
         {error && <div className="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-700" data-testid="search-error">{error}</div>}
@@ -484,6 +502,8 @@ export function searchErrorMessage(error: unknown, fallback: string): string {
     switch (error.code) {
       case "search_input_not_accepted":
         return "No accepted project inputs. Complete Intake acceptance before running searches.";
+      case "search_context_invalid":
+        return "Search targeting needs clarification. Select a supported language and an unambiguous location before running search.";
       case "search_query_invalid":
         return "That query is not valid. Check length and characters, then try again.";
       case "search_provider_not_configured":

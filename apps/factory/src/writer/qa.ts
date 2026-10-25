@@ -1,3 +1,4 @@
+import { significantTerms } from "../text/lexical.js";
 import type {
   ContentBriefData,
   PageContentProposalData,
@@ -24,7 +25,7 @@ import retextReadability from "retext-readability";
  * scores. Keyword density / LSI / pseudo-SEO scoring is deliberately absent.
  */
 
-const QA_VERSION = "content-qa-v1";
+const QA_VERSION = "content-qa-v2";
 
 function overallVerdict(checks: QaCheckResult[]): QaVerdict {
   if (checks.some((c) => c.verdict === "FAIL")) return "FAIL";
@@ -242,12 +243,10 @@ export function runSearchQa(
     // the requirement and a section (>= 2 shared significant terms or a
     // verbatim phrase match). NOT keyword density — presence of the required
     // meaning-bearing vocabulary.
-    const reqTerms = norm(requirement)
-      .split(/[^a-z0-9]+/)
-      .filter((t) => t.length >= 4);
+    const reqTerms = significantTerms(requirement);
     for (const section of sectionTexts) {
       const secText = norm(section.text);
-      if (secText.includes(norm(requirement))) return { covered: true, evidenceRef: section.ref };
+      if (reqTerms.length > 0 && secText.includes(norm(requirement))) return { covered: true, evidenceRef: section.ref };
       const shared = reqTerms.filter((t) => secText.includes(t)).length;
       if (reqTerms.length > 0 && shared >= Math.min(2, reqTerms.length)) {
         return { covered: true, evidenceRef: section.ref };
@@ -302,17 +301,15 @@ export function runSearchQa(
 
   // Primary-intent alignment: the primary intent's significant terms must
   // appear in the title/introduction.
-  const intentTerms = norm(brief.searchSemantics.primaryIntent)
-    .split(/[^a-z0-9]+/)
-    .filter((t) => t.length >= 4);
+  const intentTerms = significantTerms(brief.searchSemantics.primaryIntent);
   const introText = norm(`${proposal.title} ${proposal.introduction}`);
   const alignedTerms = intentTerms.filter((t) => introText.includes(t)).length;
   checks.push(
-    intentTerms.length === 0 || alignedTerms >= Math.min(2, intentTerms.length)
+    intentTerms.length > 0 && alignedTerms >= Math.min(2, intentTerms.length)
       ? check(
           "search.primary_intent",
           "PASS",
-          "Primary intent is aligned in title/introduction.",
+          "Primary intent has lexical overlap in title/introduction; this is not semantic or factual verification.",
           [{ kind: "requirement", ref: brief.searchSemantics.primaryIntent, note: `${alignedTerms}/${intentTerms.length} intent terms present` }],
         )
       : check(

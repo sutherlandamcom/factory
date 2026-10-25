@@ -16,7 +16,9 @@ minimumReleaseAgeExclude:
   - basic-ftp@6.2.3
   - brace-expansion@1.1.21
   - devalue@5.9.4
-  - fast-uri@3.1.8
+  - zod@4.6.6
+  - fast-uri@3.1.9
+  - body-parser@1.20.9
   - http-cache-semantics@4.3.0
   - ip-address@10.7.4
   - proxy-addr@2.0.8
@@ -30,7 +32,11 @@ overrides:
   basic-ftp: "6.2.3"
   "brace-expansion@<2": "1.1.21"
   devalue: "5.9.4"
-  fast-uri: "3.1.8"
+  fast-uri: "3.1.9"
+  body-parser: "^1.20.9"
+  zod: "4.6.6"
+  "@google/design.md>zod": "4.6.6"
+  puppeteer-core: "^25.16.0"
   http-cache-semantics: "4.3.0"
   ip-address: "10.7.4"
   proxy-addr: "2.0.8"

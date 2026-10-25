@@ -614,6 +614,393 @@ function extractSubstantiveTokens(text: string): string[] {
 }
 
 /**
+ * P1-04 — industrial actor/action attribution alignment.
+ *
+ * Financial-industrial verbs assign responsibility to a specific actor. A
+ * source sentence "The FACILITY received 500M investment" does not authorize
+ * a claim "The CONTRACTOR invested 500M" even when every number matches.
+ * This check is deliberately narrow and deterministic (no AI, no semantics
+ * engine): for each claim clause `<actor> <actional-verb> ... <object?>`,
+ * the combined supporting evidence must contain the same actor token within
+ * a short window before the same verb family (or the excerpt's own actor-verb
+ * pairing of that verb family). Exemptions keep first-person/facility-neutral
+ * restatement and explicitly-paired quote edits working:
+ *  - the evidence pairs the same actor with the same verb family anywhere;
+ *  - the evidence names the claim actor at all AND the verb family, in the
+ *    same sentence segment ("Vendor Ltd" + "engineering review").
+ */
+const ACTIONAL_VERB_FAMILIES: ReadonlyArray<{ family: string; pattern: RegExp }> = [
+  { family: "invest", pattern: /\b(invests?|invested|investing|funded|financed)\b/i },
+  { family: "construct", pattern: /\b(constructs?|constructed|constructing|builds?|built|building|erected)\b/i },
+  { family: "engineer", pattern: /\b(engineers?|engineered|engineering)\b/i },
+  { family: "operate", pattern: /\b(operates?|operated|operating|runs?)\b/i },
+  { family: "own", pattern: /\b(owns?|owned|holding|owner|owner of)\b/i },
+  { family: "deliver_contract", pattern: /\b(contract(ed|ing|s)|commissioned|carried\s+out|performed)\b/i },
+];
+
+/**
+ * Russian action-family patterns (P1-04 RU coverage; same six family IDs).
+ * Scope: past/present/perfective actional verbs of industrial attribution.
+ * Verb-first regexes match inflected finite forms; family "engineer" also
+ * matches the composed Russian predicate pattern «выполнило ... проектирование/
+ * инжиниринг» (deliver-verb + engineering-of-action noun in one phrase).
+ * Negation is NOT matched here: the negation guard below suppresses
+ * «не <verb>» occurrences from supporting pairings.
+ */
+const RU_ACTIONAL_VERB_FAMILIES: ReadonlyArray<{ family: string; pattern: RegExp }> = [
+  {
+    family: "invest",
+    // инвестировал/а/о/и, вложил/а/о/и, финансировал/а/о/и, финансирует
+    pattern: /(?:инвестировал(?:а|о|и)?|вложил(?:а|о|и)?|финансировал(?:а|о|и)?|финансирует|инвестирует)/iu,
+  },
+  {
+    family: "construct",
+    // построил/а/о/и, строил/а/о/и, возвёл/возвел, соорудил, модернизировал
+    pattern: /(?:построил(?:а|о|и)?|строил(?:а|о|и)?|возвёл|возвел|соорудил(?:а|о|и)?|модернизировал(?:а|о|и)?|реконструировал(?:а|о|и)?)/iu,
+  },
+  {
+    family: "engineer",
+    // спроектировал/проектировал + composed «выполнило ... проектирование/инжиниринг»
+    pattern: /(?:спроектировал(?:а|о|и)?|проектировал(?:а|о|и)?|инжиниринг|проектирование)/iu,
+  },
+  {
+    family: "operate",
+    // эксплуатирует|эксплуатировал, обслуживает|обслуживал
+    pattern: /(?:эксплуатирует|эксплуатировал(?:а|о|и)?|обслуживает|обслуживал(?:а|о|и)?)/iu,
+  },
+  {
+    family: "own",
+    // владеет|владел, является собственником, принадлежит
+    pattern: /(?:владеет|владел(?:а|о|и)?|является\s+собственником|принадлежит)/iu,
+  },
+  {
+    family: "deliver_contract",
+    // выполнил/а/о/и — deliver-verb alone maps to the contract family, but
+    // the composed «выполнило ... проектирование/инжиниринг» is reclassified
+    // to the engineer family below.
+    pattern: /(?:выполнил(?:а|о|и)?|подряд|несёт\s+ответственность)/iu,
+  },
+];
+
+/**
+ * RU verb-composition refinement: a deliver-verb («выполнило») followed, in
+ * the same predicate, by an engineering-of-action noun maps the WHOLE pair to
+ * the engineer family (RU-02/RU-06/RU-12 semantics).
+ */
+const RU_DELIVER_ENGINEERING_NOUN =
+  /выполнил(?:а|о|и)?.{0,40}?(?:проектирован\p{L}+|инжиниринг)/iu;
+
+/** RU future/intent markers: cannot support a completed-past claim class. */
+const RU_INTENT_MARKERS =
+  /(?:планирует|планируются|намерен(?:а|о|ы)?|собирается|собираются|будет|будут|интенция|намерение|предстоит)/iu;
+
+/**
+ * Sentence split that ALSO breaks on Russian sentence enders and does not
+ * depend on a terminal period (renders excerpt fragments isolated rather
+ * than fused with neighboring source refs).
+ */
+function splitEvidenceSentences(combined: string): string[] {
+  const parts = combined
+    .split(/(?<=[.!?.…])\s+/)
+    .flatMap((seg) =>
+      // Guard against cross-source fusion when an excerpt lacks end
+      // punctuation: source-ref prefixes are re-tokenized per sentence by
+      // design; long unpunctuated runs are capped to a bounded window.
+      seg.length > 300 ? seg.match(/[\s\S]{1,200}/g) ?? [seg] : [seg],
+    );
+  return parts;
+}
+
+/** Normalization for RU/EN actor and object matching. */
+function attributionKey(value: string): string {
+  return normKey(value)
+    .replace(/[«»"“”'`,.():;!?]/g, "")
+    .replace(/ё/g, "е")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** EN functional-word stoplist for actor windows (original behavior). */
+const ACTOR_STOPWORDS = new Set([
+  "the", "a", "an", "of", "to", "for", "and", "or", "was", "were", "is", "in",
+  "on", "at", "by", "with", "from", "that", "this", "its", "their", "facility",
+  "plant", "site", "project", "contract", "unit", "units", "million", "billion",
+]);
+
+/** RU + EN functional-word stoplist for actor windows. */
+const RU_ACTOR_STOPWORDS = new Set([
+  "и", "в", "во", "на", "за", "под", "от", "до", "для", "с", "со", "у", "о", "об",
+  "что", "это", "этот", "эта", "был", "была", "было", "были", "не", "по", "при",
+  "завод", "завода", "заводу", "заводе", "заводом", "производство", "производства",
+  "проект", "проекта", "проекте", "объект", "объекта", "объекте", "млн", "миллион",
+  "млрд", "рублей", "руб", "тыс", "год", "года", "году", "лет",
+  "построено", "построен", "инвестировано",
+  // Deliver-verb tokens that precede an engineering-of-action noun in the
+  // composed predicate («выполнило инженерное проектирование») are part of
+  // the verb phrase, not the actor (RU-06 positive semantics). The composed
+  // deliver-verb occurrence itself still pairs (reclassified to engineer).
+  "выполнил", "выполнила", "выполнило", "выполнили",
+]);
+
+/** Legal-entity prefixes glue to the following name token (RU-11). */
+const RU_ENTITY_PREFIXES = new Set(["ооо", "ао", "пао", "зао", "оао", "нпо", "нпп"]);
+
+function isEntityPrefix(tok: string): boolean {
+  return RU_ENTITY_PREFIXES.has(attributionKey(tok));
+}
+
+interface AttributionPair {
+  actor: string;
+  family: string;
+  objectFallback?: string;
+  tense: "past" | "present" | "intent";
+}
+
+function ruTenseClass(matchedText: string): "past" | "present" | "intent" {
+  if (/ил(?:а|о|и)?$/u.test(matchedText.trim()) || /л(?:а|о|и)?$/iu.test(matchedText)) {
+    return "past";
+  }
+  if (/у(?=т|ю)|и?т$|построено?$/iu.test(matchedText)) {
+    return "present";
+  }
+  return "present";
+}
+
+/**
+ * Extract actor/family pairs from ONE sentence. Composite pass1: for each
+ * family pattern occurrence (ALL matches, not just the first), assemble the
+ * actor window immediately BEFORE the match, glue legal-entity prefixes,
+ * filter stopwords, and derive a bounded object fallback from quoted names
+ * or the post-verbal object candidates. Negated occurrences («не <verb>»)
+ * are recorded as pairs with tense "intent" — they can support nothing.
+ */
+function extractActorVerbPairsSentence(
+  sentence: string,
+  families: ReadonlyArray<{ family: string; pattern: RegExp }> = ACTIONAL_VERB_FAMILIES,
+): AttributionPair[] {
+  const pairs: AttributionPair[] = [];
+  const norm = sentence;
+  for (const { family, pattern } of families) {
+    const rx = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : pattern.flags + "g");
+    let m: RegExpExecArray | null;
+    // Respect lastIndex-free fresh regex per family.
+    while ((m = rx.exec(norm)) !== null) {
+      const matched = m[0];
+      if (m.index === undefined || m.index === 0 && matched.length === 0) break;
+      const before = normKey(norm.slice(0, m.index)).split(/\s+/).filter(Boolean);
+      // Negation guard: «не»/« NOT» immediately before the verb occurrence
+      // voids this occurrence as supporting evidence.
+      const isNegated = /\b(?:не|нет)\b/i.test(norm.slice(Math.max(0, m.index - 12), m.index));
+      // Composite named subjects: "ООО X и ООО Y <verb>" — emit ONE pair per
+      // named entity so each subject is individually verified (unsupported
+      // side rejects; supported side may pass).
+      const beforeStr = normKey(norm.slice(0, m.index));
+      const compoundMatches = [...beforeStr.matchAll(/(?:ооо|ао|пао|зао|оао)\s+\S+/gi)];
+      if (compoundMatches.length >= 2) {
+        const entities = compoundMatches.map((cm) => cm[0]).map(attributionKey);
+        const between = beforeStr.slice(
+          (compoundMatches[0]!.index ?? 0) + compoundMatches[0]![0].length,
+          compoundMatches[compoundMatches.length - 1]!.index ?? 0,
+        );
+        const onlyConjunction = /^[\sа-яё]*и[\sа-яё]*$/iu.test(between.replace(/,\s*/g, " "));
+        if (onlyConjunction) {
+          for (const actor of entities) {
+            const postVerbal = sentence.slice((m.index ?? 0) + matched.length);
+            const quotedAfter = postVerbal.match(/[«"]([^«»"]{2,40})[»"]/);
+            const allQuoted = [...sentence.matchAll(/[«"]([^«»"]{2,40})[»"]/g)];
+            const lastQuoted = allQuoted.length > 0 ? allQuoted[allQuoted.length - 1]![1] : undefined;
+            const objectFallback = quotedAfter?.[1] ?? lastQuoted ?? undefined;
+            pairs.push({
+              actor,
+              family,
+              objectFallback,
+              tense: isNegated ? "intent" : families === RU_ACTIONAL_VERB_FAMILIES ? ruTenseClass(matched) : "past",
+            });
+          }
+          continue;
+        }
+      }
+      const actorTokens: string[] = [];
+      for (let i = before.length - 1; i >= 0 && actorTokens.length < 7; i--) {
+        const tok = before[i]!;
+        if (RU_ACTOR_STOPWORDS.has(tok) || ACTOR_STOPWORDS.has(tok)) {
+          // Composite-subject conjunction: cross «и» ONLY when a legal-entity
+          // prefix follows it (a second company); any other stopword — or «и»
+          // not followed by an entity — terminates the window.
+          if (tok === "и") {
+            const j = i - 1;
+            const after = before[j];
+            if (after && isEntityPrefix(after)) {
+              actorTokens.unshift(tok);
+              continue;
+            }
+          }
+          break;
+        }
+        actorTokens.unshift(tok);
+        if (isEntityPrefix(tok)) break; // company name captured after gluing
+      }
+      // Glue adjacent entity prefixes ("ооо инжпроект").
+      const glued: string[] = [];
+      for (let i = 0; i < actorTokens.length; i++) {
+        const tok = actorTokens[i]!;
+        if (isEntityPrefix(tok) && i + 1 < actorTokens.length) {
+          glued.push(`${tok} ${actorTokens[i + 1]}`);
+          i++;
+        } else {
+          glued.push(tok);
+        }
+      }
+      // Composite subjects: a coordinating conjunction («и») inside the
+      // actor window splits MULTIPLE actor candidates (each side is its own
+      // pair) so that attributing shared work to one of several subjects is
+      // individually verified (fail-closed for the unsupported side).
+      let actors: string[] = [glued.join(" ")];
+      if (glued.includes("и")) {
+        const sides: string[] = [];
+        let cur: string[] = [];
+        for (const tok of glued) {
+          if (tok === "и") {
+            if (cur.length > 0) sides.push(cur.join(" "));
+            cur = [];
+          } else {
+            cur.push(tok);
+          }
+        }
+        if (cur.length > 0) sides.push(cur.join(" "));
+        if (sides.length > 1) actors = sides;
+      }
+      for (const actor of actors) {
+        // Bounded object fallback: quoted «...»/"..." name AFTER the verb
+        // (the object of the action); the actor itself is quoted first, so
+        // post-verbal position is required; fall back to the LAST quoted
+        // name in the sentence if the predicate carries no quotes. Search
+        // runs on the RAW sentence (guillemets intact; attributionKey would
+        // have stripped them).
+        const postVerbal = sentence.slice((m.index ?? 0) + matched.length);
+        const quotedAfter = postVerbal.match(/[«"]([^«»"]{2,40})[»"]/);
+        const allQuoted = [...sentence.matchAll(/[«"]([^«»"]{2,40})[»"]/g)];
+        const lastQuoted = allQuoted.length > 0 ? allQuoted[allQuoted.length - 1]![1] : undefined;
+        const objectFallback = quotedAfter?.[1] ?? lastQuoted ?? undefined;
+        const tense: AttributionPair["tense"] = isNegated
+          ? "intent"
+          : families === RU_ACTIONAL_VERB_FAMILIES
+            ? ruTenseClass(matched)
+            : "past";
+        pairs.push({ actor: attributionKey(actor), family, objectFallback, tense });
+      }
+    }
+  }
+  // RU composed-predicate reclassification: deliver-verb + engineering noun.
+  if (RU_DELIVER_ENGINEERING_NOUN.test(norm)) {
+    for (const pair of pairs) {
+      if (pair.family === "deliver_contract") {
+        pair.family = "engineer";
+      }
+    }
+  }
+  // Related family suppression: when the SAME deliver occurrence reclassifies
+  // to engineer, ensure a plain engineering-noun match of the same predicate
+  // does not double-report (de-dup by family).
+  const seen = new Set<string>();
+  const deduped: AttributionPair[] = [];
+  for (const pair of pairs) {
+    const key = `${pair.family}|${pair.actor}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(pair);
+  }
+  return deduped;
+}
+
+/**
+ * Extract `<actor-token(s)> VERB` candidate pairs from a text. Delegates to
+ * the per-sentence extractor for both the EN and RU family sets; the RU set
+ * only triggers when the sentence contains Cyrillic actional markers (bounded
+ * by the family patterns themselves — sentences without matches produce no
+ * pairs, preserving the documented behavior for generic non-actional prose).
+ */
+function claimActorVerbPairs(text: string): Array<{ actor: string; family: string }> {
+  const sentences = splitEvidenceSentences(text);
+  const pairs: Array<{ actor: string; family: string }> = [];
+  for (const sentence of sentences) {
+    for (const pair of extractActorVerbPairsSentence(sentence, ACTIONAL_VERB_FAMILIES)) {
+      pairs.push({ actor: pair.actor, family: pair.family });
+    }
+    for (const pair of extractActorVerbPairsSentence(sentence, RU_ACTIONAL_VERB_FAMILIES)) {
+      pairs.push({ actor: pair.actor, family: pair.family });
+    }
+  }
+  return pairs;
+}
+
+/**
+ * The evidence must pair the claim's actor with the same verb family: the
+ * excerpt sentence must contain the same verb family AND the same actor
+ * token(s) in the actor window before that verb (same pairing rule as
+ * claimActorVerbPairs for EN; the RU extractor for Cyrillic sentences).
+ * A mere co-occurrence of actor and verb anywhere in the sentence is NOT
+ * sufficient: "Vendor Ltd performed the engineering review ... building two"
+ * pairs Vendor Ltd with "performed", not with "building" (which belongs to
+ * the facility's building count).
+ *
+ * Object binding (P1-04 RU-07/RU-08): a supporting excerpt must also carry
+ * the claim's OBJECT for that action (quoted facility/project name, or the
+ * post-verbal object token). Facility text differing while actor+family
+ * match ⇒ still unsupported (a shared actor never proves work on a
+ * different facility).
+ *
+ * Tense/intent (RU-13/RU-14): evidence only supports same tense class;
+ * negated-and intent-class occurrences support nothing.
+ */
+function actorActionAlignmentProblems(claimText: string, combinedEvidence: string): string[] {
+  const problems: string[] = [];
+  // Split combined evidence per source ref first, then per sentence within
+  // each excerpt (prevents cross-excerpt sentence fusion and limits
+  // unpunctuated-run contamination).
+  const evidenceSentences = combinedEvidence
+    .split(/\s{2,}|\n+/)
+    .flatMap((chunk) => splitEvidenceSentences(chunk.trim()));
+  const claimPairs = [
+    ...extractActorVerbPairsSentence(claimText, ACTIONAL_VERB_FAMILIES),
+    ...extractActorVerbPairsSentence(claimText, RU_ACTIONAL_VERB_FAMILIES),
+  ];
+  for (const pair of claimPairs) {
+    if (pair.tense === "intent") {
+      // A negated or intent-class mention in the CLAIM itself is an
+      // explicit limitation, not an attributive assertion: no requirement.
+      continue;
+    }
+    const supported = evidenceSentences.some((es) =>
+      [
+        ...extractActorVerbPairsSentence(es, ACTIONAL_VERB_FAMILIES),
+        ...extractActorVerbPairsSentence(es, RU_ACTIONAL_VERB_FAMILIES),
+      ]
+        .filter((p) => p.family === pair.family && p.tense !== "intent")
+        .some((p) => {
+          const actorMatches =
+            p.actor.length > 0 &&
+            (p.actor.endsWith(pair.actor) || pair.actor.endsWith(p.actor) ||
+              p.actor.includes(pair.actor) || pair.actor.includes(p.actor));
+          if (!actorMatches) return false;
+          // Object containment: claim object vs excerpt object.
+          const claimObj = (pair.objectFallback ?? "").toLowerCase();
+          const evObj = (p.objectFallback ?? "").toLowerCase();
+          if (!claimObj) return true;
+          if (!evObj) return false;
+          return evObj.includes(claimObj) || claimObj.includes(evObj);
+        }),
+    );
+    if (!supported) {
+      problems.push(
+        `SOURCE_ATTRIBUTION_UNSUPPORTED: claimText assigns ${pair.family} responsibility to "${pair.actor}", but no cited supportingExcerpt sentence pairs that actor with that action. A shared figure, facility name or nearby verb does not establish actor responsibility.`,
+      );
+    }
+  }
+  return problems;
+}
+
+/**
  * Independent recalculation of a calculationRef (Block 8: M16, M17).
  * Verifies unit coherence, formula reproducibility, and rounding discipline.
  */
@@ -729,6 +1116,14 @@ export function claimLineageProblems(lineage: ClaimLineage): string[] {
     if (!hasLexicalOverlap) {
       problems.push("Claim text has no lexical overlap with cited supportingExcerpt evidence.");
     }
+    // P1-04 industrial attribution: actional verbs bind a SPECIFIC actor. An
+    // excerpt may cite the same figures and the same facility without naming
+    // the claim's actor performing that action; a shared number never proves
+    // responsibility (investment/construction/engineering/operation/ownership
+    // belong to whoever the source says performed them). Deterministic check:
+    // for any actional actor-verb pair in the claim, the supporting excerpt
+    // must pair the same actor token with the same verb family.
+    problems.push(...actorActionAlignmentProblems(lineage.claimText, combinedEvidence));
     // M26: Excerpt discusses same domain (e.g. Chamonix property) but does not entail the substantive proposition
     const domainTerms = ["chamonix", "megeve", "alpine", "property", "housing", "chalet", "investment"];
     const claimLower = lineage.claimText.toLowerCase();

@@ -1,3 +1,4 @@
+import { createIsolatedProductionRoot, provisionTestSiteBinding } from "../fixtures/project-site-binding.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { cp, readFile, rm, mkdtemp, mkdir } from "node:fs/promises";
@@ -1027,7 +1028,8 @@ test(
   "RUN 12: Sutherland six-page governed production proof (real Search/Competitor services -> sourced writer -> design -> visuals -> PPI -> Astro -> mandatory YMYL QA gate)",
   { timeout: 900_000 },
   async () => {
-    const repoRoot = await resolveRepositoryRoot();
+    const sourceRepoRoot = await resolveRepositoryRoot();
+    const repoRoot = await createIsolatedProductionRoot(sourceRepoRoot);
     const realBuildIdentity = await loadProductionBuildIdentity(repoRoot);
     assert.match(realBuildIdentity.repositorySha, /^[0-9a-f]{40}$/, "real git HEAD SHA loaded");
     assert.match(realBuildIdentity.lockfileDigest, /^[0-9a-f]{64}$/, "real pnpm-lock.yaml SHA-256 loaded");
@@ -1037,6 +1039,7 @@ test(
     try {
       // ---- P1-1: Real SearchIntelligenceService (Run 2) + CompetitorContentGapService (Run 3) ----
       const seeded = await seedSutherlandProject(dbInst, "run12-proof");
+      await provisionTestSiteBinding(dbInst.db, repoRoot, seeded.projectId, { siteId: "sutherland-private-office", canonicalOrigin: "https://sutherlandam.com", route: "/home" });
       assert.equal(seeded.serpOrganicCount, 6, "P1-1: SERP snapshot contains 6 acquired organic results");
       assert.equal(seeded.pageSnapshotCount, 6, "P1-1: Competitor run persisted 6 acquired page snapshots");
       assert.equal(seeded.analysisCount, 6, "P1-1: Competitor run persisted 6 structured page analyses");
@@ -1047,7 +1050,7 @@ test(
       assert.notEqual(seeded.gapSnapshotDigest, "e".repeat(64), "P1-1: Gap digest is computed, not a constant");
 
       const trust = new TrustGovernanceStore(dbInst.db);
-      const productionStore = new ProductionStore(dbInst.db);
+      const productionStore = new ProductionStore(dbInst.db, { repoRoot });
       const productionFacade = new ProductionApiFacade(dbInst.db, repoRoot);
       const writerStores = {
         store: new WriterStore(dbInst.db),
@@ -1911,14 +1914,16 @@ test(
       );
 
       // ---- P2-5: Persist the built 6-page Sutherland site & manifests in .factory/qa-evidence/run12-sutherland-site ----
-      const qaEvidenceRoot = path.join(repoRoot, ".factory", "qa-evidence", "run12-sutherland-site");
+      const qaEvidenceRoot = path.join(sourceRepoRoot, ".factory", "qa-evidence", "run12-sutherland-site");
       await rm(qaEvidenceRoot, { recursive: true, force: true }).catch(() => undefined);
       await mkdir(qaEvidenceRoot, { recursive: true });
       await cp(distDir2, path.join(qaEvidenceRoot, "dist"), { recursive: true });
       await cp(path.join(last6, "manifests"), path.join(qaEvidenceRoot, "manifests"), { recursive: true });
 
       // ---- Real-browser Playwright E2E, Responsive, Axe & Keyboard QA against the preserved 6-page Sutherland site ----
-      const starterDir = path.join(repoRoot, "sites", "starter");
+      // Test/config oracles stay in the source checkout; only candidate build
+      // configuration/output is isolated. The built artifact path stays exact.
+      const starterDir = path.join(sourceRepoRoot, "sites", "starter");
       const pwRun = await runProcess(
         "pnpm",
         [

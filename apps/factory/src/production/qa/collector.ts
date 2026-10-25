@@ -238,9 +238,10 @@ export class LocalTrustedQaEvidenceExecutor implements TrustedQaEvidenceExecutor
               const marker = await page.evaluate(() => {
                 const active = document.activeElement;
                 if (!active || active === document.body) return "";
-                return active.tagName + ":" + (active.getAttribute("href") ?? active.id ?? active.textContent?.trim() ?? "");
+                const elements = Array.from(document.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+                return String(elements.indexOf(active));
               });
-              if (marker === "") ok = false;
+              if (marker !== String(i)) ok = false;
               visited.add(marker);
             }
             results.push({ kind: "keyboard", route, expected, visited: visited.size, ok: ok && visited.size === expected });

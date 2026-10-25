@@ -17,7 +17,7 @@ export async function acquireAcceptedGap(db: FactoryDatabaseInstance, projectId:
   const serp = new FixtureSerpProvider();
   const search = new SearchIntelligenceService({ intake, searchStore: new SearchStore(db.db), productionSerpProvider: serp, fixtureSerpProvider: serp,
     analyst: new FixtureSearchAnalyst(), groundedProvider: new FixtureGroundedSearchProvider(), config: { providerMode: "fixture" } });
-  const evidence = await search.runSearch({ projectId, query: "roof repair austin", device: "desktop", refresh: true });
+  const evidence = await search.runSearch({ projectId, query: "roof repair austin", location: "Austin,Texas,United States", language: "en", device: "desktop", refresh: true });
   const service = new CompetitorContentGapService({ intake, competitorStore: new CompetitorStore(db.db),
     competitorAnalyst: new FixtureCompetitorAnalyst(), gapAnalyst: new FixtureGapAnalyst(), pageProvider: new FixturePageProvider(), config: { mode: "fixture" } });
   const competitors = await service.runCompetitors({ projectId, serpSnapshotId: evidence.serp!.snapshotId });

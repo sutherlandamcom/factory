@@ -1,8 +1,10 @@
 import { gotoSubsection } from "./run11-navigation.js";
 import { expect, type Page } from "@playwright/test";
-export async function acceptSearchGap(page: Page) {
+export async function acceptSearchGap(page: Page, context: { query: string; location?: string; language?: string } = { query: "roof repair austin", location: "United States", language: "en" }) {
   await gotoSubsection(page, "Research", "Search");
-  await page.getByLabel("Query", { exact: false }).first().fill("roof repair austin");
+  await page.getByLabel("Query", { exact: false }).first().fill(context.query);
+  if (context.location) await page.getByLabel("Location", { exact: false }).first().fill(context.location);
+  if (context.language) await page.locator("#search-language").fill(context.language);
   await page.getByTestId("search-workspace").getByRole("button", { name: "Run Search" }).click();
   await expect(page.locator("text=SERP", { hasText: "SERP" }).first()).toBeVisible({ timeout: 30_000 });
     await gotoSubsection(page, "Research", "Competitors");

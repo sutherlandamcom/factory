@@ -17,6 +17,20 @@ export interface DesignMdLintReport {
 }
 
 /**
+ * The pinned @google/design.md 0.4.0 bundle embeds zod v3 at runtime while its
+ * declared types resolve the external zod package. A finding severity is
+ * cross-checked against the actual runtime value so the Factory finding type
+ * stays exact regardless of upstream type-surface drift.
+ */
+const SEVERITY_VALUES: ReadonlySet<string> = new Set(["error", "warning", "info"]);
+
+function normalizeSeverity(value: unknown): DesignMdLintFinding["severity"] {
+  return typeof value === "string" && SEVERITY_VALUES.has(value)
+    ? (value as DesignMdLintFinding["severity"])
+    : "info";
+}
+
+/**
  * Official tooling owns YAML/markdown parsing, token resolution, portable
  * lint and contrast checks. Factory additionally requires front matter,
  * a named identity and a resolved primary color: upstream intentionally
@@ -29,7 +43,9 @@ export function lintDesignMd(markdown: string): DesignMdLintReport {
   try {
     const report = lint(markdown);
     findings.push(...report.findings.map((finding) => ({
-      severity: finding.severity, rule: finding.rule ?? "official-parse", message: finding.message,
+      severity: normalizeSeverity(finding.severity),
+      rule: finding.rule ?? "official-parse",
+      message: finding.message,
     })));
     if (!/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.test(markdown)) {
       findings.push({ severity: "error", rule: "front-matter", message: "Factory requires DESIGN.md front matter." });

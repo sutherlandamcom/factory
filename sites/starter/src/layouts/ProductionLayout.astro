@@ -139,7 +139,10 @@ if (!displayFont || !bodyFont) {
   </head>
   <body class="min-h-screen bg-[var(--color-background-primary)] text-[var(--color-text-primary)] antialiased" style={`font-family:${bodyFont.family}`}>
     <header class="border-b border-[var(--color-border-subtle)] px-[var(--spacing-page-x)] py-[var(--spacing-stack-md)]">
-      <nav aria-label="Primary"><a href="/" class="font-[var(--typography-heading)] font-semibold text-[var(--color-text-primary)]">{input.siteIdentity.siteName}</a></nav>
+      <nav aria-label="Primary" class="flex flex-wrap items-center gap-[var(--spacing-stack-md)]">
+        <a href="/" class="font-[var(--typography-heading)] font-semibold text-[var(--color-text-primary)]">{input.siteIdentity.siteName}</a>
+        {manifest.navigation?.map(entry => <a href={entry.targetSlug} class="text-[var(--color-text-primary)] underline">{entry.label}</a>)}
+      </nav>
     </header>
     <main><slot /></main>
     <footer class="border-t border-[var(--color-border-subtle)] px-[var(--spacing-page-x)] py-[var(--spacing-section-y)]">{input.siteIdentity.siteName}</footer>

@@ -134,7 +134,7 @@ const legacyLcp = assets.find((asset) => asset.isProbableLcp);
       }
       if (entry.componentId === "page-cta") {
         if (ctaText === "") return null;
-        return <PageCta variant={entry.variant as "text"} ctaText={ctaText} />;
+        return <PageCta variant={entry.variant as "text"} ctaText={ctaText} destinationHref={manifest.conversion?.mode === "action" ? manifest.conversion.href ?? undefined : undefined} />;
       }
       if (entry.componentId === "related-links") {
         if (links.length === 0) return null;
@@ -154,7 +154,7 @@ const legacyLcp = assets.find((asset) => asset.isProbableLcp);
         ))}
         <PageConclusion variant="surface" paragraphs={conclusionParagraphs} />
         {links.length > 0 && <RelatedLinks variant="list" links={links} />}
-        {ctaText !== "" && <PageCta variant="text" ctaText={ctaText} />}
+        {ctaText !== "" && <PageCta variant="text" ctaText={ctaText} destinationHref={manifest.conversion?.mode === "action" ? manifest.conversion.href ?? undefined : undefined} />}
       </>
     )}
   </article>

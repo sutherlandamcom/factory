@@ -1,3 +1,4 @@
+import { requireProjectSiteAuthority } from "./site-binding.js";
 import { createHash, randomUUID } from "node:crypto";
 import { cp, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -32,8 +33,16 @@ export class ProductionBuildService {
     this.compiler = new ProductionRenderCompiler(db, repoRoot, options);
   }
 
+  private async projectBuildIdentity(projectId: string) {
+    const authority = await requireProjectSiteAuthority(this.db, this.repoRoot, projectId);
+    return loadProductionBuildIdentity(this.repoRoot, {
+      projectKey: authority.binding.projectKey, siteKey: authority.site.key,
+      acceptedSiteIdentity: (authority.snapshot.payload as { siteIdentity: import("@factory/contracts").SiteIdentity }).siteIdentity,
+    });
+  }
+
   async prepareCandidate(input: { projectId: string; pageSlug: string }) {
-    const identity = await loadProductionBuildIdentity(this.repoRoot);
+    const identity = await this.projectBuildIdentity(input.projectId);
     const store = new ProductionStore(this.db, {
       repoRoot: this.repoRoot,
       evidenceRoot: this.options.evidenceRoot,
@@ -78,7 +87,7 @@ export class ProductionBuildService {
     if (!candidate.siteProfileDigest || !candidate.rendererVersion || !candidate.repositorySha || !candidate.lockfileDigest) {
       throw buildError("production_build_rejected", "Candidate predates immutable build identity.");
     }
-    const currentIdentity = await loadProductionBuildIdentity(this.repoRoot);
+    const currentIdentity = await this.projectBuildIdentity(input.projectId);
     const buildStaleness = candidateBuildStaleness(candidate, currentIdentity);
     if (buildStaleness.stale) {
       throw buildError("production_authority_stale", buildStaleness.reason ?? "Repository, site profile, renderer, or lockfile identity changed after candidate preparation.");
@@ -158,7 +167,7 @@ export class ProductionBuildService {
         await writeFile(path.join(distDir, "index.html"), rootStub.html, "utf8");
       }
       const artifactDigest = await computeArtifactDigest(distDir);
-      const finalIdentity = await loadProductionBuildIdentity(this.repoRoot);
+      const finalIdentity = await this.projectBuildIdentity(input.projectId);
       const finalStaleness = candidateBuildStaleness(candidate, finalIdentity);
       if (finalStaleness.stale) {
         throw buildError("production_authority_stale", finalStaleness.reason ?? "Repository, site profile, renderer, or lockfile identity changed during candidate build.");

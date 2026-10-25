@@ -11,9 +11,13 @@ interface Props {
   variant: "text";
   /** Accepted CTA text (verbatim; empty means no CTA section renders). */
   ctaText: string;
+  /** Exact verified destination from the bound conversion authority. */
+  destinationHref?: string;
 }
-const { variant, ctaText } = Astro.props;
+const { variant, ctaText, destinationHref } = Astro.props;
 ---
 <section class="px-[var(--spacing-page-x)] py-[var(--spacing-section-y)] text-center" data-component="page-cta" data-variant={variant} data-pattern="cta">
-  <p class="text-lg leading-relaxed text-[var(--color-action-primary)]">{ctaText}</p>
+  {destinationHref ? (
+    <a href={destinationHref} class="text-lg leading-relaxed text-[var(--color-action-primary)] underline">{ctaText}</a>
+  ) : <p class="text-lg leading-relaxed text-[var(--color-action-primary)]">{ctaText}</p>}
 </section>

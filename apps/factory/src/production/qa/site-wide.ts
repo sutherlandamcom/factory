@@ -1,3 +1,4 @@
+import { parse } from "node-html-parser";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { deterministicDigest } from "../../intelligence/digest.js";
@@ -168,6 +169,18 @@ export async function runSiteWideQa(input: SiteWideQaInput): Promise<SiteWideQaR
 
   // Redirect authority: no loops, no chains, no sitemap inclusion of sources.
   const redirectProblems = validateCandidateRedirects(input.redirectRules, knownRoutes);
+  for (const manifest of input.manifests) {
+    const page = pages.find(page => page.route === manifest.input.route);
+    if (!page) continue;
+    const primary = parse(page.html).querySelector('nav[aria-label="Primary"]');
+    for (const entry of manifest.navigation ?? []) {
+      if (!knownRoutes.has(entry.targetSlug) || !primary?.querySelectorAll("a[href]").some(anchor => anchor.getAttribute("href") === entry.targetSlug && anchor.text.trim() === entry.label)) {
+        redirectProblems.push(`Navigation authority missing or invalid on ${manifest.input.route}: ${entry.targetSlug}`);
+      }
+    }
+    const href = manifest.conversion?.href;
+    if (href?.startsWith("/") && !knownRoutes.has(href)) redirectProblems.push(`CTA target is outside candidate route authority: ${href}`);
+  }
   checks.push(
     check(
       "links.canonical_destination",

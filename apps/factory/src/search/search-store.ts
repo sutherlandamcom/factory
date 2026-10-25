@@ -47,6 +47,7 @@ export class SearchStore {
     device: string;
     provider: string;
     requestDigest: string;
+    requestContext?: import("./context.js").EffectiveSearchContext;
     refreshRequested: boolean;
     sourceRunId?: string;
   }): Promise<SearchRunRecord> {

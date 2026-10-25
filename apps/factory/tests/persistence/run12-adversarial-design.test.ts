@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import path from "node:path";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { provisionTestSiteBinding } from "../fixtures/project-site-binding.js";
 import test from "node:test";
 import { setupMigratedTestDatabase } from "./helpers.js";
 import { seedProjectWithAcceptedInputs } from "../fixtures/writer-seeds.js";
@@ -23,22 +26,19 @@ import { DESIGN_SCHEMA_VERSION_V2, type DesignCandidateDataV2 } from "@factory/c
  *   - tampered manifest digest -> assertManifest throws
  *   - DIC digest changes deterministically when tokens, section patterns, or rendererPolicyVersion change
  */
-test("ADVERSARIAL DESIGN: missing design authority fails closed at production input derivation", async () => {
+test("ADVERSARIAL DESIGN: missing design authority fails closed at production input derivation", async (t) => {
   const dbInst = await setupMigratedTestDatabase();
   try {
     const { projectId } = await seedProjectWithAcceptedInputs(dbInst, "adv-design-1");
-    const production = new ProductionStore(dbInst.db);
+    const root = await mkdtemp(path.join(tmpdir(), "e2e01-adversarial-design-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const siteIdentity = await provisionTestSiteBinding(dbInst.db, root, projectId);
+    const production = new ProductionStore(dbInst.db, { repoRoot: root });
     await assert.rejects(
       production.deriveProductionInput({
         projectId,
         pageSlug: "home",
-        siteIdentity: {
-          siteId: "s",
-          siteName: "S",
-          canonicalOrigin: "https://example.com",
-          language: "en",
-          profileDigest: "a".repeat(64),
-        },
+        siteIdentity,
         rendererVersion: "astro-7.2.9",
         rendererPolicyVersion: "production-policy-v3",
       }),

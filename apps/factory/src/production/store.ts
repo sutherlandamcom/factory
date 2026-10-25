@@ -1,3 +1,6 @@
+import { deriveConversionAuthority } from "./conversion.js";
+import path from "node:path";
+import { requireProjectSiteAuthority } from "./site-binding.js";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { FactoryDb } from "../persistence/db.js";
@@ -277,6 +280,15 @@ export class ProductionStore {
     rendererVersion: string;
     rendererPolicyVersion: string;
   }): Promise<ProductionPageInputRecord> {
+    const authority = await requireProjectSiteAuthority(this.db, this.evidenceOptions.repoRoot ?? path.resolve(import.meta.dirname, "../../../.."), input.projectId);
+    const expectedIdentity = {
+      siteId: authority.profile.siteId, siteName: authority.profile.siteName,
+      canonicalOrigin: authority.profile.canonicalOrigin, language: authority.profile.language,
+      profileDigest: deterministicDigest(authority.profile), bindingDigest: authority.bindingDigest,
+    };
+    if (deterministicDigest(input.siteIdentity) !== deterministicDigest(expectedIdentity)) {
+      throw productionError("production_authority_stale", "Production identity does not match the current project/site binding.");
+    }
     const bundle = await new ProductionStore(this.db, this.evidenceOptions).deriveAuthorityBundle({
       projectId: input.projectId,
       pageSlug: input.pageSlug,
@@ -331,7 +343,7 @@ export class ProductionStore {
       );
     }
 
-    const route = normalizeRoute(input.pageSlug);
+    const route = normalizeProductionRoute(input.pageSlug);
     // Route authority invariant: the route must not already belong to a
     // different page identity.
     const [routeOwner] = await this.db
@@ -402,6 +414,11 @@ export class ProductionStore {
       );
     }
 
+    const acceptedPayload = authority.snapshot.payload as import("@factory/contracts").ProjectIntakePayload;
+    const conversion = deriveConversionAuthority({ projectId: input.projectId, snapshot: authority.snapshot,
+      conversion: acceptedPayload.conversion, acceptedContentDigest: bundle.content.digest,
+      ctaText: (bundle.content.data as { content?: { cta?: string }; cta?: string }).content?.cta ?? (bundle.content.data as { cta?: string }).cta ?? "",
+      informationalApproval: authority.binding.informationalConversion });
     const hasDerivativeSet = derivativeSetRef !== null;
     const data: ProductionPageInputData | ProductionPageInputV2Data = hasDerivativeSet
       ? {
@@ -411,6 +428,7 @@ export class ProductionStore {
           pageType: pageType as ProductionPageInputData["pageType"],
           route,
           siteIdentity: input.siteIdentity,
+          conversion,
           acceptedContent: {
             id: bundle.content.id,
             version: bundle.content.version,
@@ -441,6 +459,7 @@ export class ProductionStore {
           pageType: pageType as ProductionPageInputData["pageType"],
           route,
           siteIdentity: input.siteIdentity,
+          conversion,
           acceptedContent: {
             id: bundle.content.id,
             version: bundle.content.version,
@@ -476,6 +495,10 @@ export class ProductionStore {
       await tx.execute(
         sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.projectId}, 104))`,
       );
+      const finalAuthority = await requireProjectSiteAuthority(tx as unknown as FactoryDb, this.evidenceOptions.repoRoot ?? path.resolve(import.meta.dirname, "../../../.."), input.projectId);
+      if (finalAuthority.bindingDigest !== authority.bindingDigest || finalAuthority.snapshot.digest !== authority.snapshot.digest) {
+        throw new FactoryError("production_authority_stale", "Project/site configuration changed during production derivation.");
+      }
       // Idempotency: identical upstream authority + identical renderer config
       // returns the existing latest input for this page identity.
       const [latest] = await tx
@@ -595,6 +618,14 @@ export class ProductionStore {
       rendererPolicyVersion?: string | null;
     },
   ): Promise<{ stale: boolean; reason: string | null }> {
+    try {
+      const authority = await requireProjectSiteAuthority(this.db, this.evidenceOptions.repoRoot ?? path.resolve(import.meta.dirname, "../../../.."), input.projectId);
+      const bound = input.data as { siteIdentity?: { bindingDigest?: string }; conversion?: import("@factory/contracts").ProductionConversionAuthority };
+      if (bound.conversion?.acceptedInput.digest !== authority.snapshot.digest || bound.conversion.projectId !== input.projectId || bound.conversion.acceptedContentDigest !== input.acceptedContentDigest) return { stale: true, reason: "Accepted conversion/input authority changed or is missing." };
+      if (bound.siteIdentity?.bindingDigest !== authority.bindingDigest) return { stale: true, reason: "Project/site binding changed or historical input requires revalidation and derivation." };
+    } catch (error) {
+      return { stale: true, reason: error instanceof Error ? error.message : String(error) };
+    }
     const profileDigest = currentEnvironment?.siteIdentity?.profileDigest ?? currentEnvironment?.siteProfileDigest;
     if (profileDigest && input.siteProfileDigest && profileDigest !== input.siteProfileDigest) {
       return { stale: true, reason: "Site profile changed or was superseded." };
@@ -1331,7 +1362,7 @@ export class ProductionStore {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function normalizeRoute(pageSlug: string): string {
+export function normalizeProductionRoute(pageSlug: string): string {
   const trimmed = pageSlug.trim();
   if (trimmed === "" || trimmed === "/") return "/";
   const withLeading = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;

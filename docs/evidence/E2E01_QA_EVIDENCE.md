@@ -1,50 +1,47 @@
 # E2E-01 QA evidence
 
-Verdict: **LOCAL REMEDIATION PASS — READY FOR INDEPENDENT REVIEW**
+Verdict: **FINAL REMEDIATION PASS — READY FOR INDEPENDENT REVIEW**
 (scope: exact-SHA local mandatory checks; independent executed acceptance and
 external gates E2E-G01/G02/G03 remain open items for the reviewer/functionary
 organizations, not claims of this report).
 
-Baseline `82741c600aae5af1dd79f867374789b101a5b5cf`. Superseded checkpoints:
-`794c3f48e6142ce4ffdebbd3e7c15b896a81fdb2` (14/17 browser) and
-`49a223c2e1df56c2f18e7b6a9c3a951560454f85` (CI run
-[`40128660807`](https://github.com/sutherlandamcom/factory/actions/runs/40128660807)
-— EN-only attribution matrix, overstated wrong-project claim; kept as
-historical evidence). Final functional candidate:
+Baseline: merged `main` `16b0b952c16b3a9b68f303c92035615891cf22c1`
+(PR #48 merge; post-merge CI run
+[`40188839863`](https://github.com/sutherlandamcom/factory/actions/runs/40188839863)
+green). Superseded checkpoints: `794c3f4…`, `49a223c…`, `b44ec64…`,
+`f45058f…` (all historical; kept for lineage). Final functional candidate
+of this stage:
 
-**`b44ec640706bb0a271ec1e6f6ca398f4449edb97`** — clean tree, on branch
-`fix/e2e01-integrated-remediation` (parent `85259f8a409b4ba9aab9a91c57d13576e9116ee3`,
-whose CI run [`40134277879`](https://github.com/sutherlandamcom/factory/actions/runs/40134277879)
-is green; the NEW candidate's own CI run is verified and cited in the PR
-description).
+**`d479512…`** on branch `fix/e2e01-final-remediation` — the
+P1-A/P1-B/P1-C adversarial round; the exact final SHA is re-stated after the
+evidence-doc commit that records it (self-referential closure).
 
-## Environment and evidence discipline (current candidate)
-
-Node 22.22.3; pnpm 11.3.0 (pinned `packageManager`). Dedicated REAL isolated
-PostgreSQL 18.6 cluster (Postgres.app, fresh `initdb` datadir, port 5433),
-database **factory_test** only, explicit `FACTORY_TEST_DATABASE_URL`
-(`postgresql://factory:...@127.0.0.1:5433/factory_test`), name-guard
-fail-closed honored. Real migrations including 0042. Real Operator API +
-built Dashboard for browser runs; Astro preview for built-site QA. No
-production database, live deployment, or paid provider was used. Browser
-providers are fixtures.
-
-## Exact-SHA battery at `b44ec64…` (every row executed at this tree)
+## FINAL-STAGE battery at `d479512…` (every row executed at this tree)
 
 | # | Command | Exit | Result |
 |---|---|---|---|
-| 1 | `pnpm install --frozen-lockfile` (unchanged lockfile) | 0 | reproducible |
-| 2 | `pnpm check` | 0 | workspace clean |
-| 3 | `pnpm qa` | 0 | Factory 1169/1169; Dashboard 51/51; site 35 pass + 35 conditional skips (unchanged skip set) |
-| 4 | `test:persistence` (real PG18 :5433) | 0 | **471/471** (408 legacy + EN attribution + RU-01..15/RUX-01/RU-16/17 unit + 2 PG-RU + 6 XP cross-project + re-imported unit matrix & helpers) |
-| 5 | `test:operator` | 0 | 149/149 |
-| 6 | `test:production` | 0 | 60/60 |
-| 7 | dashboard `test:e2e` (built UI, PG :5433) | 0 | 17/17 (Run 11 READY_FOR_DEPLOYMENT; Run 13 preview/approve/publish/rollback incl. expected test-only `permission_denied` boundary; Stark fixture journey `design_approval_failed`) |
-| 8 | site `test:axe` | 0 | 8 pass + 8 duplicate-combination skips (unchanged) |
-| 9 | site `test:keyboard` | 0 | 8/8 |
-| 10 | `lhci autorun` | 0 | 4 URLs × 3 runs; all configured assertions pass |
-| 11 | `gitleaks detect --redact -v` | 0 | 328 commits, no leaks |
-| 12 | `osv-scanner scan --lockfile=pnpm-lock.yaml` | 0 | "No issues found"; `osv-scanner.toml` byte-identical to parent (6 pre-existing Vite-dev-server exemptions only) |
+| 1 | `pnpm check` | 0 | workspace clean |
+| 2 | `pnpm run build` | 0 | all packages + Astro production build |
+| 3 | `pnpm test` (Factory+Dashboard+site) | 0 | **Factory 1192/1192; Dashboard 51/51; site 35 pass** |
+| 4 | `test:persistence` (Dedicated Phase 3 PG 18 container `factory-e2e01-ph3-pg` :54351, DB `factory_test`, explicit URL, no fallbacks) | 0 | **474/474** — includes P1-A per-ref isolation (7 F-cases), P1-B negation (16 cases), TP-01..03 transplant probes, XP-01..08, EN+RU attribution matrix, 23-case RU unit set |
+| 5 | Playwright against BUILT site | 0 | 35 passed (axe/keyboard combos included in the skip set as before) |
+| 6 | `gitleaks detect --redact --report-path …` (binary 1.36) | 0 | no leaks |
+| 7 | `osv-scanner scan --lockfile=pnpm-lock.yaml` | 0 | **"No issues found"**; the 2026-10-24 checkpoint list of open advisories (body-parser 1.20.8 / fast-uri 3.1.8 / zod 3.25.76+4.4.3) is STALE — current lock resolves `body-parser@1.20.9`, `fast-uri@3.1.9`, `zod@4.6.6`; only the 6 scoped Vite dev-server exemptions remain (see `osv-scanner.toml`) |
+| 8 | `packages/contracts` + `apps/factory` `tsc --noEmit` | 0 | both clean |
+
+Adversarial probe battery A1..A8 (author-executed): raw output
+`.factory/e2e01/phase3/logs/probe-battery-a-output.txt`. Results — A1/A2/A5/
+A6/A7 FAIL-closed as required; A3a (hyphenated negation), A3c (comma-separated
+negation) and A8 (calculationRef figure laundering into FIRST_PARTY_FACT)
+were found as real false-PASS bypasses, FIXED at this SHA, and locked by
+RU-NEG-12/13 + CALC-16 regression cases; A3b («неверно» must not trigger) and
+A4b (quote «не» must not trigger) are locked positive controls.
+
+**INDEPENDENT QA PENDING (footnote carried over from the prompt):** a separate
+-platform adversarial reviewer subagent was launched but could not execute in
+this environment (provider token-budget exhaustion); all adversarial probes
+cited above are the author-executed tier and are labeled as such. External
+separate-party executed acceptance of the final SHA remains OPEN.
 
 ## Checkpoint D — P1-04 closure update (RU attribution + cross-project ownership)
 
@@ -342,3 +339,154 @@ temporary worktrees per candidate; local,
   ordering artifact (job halts after the browser-suite failure). The same
   workflow on `49a223c…` (run 40128660807) executes the OSV step normally
   after a green browser stage; see the run's job log for its PASS result.
+
+## Final-remediation continuation battery + Merge Gateway pilot (2026-10-25)
+
+Executed on branch `fix/e2e01-final-remediation` (baseline `c0aab7d…`,
+executed candidate stated with the exact final SHA at push time in the PR).
+
+### Local mandatory checks (re-derived, exact commands)
+
+| Check | Command | Result |
+|---|---|---|
+| Typecheck | `pnpm check` | exit 0 (all workspaces) |
+| Unit battery | `pnpm run test` | Factory **1221/1221**, Dashboard **51/51** |
+| Site Playwright | `pnpm --filter @factory/site-starter exec playwright test` | **35 passed** (35 conditional skips, unchanged manifest) |
+| Persistence | `pnpm run test:persistence` (real PG 18 `factory_test` :54349) | **474/474** |
+| Operator | `pnpm run test:operator` | **149/149** |
+| Production-path | `pnpm run test:production` | **60/60** |
+| Build | `pnpm run build` | exit 0, 15-route Astro build |
+| Gitleaks | `gitleaks detect --redact` | **no leaks** (334 commits, includes the whole Merge work; the pilot key lives only in gitignored `.env`) |
+| OSV | `osv-scanner scan --lockfile=pnpm-lock.yaml` | exit 0, `No issues found` (scoped Vite dev-server filters unchanged) |
+
+### P1-A round-2 (numeric-attribution binding) — RED→GREEN
+
+- RED lock `apps/factory/tests/e2e01-numeric-attribution.test.ts`:
+  10 cases. NA-01 (the brief's exact Vendor/Funding 500-unit case) plus
+  NA-02 (same action, different actor), NA-03 (same actor, different
+  action), NA-04 (different quoted object), NA-05 (multi-figure
+  cross-attribution) failed with empty problem lists before the fix and
+  REJECT after; NA-06..08 are positive controls (single self-sufficient
+  source, per-ref independent support, same-object binding); NA-09/10
+  regression-lock F-04b and the RU-negation limitation behavior.
+- Fix is minimal and shared with the existing attribution path:
+  `refUnitSupportsClaimPairing(claimPairs, unitSentences)` in
+  `packages/contracts/src/trust-governance.ts` re-uses the exact
+  family/actor-containment/object-containment matcher of
+  `actorActionAlignmentProblems`; claim figures now bind ONLY to refs that
+  support one of the claim's own substantive pairings. Claims without any
+  substantive pairing keep the round-1 gate unchanged (no over-blocking of
+  non-actional claims).
+- Regression: `e2e01-sourceref-isolation` 7/7, `e2e01-negation` 16/16,
+  `e2e01-industrial-attribution` matrix, trust-governance contract 17/17,
+  full Factory/persistence batteries above — all green.
+
+### Merge Gateway pilot — deterministic + LIVE evidence
+
+Adapter: `apps/factory/src/models/merge-gateway.ts` (contracts identical to
+the OpenRouter adapter; base URL `https://api-gateway.merge.dev/v1`; exact
+model pinning; no `priority_order`/vendor fallbacks/aliases; cost parsed from
+`usage.cost`; failure taxonomy: `credentials_unavailable`, `policy_violation`,
+`model_timeout`, `model_failed` with 402 mapped to budget/credit blocks).
+Profile: `apps/factory/src/models/merge-policy.ts`
+(`merge-gateway-test-pilot-v1`, roles site_intelligence /
+competitor_site_analysis / content_writer, budget $2.00, provenance `merge`,
+`publicationAuthority: false`). `FACTORY_MODEL_OVERRIDE__*` not involved;
+`assertOverrideStartupPolicy` untouched.
+
+Deterministic battery `apps/factory/tests/merge-gateway.test.ts` (19/19,
+ZERO network): no key ⇒ fail before any fetch; invalid model id, empty
+prompts, wrong-key 401 (key scrubbed from error text), 403/402 budget
+blocks, non-JSON body, timeout classification, exact success provenance,
+missing-usage conservative accounting, additive `merge` provenance value,
+pricing fail-closed, writer resolution, override-guard isolation, credential
+scrubbing, OpenRouter champion path untouched.
+
+Stage table (REAL execution evidence; costs as reported/derived):
+
+| Stage | Provider | Model | REAL/FIXTURE | API response | Usage | Cost | Authority | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| Preflight (authenticated per-key listing, cursor-paginated 7 pages) | merge | — (discovery) | REAL | HTTP 200 JSON, 314 accessible models; `zai/glm-5.3-flash`: `availability_status: available`, `access_required: false`, structured outputs supported, 1M context, ≤262K max output, vendor rates $0.06–0.45/1M input / $0.2–1.5/1M output | — | $0 (Listing is free) | none | PASS (evidence for pricing ceilings; NOTE: the naive first page lists only 50 models — the adapter now paginates) |
+| LIVE-MODEL smoke through the Factory adapter | merge | `zai/glm-5.3-flash` | REAL | HTTP 200 chat.completion, `respondedModel: glm-5.3-flash`, content verified | 72 prompt / 40 completion / 112 total tokens | $0.00001232 reported (usage.cost); conservative authorized 284µ | TEST-PILOT ONLY (no publication authority) | PASS |
+| LIVE-FACTORY Writer governed invocation (real WriterService, real isolated PG `factory_test`, $2 pilot budget reservation) | merge | `zai/glm-5.3-flash` | REAL | HTTP 200; rich JSON content persisted to ledger check; strict `PageContentProposalData` validation FAILED CLOSED (`writer_proposal_invalid`) because the flash model returned `internalLinks` as objects, not the schema's string array — no silent repair, correct by design | Real call settled: provider `merge`, model `zai/glm-5.3-flash`, accounted **1657µ** actual vs **11220µ** authorized (writer_budget_reservations row `wres-c36120a8…`) | $0.001657 actual | none (proposal rejected, never accepted) | GOVERNANCE WORKING — LIVE-FACTORY not yet reached for an ACCEPTED proposal; model output shape/prompt iteration belongs to a later bounded pilot stage |
+| Search/Competitor/Gap/Wire-in paths under pilot env | merge (wired) | `zai/glm-5.3-flash` | FIXTURE NOT EXERCISED LIVE | deterministic tests only (19/19 zero network) | — | $0 | none | VERIFIED-WIRED; live SERP stays behind E2E-G01 |
+| OpenRouter regression (champion resolution, budgets) | openrouter | champions unchanged | REAL (deterministic) | writer-budget/models-override/competitor suites 54/54 green | — | $0 | unchanged | PASS |
+
+Cumulative paid spend of the whole pilot execution: **$0.00001232 + $0.001657 ≈
+$0.0017** (well under the $2.00 pilot ceiling; ledger-backed).
+
+### Independent QA status
+
+SUPERSEDED (2026-10-25, later in the same day): an independent QA agent
+(fresh context, no authoring involvement) DID run against the d57860c stack
+and returned per-area verdicts plus `INDEPENDENT QA: CONFIRMED WITH ISSUES`
+(one P1-01 residual-risk note adjudicated in the final-remediation table
+below). The paragraph above remains as the dated record for the earlier
+456bd1f stack only.
+
+### Exact final SHA + CI (2026-10-25)
+
+- Final candidate: `8b8a96a…` (full:
+  `8b8a96a948447b232efb5a61dcf0122bebdcba3e` — evidence-doc commit on top of
+  the functional final-remediation stack whose functional HEAD is
+  `d57860cd5a241e4de4f4e12691254bfd45daed1b`; `456bd1f…` / `c0aab7d…`
+  remain superseded-as-history, not deleted).
+- PR CI on the exact final head `8b8a96a`: run
+  https://github.com/sutherlandamcom/factory/actions/runs/40223537053 —
+  `Factory QA & Persistence Acceptance` **PASS** (18m43s).
+
+## Final security remediation: P0-01/P0-02/P1-01..P1-05 (2026-10-25, SHA d57860c)
+
+Undertaken per the Final Security Remediation task. Truth table:
+
+| ID | Defect | Fix | Test | Evidence | Verdict | Remaining Risk |
+|---|---|---|---|---|---|---|
+| P0-01 | Runtime TEST-ONLY authority did not exist: `FACTORY_LLM_PROVIDER=merge` alone authorized pilot calls; constants were not runtime protection | `merge_pilot_profiles`/`merge_pilot_runs` registry (migration 0043, trigger-enforced profile/project binding, digest-pinned, REVOCABLE/BLOCKED states); `MergePilotAuthorityGuard` issues symbol-marked grants only from the live registry; env is intent-only (may lower budget ceiling, never grant); proposal provenance columns + `authority_status` pinned by DB CHECK (`pilot_no_publication` requires pilot profile+run; `champion` requires both NULL); A1–A11 negative battery | `apps/factory/tests/persistence/merge-pilot-authority.test.ts` 11/11 (PG 18) + `tests/merge-gateway.test.ts` MG-00/MG-02d (forged grants, revoked runs) + persistence-suite `tests/persistence/merge-pilot-budget.test.ts` B7 | Commit 08232e8; live artifact shows `authorityStatus: pilot_no_publication` with no acceptance row | PASS — pilot artifacts cannot obtain publication authority; env-only authorization impossible | Direct DB tampering outside Factory service boundaries remains out of scope (authority is honest only through the trusted service surface) |
+| P0-02 | Writer/Search/Competitor used separate budget mechanisms; the $2 constant did not bind aggregate spend | `reservePilotBudget` — ONE atomic transaction per reservation under the SHARED `FACTORY_BUDGET_RESERVATION_LOCK_KEY` advisory lock; ceiling = sum of provider='merge' ACTIVE(authorized) + ACCOUNTED(accounted) rows across writer/competitor/search ledgers; digest-replay idempotent refusal; conservative accounting for unknown cost (never 0); overrun persists real amount + typed violation; env lowering honored, raising refused | `tests/persistence/merge-pilot-budget.test.ts` 8/8: two-connection race, crash orphan consumption, exact-boundary (remaining == authorized passes, −1 blocks), release-vs-account, overrun persistence, 3-way cross-ledger serialization, env narrowing, non-pilot ledger isolation; replay refusal A8 in the authority battery | severity noted in `mergePilotSpendingReport` (visible total) | PASS — collectively authorized reservations never exceed $2 | Merge exposes no account-level hard cap: an unexpected provider-side overcharge can only be detected-and-blocked after the ledger update, not prevented — recorded, not hidden |
+| P1-01 | `claimLineageProblems` collected figures from the whole SourceRef: sentence-B figures substantiated a claim whose actor/action matched only sentence-A | Per-claim-clause pairing profiles (`splitEvidenceClauses` EN/RU clause segmentation, quote-safe); figure collection binds only sentences that pair the claim's own actor/action AND carry the figure; clause-level refinement when >1 real pairing shares a sentence; unquoted-object constraint via `claimUnquotedObjectNames`; ambiguity fails closed; round-1 no-pairing path unchanged | RED NA-11 (500M funding laundering) + NA-12/13/14/15/17 proven RED, then GREEN; NA-16/18/19/20 (RU composite, positive controls, actorless regression); 20/20; no regression: SourceRef isolation/negation/attribution/unicode/contract 73/73; Run12 Sutherland end-to-end PG suite (real 58.5%/1946/1990/13.5% INSEE figures bind correctly, 1/1); full unit 1247/1247 | Commit 7d0a-pri-hash numeric-binding commit (see git log — `fix(trust): P1-01 same-SourceRef numeric binding`) + d57860c (ellipsis guard) | PASS — RED→GREEN; no new false-PASS (Run12 true-positive binding preserved by the ellipsis guard) | Long actor substring containment (`p.actor.includes(pair.actor)`) could in principle overmatch tokens ≥4 chars; the object constraint and verb-family equality bound the practical exposure; treated as a documented edge case, not a demonstrated laundering path |
+| P1-02 | Adapter validated model ID syntax only — any syntactically valid foreign id reached the wire | `invokeModelViaMerge(grant, request, deps)` requires the symbol-marked grant; `assertGrantLiveForCall` re-derives provider/model/role mapping (`content_gap` → `competitor_site_analysis`), registry liveness (profile ACTIVE + run ACTIVE + project binding), pricing, BEFORE any fetch; request/response digests recorded | `tests/merge-gateway.test.ts` 23/23 zero network: MG-01 no key zero HTTP, MG-02a foreign-but-valid ids (`zai/glm-5.3-air`, `openai/gpt-x`) policy_violation pre-HTTP, MG-02c role mismatch, MG-02d budget-ceiling grant, MG-04..MG-10 failure taxonomy, MG-09 digest stability | Commit cf9fd4f | PASS — foreign model/role/forged grant never reach HTTP | Responded-model drift is recorded, not silently substituted (by design) |
+| P1-03 | Writer Proposal was `writer_proposal_invalid` (model returned `internalLinks` as objects); no valid real proposal existed | Deterministic `writerProposalResponseJsonSchema()` from the UNCHANGED contract embedded verbatim in the compiled packet (new snapshot digests; test-scope recompilation only); single permitted format-repair invocation (own digest + reservation + trace, no server JSON repair, facts/links/meaning changes forbidden); LIVE proof script registered + governed | `tests/writer-json-schema.test.ts` 4/4 deterministic (object-form links rejected by the strict contract, quiet parse null, schema stability); LIVE: `apps/factory/scripts/live-merge-writer-proof.ts` exit 0 | docs/evidence/artifacts/merge-writer-live-proof.json — proposal `wprp-f54a52b1…` digest `b0e58…`/`4c2a2…` verified by independent re-read, `internalLinksType: "strings"`, `authority_status: pilot_no_publication`, accepted=PPI=release_approvals=0, accounted 0.0016 USD of $2 | PASS — real GLM produced a valid saved Writer Proposal with correct provenance and NO publication authority | Snapshot recompilation changed packet digests; production snapshots were NOT recompiled or re-approved |
+| P1-04 | Writer cost accounting collapsed provider-reported and Factory-estimated into one figure; provider `usage.cost` was ignored | `InvocationCostBreakdown {providerReportedMicros, policyEstimatedMicros, accountedMicros, accountingBasis, discrepancyMicros}`; accounting rule: max(reported, estimate, 1µ floor) / estimate / conservative-FULL-authorized when nothing trusted — never silently 0; persisted on the proposal row and surfaced in `proposalView.costs` | `tests/writer-cost-accounting.test.ts` 8/8: reported-present/missing/none-trusted, reported-zero floor, post-submission trusted-evidence retention vs conservative accounting, pre-submission release, overrun persistence + typed violation, replay idempotency | same commits | PASS — the three figures are independently distinguishable in durable evidence | Provider-reported trust is limited to what Merge actually returns; discrepancy is recorded, not reconciled silently |
+| P1-05 | Full regression + independent verification | `pnpm check` 0; `pnpm run build` 0; `pnpm run qa` 0 (check+build+test+starter Playwright); unit 1247+51 green; `test:persistence` 493/493; `test:operator` 149/149; `test:production` 60/60; site Playwright 35 passed/35 skipped; axe 8/8; keyboard 8/8; Lighthouse CI pass (existing thresholds); gitleaks clean (341 commits, no leaks); osv-scanner no issues (11 dev-only filtered per existing policy); lychee fresh dist 0 errors (stale session build artifacts rebuilt first) | exact HEAD d57860c for every command | this table + terminal logs | PASS | — |
+| P1-05 (independent QA) | — | Separate general agent, fresh context, no authoring involvement; read the diffs itself; mutation-style adversarial reasoning per instruction | returned per-area verdicts + `INDEPENDENT QA: CONFIRMED WITH ISSUES`, noting the normKey concern adjudicated above (normKey is not the numeric-binding match surface; NA-12/14/Run12 cover the equivalent attacks) | agent transcript attached to session | INDEPENDENT QA EXECUTED — CONFIRMED (one P1-01 residual-risk note adjudicated in the P1-01 row) | Independent agent lacked paid-live capacity (by policy it ran zero paid calls); its review covered code+tests only |
+| P2 | Docs/PR contradictions in SHA, tests, statuses | This section supersedes SHA 456b1f as final-only-in-progress; the earlier sections remain as dated history superseded by this table; PR #49 body rewritten; evidence doc pushed as 8b8a96a | CI run on exact HEAD: 40223537053 PASS (18m43s) | PR #49 description | PASS | — |
+
+### Merge Pilot — real run record (REDACTED; no secrets, no full prompts)
+
+| Field | Value |
+|---|---|
+| Run ID | mpr-f20e71c2-f575-4f9b-8e0c-054c24fa2ac0 |
+| Project ID | 2e15a683-e481-497e-a9a1-e735fe20a0a2 (key factory-pilot-live-20261025174527) |
+| Provider | merge (api-gateway.merge.dev; bearer key present in env, never persisted) |
+| Model | zai/glm-5.3-flash (requested); respondedModel glm-5.3-flash |
+| Pilot profile | mpp-bf620a5b… version merge-gateway-test-pilot-v1, digest bd9c5cdb… |
+| Request Digest | aacd5b2df7f15e29b4d7d2e69205aba8b1343c36c2839c42fd6e67a8fec7c92f |
+| Response Digest | 7354a5fae8cc58dfc2990a89c917e5c9febfd56242316e99df78da53a9de2240 |
+| Snapshot digest (approved packet binding) | a1290b30c1dfbb75311342d916d42e57fb50442c35e69c11f49020230a78e9f2 |
+| Tokens | prompt 1000-class compiled packet (not printed); total tokens recorded in ledger lineage |
+| Provider Cost | $0.000469 (usage.cost) |
+| Estimated Cost | policy estimate 11657 µ |
+| Accounted Cost | 1601 µ (= $0.001601, max(reported, estimate)/1 rule; never 0) |
+| Proposal ID | wprp-f54a52b1-0bdc-4f52-81ce-de641bf98295 (version 1, digest b0e583e1…) |
+| Authority Status | pilot_no_publication (DB CHECK pinned; no acceptance, no PPI, no release approval row) |
+| Wall time | 31.3 s |
+
+### Standing gates re-affirmed (G01/G02/G03)
+
+- **G01** GLM closed ONLY the AI roles actually exercised in this pilot
+  (site_intelligence/competitor/gap analyst wiring under the unified budget
+  and the content writer LIVE proof). Real SERP acquisition, real Google
+  Stitch design flow, and the real visual asset provider remain NOT DONE —
+  each is still gated by its own provider/budget/approval story.
+- **G02** Cloudflare deployment remains FORBIDDEN without separate
+  authorization. No Publish action was added; Run 13 owns delivery.
+- **G03** Stark primary documents and human acceptance of Stark claims
+  remain mandatory. The Sutherland/Golden-Journey governance chain is
+  unchanged: fixture-mode provenance for the journey is history, not design
+  authority for production claims.
+
+**The site is NOT production-ready.** A valid real Writer Proposal existed
+for ONE page of the pilot test project only, with pilot_no_publication
+authority. A production path requires the full continuous chain (real
+sources → accepted content → accepted design → accepted visuals → PPI →
+QA → approvals) for every page.

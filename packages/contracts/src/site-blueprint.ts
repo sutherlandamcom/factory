@@ -430,7 +430,13 @@ export const blueprintErrorCodeSchema = z.enum(BLUEPRINT_ERROR_CODES);
 
 export type BlueprintErrorCode = (typeof BLUEPRINT_ERROR_CODES)[number];
 
-export const modelGatewaySchema = z.enum(["openrouter"]);
+/**
+ * Model gateway identifiers. `openrouter` is the ordinary production
+ * gateway; `merge` is the bounded test-only Merge Gateway pilot (fixed
+ * model, operator-approved profile, no production authority). Values are
+ * provenance only — persisted invocation records may carry either.
+ */
+export const modelGatewaySchema = z.enum(["openrouter", "merge"]);
 
 export type ModelGateway = z.infer<typeof modelGatewaySchema>;
 

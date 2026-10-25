@@ -931,6 +931,15 @@ export class WriterSnapshotStore {
     overrideApplied: boolean;
     overriddenChampion: string | null;
     data: unknown;
+    // P0-01/P1-03 pilot provenance (pilot rows carry these; champion rows null).
+    pilotProfileId?: string | null;
+    pilotRunId?: string | null;
+    gatewayRole?: string | null;
+    requestDigest?: string | null;
+    responseDigest?: string | null;
+    providerReportedCostMicros?: number | null;
+    policyEstimatedCostMicros?: number | null;
+    accountedCostMicros?: number | null;
   }): Promise<{ id: string; version: number; digest: string }> {
     const data = parsePageContentProposalData(input.data);
     // The proposal MUST bind to an APPROVED snapshot at the exact digest.
@@ -974,6 +983,15 @@ export class WriterSnapshotStore {
         overriddenChampion: input.overriddenChampion,
         data,
         proposalDigest,
+        pilotProfileId: input.pilotProfileId ?? null,
+        pilotRunId: input.pilotRunId ?? null,
+        gatewayRole: input.gatewayRole ?? null,
+        requestDigest: input.requestDigest ?? null,
+        responseDigest: input.responseDigest ?? null,
+        providerReportedCostMicros: input.providerReportedCostMicros ?? null,
+        policyEstimatedCostMicros: input.policyEstimatedCostMicros ?? null,
+        accountedCostMicros: input.accountedCostMicros ?? null,
+        authorityStatus: input.pilotProfileId ? "pilot_no_publication" : "champion",
       });
       return { id, version: nextVersion, digest: proposalDigest };
     });

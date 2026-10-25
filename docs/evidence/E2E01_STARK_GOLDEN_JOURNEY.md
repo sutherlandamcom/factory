@@ -1,12 +1,54 @@
 # E2E-01 Stark golden journey
 
 Classification: **FIXTURE_ONLY_NOT_PUBLICATION_AUTHORITY**.
-Functional candidate: **`b44ec640706bb0a271ec1e6f6ca398f4449edb97`** (browser
-17/17 re-verified at this SHA including this journey); earlier trace
-artifacts below were captured at `794c3f48e6142ce4ffdebbd3e7c15b896a81fdb2`
-and remain labeled with their capture SHA. No continuous Stark production
-HTML, artifact digest or production QA PASS exists beyond the
-genuine-evidence gate.
+
+> **2026-10-25 GLM-pilot update:** the Merge Gateway TEST pilot introduces a
+> real LLM inference capability for the four Factory AI roles (search
+> analyst, competitor/gap analysts, writer) via `zai/glm-5.3-flash`
+> (provider provenance `merge`, test profile `merge-gateway-test-pilot-v1`,
+> $2 budget, no publication authority). Live-executed so far: authenticated
+> per-key preflight + one LIVE-MODEL adapter smoke call (PASS,
+> $0.00001232) + one real governed Writer invocation (budget reserved and
+> settled; the strict `PageContentProposal` schema gate rejected the
+> flash model's output format fail-closed, so no accepted proposal exists).
+> See the stage table in `E2E01_QA_EVIDENCE.md`.
+
+| Stage | Provider | Model | REAL/FIXTURE | API response | Usage | Cost | Authority | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| Intake → accepted snapshot | local operator | — | REAL (local workflow) | persisted; digests in the trace below | — | $0 | unchanged | PASS (unchanged) |
+| SERP acquisition (BrightData/DataForSeo) | brightdata / dataforseo | — | FIXTURE in every executed journey | not executed live | — | $0 | — | BLOCKED — E2E-G01 (real Russian SERP credentials absent) |
+| Search Intelligence (search analyst) | merge (wired, pilot) / openrouter (production) | `zai/glm-5.3-flash` pilot | Wired+LIVE-MODEL smoke only; no full live Search run because real SERP upstream is absent | adapter smoke 200 OK | 112 tokens | $0.00001232 | TEST-PILOT ONLY | WIRED-VERIFIED; live stage BLOCKED — E2E-G01 |
+| Competitors / Content Gap | merge (wired, pilot) | `zai/glm-5.3-flash` | WIRED-VERIFIED (deterministic 19/19 zero network) | deterministic only | — | $0 | — | WIRED-VERIFIED; live stage BLOCKED — E2E-G01 (SERP + competitor fetch upstream) |
+| Writer | merge (wired, pilot) | `zai/glm-5.3-flash` | REAL governed invocation executed against isolated PG | real 200 + strict-schema REJECT (fail-closed `writer_proposal_invalid`) | settled 1657µ actual / 11220µ authorized | $0.001657 | none (proposal not accepted) | GOVERNANCE PROVEN; ACCEPTED-proposal tier pending output-shape iteration |
+| Design (Stitch) | stitch | — | FIXTURE (never live; token present but production design authority is a human acceptance act) | not exercised live here | — | $0 | fixture only | BLOCKED — E2E-G01/G03 (unchanged) |
+| Visual | visual provider | — | FIXTURE | not exercised live | — | $0 | fixture only | BLOCKED — E2E-G01/G03 (unchanged) |
+| Astro renderer → QA → SITE-CANDIDATE | local renderer | — | FIXTURE tier only (isolated renderer builds) | 35/35 Playwright on built site | — | $0 | not production data | UNCHANGED |
+
+Recorded pilot spend remains ≈ **$0.0017** total; the $2.00 ceiling is
+enforced by the durable writer/search budget reservation lifecycle.
+
+Functional candidate: **`16b0b952c16b3a9b68f303c92035615891cf22c1`** (merged
+`main` after PR #48; the browser journey 17/17 was re-verified on this lineage;
+the adversarial final-remediation candidate `d479512…` does not change journey
+mechanics — it only tightens `claimLineageProblems` semantics, re-proven green
+on the full battery); earlier trace artifacts below were captured at
+`794c3f4…`/`b44ec64…` and remain labeled with their capture SHA. No continuous
+Stark production HTML, artifact digest, human release approval, or production
+QA PASS exists beyond the genuine-evidence gate.
+
+**G01/G03 external-blocker list (exact, per prompt Step 4; restated):** to run
+the real-provider Stark journey an operator must supply — (1) authorized live
+pilot access for Russian SERP search, Writer, Stitch and Visual providers with
+a stated cost envelope (G01); (2) the exact target-specific Cloudflare
+authorization block: account ID, dedicated Worker name, permitted test
+hostname, permitted operations (preview/publish/Version B/rollback), authorized
+release-approval operator identity (G02 — reaches Phase 3 only after the real
+candidate exists); (3) Stark primary legal/brand/client/IP documents and
+evidence, legitimate human approval identities per accepted Person/Organization
+authority, exact operator-approved writer prompt and final content acceptance
+(G03). None of these may be simulated; they are recorded locally in
+`.factory/e2e01/phase3/AUTHORIZATION_TEMPLATE.md` when G02 authorization is
+prepared.
 
 ## Scope separation (mandatory reading)
 

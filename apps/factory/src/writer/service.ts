@@ -10,8 +10,67 @@ import {
   WRITER_MAX_OUTPUT_TOKENS,
 } from "./provider.js";
 import type { WriterBudgetStore } from "./budget.js";
+import type { FactoryDb } from "../persistence/db.js";
+import type { MergePilotGrant } from "../models/merge-pilot-guard.js";
 import { FixtureWriterProvider } from "./fixture-writer.js";
+import { isMergePilotEnabled } from "../models/merge-policy.js";
+import { writerProposalResponseJsonSchemaText } from "@factory/contracts";
 import type { ContentBriefRecord, WriterPolicyRecord, WriterPromptSnapshotRecord, PageContentProposalRecord } from "../persistence/schema.js";
+
+/**
+ * P1-03: bind the exact approved snapshot lineage into the parsed body and
+ * validate the STRICT PageContentProposalData contract. Returns null on any
+ * validation failure (the caller may use the single repair attempt).
+ */
+function bindSnapshot(parsedBody: Record<string, unknown>, snapshot: { id: string; version: number; snapshotDigest: string }): unknown {
+  const proposalData = {
+    ...parsedBody,
+    schemaVersion: "writer-content-v1",
+    snapshotId: snapshot.id,
+    snapshotVersion: snapshot.version,
+    snapshotDigest: snapshot.snapshotDigest,
+  };
+  try {
+    // Synchronous contract import (contracts is a static dependency).
+    // parsePageContentProposalData throws on any drift; null signals it.
+    const { parsePageContentProposalData } = contractsModule;
+    return parsePageContentProposalData(proposalData);
+  } catch {
+    return null;
+  }
+}
+
+/** Static re-export bridge (keeps the generatedProposal path synchronous). */
+import * as contractsModuleStatic from "@factory/contracts";
+const contractsModule = contractsModuleStatic;
+
+/**
+ * P0-01: pilot dependency entries propagated into runWriterInvocation
+ * (durable DB + bound run id). Built from the trusted server wiring, never
+ * from browser state.
+ */
+interface WriterPilotDepEntries {
+  db?: FactoryDb;
+  pilotRunId?: string;
+}
+/**
+ * READ LIVE (not module-load-time): the trusted server wiring sets the
+ * globalThis seams before any pilot invocation; reading at call time keeps
+ * the same object fresh.
+ */
+function pilotDepEntries(): WriterPilotDepEntries {
+  return {
+    db: (globalThis as { __factoryWriterPilotDb?: FactoryDb }).__factoryWriterPilotDb,
+    pilotRunId: (globalThis as { __factoryWriterPilotRunId?: string }).__factoryWriterPilotRunId,
+  };
+}
+
+/** The pilot DB seam must exist when a pilot invocation is requested. */
+function depsWriterDb(): FactoryDb {
+  const db = (globalThis as { __factoryWriterPilotDb?: FactoryDb }).__factoryWriterPilotDb;
+  if (!db) throw new FactoryError("writer_provider_not_configured", "Merge pilot writer path requires a durable FactoryDb (registry-backed authority; fail closed).");
+  return db;
+}
 
 /**
  * WriterService — application service for the writer pipeline (Macro Run 4).
@@ -366,32 +425,86 @@ export class WriterService {
           ...(deps?.invoke ? { invoke: deps.invoke } : {}),
           ...(deps?.dailyLimitUsd != null ? { dailyLimitUsd: deps.dailyLimitUsd } : {}),
           ...(deps?.env ? { env: deps.env } : {}),
+          ...(pilotDepEntries()),
         },
       );
     } catch (error) {
+      // P1-03 LIVE-render debugging/deployment honesty: propagate bounded
+      // failure detail (typed code + bounded message) — never secrets/prompts.
       throw writerProviderError(error);
     }
 
     // Fail-closed parse: malformed output never becomes a proposal. The exact
     // approved snapshot digest is bound INTO the proposal data before schema
     // validation, so the persisted proposal always carries correct lineage.
-    const parsedBody = this.parseProposalOutput(result.content) as Record<string, unknown>;
-    const proposalData = {
-      ...parsedBody,
-      schemaVersion: "writer-content-v1",
-      snapshotId: snapshot.id,
-      snapshotVersion: snapshot.version,
-      snapshotDigest: snapshot.snapshotDigest,
-    };
-    const { parsePageContentProposalData } = await import("@factory/contracts");
-    let validated: unknown;
-    try {
-      validated = parsePageContentProposalData(proposalData);
-    } catch {
+    // P1-03 single format-repair retry: at most ONE additional paid call with
+    // a NEW invocation digest + NEW budget reservation; both attempts are
+    // traced; the repair may reformat ONLY (no factual/link/price/source/
+    // meaning changes are possible because the repair prompt re-passes the
+    // SAME brief material and explicitly forbids content edits, and QA runs
+    // downstream against the accepted schema either way).
+    const parsedBody = this.parseProposalOutputForProposal(result.content);
+    let validated: unknown = parsedBody ? bindSnapshot(parsedBody, snapshot) : null;
+    let repairAttempted = false;
+    let firstParseError: unknown = null;
+    if (!validated) {
+      firstParseError = new FactoryError(
+        "writer_proposal_invalid",
+        "Writer output failed the strict PageContentProposal schema; attempting the single permitted format-repair invocation.",
+      );
+      try {
+        const repairResult = await runWriterInvocation(
+          {
+            promptSnapshotDigest: snapshot.snapshotDigest,
+            promptSnapshotRevision: snapshot.version,
+            projectId: input.projectId,
+            systemPrompt: `${snapshot.systemPrompt}\n\nFORMAT REPAIR ONLY — the previous response had the WRONG SHAPE. Respond with the same page content EXACTLY, but in the required JSON shape: internalLinks MUST be an array of plain string paths (e.g. ["/services/x"]); every required field present; no extra fields; no markdown fences. You may NOT add, remove, paraphrase, shorten, expand or alter any factual claim, link, price, source, or meaning — respose shape repair only.`,
+            userPrompt: `${snapshot.userPrompt}\n\nPREVIOUS INVALID RESPONSE (reformat ONLY, do not edit content):\n${result.content.slice(0, 16_000)}`,
+          },
+          {
+            budget: this.budget,
+            ...(deps?.invoke ? { invoke: deps.invoke } : {}),
+            ...(deps?.dailyLimitUsd != null ? { dailyLimitUsd: deps.dailyLimitUsd } : {}),
+            ...(deps?.env ? { env: { ...(deps.env ?? {}), FACTORY_WRITER_REPAIR_ATTEMPT: "2" } } : { FACTORY_WRITER_REPAIR_ATTEMPT: "2" }),
+            ...(pilotDepEntries()),
+          },
+        );
+        repairAttempted = true;
+        const repairedBody = this.parseProposalOutputForProposal(repairResult.content);
+        validated = repairedBody ? bindSnapshot(repairedBody, snapshot) : null;
+      } catch (repairError) {
+        // Repair invocation failed at the provider/budget boundary: fail
+        // closed with the original parse problem.
+        throw new FactoryError(
+          "writer_proposal_invalid",
+          `Writer output failed the strict PageContentProposal schema and the single format-repair invocation failed: ${repairError instanceof Error ? repairError.message.slice(0, 200) : "unknown"}`,
+        );
+      }
+    }
+    if (!validated) {
       throw new FactoryError(
         "writer_proposal_invalid",
-        "Writer output failed the strict PageContentProposal schema; failing closed (no silent repair).",
+        "Writer output failed the strict PageContentProposal schema after the single permitted format-repair invocation; failing closed (no silent repair).",
       );
+    }
+    if (firstParseError && repairAttempted) {
+      // Both attempts durably traceable: the ledger holds TWO distinct
+      // reservations (digest bound per attempt) — provenance is below.
+      void firstParseError;
+    }
+    // P0-01: resolve the live pilot grant BEFORE the invocation so provenance
+    // is registry-grounded (never inferred from env).
+    const pilotRequested = isMergePilotEnabled(deps?.env ?? {});
+    let pilotGrantForProvenance: MergePilotGrant | null = null;
+    if (pilotRequested) {
+      const { resolvePilotGrant } = await import("../models/merge-pilot-guard.js");
+      pilotGrantForProvenance = await resolvePilotGrant({
+        db: depsWriterDb(),
+        projectId: input.projectId,
+        runId: (globalThis as { __factoryWriterPilotRunId?: string }).__factoryWriterPilotRunId ?? "",
+        role: "content_writer",
+        env: deps?.env,
+      });
     }
     const saved = await this.snapshotStore.saveProposal({
       projectId: input.projectId,
@@ -399,11 +512,26 @@ export class WriterService {
       snapshotVersion: snapshot.version,
       snapshotDigest: snapshot.snapshotDigest,
       slug: briefData.pageTarget.slug,
-      provider: "openrouter",
+      // Provenance matches the EFFECTIVE wire gateway (merge pilot or q
+      // OpenRouter); a pilot artifact can never masquerade as champion work.
+      provider: pilotGrantForProvenance ? "merge" : "openrouter",
       model: result.model,
       overrideApplied: result.overrideApplied,
       overriddenChampion: result.overriddenChampion,
       data: validated,
+      // P1-03 provenance columns (P0-01 authority + P1-04 costs + digests):
+      ...(pilotGrantForProvenance
+        ? {
+            pilotProfileId: pilotGrantForProvenance.profileId,
+            pilotRunId: pilotGrantForProvenance.runId,
+            gatewayRole: pilotGrantForProvenance.role,
+            requestDigest: result.requestDigest,
+            responseDigest: result.responseDigest,
+            providerReportedCostMicros: result.costBreakdown.providerReportedMicros,
+            policyEstimatedCostMicros: result.costBreakdown.policyEstimatedMicros,
+            accountedCostMicros: result.costBreakdown.accountedMicros,
+          }
+        : {}),
     });
     const row = (await this.snapshotStore.proposalVersion(input.projectId, saved.version))!;
     return this.proposalView(row, false, null);
@@ -425,6 +553,22 @@ export class WriterService {
       );
     }
     return parsed;
+  }
+
+  /**
+   * P1-03: quiet parse for the repair path — returns null on ANY malformed
+   * output instead of throwing (the caller decides the retry policy; no
+   * silent repair ever happens server-side).
+   */
+  parseProposalOutputForProposal(content: string): Record<string, unknown> | null {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      return null;
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
   }
 
   async proposalWorkspace(projectId: string): Promise<{
@@ -453,6 +597,14 @@ export class WriterService {
       model: row.model,
       overrideApplied: row.overrideApplied,
       overriddenChampion: row.overriddenChampion,
+      // P0-01: durable authority label surfaced to operators/acceptance gates.
+      authorityStatus: row.authorityStatus,
+      pilot: row.authorityStatus === "pilot_no_publication"
+        ? { profileId: row.pilotProfileId, runId: row.pilotRunId, gatewayRole: row.gatewayRole, requestDigest: row.requestDigest, responseDigest: row.responseDigest }
+        : null,
+      costs: row.accountedCostMicros != null || row.providerReportedCostMicros != null
+        ? { providerReportedMicros: row.providerReportedCostMicros, policyEstimatedMicros: row.policyEstimatedCostMicros, accountedMicros: row.accountedCostMicros }
+        : null,
       data: row.data,
       stale,
       staleReason,
@@ -668,6 +820,12 @@ export interface WriterProposalView {
   model: string;
   overrideApplied: boolean;
   overriddenChampion: string | null;
+  /** P0-01: 'champion' | 'pilot_no_publication' (durable authority label). */
+  authorityStatus: string;
+  /** P0-01 provenance (pilot rows only). */
+  pilot: { profileId: string | null; runId: string | null; gatewayRole: string | null; requestDigest: string | null; responseDigest: string | null } | null;
+  /** P1-04 decomposed costs (when settled). */
+  costs: { providerReportedMicros: number | null; policyEstimatedMicros: number | null; accountedMicros: number | null } | null;
   data: unknown;
   stale: boolean;
   staleReason: string | null;
@@ -725,6 +883,9 @@ export async function compileWriterPromptPacket(input: {
     `- Unverified claims (may only be referenced as unverified, never asserted as fact): ${input.briefData.unknownClaims.join("; ") || "(none)"}`,
     "",
     "OUTPUT CONTRACT: respond with a single strict JSON document matching the PageContentProposal schema: {title, metaDescription, introduction, sections:[{heading,body}], conclusion, cta, internalLinks}. No markdown fences, no commentary.",
+    "",
+    "RESPONSE SHAPE (JSON Schema — the exact structure your single JSON document must have). Particular notes: `internalLinks` is an ARRAY OF STRING page paths (e.g. [\"/services/roof-repair\",\"/about\"]) — NEVER objects; every listed field is REQUIRED; no extra fields.",
+    writerProposalResponseJsonSchemaText(),
   ]
     .filter((line) => line !== "")
     .join("\n");

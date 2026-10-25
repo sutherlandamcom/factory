@@ -711,6 +711,66 @@ function splitEvidenceSentences(combined: string): string[] {
   return parts;
 }
 
+/**
+ * P1-01 same-SourceRef numeric binding — CLAUSE segmentation.
+ *
+ * Within ONE sentence, two actor/action clauses ("Vendor Ltd performed
+ * engineering for Orbital Works, while Funding Group invested 250 units in
+ * Logistics Depot") share a sentence but not a subject. Splits a sentence
+ * at clause boundaries (EN coordinating/subordinating markers and RU
+ * аоединительные/противительные markers) ONLY when the resulting fragment
+ * still contains a verb or a number (otherwise the parent sentence is kept
+ * as one clause). Never splits inside quoted names («...»/"...").
+ */
+const CLAUSE_SPLIT_MARKERS_EN =
+  /,\s*(?=(?:and|while|whereas|but|which|who|whose|with)\b)|(?:\band\b|\bwhile\b|\bwhereas\b|\bbut\b)(?=\s+\w)/i;
+const CLAUSE_SPLIT_MARKERS_RU =
+  /,\s*(?=(?:а|но|при\s+этом|который|которая|которое|где)\b)|(?:\bпри\s+этом\b)(?=\s+\S)/iu;
+
+function containsPredicateOrFigure(fragment: string): boolean {
+  if (extractNormalizedNumbers(fragment).length > 0) return true;
+  for (const { pattern } of ACTIONAL_VERB_FAMILIES) if (pattern.test(fragment)) return true;
+  for (const { pattern } of RU_ACTIONAL_VERB_FAMILIES) if (pattern.test(fragment)) return true;
+  return false;
+}
+
+function splitEvidenceClauses(sentence: string): string[] {
+  // Never split inside quotes: mask «...»/"..." spans during marker search.
+  const masked = sentence.replace(/[«"][^«»"]{2,40}[»"]/g, (q) => q.replace(/[^«»"]/g, "\u0000"));
+  const positions: number[] = [];
+  for (const rx of [CLAUSE_SPLIT_MARKERS_EN, CLAUSE_SPLIT_MARKERS_RU]) {
+    const re = new RegExp(rx.source, rx.flags.includes("g") ? rx.flags : rx.flags + "g");
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(masked)) !== null) {
+      positions.push(m.index + (m[0].startsWith(",") ? 1 : 0));
+    }
+  }
+  positions.sort((a, b) => a - b);
+  const fragments: string[] = [];
+  let prev = 0;
+  for (const pos of positions) {
+    if (pos <= prev || pos >= sentence.length) continue;
+    const frag = sentence.slice(prev, pos).trim();
+    if (frag.length > 0) fragments.push(frag);
+    prev = pos;
+  }
+  const tail = sentence.slice(prev).trim();
+  if (tail.length > 0) fragments.push(tail);
+  if (fragments.length <= 1) return [sentence];
+  // Keep only fragments that carry a verb or a number; merge a fragment that
+  // carries neither into its successor (it is trailing description text).
+  const survivors: string[] = [];
+  for (const frag of fragments) {
+    if (containsPredicateOrFigure(frag)) survivors.push(frag);
+    else if (survivors.length > 0) survivors[survivors.length - 1] = `${survivors[survivors.length - 1]} ${frag}`.trim();
+    else survivors.push(frag);
+  }
+  // A single surviving clause loses nothing: return the parent sentence so
+  // object fallback width stays identical to pre-P1-01 behavior.
+  if (survivors.length <= 1) return [sentence];
+  return survivors;
+}
+
 /** Normalization for RU/EN actor and object matching. */
 function attributionKey(value: string): string {
   return normKey(value)
@@ -767,6 +827,66 @@ function ruTenseClass(matchedText: string): "past" | "present" | "intent" {
 }
 
 /**
+ * P1-B Cyrillic-safe negation detection for one verb-occurrence lookback.
+ * «не»/«нет» as standalone tokens; punctuation/comma/hyphen separators and
+ * short parentheticals tolerated between the negation token and the
+ * lookback END (covers «не, впрочем, построил», «не-смо́г инвестировал»).
+ * Replaces the ASCII-only /\b/ guard. The final separator run before the
+ * verb stays bounded (≤3 tokens) so distance negation beyond ~40 chars
+ * stays out of scope (window cap handles it separately).
+ */
+function negatedCyrillic(lookback: string): boolean {
+  // Direct adjacency: <sep>«не»/«нет»<sep>END.
+  if (/(?:^|[^а-яёА-ЯЁ])(?:не|нет)(?![а-яёА-ЯЁ])[\s,.»;:—-]{0,8}[\s»"']{0,4}$/iu.test(lookback)) {
+    return true;
+  }
+  // Short insertions between «не» and END: e.g. «не, впрочем,", «не-смо́г»,
+  // bounded to 24 chars with no other negation token and no second cohort.
+  const m = /(?:^|[^а-яёА-ЯЁ])(?:не|нет)(?![а-яёА-ЯЁ])([\s\S]{1,24})$/iu.exec(lookback);
+  if (m) {
+    const tail = m[1]!;
+    // Insertion must not contain another Cyrillic word token longer than a
+    // particle/discourse marker (particles: «впрочем», «именно», «или»,
+    // «наконец», «же», «ли», «бы»...). allow: punctuation wrappers and
+    // hyphen-clitics «смо́г», «могли» — modeled as ≤2 such words.
+    const wordTokens = tail.match(/[а-яёА-ЯЁ]{2,}/giu) ?? [];
+    const disallowedWord = wordTokens.some(
+      (w) =>
+        w.length > 8 && !/^смо[гг]|могл/i.test(w),
+    );
+    if (!disallowedWord || wordTokens.length <= 2) {
+      return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+/**
+ * P1-B EN negation detection: "did not <verb>", "does not <verb>",
+ * "was/were not <verb-ed>", and fronted "Not <X> but <Y> ..." inversions.
+ * `matched` is the verb form; do-support negation must directly precede.
+ */
+function negatedEnglish(lookback: string, matched: string): boolean {
+  if (/\b(?:did|does|do|was|were|is|are|has|have|had)\s+(?:not|n't)\s*$/i.test(lookback)) {
+    return true;
+  }
+  // Fronted anti-attribution: "Not <actor> but/but rather ..." — the verb
+  // belongs to the OTHER actor. The window already ends before the verb.
+  if (/(?:^|\s)not\s+[\w'’.-]+(?:\s[\w'’.-]+)*,?\s+but\b/i.test(lookback.trim())) {
+    return true;
+  }
+  // Passive negative chains (no auxiliary inside lookback but participle
+  // itself negated via preceding not -- covered by the do-support branch
+  // when aux is present) — plus bare "... not <participle>" terminators.
+  const base = matched.toLowerCase().replace(/(?:ed|s|ing)$/, "");
+  if (base.length > 2 && /(?:^|[\s,.»;:—-])not\s*$/i.test(lookback)) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Extract actor/family pairs from ONE sentence. Composite pass1: for each
  * family pattern occurrence (ALL matches, not just the first), assemble the
  * actor window immediately BEFORE the match, glue legal-entity prefixes,
@@ -788,9 +908,17 @@ function extractActorVerbPairsSentence(
       const matched = m[0];
       if (m.index === undefined || m.index === 0 && matched.length === 0) break;
       const before = normKey(norm.slice(0, m.index)).split(/\s+/).filter(Boolean);
-      // Negation guard: «не»/« NOT» immediately before the verb occurrence
-      // voids this occurrence as supporting evidence.
-      const isNegated = /\b(?:не|нет)\b/i.test(norm.slice(Math.max(0, m.index - 12), m.index));
+      // Negation guard (P1-B Unicode fix): JavaScript `/\b(?:не|нет)\b/` is
+      // ASCII-only — `\b` never matches around Cyrillic, so the previous
+      // guard was dead and negated occurrences could pair as support.
+      // Replaced with explicit character-class lookaround (Cyrillic-safe)
+      // plus an EN do-support/demonstrative negation check, evaluated over
+      // a bounded lookback window that covers distance negation and
+      // auxiliary/passive chains («официально не инвестировало», «не был
+      // построен», "did not invest", "Not X but Y built").
+      const lookback = norm.slice(Math.max(0, m.index - 40), m.index);
+      const isNegated =
+        negatedCyrillic(lookback) || negatedEnglish(lookback, matched);
       // Composite named subjects: "ООО X и ООО Y <verb>" — emit ONE pair per
       // named entity so each subject is individually verified (unsupported
       // side rejects; supported side may pass).
@@ -871,6 +999,12 @@ function extractActorVerbPairsSentence(
         if (sides.length > 1) actors = sides;
       }
       for (const actor of actors) {
+        // P1-B: an EMPTY actor window (e.g. stopword-circuit remnants like the
+        // «не» token) carries no identifiable subject; such a pair asserts
+        // nothing and must not participate in attribution requirements.
+        if (attributionKey(actor).length === 0) {
+          continue;
+        }
         // Bounded object fallback: quoted «...»/"..." name AFTER the verb
         // (the object of the action); the actor itself is quoted first, so
         // post-verbal position is required; fall back to the LAST quoted
@@ -914,6 +1048,46 @@ function extractActorVerbPairsSentence(
 }
 
 /**
+ * P1-01 same-SourceRef numeric binding — UNQUOTED object names.
+ *
+ * The pairing matcher binds objects through QUOTED names only (fail-open when
+ * the claim object is unquoted). For numeric substantiation this is too lax:
+ * "engineering for Orbital Works" must not be satisfied by an excerpt clause
+ * about "engineering for Logistics Depot" merely because neither object is
+ * quoted. Deterministic extraction: the capitalized multi-word name that
+ * follows a post-verbal `for|at` (EN) in the claim; RU relies on quoted
+ * objects (already bound by the pairing matcher). Returns lowercase names;
+ * an empty list means "no extra constraint".
+ */
+function claimUnquotedObjectNames(claimText: string): string[] {
+  const names = new Set<string>();
+  for (const sentence of splitEvidenceSentences(claimText)) {
+    for (const families of [ACTIONAL_VERB_FAMILIES, RU_ACTIONAL_VERB_FAMILIES]) {
+      for (const { pattern } of families) {
+        const rx = new RegExp(
+          pattern.source,
+          pattern.flags.includes("g") ? pattern.flags : pattern.flags + "g",
+        );
+        let m: RegExpExecArray | null;
+        while ((m = rx.exec(sentence)) !== null) {
+          const post = sentence.slice(m.index + m[0].length);
+          const enObject = post.match(
+            /\b(?:for|at)\s+((?:[A-Z][\p{L}0-9'’-]+)(?:\s+[A-Z][\p{L}0-9'’-]+){0,3})/u,
+          );
+          // Trim a trailing stopword the greedy capture may have swallowed
+          // ("worth", "in", unit words). Only keep names with >= 4 chars.
+          const candidate = (enObject?.[1] ?? "")
+            .replace(/\s+(?:worth|in|of|and|the|units?|million|billion)$/i, "")
+            .trim();
+          if (candidate.length >= 4) names.add(candidate.toLowerCase());
+        }
+      }
+    }
+  }
+  return [...names];
+}
+
+/**
  * Extract `<actor-token(s)> VERB` candidate pairs from a text. Delegates to
  * the per-sentence extractor for both the EN and RU family sets; the RU set
  * only triggers when the sentence contains Cyrillic actional markers (bounded
@@ -953,14 +1127,23 @@ function claimActorVerbPairs(text: string): Array<{ actor: string; family: strin
  * Tense/intent (RU-13/RU-14): evidence only supports same tense class;
  * negated-and intent-class occurrences support nothing.
  */
-function actorActionAlignmentProblems(claimText: string, combinedEvidence: string): string[] {
+function actorActionAlignmentProblems(
+  claimText: string,
+  combinedEvidence: string,
+  evidenceUnits?: readonly { ref: string; text: string }[],
+): string[] {
   const problems: string[] = [];
-  // Split combined evidence per source ref first, then per sentence within
-  // each excerpt (prevents cross-excerpt sentence fusion and limits
-  // unpunctuated-run contamination).
-  const evidenceSentences = combinedEvidence
-    .split(/\s{2,}|\n+/)
-    .flatMap((chunk) => splitEvidenceSentences(chunk.trim()));
+  // P1-A SourceRef isolation: when per-ref evidence units are supplied, each
+  // ref's excerpts are evaluated INDEPENDENTLY — an actor-verb pairing must
+  // be supported by ONE ref alone. An actor fragment in one excerpt plus an
+  // action fragment in another never fuses into a supported pairing.
+  const evidenceSentences = (
+    evidenceUnits && evidenceUnits.length > 0
+      ? evidenceUnits.flatMap((unit) => splitEvidenceSentences(unit.text.trim()))
+      : combinedEvidence
+          .split(/\s{2,}|\n+/)
+          .flatMap((chunk) => splitEvidenceSentences(chunk.trim()))
+  );
   const claimPairs = [
     ...extractActorVerbPairsSentence(claimText, ACTIONAL_VERB_FAMILIES),
     ...extractActorVerbPairsSentence(claimText, RU_ACTIONAL_VERB_FAMILIES),
@@ -1065,6 +1248,53 @@ export function verifyCalculationProvenance(
   return problems;
 }
 
+/** Pairing indicator: a pair list contains at least one actional pair. */
+type PairListIndicator = (pairs: AttributionPair[]) => boolean;
+const claimPairIndicators: ReadonlyArray<PairListIndicator> = [
+  (pairs) => pairs.some((p) => p.tense !== "intent"),
+];
+
+/**
+ * P1-A round 2 — claim-pair matcher shared by the attribution check and the
+ * numeric-substantiation gate. A ref unit "supports the claim's pairing"
+ * only when one of THE CLAIM's own substantive actor/action pairs (same verb
+ * family, matching actor tokens, matching quoted object) is paired by an
+ * excerpt sentence of that ref. This is the exact semantics of
+ * actorActionAlignmentProblems, extracted so figures bind to the pairing
+ *excerpt of the claim's actor/action rather than to any pairing anywhere.
+ */
+function refUnitSupportsClaimPairing(
+  claimPairs: AttributionPair[],
+  unitSentences: readonly string[],
+): boolean {
+  if (claimPairs.length === 0) return false;
+  for (const unitSentence of unitSentences) {
+    const excerptPairs = [
+      ...extractActorVerbPairsSentence(unitSentence, ACTIONAL_VERB_FAMILIES),
+      ...extractActorVerbPairsSentence(unitSentence, RU_ACTIONAL_VERB_FAMILIES),
+    ];
+    for (const pair of claimPairs) {
+      const supported = excerptPairs
+        .filter((p) => p.family === pair.family && p.tense !== "intent")
+        .some((p) => {
+          const actorMatches =
+            p.actor.length > 0 &&
+            (p.actor.endsWith(pair.actor) || pair.actor.endsWith(p.actor) ||
+              p.actor.includes(pair.actor) || pair.actor.includes(p.actor));
+          if (!actorMatches) return false;
+          // Object containment: claim object vs excerpt object.
+          const claimObj = (pair.objectFallback ?? "").toLowerCase();
+          const evObj = (p.objectFallback ?? "").toLowerCase();
+          if (!claimObj) return true;
+          if (!evObj) return false;
+          return evObj.includes(claimObj) || claimObj.includes(evObj);
+        });
+      if (supported) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Detailed deterministic problem list for a ClaimLineage record (Block 11).
  */
@@ -1094,16 +1324,171 @@ export function claimLineageProblems(lineage: ClaimLineage): string[] {
     }
   }
   if (lineage.sourceRefs.length > 0) {
+    // P1-A SourceRef isolation: per-ref evidence units. A figure or token is
+    // substantive evidence for the claim ONLY when it appears in an excerpt
+    // whose ref counts as evidence for that figure. The calculationRef (and
+    // the ref-prefixed evidence sentences) remain part of the combined blob
+    // for backwards-compatible entailment windowing.
+    const calculationEvidence = lineage.calculationRef
+      ? `${lineage.calculationRef.modelId} ${lineage.calculationRef.output.value} ${lineage.calculationRef.inputs.map((i) => `${i.name} ${i.value}`).join(" ")}`
+      : "";
+    const refEvidenceUnits = lineage.sourceRefs.map((r) => ({
+      ref: r.ref,
+      text: `${r.ref} ${r.supportingExcerpt ?? ""}`,
+    }));
     const combinedEvidence = [
       ...lineage.sourceRefs.map((r) => `${r.ref} ${r.supportingExcerpt ?? ""}`),
-      lineage.calculationRef
-        ? `${lineage.calculationRef.modelId} ${lineage.calculationRef.output.value} ${lineage.calculationRef.inputs.map((i) => `${i.name} ${i.value}`).join(" ")}`
-        : "",
+      calculationEvidence,
     ].join(" ");
-    const evidenceNumbers = new Set(extractNormalizedNumbers(combinedEvidence));
+    // Numeric substantiation (P1-A, rounds 1+2): a claim figure counts as
+    // substantiated ONLY when a supporting ref that carries the figure ALSO
+    // supports one of the claim's own actor/action pairings (same family,
+    // actor containment, quoted-object containment — P1-A round 2), or the
+    // calculationRef produces it. When the claim carries NO substantive
+    // actional pairing itself, the round-1 gate applies unchanged (any
+    // actional pairing in the figure-bearing ref, or no pairing indicators
+    // at all) so non-actional claims are never over-blocked. A figure
+    // supplied by an unrelated ref (one that pairs a DIFFERENT actor/action,
+    // e.g. "Funding Group invested 500 …" for a Vendor Ltd engineering
+    // claim) cannot launder support for the pairing excerpt.
+    const claimPairings = [
+      ...extractActorVerbPairsSentence(lineage.claimText, ACTIONAL_VERB_FAMILIES),
+      ...extractActorVerbPairsSentence(lineage.claimText, RU_ACTIONAL_VERB_FAMILIES),
+    ].filter((p) => p.tense !== "intent");
+    // P1-01: per-claim-clause profiles. Each claim clause carries its own
+    // actor/action pairings AND its own (possibly unquoted) object names; a
+    // figure binds only through a clause profile whose pairing and object
+    // the evidence clause independently satisfies.
+    const claimClauseProfiles = splitEvidenceSentences(lineage.claimText.trim())
+      .flatMap((cs) => splitEvidenceClauses(cs))
+      .map((clause) => ({
+        pairings: [
+          ...extractActorVerbPairsSentence(clause, ACTIONAL_VERB_FAMILIES),
+          ...extractActorVerbPairsSentence(clause, RU_ACTIONAL_VERB_FAMILIES),
+        ].filter((p) => p.tense !== "intent"),
+        objects: claimUnquotedObjectNames(clause),
+      }))
+      .filter((profile) => profile.pairings.length > 0);
+    const pairingIndicators = new Set(
+      refEvidenceUnits
+        .filter((u) =>
+          splitEvidenceSentences(u.text.trim()).some((es) =>
+            claimPairIndicators.some(
+              (indicator) =>
+                indicator(extractActorVerbPairsSentence(es, ACTIONAL_VERB_FAMILIES)) ||
+                indicator(extractActorVerbPairsSentence(es, RU_ACTIONAL_VERB_FAMILIES)),
+            ),
+          ),
+        )
+        .map((u) => u.ref),
+    );
+    const figuresWithEvidence = new Set<string>();
+    // P1-01 same-SourceRef numeric binding: when the claim carries substantive
+    // pairings, a figure substantiates ONLY from an evidence SENTENCE that
+    // (a) pairs the claim's own actor/action (same matcher semantics as
+    // refUnitSupportsClaimPairing) AND (b) carries that same figure. Figures
+    // that live in a DIFFERENT sentence (or a different actor's own pairing
+    // clause) of the SAME ref never launder support.
+    const claimClauseSentences = splitEvidenceSentences(lineage.claimText.trim());
+    for (const unit of refEvidenceUnits) {
+      const unitSentences = splitEvidenceSentences(unit.text.trim());
+      // Round-2 binding: the ref must pair THE CLAIM's own actor/action.
+      const unitSupportsClaimPairing = refUnitSupportsClaimPairing(claimPairings, unitSentences);
+      const unitHasPairing = unitSentences.some((es) =>
+        claimPairIndicators.some(
+          (indicator) =>
+            indicator(extractActorVerbPairsSentence(es, ACTIONAL_VERB_FAMILIES)) ||
+            indicator(extractActorVerbPairsSentence(es, RU_ACTIONAL_VERB_FAMILIES)),
+        ),
+      );
+      const unitCountsAsEvidence = claimPairings.length > 0
+        ? unitSupportsClaimPairing
+        : !unitHasPairing && pairingIndicators.size > 0
+          ? false
+          : true;
+      if (!unitCountsAsEvidence) {
+        // This ref carries no claim-relevant pairing: its figures do not
+        // substantiate the attributed claim.
+        continue;
+      }
+      if (claimPairings.length === 0) {
+        // Round-1 path (claim has NO substantive actional pairing): the whole
+        // unit's figures remain evidence — unchanged semantics.
+        for (const num of extractNormalizedNumbers(unit.text)) {
+          figuresWithEvidence.add(num);
+        }
+      } else {
+        // P1-01 same-SourceRef binding: only sentences that pair the claim's
+        // own actor/action contribute figures. Clause-level refinement:
+        // inside ONE sentence with TWO pairings, each figure binds only to
+        // the clause whose pairing matches the claim; and the evidence must
+        // also carry the claim clause's (possibly unquoted) object.
+        for (const unitSentence of unitSentences) {
+          let bound = false;
+          for (const profile of claimClauseProfiles) {
+            if (!refUnitSupportsClaimPairing(profile.pairings, [unitSentence])) continue;
+            // Unquoted-object constraint: when the claim clause names
+            // unquoted object(s), a binding sentence must carry at least ONE
+            // of them. Ambiguous (no object named in the excerpt): FAIL
+            // closed for figure binding (never PASS on ambiguity).
+            if (profile.objects.length > 0) {
+              const lower = unitSentence.toLowerCase();
+              if (!profile.objects.some((obj) => lower.includes(obj))) continue;
+            }
+            // Ellipsis guard: only refine to clause-level figures when OTHER
+            // paired clauses exist in the same sentence (two real pairings).
+            // A sentence whose sibling clauses carry NO own pairing shares
+            // the single pairing (observed subject) — figures stay sentence-
+            // scoped, preserving pre-P1-01 behavior for single-actor lists.
+            const sentencePairings = [
+              ...extractActorVerbPairsSentence(unitSentence, ACTIONAL_VERB_FAMILIES),
+              ...extractActorVerbPairsSentence(unitSentence, RU_ACTIONAL_VERB_FAMILIES),
+            ].filter((p) => p.tense !== "intent");
+            const requiresClauseRefine = sentencePairings.length > 1;
+            if (requiresClauseRefine) {
+              for (const clause of splitEvidenceClauses(unitSentence)) {
+                if (!refUnitSupportsClaimPairing(profile.pairings, [clause])) continue;
+                for (const num of extractNormalizedNumbers(clause)) {
+                  figuresWithEvidence.add(num);
+                }
+                bound = true;
+              }
+              if (!bound) {
+                // Clause segmentation produced no matching clause: keep the
+                // sentence-level figures (conservative in the SUPPORTIVE
+                // direction only when the sentence itself pairs the claim).
+                for (const num of extractNormalizedNumbers(unitSentence)) {
+                  figuresWithEvidence.add(num);
+                }
+                bound = true;
+              }
+            } else {
+              for (const num of extractNormalizedNumbers(unitSentence)) {
+                figuresWithEvidence.add(num);
+              }
+              bound = true;
+            }
+          }
+          void bound;
+        }
+      }
+    }
+    if (calculationEvidence && lineage.claimType === "CALCULATION") {
+      // P1-C-adjacent: a calculationRef substantiates figures ONLY for
+      // CALCULATION-type claims. A FIRST_PARTY_FACT/FACT/SOURCE_DERIVED_FACT
+      // claim is an observation class and cannot launder its figures through
+      // a calculation payload (probe A8).
+      for (const num of extractNormalizedNumbers(calculationEvidence)) {
+        figuresWithEvidence.add(num);
+      }
+    } else if (calculationEvidence && lineage.claimType !== "CALCULATION") {
+      problems.push(
+        "calculation_ref_claim_type_mismatch: calculationRef provenance substantiates figures only for CALCULATION claims.",
+      );
+    }
     const claimNumbers = extractNormalizedNumbers(lineage.claimText);
     for (const num of claimNumbers) {
-      if (!evidenceNumbers.has(num)) {
+      if (!figuresWithEvidence.has(num)) {
         problems.push(
           `Numeric figure "${num}" in claimText is not substantiated by any sourceRef supportingExcerpt or calculationRef.`,
         );
@@ -1122,8 +1507,11 @@ export function claimLineageProblems(lineage: ClaimLineage): string[] {
     // responsibility (investment/construction/engineering/operation/ownership
     // belong to whoever the source says performed them). Deterministic check:
     // for any actional actor-verb pair in the claim, the supporting excerpt
-    // must pair the same actor token with the same verb family.
-    problems.push(...actorActionAlignmentProblems(lineage.claimText, combinedEvidence));
+    // must pair the same actor token with the same verb family — within ONE
+    // SourceRef (P1-A: no cross-ref pairing fusion).
+    problems.push(
+      ...actorActionAlignmentProblems(lineage.claimText, combinedEvidence, refEvidenceUnits),
+    );
     // M26: Excerpt discusses same domain (e.g. Chamonix property) but does not entail the substantive proposition
     const domainTerms = ["chamonix", "megeve", "alpine", "property", "housing", "chalet", "investment"];
     const claimLower = lineage.claimText.toLowerCase();

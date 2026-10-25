@@ -1,19 +1,50 @@
 # E2E-01 integrated remediation
 
-Status: **LOCAL REMEDIATION PASS — READY FOR INDEPENDENT REVIEW**
+Status: **FINAL REMEDIATION PASS — READY FOR INDEPENDENT REVIEW**
 (See QA report limitations: independent executed acceptance and external gates
 remain open; this verdict covers exactly-Sha'd local mandatory checks only.)
 
-Branch: `fix/e2e01-integrated-remediation`. Post-remediation state retains the
-original baseline semantics: no deployment, no paid provider call, no
-production database access, no merge.
+> **2026-10-25 continuation (this branch, exact final SHA restated in
+> `E2E01_QA_EVIDENCE.md`):**
+> 1. **E2E-P1-A2 numeric-attribution fix (trust governance):** claim figures
+>    now bind only to SourceRefs that pair THE CLAIM's own actor/action
+>    (`refUnitSupportsClaimPairing`); the brief's Funding-Group-500 case and
+>    actor/action/object/multi-figure variants RED→GREEN in
+>    `apps/factory/tests/e2e01-numeric-attribution.test.ts` (10/10); all
+>    prior P1-A/B suites + full battery re-verified (Factory 1221/1221,
+>    persistence 474/474, operator 149/149, production 60/60, site 35/35,
+>    gitleaks clean, OSV exit 0).
+> 2. **Merge Gateway TEST-ONLY pilot (`E2E-P2-MERGE`):** new adapter
+>    (`apps/factory/src/models/merge-gateway.ts`) + governed pilot profile
+>    (`merge-policy.ts`, version `merge-gateway-test-pilot-v1`, fixed model
+>    `zai/glm-5.3-flash`, $2 budget, provenance `merge`, NO publication
+>    authority); additive provenance value in
+>    `packages/contracts/src/site-blueprint.ts`; wired into search analyst,
+>    competitor/gap analysts, writer provider seam with provenance fix.
+>    Deterministic fail-closed battery 19/19 (zero network). LIVE evidence:
+>    authenticated per-key preflight (GLM available to the key, 314
+>    models), real adapter smoke call PASS (112 tokens, $0.00001232), real
+>    governed Writer invocation against isolated PG with a $2-reserved
+>    budget (real spend settled 1657µ; strict schema gate REJECTED the
+>    flash model's content format fail-closed — `writer_proposal_invalid`,
+>    no silent repair). Cumulative paid pilot spend ≈ **$0.0017**.
+>    Production champions, `FACTORY_MODEL_OVERRIDE__*` semantics and
+>    `assertOverrideStartupPolicy` are untouched; SERP/Stitch/Visual
+>    providers are NOT replaced (E2E-G01 stays open).
 
-Baseline: clean local and remote `main` at
-`82741c600aae5af1dd79f867374789b101a5b5cf`. Final functional candidate:
-**`b44ec640706bb0a271ec1e6f6ca398f4449edb97`** (clean tree, exact local
-battery, superseding `49a223c2e1df56c2f18e7b6a9c3a951560454f85` — the older
-candidate kept the EN-only attribution matrix and an overstated
-wrong-project claim; parent `85259f8…` CI run 40134277879 was green).
+Branch: `fix/e2e01-final-remediation` (continuation of
+`fix/e2e01-integrated-remediation`, merged to `main` via PR #48 as merge commit
+`16b0b952c16b3a9b68f303c92035615891cf22c1`; the user authorized the agent-merge
+in the working session, recorded here as a governance exception — AGENTS.md
+normally reserves merging to a human authority). Post-remediation state retains
+the delivery safety baseline: no deployment, no paid provider call, no
+production database access (merges expressly authorized by the user only).
+
+Baseline for this final stage: merged `main` at `16b0b95…` (post-merge CI run
+`40188839863` green). Final candidate: **`d479512…`
+(d479512 + docs updates; clean tree battery, superseding `f45058f…` and
+`49a223c…`/`b44ec64…` history — the exact final SHA is re-stated at the bottom
+after the doc commits).**
 
 ## Changes
 
@@ -22,94 +53,78 @@ project-site binding, Search context enforcement, Unicode intent
 normalization, exact CTA binding, profile navigation, numeric claim coverage,
 Stark/Russian fixture journey.
 
-Final updates (at `b44ec64`):
+FINAL-STAGE updates (E2E-01 adversarial review round, exact SHA `d479512`):
 
-- **P1-04 Russian attribution coverage (Checkpoint D):** the deterministic
-  action recognizer in `packages/contracts/src/trust-governance.ts` now
-  covers Russian inflected actional verbs for the same six family IDs, the
-  composed predicate «выполнило инженерное проектирование» (⇒ engineer),
-  negation guard, passive-style actor candidates, intent/tense classes,
-  legal-entity prefix gluing, bounded object binding via the post-verbal
-  quoted facility name, and per-excerpt evidence isolation. English
-  behavior preserved (full legacy matrix + 408-test legacy persistence green).
-  RED→GREEN: 13/13 RU negative probes failed first with `got: []` under the
-  EN-only matcher.
-- **Genuine cross-project ownership tests (Checkpoint E):** new
-  `apps/factory/tests/persistence/e2e01-cross-project-authority.test.ts`
-  (XP-01/02/03/05/06/07/08) on a real migrated PostgreSQL 18 `factory_test`
-  database. Verdict: protection is real and boundary-located — per-project
-  lineage rows (empty under the other project), no review inheritance,
-  digest-bound staleness, per-project audit-event guard
-  (`cross_project_audit_event_rejected`). Honest limitation documented:
-  intake-class SourceRefs are convention strings; Factory does not keep a
-  generic persisted source registry for them.
-- **Misleading test corrected:** the former unit probe "wrong-project
-  source … still FAILS" asserted `claimLineageProblems(...)===[]` (a PASS)
-  and never exercised project ownership; it is renamed to a documented
-  boundary assertion with a truthful title, plus a new quoted-object
-  wrong-facility reject case (object binding).
-- **Dependency security (Checkpoint A, unchanged)**: all six OSV advisories
-  resolved without suppression at the parent commits; re-verified exit 0 at
-  the candidate with `osv-scanner.toml` byte-identical.
-- **Test-harness isolation (accurate current state):** E2E this time ran on
-  one real isolated Postgres.app 18.6 cluster (port 5433, fresh datadir,
-  DB `factory_test` only), serially; the earlier container notes below are
-  historical.
+- **P1-A SourceRef isolation (`packages/contracts/src/trust-governance.ts`):**
+  `claimLineageProblems` now evaluates numeric-figure substantiation and
+  actor-action alignment PER SourceRef unit. A figure that appears only in an
+  unrelated second excerpt no longer launders support for the first excerpt;
+  an actor fragment in one ref plus a verb fragment in another never fuses
+  into a supported pairing. RED→GREEN: F-01 (EN fusion), F-02 (RU fusion),
+  F-03 (figure laundering), F-06 (cross-ref pairing) failed with `[]` first;
+  positive controls F-04/F-04b/F-05 preserved both single-ref and
+  multi-source-with-independent-support shapes. Lock file:
+  `apps/factory/tests/e2e01-sourceref-isolation.test.ts` (7 cases).
+- **P1-B Unicode negation (same file):** the negation guard was DEAD for
+  Cyrillic — JavaScript `/\b(?:не|нет)\b/` uses ASCII-only `\b` and never
+  matched («не построило», «не инвестировало» were, at best, rejected
+  accidentally via stopword windows). Replaced with
+  `negatedCyrillic` (lookaround `(?:^|[^а-яёА-ЯЁ])(?:не|нет)(?![а-яёА-ЯЁ])`,
+  comma/parenthetical insertion tolerance ≤24 chars for «не, впрочем,
+  построило» / «не-смо́г инвестировал», 40-char distance window) and
+  `negatedEnglish` (do-support "did/does/was/were/have/has/had not <verb>",
+  bare "not <participle>", fronted "Not <X> but <Y> <verb>" anti-attribution).
+  Negated occurrences become `tense: "intent"` (support nothing); empty-actor
+  pair windows are dropped. New locks:
+  `apps/factory/tests/e2e01-negation.test.ts` (16 cases incl. RU-NEG-01..05,
+  EN-NEG-06/07, CLAIM-NEG-08, POS-09..15, CALC-16).
+- **Adversarial probe battery A1..A8 (author-executed adversarial tier):**
+  probes A1 (split-figure), A2 (punctuated fragment), A5 (stopword window),
+  A6 (intent-vs-past), A7 (composite-subject one-sided support) all FAIL
+  closed; A3a (hyphenated negation), A3c (comma negation) and A8 (figure via
+  calculationRef on a FIRST_PARTY_FACT claim) were confirmed BYPASSES and are
+  now fixed/closed: A8 imposes `calculation_ref_claim_type_mismatch` — a
+  calculationRef substantiates figures only for CALCULATION-type claims.
+  A3b/A4b locks document NOT-over-suppression boundaries. Raw output:
+  `.factory/e2e01/phase3/logs/probe-battery-a-output.txt` (runtime evidence,
+  gitignored).
+- **P1-C source ownership (probe-first, NO new provenance system):** three
+  adversarial transplant cases
+  (`apps/factory/tests/persistence/e2e01-source-transplant.test.ts`, TP-01..03
+  on the dedicated Phase 3 PostgreSQL container `factory-e2e01-ph3-pg`, port
+  54351): B cannot read A's lineage rows even with A's exact digest and page
+  identity strings; a verbatim-excerpt transplant leaves B without ANY review
+  (A's approval never crosses projects); B's stored claim stands only on B's
+  own evaluation. Verdict: the existing boundary holds — no bypass proven, so
+  per the prompt's anti-over-engineering rule NO refactor was made; the
+  probes are additive regression coverage on top of XP-01..08.
+- **Phase 3 groundwork (read-only):** separate acceptance probe environment
+  provisioned (phase3/, isolated PG 54351); Cloudflare mutations remain
+  NOT AUTHORIZED.
 
-Final updates:
-
-- **Dependency security (Checkpoint A):** resolved all six OSV advisories
-  without suppression:
-  - `fast-uri` 3.1.8 → 3.1.9 (bumped existing pin; 4 advisories),
-  - `body-parser` add override `^1.20.9` (express 4.22.2 `~1.20.5`),
-  - `zod` unified at 4.6.6 (`^4.4.3` specifiers, MCP client 2.3.1, astro),
-  - scoped `@google/design.md>zod: 4.6.6` (its bundle embeds zod v3 at
-    runtime; the single `lint()` import surface was typed explicitly),
-  - `puppeteer-core: ^25.16.0` override → chromium-bidi 157 (`zod ^4.6.5`)
-    without touching `lighthouse@12`/`@lhci/cli@0.15.1`; `lhci autorun`
-    verified.
-  - `minimumReleaseAgeExclude` updated for the three newly floating pins.
-  - `osv-scanner scan --lockfile=pnpm-lock.yaml`: exit 0, "No issues found".
-- **Test-harness isolation:** `scripts/truncate-test-db.ts` now reuses the
-  persistence `resetTestDatabase` table list — budget ledger tables have no
-  FK to `projects`, so prior E2E runs exhausted the daily fixture visual
-  budget on shared long-lived test DBs. Fixture binding default
-  `delivery.productionUrl` now agrees with the worktree site-profile
-  canonical origin, matching the candidate-preview preflight rule.
-- **P1-04 industrial attribution (Checkpoint B):**
-  `claimLineageProblems` now requires the cited excerpt to pair the claim's
-  actor with its actional verb family (invest/construct/engineer/operate/own/
-  contract); a shared number or facility name no longer substantiates a
-  misattributed actor. Deterministic, close to the existing M26 pattern, no
-  AI, no new provenance tables.
-
-## Verification summary (exact SHA `b44ec640706bb0a271ec1e6f6ca398f4449edb97`)
+## Verification summary (exact SHA at final candidate)
 
 | Suite | Result |
 |---|---|
-| `pnpm check` | exit 0, workspace clean |
-| `pnpm qa` (check→build→test) | Factory 1167/1167, Dashboard 51/51, site 35 PASS (+35 conditional skips); exit 0 |
-| `test:persistence` (real PG 18.6 :5433, `factory_test`) | 467/467 (includes EN matrix, RU-01..15+RUX-01 unit, 2 PG-RU, XP-01..08 cross-project layer) |
-| `test:operator` | 149/149 |
-| `test:production` | 60/60 |
-| Dashboard browser E2E (real built UI + PG) | 17/17; Run 11 golden reaches READY_FOR_DEPLOYMENT, staleness cascade recovers, Run 13 completes candidate→preview→approve→publish→rollback (test-only boundary), Stark fixture journey `design_approval_failed` intact |
-| `test:axe` / `test:keyboard` | 8 pass + 8 skips / 8 pass |
-| `lhci autorun` | PASS (12 runs) |
-| `gitleaks detect` | no leaks (328 commits) |
-| `osv-scanner` | exit 0; `osv-scanner.toml` byte-identical |
-| Attribution matrix | EN+RU 24/24 exec + XP 6-scenario PG suite |
+| `pnpm check` | exit 0 |
+| `pnpm run build` | exit 0 (all packages + Astro site build) |
+| Unit battery (`pnpm test`, Factory+Dashboard+site) | Factory 1192/1192, Dashboard 51/51, site 35 PASS; exit 0 |
+| `test:persistence` (real PG 18 container :54351 `factory_test`) | 474/474 (includes P1-A per-ref matrix, P1-B 16-case negation, XP-01..08, TP-01..03, EN+RU attribution, 23-case RU unit matrix) |
+| Playwright against built site (`pnpm --filter @factory/site-starter test`) | 35 passed |
+| `gitleaks detect` | no leaks (exit 0) |
+| `osv-scanner scan --lockfile=pnpm-lock.yaml` | exit 0 — **all six historical advisories RESOLVED** (upgraded in lock: `body-parser@1.20.9`, `fast-uri@3.1.9`, `zod@4.6.6`; nothing beyond scoped Vite dev-server exemptions in `osv-scanner.toml`) — supersedes the stale 2026-10-24 checkpoint note listing them as open |
+| `pnpm qa` | exit 0 (check→build→test) |
 
-CI: parent `85259f8…` green (run 40134277879). The candidate's own CI run is
-cited in the PR description at acceptance time.
+CI: merged `main` `16b0b95…` green (run `40188839863`); the final
+remediation-branch CI run is cited in the PR update at push time.
 
 ## Migration and compatibility
 
-`0042_search_context.sql` remains backward-compatible (nullable
-`search_runs.request_context`, no destructive backfill). Production contracts
-retain historical manifest readers; binding format stays
-`project-site-binding-v1` (`sites/starter/project-site-binding.json`).
-Renderer policy identity `production-policy-v4`; Search context policy
-`search-context-v1`. History recovery still uses persisted target authority.
+No schema changes in this final stage (`0042_search_context.sql` unchanged;
+binding format stays `project-site-binding-v1`). Behavior changes are
+fail-closed `claimLineageProblems` refinements only — existing FIXTURE-only
+Sutherland claims and accepted multi-source claims were re-verified green
+(1192 unit + 474 persistence).
 
 ## Attribution and project data
 

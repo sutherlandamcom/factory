@@ -1,7 +1,20 @@
 # E2E-01 unified issue register
 
 This register preserves the master-prompt IDs. A status is an execution-evidence
-claim, not an inferred acceptance. All changes remain unmerged.
+claim, not an inferred acceptance. Changes stage: integrated remediation MERGED
+to `main` via PR #48 (merge commit `16b0b95…`); the adversarial final-remediation
+round (P1-A/B/C below) lives on branch `fix/e2e01-final-remediation`
+(candidate `d479512…`) pending its PR; a user-authorized agent-merge exception
+is recorded in the remediation summary.
+
+FINAL-STAGE additions to the register (branch `fix/e2e01-final-remediation`):
+
+| ID | Priority | Finding | Root cause | Files changed | Tests | Status | Remaining risk |
+|---|---|---|---|---|---|---|---|
+| E2E-P1-A | P1 | Cross-SourceRef evidence fusion: a joined `.join(" ")` excerpt blob let an actor fragment in one ref + verb/figure fragment in another falsely substantiate a claim; numeric figures from an unrelated ref laundered support for the pairing ref | `claimLineageProblems` used a single combined blob for numeric/lexical/attribution checks | `packages/contracts/src/trust-governance.ts` (per-ref units: figuresWithEvidence + actorActionAlignmentProblems), `apps/factory/tests/e2e01-sourceref-isolation.test.ts` | F-01..F-06 RED→GREEN (7/7); probe battery A1/A2/A5 FAIL-closed | FIXED — VERIFIED (`d479512`) | Per-ref semantics now also REQUIRED for any future multi-ref claim producer |
+| E2E-P1-B | P1 | Dead negation guard for Cyrillic: `/\b(?:не|нет)\b/` uses ASCII-only `\b` (never matches Cyrillic) — negated RU evidence could pass accidentally via stopword windows; EN "did not invest"/"Not X but Y built" false-PASSED outright; distance negation beyond 12 chars missed; hyphenated/comma-inserted «не …» unbaked | JS regex `\b` is ASCII-only; guard window 12 chars, no do-support, no anti-attribution inversion | same file (`negatedCyrillic`/`negatedEnglish`, 40-char window, insertion tolerance, empty-actor drop), `apps/factory/tests/e2e01-negation.test.ts` | 16 cases RED→GREEN; probes A3a/A3c were confirmed BYPASSES then closed; A3b/A4b over-suppression positive locks added | FIXED — VERIFIED (`d479512`) | Deterministic token-level guard only; no general NLP negation engine (deliberate scope per anti-over-engineering rule) |
+| E2E-P1-C | P1 | Source-ownership transplant risk: can B gain production authority using verbatim A `intake:` refs? | — (boundary audit, no code change needed) | `apps/factory/tests/persistence/e2e01-source-transplant.test.ts` (additive probes) | TP-01..03 on isolated Phase 3 PG: A rows invisible to B, A review never crosses, verbatim transplant leaves B review-less; production-QA trust path re-verified | NO BYPASS PROVEN — probes added on top of XP-01..08; boundary documented | boundary holds at per-project rows + digest-bound reviews; future providers must keep intake refs per-project |
+| E2E-P1-A8 | P1 | calculationRef figure laundering into FIRST_PARTY_FACT claims | calculationRef figures counted regardless of claimType | same file (CALCULATION-only gate + `calculation_ref_claim_type_mismatch`) | probe A8 closed; CALC-16 lock | FIXED — VERIFIED (`d479512`) | Existing suites already bound calcRefs to CALCULATION claims; rule is strictly additive |
 
 External gate definitions (restored from the original unified issue register;
 the previous PR report lacked them because the original audits were not

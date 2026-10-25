@@ -1,50 +1,47 @@
 # E2E-01 QA evidence
 
-Verdict: **LOCAL REMEDIATION PASS — READY FOR INDEPENDENT REVIEW**
+Verdict: **FINAL REMEDIATION PASS — READY FOR INDEPENDENT REVIEW**
 (scope: exact-SHA local mandatory checks; independent executed acceptance and
 external gates E2E-G01/G02/G03 remain open items for the reviewer/functionary
 organizations, not claims of this report).
 
-Baseline `82741c600aae5af1dd79f867374789b101a5b5cf`. Superseded checkpoints:
-`794c3f48e6142ce4ffdebbd3e7c15b896a81fdb2` (14/17 browser) and
-`49a223c2e1df56c2f18e7b6a9c3a951560454f85` (CI run
-[`40128660807`](https://github.com/sutherlandamcom/factory/actions/runs/40128660807)
-— EN-only attribution matrix, overstated wrong-project claim; kept as
-historical evidence). Final functional candidate:
+Baseline: merged `main` `16b0b952c16b3a9b68f303c92035615891cf22c1`
+(PR #48 merge; post-merge CI run
+[`40188839863`](https://github.com/sutherlandamcom/factory/actions/runs/40188839863)
+green). Superseded checkpoints: `794c3f4…`, `49a223c…`, `b44ec64…`,
+`f45058f…` (all historical; kept for lineage). Final functional candidate
+of this stage:
 
-**`b44ec640706bb0a271ec1e6f6ca398f4449edb97`** — clean tree, on branch
-`fix/e2e01-integrated-remediation` (parent `85259f8a409b4ba9aab9a91c57d13576e9116ee3`,
-whose CI run [`40134277879`](https://github.com/sutherlandamcom/factory/actions/runs/40134277879)
-is green; the NEW candidate's own CI run is verified and cited in the PR
-description).
+**`d479512…`** on branch `fix/e2e01-final-remediation` — the
+P1-A/P1-B/P1-C adversarial round; the exact final SHA is re-stated after the
+evidence-doc commit that records it (self-referential closure).
 
-## Environment and evidence discipline (current candidate)
-
-Node 22.22.3; pnpm 11.3.0 (pinned `packageManager`). Dedicated REAL isolated
-PostgreSQL 18.6 cluster (Postgres.app, fresh `initdb` datadir, port 5433),
-database **factory_test** only, explicit `FACTORY_TEST_DATABASE_URL`
-(`postgresql://factory:...@127.0.0.1:5433/factory_test`), name-guard
-fail-closed honored. Real migrations including 0042. Real Operator API +
-built Dashboard for browser runs; Astro preview for built-site QA. No
-production database, live deployment, or paid provider was used. Browser
-providers are fixtures.
-
-## Exact-SHA battery at `b44ec64…` (every row executed at this tree)
+## FINAL-STAGE battery at `d479512…` (every row executed at this tree)
 
 | # | Command | Exit | Result |
 |---|---|---|---|
-| 1 | `pnpm install --frozen-lockfile` (unchanged lockfile) | 0 | reproducible |
-| 2 | `pnpm check` | 0 | workspace clean |
-| 3 | `pnpm qa` | 0 | Factory 1169/1169; Dashboard 51/51; site 35 pass + 35 conditional skips (unchanged skip set) |
-| 4 | `test:persistence` (real PG18 :5433) | 0 | **471/471** (408 legacy + EN attribution + RU-01..15/RUX-01/RU-16/17 unit + 2 PG-RU + 6 XP cross-project + re-imported unit matrix & helpers) |
-| 5 | `test:operator` | 0 | 149/149 |
-| 6 | `test:production` | 0 | 60/60 |
-| 7 | dashboard `test:e2e` (built UI, PG :5433) | 0 | 17/17 (Run 11 READY_FOR_DEPLOYMENT; Run 13 preview/approve/publish/rollback incl. expected test-only `permission_denied` boundary; Stark fixture journey `design_approval_failed`) |
-| 8 | site `test:axe` | 0 | 8 pass + 8 duplicate-combination skips (unchanged) |
-| 9 | site `test:keyboard` | 0 | 8/8 |
-| 10 | `lhci autorun` | 0 | 4 URLs × 3 runs; all configured assertions pass |
-| 11 | `gitleaks detect --redact -v` | 0 | 328 commits, no leaks |
-| 12 | `osv-scanner scan --lockfile=pnpm-lock.yaml` | 0 | "No issues found"; `osv-scanner.toml` byte-identical to parent (6 pre-existing Vite-dev-server exemptions only) |
+| 1 | `pnpm check` | 0 | workspace clean |
+| 2 | `pnpm run build` | 0 | all packages + Astro production build |
+| 3 | `pnpm test` (Factory+Dashboard+site) | 0 | **Factory 1192/1192; Dashboard 51/51; site 35 pass** |
+| 4 | `test:persistence` (Dedicated Phase 3 PG 18 container `factory-e2e01-ph3-pg` :54351, DB `factory_test`, explicit URL, no fallbacks) | 0 | **474/474** — includes P1-A per-ref isolation (7 F-cases), P1-B negation (16 cases), TP-01..03 transplant probes, XP-01..08, EN+RU attribution matrix, 23-case RU unit set |
+| 5 | Playwright against BUILT site | 0 | 35 passed (axe/keyboard combos included in the skip set as before) |
+| 6 | `gitleaks detect --redact --report-path …` (binary 1.36) | 0 | no leaks |
+| 7 | `osv-scanner scan --lockfile=pnpm-lock.yaml` | 0 | **"No issues found"**; the 2026-10-24 checkpoint list of open advisories (body-parser 1.20.8 / fast-uri 3.1.8 / zod 3.25.76+4.4.3) is STALE — current lock resolves `body-parser@1.20.9`, `fast-uri@3.1.9`, `zod@4.6.6`; only the 6 scoped Vite dev-server exemptions remain (see `osv-scanner.toml`) |
+| 8 | `packages/contracts` + `apps/factory` `tsc --noEmit` | 0 | both clean |
+
+Adversarial probe battery A1..A8 (author-executed): raw output
+`.factory/e2e01/phase3/logs/probe-battery-a-output.txt`. Results — A1/A2/A5/
+A6/A7 FAIL-closed as required; A3a (hyphenated negation), A3c (comma-separated
+negation) and A8 (calculationRef figure laundering into FIRST_PARTY_FACT)
+were found as real false-PASS bypasses, FIXED at this SHA, and locked by
+RU-NEG-12/13 + CALC-16 regression cases; A3b («неверно» must not trigger) and
+A4b (quote «не» must not trigger) are locked positive controls.
+
+**INDEPENDENT QA PENDING (footnote carried over from the prompt):** a separate
+-platform adversarial reviewer subagent was launched but could not execute in
+this environment (provider token-budget exhaustion); all adversarial probes
+cited above are the author-executed tier and are labeled as such. External
+separate-party executed acceptance of the final SHA remains OPEN.
 
 ## Checkpoint D — P1-04 closure update (RU attribution + cross-project ownership)
 

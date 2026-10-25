@@ -1,12 +1,28 @@
 # E2E-01 Stark golden journey
 
 Classification: **FIXTURE_ONLY_NOT_PUBLICATION_AUTHORITY**.
-Functional candidate: **`b44ec640706bb0a271ec1e6f6ca398f4449edb97`** (browser
-17/17 re-verified at this SHA including this journey); earlier trace
-artifacts below were captured at `794c3f48e6142ce4ffdebbd3e7c15b896a81fdb2`
-and remain labeled with their capture SHA. No continuous Stark production
-HTML, artifact digest or production QA PASS exists beyond the
-genuine-evidence gate.
+Functional candidate: **`16b0b952c16b3a9b68f303c92035615891cf22c1`** (merged
+`main` after PR #48; the browser journey 17/17 was re-verified on this lineage;
+the adversarial final-remediation candidate `d479512…` does not change journey
+mechanics — it only tightens `claimLineageProblems` semantics, re-proven green
+on the full battery); earlier trace artifacts below were captured at
+`794c3f4…`/`b44ec64…` and remain labeled with their capture SHA. No continuous
+Stark production HTML, artifact digest, human release approval, or production
+QA PASS exists beyond the genuine-evidence gate.
+
+**G01/G03 external-blocker list (exact, per prompt Step 4; restated):** to run
+the real-provider Stark journey an operator must supply — (1) authorized live
+pilot access for Russian SERP search, Writer, Stitch and Visual providers with
+a stated cost envelope (G01); (2) the exact target-specific Cloudflare
+authorization block: account ID, dedicated Worker name, permitted test
+hostname, permitted operations (preview/publish/Version B/rollback), authorized
+release-approval operator identity (G02 — reaches Phase 3 only after the real
+candidate exists); (3) Stark primary legal/brand/client/IP documents and
+evidence, legitimate human approval identities per accepted Person/Organization
+authority, exact operator-approved writer prompt and final content acceptance
+(G03). None of these may be simulated; they are recorded locally in
+`.factory/e2e01/phase3/AUTHORIZATION_TEMPLATE.md` when G02 authorization is
+prepared.
 
 ## Scope separation (mandatory reading)
 

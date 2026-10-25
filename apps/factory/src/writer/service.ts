@@ -53,10 +53,17 @@ interface WriterPilotDepEntries {
   db?: FactoryDb;
   pilotRunId?: string;
 }
-const pilotDepEntries: WriterPilotDepEntries = {
-  db: (globalThis as { __factoryWriterPilotDb?: FactoryDb }).__factoryWriterPilotDb,
-  pilotRunId: (globalThis as { __factoryWriterPilotRunId?: string }).__factoryWriterPilotRunId,
-};
+/**
+ * READ LIVE (not module-load-time): the trusted server wiring sets the
+ * globalThis seams before any pilot invocation; reading at call time keeps
+ * the same object fresh.
+ */
+function pilotDepEntries(): WriterPilotDepEntries {
+  return {
+    db: (globalThis as { __factoryWriterPilotDb?: FactoryDb }).__factoryWriterPilotDb,
+    pilotRunId: (globalThis as { __factoryWriterPilotRunId?: string }).__factoryWriterPilotRunId,
+  };
+}
 
 /** The pilot DB seam must exist when a pilot invocation is requested. */
 function depsWriterDb(): FactoryDb {
@@ -418,10 +425,12 @@ export class WriterService {
           ...(deps?.invoke ? { invoke: deps.invoke } : {}),
           ...(deps?.dailyLimitUsd != null ? { dailyLimitUsd: deps.dailyLimitUsd } : {}),
           ...(deps?.env ? { env: deps.env } : {}),
-          ...(pilotDepEntries),
+          ...(pilotDepEntries()),
         },
       );
     } catch (error) {
+      // P1-03 LIVE-render debugging/deployment honesty: propagate bounded
+      // failure detail (typed code + bounded message) — never secrets/prompts.
       throw writerProviderError(error);
     }
 
@@ -457,7 +466,7 @@ export class WriterService {
             ...(deps?.invoke ? { invoke: deps.invoke } : {}),
             ...(deps?.dailyLimitUsd != null ? { dailyLimitUsd: deps.dailyLimitUsd } : {}),
             ...(deps?.env ? { env: { ...(deps.env ?? {}), FACTORY_WRITER_REPAIR_ATTEMPT: "2" } } : { FACTORY_WRITER_REPAIR_ATTEMPT: "2" }),
-            ...(pilotDepEntries),
+            ...(pilotDepEntries()),
           },
         );
         repairAttempted = true;

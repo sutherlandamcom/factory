@@ -1435,17 +1435,34 @@ export function claimLineageProblems(lineage: ClaimLineage): string[] {
               const lower = unitSentence.toLowerCase();
               if (!profile.objects.some((obj) => lower.includes(obj))) continue;
             }
-            for (const clause of splitEvidenceClauses(unitSentence)) {
-              if (!refUnitSupportsClaimPairing(profile.pairings, [clause])) continue;
-              for (const num of extractNormalizedNumbers(clause)) {
-                figuresWithEvidence.add(num);
+            // Ellipsis guard: only refine to clause-level figures when OTHER
+            // paired clauses exist in the same sentence (two real pairings).
+            // A sentence whose sibling clauses carry NO own pairing shares
+            // the single pairing (observed subject) — figures stay sentence-
+            // scoped, preserving pre-P1-01 behavior for single-actor lists.
+            const sentencePairings = [
+              ...extractActorVerbPairsSentence(unitSentence, ACTIONAL_VERB_FAMILIES),
+              ...extractActorVerbPairsSentence(unitSentence, RU_ACTIONAL_VERB_FAMILIES),
+            ].filter((p) => p.tense !== "intent");
+            const requiresClauseRefine = sentencePairings.length > 1;
+            if (requiresClauseRefine) {
+              for (const clause of splitEvidenceClauses(unitSentence)) {
+                if (!refUnitSupportsClaimPairing(profile.pairings, [clause])) continue;
+                for (const num of extractNormalizedNumbers(clause)) {
+                  figuresWithEvidence.add(num);
+                }
+                bound = true;
               }
-              bound = true;
-            }
-            if (!bound) {
-              // The sentence supports the profile but clause splitting found
-              // no marker: keep the sentence-level figures rather than
-              // inventing stricter behavior without segmentation evidence.
+              if (!bound) {
+                // Clause segmentation produced no matching clause: keep the
+                // sentence-level figures (conservative in the SUPPORTIVE
+                // direction only when the sentence itself pairs the claim).
+                for (const num of extractNormalizedNumbers(unitSentence)) {
+                  figuresWithEvidence.add(num);
+                }
+                bound = true;
+              }
+            } else {
               for (const num of extractNormalizedNumbers(unitSentence)) {
                 figuresWithEvidence.add(num);
               }

@@ -19,6 +19,16 @@ export class InvocationFailure extends FactoryError {
   }
 }
 
+/** Typed guard: an InvocationFailure carrying an HTTP status envelope. */
+interface HttpStatusCarrier {
+  readonly httpStatus?: number | null;
+}
+
+export function httpStatusOf(error: InvocationFailure): number | null {
+  const carrier = error as unknown as HttpStatusCarrier;
+  return typeof carrier.httpStatus === "number" ? carrier.httpStatus : null;
+}
+
 /** Validation failure after a completed invocation must retain its usage. */
 export function preserveInvocationCost(error: unknown, trustedCostMicros: number | null): InvocationFailure {
   return new InvocationFailure(

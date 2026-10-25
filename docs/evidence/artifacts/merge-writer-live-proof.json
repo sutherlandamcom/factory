@@ -1,0 +1,49 @@
+{
+  "generatedAt": "2026-10-25T17:46:04.891Z",
+  "profileVersion": "merge-gateway-test-pilot-v1",
+  "model": "zai/glm-5.3-flash",
+  "provider": "merge",
+  "publicationAuthority": false,
+  "projectKey": "factory-pilot-live-20261025174605",
+  "projectId": "39fe2bf3-8f32-40bf-b845-6cc6d8635a27",
+  "pilotProfileId": "mpp-c767bf74-aad4-486d-b359-a78937b53338",
+  "pilotProfileDigest": "3992c6f13e3fe0f0d00362d3fe3886da8df47493a763896a4fbc47ca3a11dd50",
+  "pilotRunId": "mpr-059da185-8f49-4a97-a891-6a1e765952f2",
+  "effectiveBudgetLimitMicros": 2000000,
+  "snapshotId": "wsnp-cb6496f7-ba4a-43de-9565-6e31873459fe",
+  "snapshotDigest": "62de0bbbc560c922347dcfa19c13403f29777e398df5f4f4a86092ea963a5279",
+  "promptDigest": "62de0bbbc560c922347dcfa19c13403f29777e398df5f4f4a86092ea963a5279",
+  "proposal": {
+    "id": "wprp-f54a52b1-0bdc-4f52-81ce-de641bf98295",
+    "version": 1,
+    "digest": "86235c120dea29a4691b371a830e643531a06350b9fd3eeb0baf0454dd564da0",
+    "provider": "merge",
+    "model": "zai/glm-5.3-flash",
+    "authorityStatus": "pilot_no_publication",
+    "requestDigest": "aacd5b2df7f15e29b4d7d2e69205aba8b1343c36c2839c42fd6e67a8fec7c92f",
+    "responseDigest": "beab6d1cccaa4c50cb239253e868fa54e1fa719554c0ada8e8f69f4b43584ecc",
+    "providerReportedCostMicros": 461,
+    "policyEstimatedCostMicros": 11657,
+    "accountedCostMicros": 1576,
+    "title": "Sutherland Private Office \u2014 Independent Buyer-Side Property Advisory for the French Alps",
+    "internalLinksType": "strings"
+  },
+  "separationChecks": {
+    "accepted": "0",
+    "ppi": "0",
+    "release_approvals": "0"
+  },
+  "unifiedPilotSpending": {
+    "totalMicros": 1576,
+    "perLedger": {
+      "writer": 1576,
+      "competitor": 0,
+      "search": 0
+    },
+    "activeReservationMicros": 0,
+    "ceilingMicros": 2000000
+  },
+  "durationMs": 28628,
+  "verdict": "PASS",
+  "note": "Real GLM proposal saved under registry-backed TEST-ONLY authority; no acceptance/approval/publication."
+}

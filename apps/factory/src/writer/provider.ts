@@ -396,10 +396,23 @@ export function writerProviderError(error: unknown): FactoryError {
         "Writer provider credentials are missing or unusable.",
       );
     }
-    return new FactoryError("writer_provider_unavailable", "Writer provider invocation failed.");
+    // Post-submission gateway/HTTP failures: keep the specific bounded cause
+    // (classification, HTTP status, timeout class) attached for operators —
+    // no secrets, no prompt material, no provider-internal payloads.
+    const status = error instanceof Error && "httpStatus" in error ? (error as { httpStatus?: number | null }).httpStatus : null;
+    const detail = error.message.slice(0, 180);
+    const summary = error.requestSubmitted
+      ? ` (code=${error.code}${status != null ? ` status=${status}` : ""})`
+      : ` (code=${error.code})`;
+    const mapped = new FactoryError("writer_provider_unavailable", `Writer provider invocation failed.${summary}`);
+    (mapped as Error & { cause?: unknown }).cause = new Error(detail);
+    return mapped;
   }
   if (error instanceof FactoryError) return error;
-  return new FactoryError("writer_provider_unavailable", "Writer provider invocation failed.");
+  const detail = error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180);
+  const mapped = new FactoryError("writer_provider_unavailable", `Writer provider invocation failed. (${detail})`);
+  (mapped as Error & { cause?: unknown }).cause = error instanceof Error ? error : new Error(detail);
+  return mapped;
 }
 
 export { preserveInvocationCost };

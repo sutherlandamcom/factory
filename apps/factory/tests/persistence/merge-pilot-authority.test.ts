@@ -139,7 +139,7 @@ test("A4: pilot proposal used in a production approval path -> merge_pilot_publi
   await inst.db.execute(
     sql`INSERT INTO page_content_proposals
         (id, project_id, version, snapshot_id, snapshot_version, snapshot_digest, slug, provider, model, data, proposal_digest, pilot_profile_id, pilot_profile_version, pilot_run_id, gateway_role, authority_status)
-        VALUES ('prop-a4', ${PILOT_PROJECT}, 1, 'snap-1', 1, ${"0".repeat(64)}, 'pilot', 'merge', 'zai/glm-5.3-flash', '{}'::jsonb, ${"2".repeat(64)}, ${profileId}, 'merge-gateway-test-pilot-v1', ${runId}, 'content_writer', 'pilot_no_publication')`,
+        VALUES ('prop-a4', ${PILOT_PROJECT}, 2, 'snap-1', 1, ${"0".repeat(64)}, 'pilot', 'merge', 'zai/glm-5.3-flash', '{}'::jsonb, ${"2".repeat(64)}, ${profileId}, 'merge-gateway-test-pilot-v1', ${runId}, 'content_writer', 'pilot_no_publication')`,
   );
   const { rows: authority } = await inst.db.execute<{ authority_status: string }>(
     sql`SELECT authority_status FROM page_content_proposals WHERE id = 'prop-a4'`,

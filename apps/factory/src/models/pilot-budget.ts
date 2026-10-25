@@ -243,15 +243,21 @@ export async function reservePilotBudget(
     });
     const reservationId = id;
 
+    // Settlement MUST run on a fresh transaction: the reservation transaction
+    // has already committed (the ACTIVE row consumes the ceiling) when the
+    // provider call starts; a handle settled later cannot reuse that tx.
     const settle = async (state: "ACCOUNTED" | "RELEASED", accountedMicros: number | null): Promise<void> => {
-      await tx
-        .update(table)
-        .set(
-          state === "ACCOUNTED"
-            ? { state: "ACCOUNTED", accountedMicros, accountedAt: new Date() }
-            : { state: "RELEASED", accountedAt: new Date() },
-        )
-        .where(and(eq(table.id, reservationId), eq(table.state, "ACTIVE")));
+      await db.transaction(async (settleTx) => {
+        await settleTx.execute(sql`SELECT pg_advisory_xact_lock(${Number(FACTORY_BUDGET_RESERVATION_LOCK_KEY)})`);
+        await settleTx
+          .update(table)
+          .set(
+            state === "ACCOUNTED"
+              ? { state: "ACCOUNTED", accountedMicros, accountedAt: new Date() }
+              : { state: "RELEASED", accountedAt: new Date() },
+          )
+          .where(and(eq(table.id, reservationId), eq(table.state, "ACTIVE")));
+      });
     };
 
     return {

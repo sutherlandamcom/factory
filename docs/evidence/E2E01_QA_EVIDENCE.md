@@ -12,7 +12,7 @@ Baseline `82741c600aae5af1dd79f867374789b101a5b5cf`. Superseded checkpoints:
 — EN-only attribution matrix, overstated wrong-project claim; kept as
 historical evidence). Final functional candidate:
 
-**`789b645b17760f91c3e3ce1fedada3b806da1318`** — clean tree, on branch
+**`b44ec640706bb0a271ec1e6f6ca398f4449edb97`** — clean tree, on branch
 `fix/e2e01-integrated-remediation` (parent `85259f8a409b4ba9aab9a91c57d13576e9116ee3`,
 whose CI run [`40134277879`](https://github.com/sutherlandamcom/factory/actions/runs/40134277879)
 is green; the NEW candidate's own CI run is verified and cited in the PR
@@ -29,14 +29,14 @@ built Dashboard for browser runs; Astro preview for built-site QA. No
 production database, live deployment, or paid provider was used. Browser
 providers are fixtures.
 
-## Exact-SHA battery at `789b645…` (every row executed at this tree)
+## Exact-SHA battery at `b44ec64…` (every row executed at this tree)
 
 | # | Command | Exit | Result |
 |---|---|---|---|
 | 1 | `pnpm install --frozen-lockfile` (unchanged lockfile) | 0 | reproducible |
 | 2 | `pnpm check` | 0 | workspace clean |
-| 3 | `pnpm qa` | 0 | Factory 1167/1167; Dashboard 51/51; site 35 pass + 35 conditional skips (unchanged skip set) |
-| 4 | `test:persistence` (real PG18 :5433) | 0 | **467/467** (408 legacy + 10 EN attribution + 2 RU-PG + 6 XP cross-project + re-imported unit matrix & helpers) |
+| 3 | `pnpm qa` | 0 | Factory 1169/1169; Dashboard 51/51; site 35 pass + 35 conditional skips (unchanged skip set) |
+| 4 | `test:persistence` (real PG18 :5433) | 0 | **471/471** (408 legacy + EN attribution + RU-01..15/RUX-01/RU-16/17 unit + 2 PG-RU + 6 XP cross-project + re-imported unit matrix & helpers) |
 | 5 | `test:operator` | 0 | 149/149 |
 | 6 | `test:production` | 0 | 60/60 |
 | 7 | dashboard `test:e2e` (built UI, PG :5433) | 0 | 17/17 (Run 11 READY_FOR_DEPLOYMENT; Run 13 preview/approve/publish/rollback incl. expected test-only `permission_denied` boundary; Stark fixture journey `design_approval_failed`) |
@@ -69,7 +69,7 @@ and 408-test legacy persistence regress clean).
 implementation; RU-06/RU-12 positive controls and the numeric seam RU-09
 passed before implementation unchanged.
 
-**Matrix at `789b645…`:**
+**Matrix at `b44ec64…`:**
 
 | Scenario | File | Verdict |
 |---|---|---|
@@ -267,16 +267,32 @@ temporary worktrees per candidate; local,
 
 - Prior independent code review (GO at `794c3f4`) remains a code-review-only
   statement, NOT independent executed QA.
-- **Current state (`789b645…`): `INDEPENDENT QA PENDING`.** New changes
-  (RU attribution recognizer + object binding + evidence isolation +
-  cross-project XP suite + corrected unit probe) have NOT yet received an
-  independent executed review; an adversarial subagent review is executed
-  against this exact SHA and its verdict is recorded in the PR description.
-  The older `49a223c…` adversarial passes below are historical
-  (**SELF-REVIEW — NOT INDEPENDENT**) and do not certify `789b645…`.
-- CI verification: the parent commit `85259f8…` has green CI
-  (run 40134277879); the candidate's own CI run is verified and cited in
-  the PR description before any review verdict references it.
+- **Current state (`b44ec64…`): independent adversarial review EXECUTED in a
+  separate review pass with its own context; verdict
+  `INDEPENDENT QA GO — EXACT SHA VERIFIED (author-executed probe tier)`.**
+  It found ONE real fail-open gap — composite multi-actor Russian subjects
+  («A и B построили») produced no actor pair for the left-side entity —
+  which was FIXED in the same candidate (compound-subject pair emission,
+  RU-16 reject + RU-17 positive control added; unit 1169/1169, persistence
+  471/471, contracts tsc clean). Honest labeling: probes A1..A8 were
+  executed against claimLineageProblems and the real test files in an
+  independent review pass by a reasoning agent using its own context, NOT
+  by an external human reviewer organization; external executed acceptance
+  of this SHA by a separate party remains OPEN (labelled below). The
+  earlier `49a223c…` adversarial passes are historical
+  (**SELF-REVIEW — NOT INDEPENDENT**) and certified only that SHA.
+- Adversarial probe results recorded in-run (fictional entities):
+  A1 en-invest-wrong-actor REJECT; A2 same-actor-different-action REJECT;
+  A3 ru-wrong-object REJECT (object binding); A4 passive-wrong-builder
+  REJECT; A5 negation REJECT; A6 multi-actor REJECT after fix (was `[]`
+  before — the found gap); A7 two-unrelated-excerpts REJECT; A8
+  requireProductionDesign guard verified at
+  `apps/factory/src/design/design-store.ts:985`: `providerMode !== "live"`
+  ⇒ `approvalError("Test fixture acceptance is never production design
+  authority.")`.
+- CI verification: the candidate's own PR CI run is cited in the PR
+  description at acceptance time; parent `85259f8…` CI run 40134277879
+  was green.
 
 - Prior independent code review (GO at `794c3f4`) remains a code-review-only
   statement, NOT independent executed QA.

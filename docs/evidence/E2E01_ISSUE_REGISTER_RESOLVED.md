@@ -37,7 +37,7 @@ Paths above are under `apps/factory/src`, `apps/factory/tests`, `packages/contra
 `apps/dashboard` or `sites/starter/src` as named. See the QA report for exact
 commands, results and candidate identity.
 
-Final candidate: **`789b645b17760f91c3e3ce1fedada3b806da1318`** (exact local battery:
+Final candidate: **`b44ec640706bb0a271ec1e6f6ca398f4449edb97`** (exact local battery:
 `pnpm check` exit 0; `pnpm qa` Factory 1167/1167 + Dashboard 51/51 + site
 35 pass/35 conditional skips; persistence 467/467 on a real isolated
 PostgreSQL 18 cluster; operator 149/149; production 60/60; browser 17/17;
@@ -47,7 +47,7 @@ config byte-unchanged). The previous final SHA
 `49a223c2e1df56c2f18e7b6a9c3a951560454f85` (CI run `40128660807`) is
 SUPERSEDED: it carried the EN-only attribution matrix and the overstated
 wrong-project claim corrected by the P1-04 update above (RU-01..15, RUX-01,
-PG-RU persistence and XP-01..08 are new at `789b645`).
+PG-RU persistence and XP-01..08 are new at `b44ec64`).
 
 The P2-04 lexical probes use invented test sentences, not factual assertions
 about either company. No missing audit finding was invented; G01–G03 carry the

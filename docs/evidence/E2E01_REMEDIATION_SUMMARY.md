@@ -10,7 +10,7 @@ production database access, no merge.
 
 Baseline: clean local and remote `main` at
 `82741c600aae5af1dd79f867374789b101a5b5cf`. Final functional candidate:
-**`789b645b17760f91c3e3ce1fedada3b806da1318`** (clean tree, exact local
+**`b44ec640706bb0a271ec1e6f6ca398f4449edb97`** (clean tree, exact local
 battery, superseding `49a223c2e1df56c2f18e7b6a9c3a951560454f85` — the older
 candidate kept the EN-only attribution matrix and an overstated
 wrong-project claim; parent `85259f8…` CI run 40134277879 was green).
@@ -22,7 +22,7 @@ project-site binding, Search context enforcement, Unicode intent
 normalization, exact CTA binding, profile navigation, numeric claim coverage,
 Stark/Russian fixture journey.
 
-Final updates (at `789b645`):
+Final updates (at `b44ec64`):
 
 - **P1-04 Russian attribution coverage (Checkpoint D):** the deterministic
   action recognizer in `packages/contracts/src/trust-governance.ts` now
@@ -83,7 +83,7 @@ Final updates:
   misattributed actor. Deterministic, close to the existing M26 pattern, no
   AI, no new provenance tables.
 
-## Verification summary (exact SHA `789b645b17760f91c3e3ce1fedada3b806da1318`)
+## Verification summary (exact SHA `b44ec640706bb0a271ec1e6f6ca398f4449edb97`)
 
 | Suite | Result |
 |---|---|

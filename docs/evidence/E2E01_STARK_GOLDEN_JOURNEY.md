@@ -1,7 +1,7 @@
 # E2E-01 Stark golden journey
 
 Classification: **FIXTURE_ONLY_NOT_PUBLICATION_AUTHORITY**.
-Functional candidate: **`789b645b17760f91c3e3ce1fedada3b806da1318`** (browser
+Functional candidate: **`b44ec640706bb0a271ec1e6f6ca398f4449edb97`** (browser
 17/17 re-verified at this SHA including this journey); earlier trace
 artifacts below were captured at `794c3f48e6142ce4ffdebbd3e7c15b896a81fdb2`
 and remain labeled with their capture SHA. No continuous Stark production

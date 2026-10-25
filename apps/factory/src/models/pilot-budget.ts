@@ -126,10 +126,14 @@ export async function mergePilotSpendingReport(
   const perLedger: Record<string, number> = {};
   for (const row of rows) {
     const value = Number(row.total);
-    perLedger[row.ledger] = value;
+    const active = Number(row.active);
+    perLedger[row.ledger] = value + active;
     totalMicros += value;
-    activeReservationMicros += Number(row.active);
+    activeReservationMicros += active;
   }
+  // Whole-pilot exposure = accounted spend + ACTIVE reservations (matches
+  // the reservation ceiling predicate exactly).
+  totalMicros += activeReservationMicros;
   return { totalMicros, perLedger, activeReservationMicros };
 }
 

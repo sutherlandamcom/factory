@@ -5,25 +5,121 @@ Verdict: **LOCAL REMEDIATION PASS — READY FOR INDEPENDENT REVIEW**
 external gates E2E-G01/G02/G03 remain open items for the reviewer/functionary
 organizations, not claims of this report).
 
-Baseline `82741c600aae5af1dd79f867374789b101a5b5cf`. Prior checkpoint
-`794c3f48e6142ce4ffdebbd3e7c15b896a81fdb2` (whose browser suite stalled 14/17
-at `security.osv`) is superseded. Final functional candidate:
-
-**`49a223c2e1df56c2f18e7b6a9c3a951560454f85`** — clean tree, pushed branch
-`fix/e2e01-integrated-remediation`, CI run
+Baseline `82741c600aae5af1dd79f867374789b101a5b5cf`. Superseded checkpoints:
+`794c3f48e6142ce4ffdebbd3e7c15b896a81fdb2` (14/17 browser) and
+`49a223c2e1df56c2f18e7b6a9c3a951560454f85` (CI run
 [`40128660807`](https://github.com/sutherlandamcom/factory/actions/runs/40128660807)
-(executes this exact SHA; previously failing run for reference:
-[`40090892644`](https://github.com/sutherlandamcom/factory/actions/runs/40090892644)).
+— EN-only attribution matrix, overstated wrong-project claim; kept as
+historical evidence). Final functional candidate:
 
-## Environment and evidence discipline
+**`789b645b17760f91c3e3ce1fedada3b806da1318`** — clean tree, on branch
+`fix/e2e01-integrated-remediation` (parent `85259f8a409b4ba9aab9a91c57d13576e9116ee3`,
+whose CI run [`40134277879`](https://github.com/sutherlandamcom/factory/actions/runs/40134277879)
+is green; the NEW candidate's own CI run is verified and cited in the PR
+description).
 
-Node 22.22.3; pnpm 11.3.0 (pinned `packageManager`). Dedicated PostgreSQL 18
-containers `factory-e2e01-pg` (127.0.0.1:54349) and
-`factory-e2e01-browser-pg` (127.0.0.1:54350), database **factory_test** only,
-explicit `FACTORY_TEST_DATABASE_URL`, no other database ever targeted. Real
-migrations including 0042. Real Operator API + built Dashboard for browser
-runs; Astro preview for built-site QA. No production database, live
-deployment, or paid provider was used. Browser providers are fixtures.
+## Environment and evidence discipline (current candidate)
+
+Node 22.22.3; pnpm 11.3.0 (pinned `packageManager`). Dedicated REAL isolated
+PostgreSQL 18.6 cluster (Postgres.app, fresh `initdb` datadir, port 5433),
+database **factory_test** only, explicit `FACTORY_TEST_DATABASE_URL`
+(`postgresql://factory:...@127.0.0.1:5433/factory_test`), name-guard
+fail-closed honored. Real migrations including 0042. Real Operator API +
+built Dashboard for browser runs; Astro preview for built-site QA. No
+production database, live deployment, or paid provider was used. Browser
+providers are fixtures.
+
+## Exact-SHA battery at `789b645…` (every row executed at this tree)
+
+| # | Command | Exit | Result |
+|---|---|---|---|
+| 1 | `pnpm install --frozen-lockfile` (unchanged lockfile) | 0 | reproducible |
+| 2 | `pnpm check` | 0 | workspace clean |
+| 3 | `pnpm qa` | 0 | Factory 1167/1167; Dashboard 51/51; site 35 pass + 35 conditional skips (unchanged skip set) |
+| 4 | `test:persistence` (real PG18 :5433) | 0 | **467/467** (408 legacy + 10 EN attribution + 2 RU-PG + 6 XP cross-project + re-imported unit matrix & helpers) |
+| 5 | `test:operator` | 0 | 149/149 |
+| 6 | `test:production` | 0 | 60/60 |
+| 7 | dashboard `test:e2e` (built UI, PG :5433) | 0 | 17/17 (Run 11 READY_FOR_DEPLOYMENT; Run 13 preview/approve/publish/rollback incl. expected test-only `permission_denied` boundary; Stark fixture journey `design_approval_failed`) |
+| 8 | site `test:axe` | 0 | 8 pass + 8 duplicate-combination skips (unchanged) |
+| 9 | site `test:keyboard` | 0 | 8/8 |
+| 10 | `lhci autorun` | 0 | 4 URLs × 3 runs; all configured assertions pass |
+| 11 | `gitleaks detect --redact -v` | 0 | 328 commits, no leaks |
+| 12 | `osv-scanner scan --lockfile=pnpm-lock.yaml` | 0 | "No issues found"; `osv-scanner.toml` byte-identical to parent (6 pre-existing Vite-dev-server exemptions only) |
+
+## Checkpoint D — P1-04 closure update (RU attribution + cross-project ownership)
+
+**Language-coverage fix (`packages/contracts/src/trust-governance.ts`):**
+the action recognizer now covers Russian多大的 industrial vocabulary keyed to
+the same six family IDs: inflected past/present verbs (инвестировал/вложил/
+финансировал; построил/строил/возвёл/соорудил/модернизировал;
+спроектировал/проектировал/инжиниринг/проектирование;
+эксплуатирует/обслуживает; владеет/принадлежит; общесоюзный срок determined
+выполнил/подряд/несёт ответственность), composed predicate reclassification
+(«выполнило инженерное проектирование» ⇒ engineer family), negation guard
+(«не <verb>» can never pair as support), intent/tense classes (planned/
+future evidence cannot authorize completed past facts), legal-entity prefix
+gluing («ООО ИнжПроект»), bounded object binding via the post-verbal quoted
+facility name (wrong-facility attribution with quoted objects rejects), and
+per-excerpt evidence isolation with bounded unpunctuated fragments (no
+cross-source sentence fusion). English path unchanged (full legacy matrix
+and 408-test legacy persistence regress clean).
+
+**RED→GREEN evidence:** 13/13 strict negative RU probes failed first with
+`got: []` (EN-only matcher blind) and turned green only after the
+implementation; RU-06/RU-12 positive controls and the numeric seam RU-09
+passed before implementation unchanged.
+
+**Matrix at `789b645…`:**
+
+| Scenario | File | Verdict |
+|---|---|---|
+| RU-01 investor misattribution (500M) | unit matrix | FAIL `SOURCE_ATTRIBUTION_UNSUPPORTED` (invest/ИнжПроект) |
+| RU-02 construction claimed from engineering-only excerpt | unit matrix | FAIL (construct family, composed-predicate semantics) |
+| RU-03 operation misattributed | unit matrix | FAIL (operate) |
+| RU-04 ownership misattributed | unit matrix | FAIL (own) |
+| RU-05 investment misattributed | unit matrix | FAIL (invest) |
+| RU-06 faithful engineering claim | unit matrix | PASS ([]) positive control |
+| RU-07 source names another builder (passive «был построен ПромСтрой») | unit matrix | FAIL (changed actor) |
+| RU-08 same actor+action, PLANT B object | unit matrix | FAIL (object binding Орбита≠Спектр) |
+| RU-09 unsupported 900M figure | unit matrix | FAIL (numeric seam) |
+| RU-10 passive wording, wrong company claims responsibility | unit matrix | FAIL |
+| RU-11 mixed RU/EN entity names | unit matrix | FAIL |
+| RU-12 inflected verbs, legitimate actor/action | unit matrix | PASS ([]) positive control |
+| RU-13 source negation «не строило» | unit matrix | FAIL (negation guard) |
+| RU-14 future/intent source («планирует построить») | unit matrix | FAIL (intent cannot authorize past) |
+| RU-15 ambiguous responsibility phrasing | unit matrix | FAIL |
+| RUX-01 cross-excerpt fusion probe | unit matrix | FAIL (fragment isolation) |
+| L2x wrong-facility QUOTED object claim | unit matrix | FAIL (object binding; replaces the misleading unquoted-only probe) |
+| PG-RU: unsupported RU claim cannot persist | persistence matrix | `trust_claim_lineage_invalid` |
+| PG-RU: supported RU engineering claim persists; TEST_ONLY review still not publication-eligible | persistence matrix | lineage/source PASS at seam; review_authority FAIL |
+
+**Cross-project ownership (genuine two-project PostgreSQL suite,
+`tests/persistence/e2e01-cross-project-authority.test.ts`):**
+
+| Case | Boundary exercised | Verdict |
+|---|---|---|
+| XP-01 | A's own evidence inside A | PASS (positive control) |
+| XP-02 | A lineage rows unreadable beneath B (`listClaimLineage` project-scoped) | rows empty under B — protection VERIFIED |
+| XP-03 | A review not inherited by B (B `currentReview` → null; A remains APPROVED) | protection VERIFIED |
+| XP-05 | copied claim text under B does not merge/inherit A rows | protection VERIFIED (per-project rows + each claim judged under its own authority; textual copying alone grants nothing) |
+| XP-06 | changed A content digest ⇒ review stale | protection VERIFIED |
+| XP-07 | historical A record stays readable, not re-approved | VERIFIED |
+| XP-08 | independently accepted B evidence valid inside B | PASS (with its own claim-set digest) |
+| XP-03/`()trust`, XP-04 | direct cross-project **audit-event** reuse of VERIFIED_HUMAN authority | covered by pre-existing `cross_project_audit_event_rejected` store check (repo suite, untouched) |
+
+**Honest boundary (corrects the overstated old claim):** an intake-class
+`SourceRef` (`ref: "intake:..."`) is a convention string, NOT a persisted
+project-owned source-evidence row; Factory does not maintain a generic
+persisted source registry for such refs. Cross-project protection provably
+lives at: per-project ClaimLineage/Review/Intent rows, digest-bound review
+staleness (incl. source-evidence/claim-set digests), and the
+`cross_project_audit_event_rejected` guard for human approvals.
+Acquisition-bound refs carry `acquisitionEventId` + `acquisitionDigest`
+bound to the global TRUSTED_ACQUISITION_REGISTRY — provider-scoped, not
+project-scoped (external-world facts). The former unit probe titled
+"wrong-project source … still FAILS" asserted `claimLineageProblems(...)===[]`
+and never exercised project ownership; it is renamed to the documented
+boundary and supplemented by a quoted-object reject case and the XP suite.
 
 Logs under `.factory/e2e01/logs/{4646fd2-depsec,49a223c}/` (gitignored
 local QA evidence; not approval data).
@@ -80,7 +176,7 @@ finding severity defensively and 36/36 design pipeline tests pass.
 `chromium-bidi@14` (zod 3) was eliminated by the parent-side override to
 `puppeteer-core 25.16.0`, verified through the real `lhci autorun` run.
 
-## Checkpoint B — industrial attribution matrix (P1-04)
+## Checkpoint B — industrial attribution matrix (P1-04) — SUPERSEDED (historical, EN-only; see Checkpoint D for the current RU+XP state)
 
 **Code seam fixed:** `packages/contracts/src/trust-governance.ts` —
 `claimLineageProblems` now fails closed with
@@ -168,6 +264,19 @@ temporary worktrees per candidate; local,
 `ProductionPageRenderer` reads manifests from the candidate directory only.
 
 ## Independent review status
+
+- Prior independent code review (GO at `794c3f4`) remains a code-review-only
+  statement, NOT independent executed QA.
+- **Current state (`789b645…`): `INDEPENDENT QA PENDING`.** New changes
+  (RU attribution recognizer + object binding + evidence isolation +
+  cross-project XP suite + corrected unit probe) have NOT yet received an
+  independent executed review; an adversarial subagent review is executed
+  against this exact SHA and its verdict is recorded in the PR description.
+  The older `49a223c…` adversarial passes below are historical
+  (**SELF-REVIEW — NOT INDEPENDENT**) and do not certify `789b645…`.
+- CI verification: the parent commit `85259f8…` has green CI
+  (run 40134277879); the candidate's own CI run is verified and cited in
+  the PR description before any review verdict references it.
 
 - Prior independent code review (GO at `794c3f4`) remains a code-review-only
   statement, NOT independent executed QA.

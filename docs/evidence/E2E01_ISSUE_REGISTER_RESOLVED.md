@@ -21,7 +21,7 @@ supplied to that agent):
 | E2E-P1-01 | P1 | Search language/geography not enforced | Optional form fields and market hints bypassed accepted targeting | `search/context.ts`, `service.ts`, Bright Data adapter, migration 0042, `SearchPage.tsx` | context derivation, overrides, conflict, unsupported targeting, Russia gl/hl, persisted `search_runs.request_context`; browser units 55/55 incl. service+adapter | FIXED — VERIFIED | Real provider reachability remains external (E2E-G01) |
 | E2E-P1-02 | P1 | Cyrillic intent false PASS | ASCII tokenization reduced non-Latin intent to an empty string | `text/lexical.ts`, `writer/qa.ts`, `production/qa/trust.ts` | relevant/unrelated Russian/English, empty, mixed script; empty intent REVIEW; unit suites 52/52 | FIXED — VERIFIED | Lexical overlap remains advisory alignment, never semantic truth (P2-04) |
 | E2E-P1-03 | P1 | Text-only CTA | No exact verified conversion destination in production authority | `production/conversion.ts`, production contracts/compiler/QA, `PageCta.astro`, renderer | unsafe schemes, forms, email encoding, exact anchor/destination, keyboard activation; unit suites 52/52; real Astro renderer 2/2 | FIXED — VERIFIED | Forms unsupported; no live external-contact claim |
-| E2E-P1-04 | P1 | Industrial claim attribution | Lexical/number matching could not bind actor or action; the same figure could substantiate an unsupported actor | `packages/contracts/src/trust-governance.ts` (actorActionAlignmentProblems), `tests/e2e01-industrial-attribution.test.ts`, `tests/persistence/e2e01-industrial-attribution.test.ts` | attribution matrix 17/17 (7 pure + 10 persistence); supported-role positive control PASS; unsupported attributions fail lineage persistence | FIXED — VERIFIED | Lexical overlap stays advisory (P2-04); matrix uses fictional entities, not real Stark/RusSilica facts (P1-06/G03) |
+| E2E-P1-04 | P1 | Industrial claim attribution | Lexical/number matching could not bind actor or action; the same figure could substantiate an unsupported actor; the recognizer was English-only so Russian-language misattribution went unchallenged; the former "wrong-project" unit probe falsely implied cross-project rejection | `packages/contracts/src/trust-governance.ts` (actorActionAlignmentProblems + RU family patterns/negation/tense/object binding/evidence isolation), `tests/e2e01-industrial-attribution.test.ts`, `tests/persistence/e2e01-industrial-attribution.test.ts`, `tests/persistence/e2e01-cross-project-authority.test.ts` | EN+RU matrix 24/24 exec; PG cross-project/XP suite 6 scenarios; full persistence 467/467 at candidate | FIXED — VERIFIED (boundary semantics documented) | Attribution authority: (1) actor/action+object binding including RU, enforced at lineage verdict; (2) intake-class SourceRefs are convention strings — NOT persisted project-owned records: cross-project rejection provably lives at per-project trust rows, digest-bound reviews and `cross_project_audit_event_rejected`, NOT at ref strings; false old test corrected to the documented boundary; matrix uses fictional entities only (P1-06/G03) |
 | E2E-P1-05 | P1 | No continuous Stark golden journey | English-only fixtures and missing project configuration obscured safe boundary | `e2e01-stark-golden-journey.spec.ts`, shared journey helpers, Russian fixture writer, isolated test configuration | exact-head browser 17/17 incl. Stark fixture journey ending at the correct `design_approval_failed` boundary | FIXED — VERIFIED (fixture tier) / BLOCKED — EXTERNAL DEPENDENCY (real-provider tier) | Fixture journey cannot create genuine live design/source evidence; real-provider chain stays behind E2E-G01/G02/G03 |
 | E2E-P1-06 | P1 | Unverified Stark personnel/industrial assertions | Missing independently verified project-source material | None — no invented claims or evidence added | None; production approval path refuses unverified claims | NOT A CODE DEFECT — PRIMARY SOURCE AND HUMAN APPROVAL REQUIRED | Operator must supply appropriate sources and exact-content review (G03) |
 | E2E-P2-01 | P2 | First Search query guidance | Readiness/default provenance and accepted hypotheses were unclear | `SearchPage.tsx`, Search read model | Russian accepted defaults and seed/query journey (browser 17/17) | FIXED — VERIFIED | Effective provenance inspected in persisted Search row |
@@ -37,13 +37,17 @@ Paths above are under `apps/factory/src`, `apps/factory/tests`, `packages/contra
 `apps/dashboard` or `sites/starter/src` as named. See the QA report for exact
 commands, results and candidate identity.
 
-Final candidate: `49a223c2e1df56c2f18e7b6a9c3a951560454f85` (exact local battery:
-`pnpm qa` 1150+51+35 zero-fail, persistence 418/418, operator 149/149,
-production 60/60, browser 17/17, axe/keyboard PASS, Lighthouse PASS, gitleaks
-clean, `osv-scanner` exit 0). CI run `40128660807` executes the same commit.
-The P1-04 attribution fix (actorActionAlignmentProblems) also regressed clean
-across the full 418-test persistence suite (405→418 green after backfilling
-fixtures, then re-verified at the final SHA).
+Final candidate: **`789b645b17760f91c3e3ce1fedada3b806da1318`** (exact local battery:
+`pnpm check` exit 0; `pnpm qa` Factory 1167/1167 + Dashboard 51/51 + site
+35 pass/35 conditional skips; persistence 467/467 on a real isolated
+PostgreSQL 18 cluster; operator 149/149; production 60/60; browser 17/17;
+axe 8 pass/8 duplicate-combination skips; keyboard 8/8; Lighthouse PASS
+(12 runs); gitleaks clean (328 commits); `osv-scanner` exit 0, scanner
+config byte-unchanged). The previous final SHA
+`49a223c2e1df56c2f18e7b6a9c3a951560454f85` (CI run `40128660807`) is
+SUPERSEDED: it carried the EN-only attribution matrix and the overstated
+wrong-project claim corrected by the P1-04 update above (RU-01..15, RUX-01,
+PG-RU persistence and XP-01..08 are new at `789b645`).
 
 The P2-04 lexical probes use invented test sentences, not factual assertions
 about either company. No missing audit finding was invented; G01–G03 carry the

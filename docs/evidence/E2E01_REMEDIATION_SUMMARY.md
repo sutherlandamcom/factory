@@ -10,15 +10,51 @@ production database access, no merge.
 
 Baseline: clean local and remote `main` at
 `82741c600aae5af1dd79f867374789b101a5b5cf`. Final functional candidate:
-`49a223c2e1df56c2f18e7b6a9c3a951560454f85` (clean tree, exact local battery,
-superseding the earlier `794c3f4` checkpoint).
+**`789b645b17760f91c3e3ce1fedada3b806da1318`** (clean tree, exact local
+battery, superseding `49a223c2e1df56c2f18e7b6a9c3a951560454f85` — the older
+candidate kept the EN-only attribution matrix and an overstated
+wrong-project claim; parent `85259f8…` CI run 40134277879 was green).
 
 ## Changes
 
-Original remediation (73 files, unchanged in this update): trusted
+Original remediation (73 files, unchanged through `85259f8`): trusted
 project-site binding, Search context enforcement, Unicode intent
 normalization, exact CTA binding, profile navigation, numeric claim coverage,
 Stark/Russian fixture journey.
+
+Final updates (at `789b645`):
+
+- **P1-04 Russian attribution coverage (Checkpoint D):** the deterministic
+  action recognizer in `packages/contracts/src/trust-governance.ts` now
+  covers Russian inflected actional verbs for the same six family IDs, the
+  composed predicate «выполнило инженерное проектирование» (⇒ engineer),
+  negation guard, passive-style actor candidates, intent/tense classes,
+  legal-entity prefix gluing, bounded object binding via the post-verbal
+  quoted facility name, and per-excerpt evidence isolation. English
+  behavior preserved (full legacy matrix + 408-test legacy persistence green).
+  RED→GREEN: 13/13 RU negative probes failed first with `got: []` under the
+  EN-only matcher.
+- **Genuine cross-project ownership tests (Checkpoint E):** new
+  `apps/factory/tests/persistence/e2e01-cross-project-authority.test.ts`
+  (XP-01/02/03/05/06/07/08) on a real migrated PostgreSQL 18 `factory_test`
+  database. Verdict: protection is real and boundary-located — per-project
+  lineage rows (empty under the other project), no review inheritance,
+  digest-bound staleness, per-project audit-event guard
+  (`cross_project_audit_event_rejected`). Honest limitation documented:
+  intake-class SourceRefs are convention strings; Factory does not keep a
+  generic persisted source registry for them.
+- **Misleading test corrected:** the former unit probe "wrong-project
+  source … still FAILS" asserted `claimLineageProblems(...)===[]` (a PASS)
+  and never exercised project ownership; it is renamed to a documented
+  boundary assertion with a truthful title, plus a new quoted-object
+  wrong-facility reject case (object binding).
+- **Dependency security (Checkpoint A, unchanged)**: all six OSV advisories
+  resolved without suppression at the parent commits; re-verified exit 0 at
+  the candidate with `osv-scanner.toml` byte-identical.
+- **Test-harness isolation (accurate current state):** E2E this time ran on
+  one real isolated Postgres.app 18.6 cluster (port 5433, fresh datadir,
+  DB `factory_test` only), serially; the earlier container notes below are
+  historical.
 
 Final updates:
 
@@ -47,29 +83,24 @@ Final updates:
   misattributed actor. Deterministic, close to the existing M26 pattern, no
   AI, no new provenance tables.
 
-## Verification summary (exact SHA `49a223c`)
+## Verification summary (exact SHA `789b645b17760f91c3e3ce1fedada3b806da1318`)
 
 | Suite | Result |
 |---|---|
-| `pnpm qa` (check→build→test) | Factory 1150/1150, Dashboard 51/51, site 35 PASS (+35 conditional skips); exit 0 |
-| `test:persistence` (real PG 18, `factory_test`) | 418/418, includes the 10-test attribution persistence layer |
+| `pnpm check` | exit 0, workspace clean |
+| `pnpm qa` (check→build→test) | Factory 1167/1167, Dashboard 51/51, site 35 PASS (+35 conditional skips); exit 0 |
+| `test:persistence` (real PG 18.6 :5433, `factory_test`) | 467/467 (includes EN matrix, RU-01..15+RUX-01 unit, 2 PG-RU, XP-01..08 cross-project layer) |
 | `test:operator` | 149/149 |
 | `test:production` | 60/60 |
-| Dashboard browser E2E (real built UI + PG) | 17/17; Run 11 golden reaches READY_FOR_DEPLOYMENT, staleness cascade recovers, Run 13 completes candidate→preview→approve→publish→rollback |
-| `test:axe` / `test:keyboard` (Stark fixture artifact) | 4+4 PASS |
-| `lhci autorun` | PASS (6 reports) |
-| `gitleaks detect` | no leaks |
-| `osv-scanner` | exit 0 |
-| Attribution matrix | 17/17 across two layers |
+| Dashboard browser E2E (real built UI + PG) | 17/17; Run 11 golden reaches READY_FOR_DEPLOYMENT, staleness cascade recovers, Run 13 completes candidate→preview→approve→publish→rollback (test-only boundary), Stark fixture journey `design_approval_failed` intact |
+| `test:axe` / `test:keyboard` | 8 pass + 8 skips / 8 pass |
+| `lhci autorun` | PASS (12 runs) |
+| `gitleaks detect` | no leaks (328 commits) |
+| `osv-scanner` | exit 0; `osv-scanner.toml` byte-identical |
+| Attribution matrix | EN+RU 24/24 exec + XP 6-scenario PG suite |
 
-CI run `40128660807` executes this exact final commit end-to-end (every step
-PASS, including the previously-SKIPPED OSV step). Rows 1–2, 4–6, 9 were
-executed at the byte-equal functional tree `e63d839…`; rows 3, 10, 11 and
-`pnpm check` were re-executed at `49a223c…` (final delta = the RACE barrier
-test file). An additional CI finding was fixed in-session: the RACE-06/07/08
-test barriers flipped before advisory-lock acquisition, making outcomes
-scheduler-dependent; they now flip after the lock (product code unchanged;
-419-test persistence suite and CI re-proven green).
+CI: parent `85259f8…` green (run 40134277879). The candidate's own CI run is
+cited in the PR description at acceptance time.
 
 ## Migration and compatibility
 

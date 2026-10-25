@@ -339,3 +339,85 @@ temporary worktrees per candidate; local,
   ordering artifact (job halts after the browser-suite failure). The same
   workflow on `49a223c…` (run 40128660807) executes the OSV step normally
   after a green browser stage; see the run's job log for its PASS result.
+
+## Final-remediation continuation battery + Merge Gateway pilot (2026-10-25)
+
+Executed on branch `fix/e2e01-final-remediation` (baseline `c0aab7d…`,
+executed candidate stated with the exact final SHA at push time in the PR).
+
+### Local mandatory checks (re-derived, exact commands)
+
+| Check | Command | Result |
+|---|---|---|
+| Typecheck | `pnpm check` | exit 0 (all workspaces) |
+| Unit battery | `pnpm run test` | Factory **1221/1221**, Dashboard **51/51** |
+| Site Playwright | `pnpm --filter @factory/site-starter exec playwright test` | **35 passed** (35 conditional skips, unchanged manifest) |
+| Persistence | `pnpm run test:persistence` (real PG 18 `factory_test` :54349) | **474/474** |
+| Operator | `pnpm run test:operator` | **149/149** |
+| Production-path | `pnpm run test:production` | **60/60** |
+| Build | `pnpm run build` | exit 0, 15-route Astro build |
+| Gitleaks | `gitleaks detect --redact` | **no leaks** (334 commits, includes the whole Merge work; the pilot key lives only in gitignored `.env`) |
+| OSV | `osv-scanner scan --lockfile=pnpm-lock.yaml` | exit 0, `No issues found` (scoped Vite dev-server filters unchanged) |
+
+### P1-A round-2 (numeric-attribution binding) — RED→GREEN
+
+- RED lock `apps/factory/tests/e2e01-numeric-attribution.test.ts`:
+  10 cases. NA-01 (the brief's exact Vendor/Funding 500-unit case) plus
+  NA-02 (same action, different actor), NA-03 (same actor, different
+  action), NA-04 (different quoted object), NA-05 (multi-figure
+  cross-attribution) failed with empty problem lists before the fix and
+  REJECT after; NA-06..08 are positive controls (single self-sufficient
+  source, per-ref independent support, same-object binding); NA-09/10
+  regression-lock F-04b and the RU-negation limitation behavior.
+- Fix is minimal and shared with the existing attribution path:
+  `refUnitSupportsClaimPairing(claimPairs, unitSentences)` in
+  `packages/contracts/src/trust-governance.ts` re-uses the exact
+  family/actor-containment/object-containment matcher of
+  `actorActionAlignmentProblems`; claim figures now bind ONLY to refs that
+  support one of the claim's own substantive pairings. Claims without any
+  substantive pairing keep the round-1 gate unchanged (no over-blocking of
+  non-actional claims).
+- Regression: `e2e01-sourceref-isolation` 7/7, `e2e01-negation` 16/16,
+  `e2e01-industrial-attribution` matrix, trust-governance contract 17/17,
+  full Factory/persistence batteries above — all green.
+
+### Merge Gateway pilot — deterministic + LIVE evidence
+
+Adapter: `apps/factory/src/models/merge-gateway.ts` (contracts identical to
+the OpenRouter adapter; base URL `https://api-gateway.merge.dev/v1`; exact
+model pinning; no `priority_order`/vendor fallbacks/aliases; cost parsed from
+`usage.cost`; failure taxonomy: `credentials_unavailable`, `policy_violation`,
+`model_timeout`, `model_failed` with 402 mapped to budget/credit blocks).
+Profile: `apps/factory/src/models/merge-policy.ts`
+(`merge-gateway-test-pilot-v1`, roles site_intelligence /
+competitor_site_analysis / content_writer, budget $2.00, provenance `merge`,
+`publicationAuthority: false`). `FACTORY_MODEL_OVERRIDE__*` not involved;
+`assertOverrideStartupPolicy` untouched.
+
+Deterministic battery `apps/factory/tests/merge-gateway.test.ts` (19/19,
+ZERO network): no key ⇒ fail before any fetch; invalid model id, empty
+prompts, wrong-key 401 (key scrubbed from error text), 403/402 budget
+blocks, non-JSON body, timeout classification, exact success provenance,
+missing-usage conservative accounting, additive `merge` provenance value,
+pricing fail-closed, writer resolution, override-guard isolation, credential
+scrubbing, OpenRouter champion path untouched.
+
+Stage table (REAL execution evidence; costs as reported/derived):
+
+| Stage | Provider | Model | REAL/FIXTURE | API response | Usage | Cost | Authority | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| Preflight (authenticated per-key listing, cursor-paginated 7 pages) | merge | — (discovery) | REAL | HTTP 200 JSON, 314 accessible models; `zai/glm-5.3-flash`: `availability_status: available`, `access_required: false`, structured outputs supported, 1M context, ≤262K max output, vendor rates $0.06–0.45/1M input / $0.2–1.5/1M output | — | $0 (Listing is free) | none | PASS (evidence for pricing ceilings; NOTE: the naive first page lists only 50 models — the adapter now paginates) |
+| LIVE-MODEL smoke through the Factory adapter | merge | `zai/glm-5.3-flash` | REAL | HTTP 200 chat.completion, `respondedModel: glm-5.3-flash`, content verified | 72 prompt / 40 completion / 112 total tokens | $0.00001232 reported (usage.cost); conservative authorized 284µ | TEST-PILOT ONLY (no publication authority) | PASS |
+| LIVE-FACTORY Writer governed invocation (real WriterService, real isolated PG `factory_test`, $2 pilot budget reservation) | merge | `zai/glm-5.3-flash` | REAL | HTTP 200; rich JSON content persisted to ledger check; strict `PageContentProposalData` validation FAILED CLOSED (`writer_proposal_invalid`) because the flash model returned `internalLinks` as objects, not the schema's string array — no silent repair, correct by design | Real call settled: provider `merge`, model `zai/glm-5.3-flash`, accounted **1657µ** actual vs **11220µ** authorized (writer_budget_reservations row `wres-c36120a8…`) | $0.001657 actual | none (proposal rejected, never accepted) | GOVERNANCE WORKING — LIVE-FACTORY not yet reached for an ACCEPTED proposal; model output shape/prompt iteration belongs to a later bounded pilot stage |
+| Search/Competitor/Gap/Wire-in paths under pilot env | merge (wired) | `zai/glm-5.3-flash` | FIXTURE NOT EXERCISED LIVE | deterministic tests only (19/19 zero network) | — | $0 | none | VERIFIED-WIRED; live SERP stays behind E2E-G01 |
+| OpenRouter regression (champion resolution, budgets) | openrouter | champions unchanged | REAL (deterministic) | writer-budget/models-override/competitor suites 54/54 green | — | $0 | unchanged | PASS |
+
+Cumulative paid spend of the whole pilot execution: **$0.00001232 + $0.001657 ≈
+$0.0017** (well under the $2.00 pilot ceiling; ledger-backed).
+
+### Independent QA status
+
+INDEPENDENT QA PENDING. All self-executed passes above (RED→GREEN probes,
+fail-closed batteries, live smoke) are labeled SELF-EXECUTED — NOT
+INDEPENDENT. No separate independent verifier executed against the exact
+candidate in this session; per policy this is recorded rather than claimed.

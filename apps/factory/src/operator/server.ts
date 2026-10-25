@@ -19,6 +19,9 @@ import { FixtureSerpProvider } from "../search/serp-fixture.js";
 import { FixtureGroundedSearchProvider } from "../search/grounded-types.js";
 import { FixtureSearchAnalyst, OpenRouterSearchAnalyst } from "../search/analyst.js";
 import { invokeModel } from "../models/gateway.js";
+import { invokeModelViaMerge, loadMergeApiKey, MERGE_GATEWAY_API_KEY_ENV } from "../models/merge-gateway.js";
+import { isMergePilotEnabled, mergePilotModelForRole, MERGE_PILOT_BUDGET_LIMIT_USD, MERGE_PILOT_PROVIDER } from "../models/merge-policy.js";
+import { calculateConservativeInvocationCostMicros } from "../models/pricing.js";
 import { assertOverrideStartupPolicy, logOverrideDiagnostics } from "../models/override-guard.js";
 import { CompetitorStore } from "../competitors/competitor-store.js";
 import { CompetitorContentGapService, buildCompetitorAnalysts } from "../competitors/service.js";
@@ -73,7 +76,46 @@ export function buildSearchIntelligenceService(
   const analyst =
     mode === "fixture"
       ? new FixtureSearchAnalyst()
-      : new OpenRouterSearchAnalyst({
+      : isMergePilotEnabled(env)
+        ? // Merge Gateway TEST PILOT: fixed pilot model, provider "merge".
+          // Same bounded role, same strict JSON contract, recorded usage/cost.
+          new OpenRouterSearchAnalyst({
+            model: mergePilotModelForRole("site_intelligence") ?? "",
+            provider: MERGE_PILOT_PROVIDER,
+            callModel: async (prompt) => {
+              const apiKey = loadMergeApiKey();
+              if (!apiKey) {
+                throw new FactoryError(
+                  "search_analyst_not_configured",
+                  `${MERGE_GATEWAY_API_KEY_ENV} is required for the Merge Gateway search analyst pilot (fail closed).`,
+                );
+              }
+              const systemPrompt =
+                "You are Factory's search analyst. Output only strict JSON matching the requested schema. Ground every claim in the provided evidence; never invent rankings, volumes, statistics, or business facts.";
+              const result = await invokeModelViaMerge(
+                {
+                  roleId: "site_intelligence",
+                  model: mergePilotModelForRole("site_intelligence") ?? "",
+                  systemPrompt,
+                  prompt,
+                  maxTokens: 4096,
+                  timeoutMs: 120_000,
+                },
+                { loadApiKey: () => apiKey },
+              );
+              return {
+                text: result.content,
+                usage: {
+                  inputTokens: result.promptTokens,
+                  outputTokens: result.completionTokens,
+                  totalTokens: result.totalTokens,
+                  costMicros:
+                    result.costUsd != null ? Math.round(result.costUsd * 1_000_000) : null,
+                },
+              };
+            },
+          })
+        : new OpenRouterSearchAnalyst({
           model: "google/gemini-3.7-flash",
           callModel: async (prompt) => {
             const apiKey = env.OPENROUTER_API_KEY?.trim();

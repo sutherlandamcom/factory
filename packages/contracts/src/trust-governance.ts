@@ -1155,6 +1155,47 @@ const claimPairIndicators: ReadonlyArray<PairListIndicator> = [
 ];
 
 /**
+ * P1-A round 2 — claim-pair matcher shared by the attribution check and the
+ * numeric-substantiation gate. A ref unit "supports the claim's pairing"
+ * only when one of THE CLAIM's own substantive actor/action pairs (same verb
+ * family, matching actor tokens, matching quoted object) is paired by an
+ * excerpt sentence of that ref. This is the exact semantics of
+ * actorActionAlignmentProblems, extracted so figures bind to the pairing
+ *excerpt of the claim's actor/action rather than to any pairing anywhere.
+ */
+function refUnitSupportsClaimPairing(
+  claimPairs: AttributionPair[],
+  unitSentences: readonly string[],
+): boolean {
+  if (claimPairs.length === 0) return false;
+  for (const unitSentence of unitSentences) {
+    const excerptPairs = [
+      ...extractActorVerbPairsSentence(unitSentence, ACTIONAL_VERB_FAMILIES),
+      ...extractActorVerbPairsSentence(unitSentence, RU_ACTIONAL_VERB_FAMILIES),
+    ];
+    for (const pair of claimPairs) {
+      const supported = excerptPairs
+        .filter((p) => p.family === pair.family && p.tense !== "intent")
+        .some((p) => {
+          const actorMatches =
+            p.actor.length > 0 &&
+            (p.actor.endsWith(pair.actor) || pair.actor.endsWith(p.actor) ||
+              p.actor.includes(pair.actor) || pair.actor.includes(p.actor));
+          if (!actorMatches) return false;
+          // Object containment: claim object vs excerpt object.
+          const claimObj = (pair.objectFallback ?? "").toLowerCase();
+          const evObj = (p.objectFallback ?? "").toLowerCase();
+          if (!claimObj) return true;
+          if (!evObj) return false;
+          return evObj.includes(claimObj) || claimObj.includes(evObj);
+        });
+      if (supported) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Detailed deterministic problem list for a ClaimLineage record (Block 11).
  */
 export function claimLineageProblems(lineage: ClaimLineage): string[] {
@@ -1199,12 +1240,21 @@ export function claimLineageProblems(lineage: ClaimLineage): string[] {
       ...lineage.sourceRefs.map((r) => `${r.ref} ${r.supportingExcerpt ?? ""}`),
       calculationEvidence,
     ].join(" ");
-    // Numeric substantiation (P1-A): a claim figure counts as substantiated
-    // ONLY when a supporting ref that carries the figure ALSO carries the
-    // claim's substantive obligation — an actor-action pairing for the
-    // figure-bearing sentence — or the calculationRef produces it. A figure
-    // supplied by an unrelated ref (one that does not pair the claim's
-    // actor/action) cannot launder support for the pairing excerpt.
+    // Numeric substantiation (P1-A, rounds 1+2): a claim figure counts as
+    // substantiated ONLY when a supporting ref that carries the figure ALSO
+    // supports one of the claim's own actor/action pairings (same family,
+    // actor containment, quoted-object containment — P1-A round 2), or the
+    // calculationRef produces it. When the claim carries NO substantive
+    // actional pairing itself, the round-1 gate applies unchanged (any
+    // actional pairing in the figure-bearing ref, or no pairing indicators
+    // at all) so non-actional claims are never over-blocked. A figure
+    // supplied by an unrelated ref (one that pairs a DIFFERENT actor/action,
+    // e.g. "Funding Group invested 500 …" for a Vendor Ltd engineering
+    // claim) cannot launder support for the pairing excerpt.
+    const claimPairings = [
+      ...extractActorVerbPairsSentence(lineage.claimText, ACTIONAL_VERB_FAMILIES),
+      ...extractActorVerbPairsSentence(lineage.claimText, RU_ACTIONAL_VERB_FAMILIES),
+    ].filter((p) => p.tense !== "intent");
     const pairingIndicators = new Set(
       refEvidenceUnits
         .filter((u) =>
@@ -1221,6 +1271,8 @@ export function claimLineageProblems(lineage: ClaimLineage): string[] {
     const figuresWithEvidence = new Set<string>();
     for (const unit of refEvidenceUnits) {
       const unitSentences = splitEvidenceSentences(unit.text.trim());
+      // Round-2 binding: the ref must pair THE CLAIM's own actor/action.
+      const unitSupportsClaimPairing = refUnitSupportsClaimPairing(claimPairings, unitSentences);
       const unitHasPairing = unitSentences.some((es) =>
         claimPairIndicators.some(
           (indicator) =>
@@ -1228,8 +1280,13 @@ export function claimLineageProblems(lineage: ClaimLineage): string[] {
             indicator(extractActorVerbPairsSentence(es, RU_ACTIONAL_VERB_FAMILIES)),
         ),
       );
-      if (!unitHasPairing && pairingIndicators.size > 0) {
-        // This ref carries no pairing while other refs do: its figures do not
+      const unitCountsAsEvidence = claimPairings.length > 0
+        ? unitSupportsClaimPairing
+        : !unitHasPairing && pairingIndicators.size > 0
+          ? false
+          : true;
+      if (!unitCountsAsEvidence) {
+        // This ref carries no claim-relevant pairing: its figures do not
         // substantiate the attributed claim.
         continue;
       }

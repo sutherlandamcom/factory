@@ -53,6 +53,7 @@ import {
 } from "../models/index.js";
 import type { BudgetReservationHandle } from "./competitor-store.js";
 import { ModelCallError } from "../models/gateway.js";
+import { isMergePilotEnabled, mergePilotModelForRole } from "../models/merge-policy.js";
 import { InvocationFailure } from "../models/invocation-failure.js";
 
 /**
@@ -1750,7 +1751,7 @@ export class CompetitorContentGapService {
   }
 }
 
-/** Build the competitor/gap analyst pair per trusted mode (fixture or production). */
+/** Build the competitor/gap analyst pair per trusted mode (fixture, merge pilot, or production). */
 export function buildCompetitorAnalysts(env: NodeJS.ProcessEnv, invokeModelFn: typeof import("../models/gateway.js").invokeModel): {
   competitorAnalyst: CompetitorAnalystModel;
   gapAnalyst: GapAnalystModel;
@@ -1758,6 +1759,63 @@ export function buildCompetitorAnalysts(env: NodeJS.ProcessEnv, invokeModelFn: t
   const fixtureMode = env.FACTORY_COMPETITOR_MODE === "fixture";
   if (fixtureMode) {
     return { competitorAnalyst: new FixtureCompetitorAnalyst(), gapAnalyst: new FixtureGapAnalyst() };
+  }
+  // Merge Gateway TEST PILOT: fixed pilot model/provenance for both analyst
+  // runners; same prompts, same budgets, same fail-closed semantics.
+  if (isMergePilotEnabled(env)) {
+    const pilotModel = mergePilotModelForRole("competitor_site_analysis");
+    if (pilotModel === null) {
+      throw new ModelCallError(
+        "policy_violation",
+        "Merge Gateway pilot profile does not permit the competitor/gap analyst roles.",
+        null, { requestSubmitted: false },
+      );
+    }
+    const callMerge = async (systemPrompt: string, prompt: string) => {
+      const { invokeModelViaMerge, loadMergeApiKey, MERGE_GATEWAY_API_KEY_ENV } =
+        await import("../models/merge-gateway.js");
+      const apiKey = loadMergeApiKey();
+      if (!apiKey) {
+        throw new ModelCallError(
+          "credentials_unavailable",
+          `${MERGE_GATEWAY_API_KEY_ENV} is required for the Merge Gateway competitor analyst pilot (fail closed).`,
+          null, { requestSubmitted: false },
+        );
+      }
+      const result = await invokeModelViaMerge(
+        {
+          roleId: "competitor_site_analysis",
+          model: pilotModel,
+          systemPrompt,
+          prompt,
+          maxTokens: 8192,
+          timeoutMs: 120_000,
+        },
+        { loadApiKey: () => apiKey },
+      );
+      const costMicros = result.costUsd != null ? Math.round(result.costUsd * 1_000_000) : null;
+      return {
+        text: result.content,
+        usage: {
+          inputTokens: result.promptTokens,
+          outputTokens: result.completionTokens,
+          totalTokens: result.totalTokens,
+          costMicros,
+        },
+      };
+    };
+    return {
+      competitorAnalyst: new OpenRouterCompetitorAnalyst({
+        model: pilotModel,
+        provider: "merge",
+        callModel: (prompt) => callMerge(COMPETITOR_ANALYST_SYSTEM_PROMPT, prompt),
+      }),
+      gapAnalyst: new OpenRouterGapAnalyst({
+        model: pilotModel,
+        provider: "merge",
+        callModel: (prompt) => callMerge(GAP_ANALYST_SYSTEM_PROMPT, prompt),
+      }),
+    };
   }
   const callGemini = async (systemPrompt: string, prompt: string) => {
     const apiKey = env.OPENROUTER_API_KEY?.trim();

@@ -4,6 +4,34 @@ Status: **FINAL REMEDIATION PASS — READY FOR INDEPENDENT REVIEW**
 (See QA report limitations: independent executed acceptance and external gates
 remain open; this verdict covers exactly-Sha'd local mandatory checks only.)
 
+> **2026-10-25 continuation (this branch, exact final SHA restated in
+> `E2E01_QA_EVIDENCE.md`):**
+> 1. **E2E-P1-A2 numeric-attribution fix (trust governance):** claim figures
+>    now bind only to SourceRefs that pair THE CLAIM's own actor/action
+>    (`refUnitSupportsClaimPairing`); the brief's Funding-Group-500 case and
+>    actor/action/object/multi-figure variants RED→GREEN in
+>    `apps/factory/tests/e2e01-numeric-attribution.test.ts` (10/10); all
+>    prior P1-A/B suites + full battery re-verified (Factory 1221/1221,
+>    persistence 474/474, operator 149/149, production 60/60, site 35/35,
+>    gitleaks clean, OSV exit 0).
+> 2. **Merge Gateway TEST-ONLY pilot (`E2E-P2-MERGE`):** new adapter
+>    (`apps/factory/src/models/merge-gateway.ts`) + governed pilot profile
+>    (`merge-policy.ts`, version `merge-gateway-test-pilot-v1`, fixed model
+>    `zai/glm-5.3-flash`, $2 budget, provenance `merge`, NO publication
+>    authority); additive provenance value in
+>    `packages/contracts/src/site-blueprint.ts`; wired into search analyst,
+>    competitor/gap analysts, writer provider seam with provenance fix.
+>    Deterministic fail-closed battery 19/19 (zero network). LIVE evidence:
+>    authenticated per-key preflight (GLM available to the key, 314
+>    models), real adapter smoke call PASS (112 tokens, $0.00001232), real
+>    governed Writer invocation against isolated PG with a $2-reserved
+>    budget (real spend settled 1657µ; strict schema gate REJECTED the
+>    flash model's content format fail-closed — `writer_proposal_invalid`,
+>    no silent repair). Cumulative paid pilot spend ≈ **$0.0017**.
+>    Production champions, `FACTORY_MODEL_OVERRIDE__*` semantics and
+>    `assertOverrideStartupPolicy` are untouched; SERP/Stitch/Visual
+>    providers are NOT replaced (E2E-G01 stays open).
+
 Branch: `fix/e2e01-final-remediation` (continuation of
 `fix/e2e01-integrated-remediation`, merged to `main` via PR #48 as merge commit
 `16b0b952c16b3a9b68f303c92035615891cf22c1`; the user authorized the agent-merge

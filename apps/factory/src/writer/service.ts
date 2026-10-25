@@ -11,6 +11,7 @@ import {
 } from "./provider.js";
 import type { WriterBudgetStore } from "./budget.js";
 import { FixtureWriterProvider } from "./fixture-writer.js";
+import { isMergePilotEnabled } from "../models/merge-policy.js";
 import type { ContentBriefRecord, WriterPolicyRecord, WriterPromptSnapshotRecord, PageContentProposalRecord } from "../persistence/schema.js";
 
 /**
@@ -399,7 +400,9 @@ export class WriterService {
       snapshotVersion: snapshot.version,
       snapshotDigest: snapshot.snapshotDigest,
       slug: briefData.pageTarget.slug,
-      provider: "openrouter",
+      // Provenance matches the EFFECTIVE wire gateway (merge pilot or q
+      // OpenRouter); a pilot artifact can never masquerade as champion work.
+      provider: isMergePilotEnabled(deps?.env) ? "merge" : "openrouter",
       model: result.model,
       overrideApplied: result.overrideApplied,
       overriddenChampion: result.overriddenChampion,

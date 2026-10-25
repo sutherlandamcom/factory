@@ -8,6 +8,19 @@ import {
   calculateInvocationActualCostMicros,
 } from "../models/pricing.js";
 import { invokeModel, type ModelCallResult } from "../models/gateway.js";
+import { invokeModelViaMerge } from "../models/merge-gateway.js";
+import {
+  isMergePilotEnabled,
+  mergePilotModelForRole,
+  MERGE_PILOT_BUDGET_LIMIT_USD,
+  MERGE_PILOT_MODEL,
+  MERGE_PILOT_PROVIDER,
+  MERGE_TEST_PROFILE_VERSION,
+} from "../models/merge-policy.js";
+import {
+  loadMergeApiKey,
+  MERGE_GATEWAY_API_KEY_ENV,
+} from "../models/merge-gateway.js";
 import { InvocationFailure, preserveInvocationCost } from "../models/invocation-failure.js";
 import { FactoryError } from "../executor/errors.js";
 import { deterministicDigest } from "../intelligence/digest.js";
@@ -62,18 +75,43 @@ export interface WriterProviderDeps {
 
 /** Resolve the effective writer model through the governed policy seam. */
 export function resolveWriterModel(env: Record<string, string | undefined> = process.env) {
+  // Merge Gateway TEST PILOT path: the operator-approved profile replaces
+  // the model/gateway for this role with the fixed pilot binding. Provenance
+  // is recorded as provider "merge" on every artifact and the pilot carries
+  // NO publication authority (see merge-policy.ts). Standard frozen
+  // champions are untouched; this can never be combined with
+  // FACTORY_MODEL_OVERRIDE__* (that seam stays on the OpenRouter path).
+  if (isMergePilotEnabled(env)) {
+    const pilotModel = mergePilotModelForRole(WRITER_ROLE_ID);
+    if (pilotModel === null) {
+      throw new FactoryError(
+        "writer_provider_not_configured",
+        `Merge Gateway pilot profile does not permit role ${WRITER_ROLE_ID}.`,
+      );
+    }
+    return {
+      model: pilotModel,
+      championModel: pilotModel,
+      overrideApplied: false,
+      policy: MODEL_ROLE_POLICY[WRITER_ROLE_ID as keyof typeof MODEL_ROLE_POLICY],
+      pilot: { provider: MERGE_PILOT_PROVIDER, policyVersion: MERGE_TEST_PROFILE_VERSION } as const,
+    };
+  }
   const resolved = resolveRoleModel(WRITER_ROLE_ID, env);
   return { ...resolved, policy: MODEL_ROLE_POLICY[WRITER_ROLE_ID as keyof typeof MODEL_ROLE_POLICY] };
 }
 
 /** Credential preflight: missing/unusable credential -> typed failure, zero provider calls. */
 export function assertWriterCredentialAvailable(deps: { loadApiKey?: () => string | null } = {}): string {
-  const loader = deps.loadApiKey ?? (() => process.env["OPENROUTER_API_KEY"]?.trim() ?? null);
+  // Merge pilot: the pilot credential (MERGE_GATEWAY_API_KEY) is required.
+  const loader = deps.loadApiKey ?? (isMergePilotEnabled() ? loadMergeApiKey : () => process.env["OPENROUTER_API_KEY"]?.trim() ?? null);
   const apiKey = loader();
   if (apiKey === null || apiKey.trim().length === 0) {
     throw new FactoryError(
       "writer_provider_not_configured",
-      "OPENROUTER_API_KEY is not configured; the writer provider fails closed without credentials.",
+      isMergePilotEnabled()
+        ? `${MERGE_GATEWAY_API_KEY_ENV} is not configured; the Merge Gateway pilot fails closed without credentials.`
+        : "OPENROUTER_API_KEY is not configured; the writer provider fails closed without credentials.",
     );
   }
   return apiKey;
@@ -93,6 +131,10 @@ export async function runWriterInvocation(
   const env = deps.env ?? process.env;
   const resolved = resolveWriterModel(env);
   const policy = MODEL_ROLE_POLICY[WRITER_ROLE_ID as keyof typeof MODEL_ROLE_POLICY];
+  // Merge pilot: pilot budget ceiling bounds the reservation; the effective
+  // wire provider is "merge" (provenance), never the OpenRouter enum value.
+  const pilotActive = isMergePilotEnabled(env);
+  const effectiveProvider = pilotActive ? MERGE_PILOT_PROVIDER : policy.gateway;
 
   // 1. Credential preflight BEFORE any reservation or provider call.
   assertWriterCredentialAvailable({ loadApiKey: deps.invoke ? () => "test-key" : undefined });
@@ -102,7 +144,7 @@ export async function runWriterInvocation(
     deps.authorizedMicrosOverride ??
     calculateConservativeInvocationCostMicros({
       model: resolved.model,
-      provider: policy.gateway,
+      provider: effectiveProvider,
       systemPrompt: request.systemPrompt,
       userPrompt: request.userPrompt,
       maxOutputTokens: WRITER_MAX_OUTPUT_TOKENS,
@@ -118,13 +160,21 @@ export async function runWriterInvocation(
     maxOutputTokens: WRITER_MAX_OUTPUT_TOKENS,
   });
 
-  // 4. Durable budget reservation (fail closed when blocked).
-  const dailyLimitUsd =
-    deps.dailyLimitUsd ??
-    (env["FACTORY_WRITER_DAILY_LIMIT_USD"] ? Number(env["FACTORY_WRITER_DAILY_LIMIT_USD"]) : undefined);
+  // 4. Durable budget reservation (fail closed when blocked). The pilot adds
+  // its OWN explicit ceiling (MERGE_PILOT_BUDGET_LIMIT_USD) so pilot spend
+  // is bounded independently of the writer's ordinary daily limit.
+  const dailyLimitUsd = pilotActive
+    ? Math.min(
+        deps.dailyLimitUsd ?? Number.POSITIVE_INFINITY,
+        env["FACTORY_MERGE_PILOT_LIMIT_USD"]
+          ? Number(env["FACTORY_MERGE_PILOT_LIMIT_USD"])
+          : MERGE_PILOT_BUDGET_LIMIT_USD,
+      )
+    : deps.dailyLimitUsd ??
+      (env["FACTORY_WRITER_DAILY_LIMIT_USD"] ? Number(env["FACTORY_WRITER_DAILY_LIMIT_USD"]) : undefined);
   const reservation = await deps.budget.reserveWriterBudget(
     {
-      provider: policy.gateway,
+      provider: effectiveProvider,
       model: resolved.model,
       authorizedMicros,
       invocationDigest,
@@ -135,13 +185,15 @@ export async function runWriterInvocation(
         promptSnapshotRevision: request.promptSnapshotRevision,
         overrideApplied: resolved.overrideApplied,
         overriddenChampion: resolved.overrideApplied ? resolved.championModel : null,
+        ...(pilotActive ? { mergePilotPolicyVersion: MERGE_TEST_PROFILE_VERSION } : {}),
       },
     },
-    dailyLimitUsd,
+    Number.isFinite(dailyLimitUsd) ? (dailyLimitUsd as number) : undefined,
   );
 
-  // 5. Provider call with full settlement semantics.
-  const invoke = deps.invoke ?? invokeModel;
+  // 5. Provider call with full settlement semantics. The pilot routes via
+  // the Merge Gateway adapter (same contract, same failure taxonomy).
+  const invoke = deps.invoke ?? (pilotActive ? invokeModelViaMerge : invokeModel);
   try {
     const result: ModelCallResult = await invoke(
       {
@@ -163,7 +215,7 @@ export async function runWriterInvocation(
         ? null
         : calculateInvocationActualCostMicros({
             model: resolved.model,
-            provider: policy.gateway,
+            provider: effectiveProvider,
             promptTokens: result.promptTokens,
             completionTokens: result.completionTokens,
           });

@@ -46,6 +46,16 @@ export const TRUSTED_MODEL_PRICING: Readonly<Record<string, ModelTokenPricing>> 
     promptUsdPerToken: 0.0000001,
     completionUsdPerToken: 0.0000003,
   },
+  // Merge Gateway pilot (verified against the AUTHENTICATED per-key Merge
+  // listing on 2026-10-25, vendors zai/baseten/fireworks/novita/togetherai/
+  // wafer at $0.15/1M prompt, $0.50/1M completion; pareto costs less but is
+  // not guaranteed routing): conservative ceilings strictly above every
+  // vendor rate observed for this key. Distinct id-space from the OpenRouter
+  // z-ai/… entry; provenance provider is "merge".
+  "zai/glm-5.3-flash": {
+    promptUsdPerToken: 0.0000002,
+    completionUsdPerToken: 0.0000006,
+  },
   "google/gemini-3.7-flash": {
     promptUsdPerToken: 0.00000150, // $1.50 per million tokens (catalog: $0.75/1M intro, $1.50/1M standard)
     completionUsdPerToken: 0.00000750, // $7.50 per million tokens (catalog: $3.75/1M intro, $7.50/1M standard)

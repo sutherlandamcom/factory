@@ -455,6 +455,8 @@ export {
   parsePageContentProposalData,
   parseContentQaReportData,
   parseAcceptedPageContentData,
+  writerProposalResponseJsonSchema,
+  writerProposalResponseJsonSchemaText,
 } from "./writer-content.js";
 export type {
   WriterPolicyRules,
@@ -471,6 +473,7 @@ export type {
   ContentQaReportData,
   AcceptedPageContentData,
   WriterErrorCode,
+  WriterProposalJsonSchema,
 } from "./writer-content.js";
 export {
   TRUST_GOVERNANCE_SCHEMA_VERSION,

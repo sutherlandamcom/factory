@@ -185,6 +185,90 @@ export const pageContentProposalDataSchema = z
 export type PageContentProposalData = z.infer<typeof pageContentProposalDataSchema>;
 
 // ---------------------------------------------------------------------------
+// P1-03 — deterministic JSON Schema generator for the WRITER RESPONSE subset.
+//
+// The model must return a single strict JSON document. Rather than
+// describing the response in loose prose (which GLM-5.3-flash violated by
+// returning `internalLinks` as objects), the compiled prompt carries the
+// exact JSON Schema generated from the Factory contract. The Factory
+// contract is NEVER loosened to admit a malformed model response; this
+// generator exists only to express the SAME constraints in JSON Schema form
+// for prompt guidance (and, after verified wire-capability probing, for
+// schema-constrained output requests).
+// ---------------------------------------------------------------------------
+
+export interface WriterProposalJsonSchema {
+  name: string;
+  strict: true;
+  schema: Record<string, unknown>;
+}
+
+const WRITER_RESPONSE_FIELD_BOUNDS = {
+  title: { min: 1, max: 200 },
+  metaDescription: { min: 1, max: 400 },
+  introduction: { min: 1, max: 20_000 },
+  sectionHeading: { max: 300 },
+  sectionBody: { min: 1, max: 20_000 },
+  conclusion: { min: 1, max: 20_000 },
+  cta: { min: 1, max: 1000 },
+  internalLink: { max: 300 },
+  maxSections: 30,
+  maxInternalLinks: 10,
+} as const;
+
+/**
+ * Build the JSON Schema for the writer RESPONSE subset of
+ * PageContentProposalData. `snapshotId`/`snapshotVersion`/`snapshotDigest`
+ * and `schemaVersion` are NOT part of the requested response: the
+ * persistence layer binds them from the EXACT approved snapshot AFTER the
+ * response is validated (no model-authored lineage fields).
+ */
+export function writerProposalResponseJsonSchema(): WriterProposalJsonSchema {
+  const b = WRITER_RESPONSE_FIELD_BOUNDS;
+  return {
+    name: "page_content_proposal",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["title", "metaDescription", "introduction", "sections", "conclusion", "cta", "internalLinks"],
+      properties: {
+        title: { type: "string", minLength: b.title.min, maxLength: b.title.max },
+        metaDescription: { type: "string", minLength: b.metaDescription.min, maxLength: b.metaDescription.max },
+        introduction: { type: "string", minLength: b.introduction.min, maxLength: b.introduction.max },
+        sections: {
+          type: "array",
+          maxItems: b.maxSections,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["heading", "body"],
+            properties: {
+              heading: { type: "string", minLength: 1, maxLength: b.sectionHeading.max },
+              body: { type: "string", minLength: b.sectionBody.min, maxLength: b.sectionBody.max },
+            },
+          },
+        },
+        conclusion: { type: "string", minLength: b.conclusion.min, maxLength: b.conclusion.max },
+        cta: { type: "string", minLength: b.cta.min, maxLength: b.cta.max },
+        // THE exact field the flash model previously violated: internalLinks
+        // is an ARRAY OF STRING SLUG PATHS — never objects, never missing.
+        internalLinks: {
+          type: "array",
+          maxItems: b.maxInternalLinks,
+          items: { type: "string", maxLength: b.internalLink.max },
+        },
+      },
+    },
+  };
+}
+
+/** Verbatim JSON text of the response schema (embedded into the prompt). */
+export function writerProposalResponseJsonSchemaText(): string {
+  return JSON.stringify(writerProposalResponseJsonSchema(), null, 2);
+}
+
+// ---------------------------------------------------------------------------
 // QA verdicts (deterministic triad; no fake numeric scores)
 // ---------------------------------------------------------------------------
 

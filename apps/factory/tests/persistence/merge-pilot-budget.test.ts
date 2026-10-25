@@ -125,7 +125,7 @@ test("B3: boundary — remaining exactly == authorized succeeds, one micro less 
   const inst = await setupDb(t);
   const grant = await makeGrant(inst);
   await reservePilotBudget({ grant, ledger: "writer", model: grant.model, authorizedMicros: 1_999_999, invocationDigest: "b3-border", role: "content_writer", lineage: {} }, { db: inst.db });
-  assert.equal(await reservePilotBudget({ grant, ledger: "search", model: grant.model, authorizedMicros: 1, invocationDigest: "b3-fit", role: "site_intelligence", lineage: {} }, { db: inst.db }).id !== null, true);
+  assert.equal((await reservePilotBudget({ grant, ledger: "search", model: grant.model, authorizedMicros: 1, invocationDigest: "b3-fit", role: "site_intelligence", lineage: {} }, { db: inst.db })).id !== null, true);
   // Now the ceiling is full.
   await assert.rejects(
     reservePilotBudget({ grant, ledger: "writer", model: grant.model, authorizedMicros: 1, invocationDigest: "b3-over", role: "content_writer", lineage: {} }, { db: inst.db }),
@@ -168,7 +168,7 @@ test("B5: provider overrun — real amount persisted, typed violation, ceiling a
   );
   assert.equal(rows[0]?.accounted_micros, 700_000, "the REAL amount is durably persisted (never clamped)");
   // Remaining ceiling: 2_000_000 - 700_000 = 1_300_000 usable.
-  assert.equal(await reservePilotBudget({ grant, ledger: "writer", model: grant.model, authorizedMicros: 1_300_000, invocationDigest: "b5-rest", role: "content_writer", lineage: {} }, { db: inst.db }).id !== null, true);
+  assert.equal((await reservePilotBudget({ grant, ledger: "writer", model: grant.model, authorizedMicros: 1_300_000, invocationDigest: "b5-rest", role: "content_writer", lineage: {} }, { db: inst.db })).id !== null, true);
   await assert.rejects(
     reservePilotBudget({ grant, ledger: "writer", model: grant.model, authorizedMicros: 1, invocationDigest: "b5-final", role: "content_writer", lineage: {} }, { db: inst.db }),
     (e: unknown) => refusal(e, "merge_pilot_budget_blocked"),
@@ -220,7 +220,7 @@ test("B8: non-pilot ledgers are invisible to the pilot ceiling (separate provide
   // Pilot exposure is ZERO despite $9.90 accounted in the same ledger.
   assert.equal(await exposure(inst), 0);
   const grant = await makeGrant(inst);
-  assert.equal(await reservePilotBudget({ grant, ledger: "writer", model: grant.model, authorizedMicros: 2_000_000, invocationDigest: "b8-full", role: "content_writer", lineage: {} }, { db: inst.db }).id !== null, true);
+  assert.equal((await reservePilotBudget({ grant, ledger: "writer", model: grant.model, authorizedMicros: 2_000_000, invocationDigest: "b8-full", role: "content_writer", lineage: {} }, { db: inst.db })).id !== null, true);
   const report = await mergePilotSpendingReport(inst.db);
   assert.equal(report.totalMicros, 2_000_000);
   assert.equal(report.perLedger["writer"], 2_000_000);});

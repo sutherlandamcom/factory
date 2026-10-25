@@ -426,14 +426,14 @@ below). The paragraph above remains as the dated record for the earlier
 
 ### Exact final SHA + CI (2026-10-25)
 
-- Final candidate: `d57860c…` (full:
-  `d57860cd5a241e4de4f4e12691254bfd45daed1b` — the final-remediation stack
-  on top of the historically recorded `456bd1f…` / `c0aab7d…` entries
-  below; those SHAs are superseded-as-history, not deleted).
-- PR CI on the exact final head: run
-  https://github.com/sutherlandamcom/factory/actions/runs/<CI_RUN_ID_TO_FILL_ON_PUSH>
-  — `Factory QA & Persistence Acceptance` (the earlier PASS recorded below
-  was for `456bd1f`; the run for `d57860c` is linked from PR #49 after push).
+- Final candidate: `8b8a96a…` (full:
+  `8b8a96a948447b232efb5a61dcf0122bebdcba3e` — evidence-doc commit on top of
+  the functional final-remediation stack whose functional HEAD is
+  `d57860cd5a241e4de4f4e12691254bfd45daed1b`; `456bd1f…` / `c0aab7d…`
+  remain superseded-as-history, not deleted).
+- PR CI on the exact final head `8b8a96a`: run
+  https://github.com/sutherlandamcom/factory/actions/runs/40223537053 —
+  `Factory QA & Persistence Acceptance` **PASS** (18m43s).
 
 ## Final security remediation: P0-01/P0-02/P1-01..P1-05 (2026-10-25, SHA d57860c)
 
@@ -449,7 +449,7 @@ Undertaken per the Final Security Remediation task. Truth table:
 | P1-04 | Writer cost accounting collapsed provider-reported and Factory-estimated into one figure; provider `usage.cost` was ignored | `InvocationCostBreakdown {providerReportedMicros, policyEstimatedMicros, accountedMicros, accountingBasis, discrepancyMicros}`; accounting rule: max(reported, estimate, 1µ floor) / estimate / conservative-FULL-authorized when nothing trusted — never silently 0; persisted on the proposal row and surfaced in `proposalView.costs` | `tests/writer-cost-accounting.test.ts` 8/8: reported-present/missing/none-trusted, reported-zero floor, post-submission trusted-evidence retention vs conservative accounting, pre-submission release, overrun persistence + typed violation, replay idempotency | same commits | PASS — the three figures are independently distinguishable in durable evidence | Provider-reported trust is limited to what Merge actually returns; discrepancy is recorded, not reconciled silently |
 | P1-05 | Full regression + independent verification | `pnpm check` 0; `pnpm run build` 0; `pnpm run qa` 0 (check+build+test+starter Playwright); unit 1247+51 green; `test:persistence` 493/493; `test:operator` 149/149; `test:production` 60/60; site Playwright 35 passed/35 skipped; axe 8/8; keyboard 8/8; Lighthouse CI pass (existing thresholds); gitleaks clean (341 commits, no leaks); osv-scanner no issues (11 dev-only filtered per existing policy); lychee fresh dist 0 errors (stale session build artifacts rebuilt first) | exact HEAD d57860c for every command | this table + terminal logs | PASS | — |
 | P1-05 (independent QA) | — | Separate general agent, fresh context, no authoring involvement; read the diffs itself; mutation-style adversarial reasoning per instruction | returned per-area verdicts + `INDEPENDENT QA: CONFIRMED WITH ISSUES`, noting the normKey concern adjudicated above (normKey is not the numeric-binding match surface; NA-12/14/Run12 cover the equivalent attacks) | agent transcript attached to session | INDEPENDENT QA EXECUTED — CONFIRMED (one P1-01 residual-risk note adjudicated in the P1-01 row) | Independent agent lacked paid-live capacity (by policy it ran zero paid calls); its review covered code+tests only |
-| P2 | Docs/PR contradictions in SHA, tests, statuses | This section supersedes SHA 456b1f as final-only-in-progress; the earlier sections remain as dated history superseded by this table; PR #49 body rewritten | CI run on exact HEAD winds below | PR #49 description | PASS (pending CI completion on push) | — |
+| P2 | Docs/PR contradictions in SHA, tests, statuses | This section supersedes SHA 456b1f as final-only-in-progress; the earlier sections remain as dated history superseded by this table; PR #49 body rewritten; evidence doc pushed as 8b8a96a | CI run on exact HEAD: 40223537053 PASS (18m43s) | PR #49 description | PASS | — |
 
 ### Merge Pilot — real run record (REDACTED; no secrets, no full prompts)
 

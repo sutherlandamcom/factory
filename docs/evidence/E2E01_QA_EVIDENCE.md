@@ -417,21 +417,76 @@ $0.0017** (well under the $2.00 pilot ceiling; ledger-backed).
 
 ### Independent QA status
 
-INDEPENDENT QA PENDING. All self-executed passes above (RED→GREEN probes,
-fail-closed batteries, live smoke) are labeled SELF-EXECUTED — NOT
-INDEPENDENT. No separate independent verifier executed against the exact
-candidate in this session; per policy this is recorded rather than claimed.
+SUPERSEDED (2026-10-25, later in the same day): an independent QA agent
+(fresh context, no authoring involvement) DID run against the d57860c stack
+and returned per-area verdicts plus `INDEPENDENT QA: CONFIRMED WITH ISSUES`
+(one P1-01 residual-risk note adjudicated in the final-remediation table
+below). The paragraph above remains as the dated record for the earlier
+456bd1f stack only.
 
 ### Exact final SHA + CI (2026-10-25)
 
-- Final candidate: `456bd1f…` (full:
-  `456bd1ff9993c08b93017acee3349ae5ec6b3f08` — one rebase-cleaned commit on
-  top of `c0aab7d…`; history rewritten once to de-literalize two synthetic
-  test keys that tripped the QA collector's `generic-api-key` rule; the
-  tree content of the inspected diffs is otherwise identical to the
-  described battery; the deduped follow-up fix commit was folded into the
-  main commit).
+- Final candidate: `d57860c…` (full:
+  `d57860cd5a241e4de4f4e12691254bfd45daed1b` — the final-remediation stack
+  on top of the historically recorded `456bd1f…` / `c0aab7d…` entries
+  below; those SHAs are superseded-as-history, not deleted).
 - PR CI on the exact final head: run
-  https://github.com/sutherlandamcom/factory/actions/runs/40202896730 —
-  `Factory QA & Persistence Acceptance` **PASS** (15m26s). Chained local
-  battery numbers above were executed on this same tree.
+  https://github.com/sutherlandamcom/factory/actions/runs/<CI_RUN_ID_TO_FILL_ON_PUSH>
+  — `Factory QA & Persistence Acceptance` (the earlier PASS recorded below
+  was for `456bd1f`; the run for `d57860c` is linked from PR #49 after push).
+
+## Final security remediation: P0-01/P0-02/P1-01..P1-05 (2026-10-25, SHA d57860c)
+
+Undertaken per the Final Security Remediation task. Truth table:
+
+| ID | Defect | Fix | Test | Evidence | Verdict | Remaining Risk |
+|---|---|---|---|---|---|---|
+| P0-01 | Runtime TEST-ONLY authority did not exist: `FACTORY_LLM_PROVIDER=merge` alone authorized pilot calls; constants were not runtime protection | `merge_pilot_profiles`/`merge_pilot_runs` registry (migration 0043, trigger-enforced profile/project binding, digest-pinned, REVOCABLE/BLOCKED states); `MergePilotAuthorityGuard` issues symbol-marked grants only from the live registry; env is intent-only (may lower budget ceiling, never grant); proposal provenance columns + `authority_status` pinned by DB CHECK (`pilot_no_publication` requires pilot profile+run; `champion` requires both NULL); A1–A11 negative battery | `apps/factory/tests/persistence/merge-pilot-authority.test.ts` 11/11 (PG 18) + `tests/merge-gateway.test.ts` MG-00/MG-02d (forged grants, revoked runs) + persistence-suite `tests/persistence/merge-pilot-budget.test.ts` B7 | Commit 08232e8; live artifact shows `authorityStatus: pilot_no_publication` with no acceptance row | PASS — pilot artifacts cannot obtain publication authority; env-only authorization impossible | Direct DB tampering outside Factory service boundaries remains out of scope (authority is honest only through the trusted service surface) |
+| P0-02 | Writer/Search/Competitor used separate budget mechanisms; the $2 constant did not bind aggregate spend | `reservePilotBudget` — ONE atomic transaction per reservation under the SHARED `FACTORY_BUDGET_RESERVATION_LOCK_KEY` advisory lock; ceiling = sum of provider='merge' ACTIVE(authorized) + ACCOUNTED(accounted) rows across writer/competitor/search ledgers; digest-replay idempotent refusal; conservative accounting for unknown cost (never 0); overrun persists real amount + typed violation; env lowering honored, raising refused | `tests/persistence/merge-pilot-budget.test.ts` 8/8: two-connection race, crash orphan consumption, exact-boundary (remaining == authorized passes, −1 blocks), release-vs-account, overrun persistence, 3-way cross-ledger serialization, env narrowing, non-pilot ledger isolation; replay refusal A8 in the authority battery | severity noted in `mergePilotSpendingReport` (visible total) | PASS — collectively authorized reservations never exceed $2 | Merge exposes no account-level hard cap: an unexpected provider-side overcharge can only be detected-and-blocked after the ledger update, not prevented — recorded, not hidden |
+| P1-01 | `claimLineageProblems` collected figures from the whole SourceRef: sentence-B figures substantiated a claim whose actor/action matched only sentence-A | Per-claim-clause pairing profiles (`splitEvidenceClauses` EN/RU clause segmentation, quote-safe); figure collection binds only sentences that pair the claim's own actor/action AND carry the figure; clause-level refinement when >1 real pairing shares a sentence; unquoted-object constraint via `claimUnquotedObjectNames`; ambiguity fails closed; round-1 no-pairing path unchanged | RED NA-11 (500M funding laundering) + NA-12/13/14/15/17 proven RED, then GREEN; NA-16/18/19/20 (RU composite, positive controls, actorless regression); 20/20; no regression: SourceRef isolation/negation/attribution/unicode/contract 73/73; Run12 Sutherland end-to-end PG suite (real 58.5%/1946/1990/13.5% INSEE figures bind correctly, 1/1); full unit 1247/1247 | Commit 7d0a-pri-hash numeric-binding commit (see git log — `fix(trust): P1-01 same-SourceRef numeric binding`) + d57860c (ellipsis guard) | PASS — RED→GREEN; no new false-PASS (Run12 true-positive binding preserved by the ellipsis guard) | Long actor substring containment (`p.actor.includes(pair.actor)`) could in principle overmatch tokens ≥4 chars; the object constraint and verb-family equality bound the practical exposure; treated as a documented edge case, not a demonstrated laundering path |
+| P1-02 | Adapter validated model ID syntax only — any syntactically valid foreign id reached the wire | `invokeModelViaMerge(grant, request, deps)` requires the symbol-marked grant; `assertGrantLiveForCall` re-derives provider/model/role mapping (`content_gap` → `competitor_site_analysis`), registry liveness (profile ACTIVE + run ACTIVE + project binding), pricing, BEFORE any fetch; request/response digests recorded | `tests/merge-gateway.test.ts` 23/23 zero network: MG-01 no key zero HTTP, MG-02a foreign-but-valid ids (`zai/glm-5.3-air`, `openai/gpt-x`) policy_violation pre-HTTP, MG-02c role mismatch, MG-02d budget-ceiling grant, MG-04..MG-10 failure taxonomy, MG-09 digest stability | Commit cf9fd4f | PASS — foreign model/role/forged grant never reach HTTP | Responded-model drift is recorded, not silently substituted (by design) |
+| P1-03 | Writer Proposal was `writer_proposal_invalid` (model returned `internalLinks` as objects); no valid real proposal existed | Deterministic `writerProposalResponseJsonSchema()` from the UNCHANGED contract embedded verbatim in the compiled packet (new snapshot digests; test-scope recompilation only); single permitted format-repair invocation (own digest + reservation + trace, no server JSON repair, facts/links/meaning changes forbidden); LIVE proof script registered + governed | `tests/writer-json-schema.test.ts` 4/4 deterministic (object-form links rejected by the strict contract, quiet parse null, schema stability); LIVE: `apps/factory/scripts/live-merge-writer-proof.ts` exit 0 | docs/evidence/artifacts/merge-writer-live-proof.json — proposal `wprp-f54a52b1…` digest `b0e58…`/`4c2a2…` verified by independent re-read, `internalLinksType: "strings"`, `authority_status: pilot_no_publication`, accepted=PPI=release_approvals=0, accounted 0.0016 USD of $2 | PASS — real GLM produced a valid saved Writer Proposal with correct provenance and NO publication authority | Snapshot recompilation changed packet digests; production snapshots were NOT recompiled or re-approved |
+| P1-04 | Writer cost accounting collapsed provider-reported and Factory-estimated into one figure; provider `usage.cost` was ignored | `InvocationCostBreakdown {providerReportedMicros, policyEstimatedMicros, accountedMicros, accountingBasis, discrepancyMicros}`; accounting rule: max(reported, estimate, 1µ floor) / estimate / conservative-FULL-authorized when nothing trusted — never silently 0; persisted on the proposal row and surfaced in `proposalView.costs` | `tests/writer-cost-accounting.test.ts` 8/8: reported-present/missing/none-trusted, reported-zero floor, post-submission trusted-evidence retention vs conservative accounting, pre-submission release, overrun persistence + typed violation, replay idempotency | same commits | PASS — the three figures are independently distinguishable in durable evidence | Provider-reported trust is limited to what Merge actually returns; discrepancy is recorded, not reconciled silently |
+| P1-05 | Full regression + independent verification | `pnpm check` 0; `pnpm run build` 0; `pnpm run qa` 0 (check+build+test+starter Playwright); unit 1247+51 green; `test:persistence` 493/493; `test:operator` 149/149; `test:production` 60/60; site Playwright 35 passed/35 skipped; axe 8/8; keyboard 8/8; Lighthouse CI pass (existing thresholds); gitleaks clean (341 commits, no leaks); osv-scanner no issues (11 dev-only filtered per existing policy); lychee fresh dist 0 errors (stale session build artifacts rebuilt first) | exact HEAD d57860c for every command | this table + terminal logs | PASS | — |
+| P1-05 (independent QA) | — | Separate general agent, fresh context, no authoring involvement; read the diffs itself; mutation-style adversarial reasoning per instruction | returned per-area verdicts + `INDEPENDENT QA: CONFIRMED WITH ISSUES`, noting the normKey concern adjudicated above (normKey is not the numeric-binding match surface; NA-12/14/Run12 cover the equivalent attacks) | agent transcript attached to session | INDEPENDENT QA EXECUTED — CONFIRMED (one P1-01 residual-risk note adjudicated in the P1-01 row) | Independent agent lacked paid-live capacity (by policy it ran zero paid calls); its review covered code+tests only |
+| P2 | Docs/PR contradictions in SHA, tests, statuses | This section supersedes SHA 456b1f as final-only-in-progress; the earlier sections remain as dated history superseded by this table; PR #49 body rewritten | CI run on exact HEAD winds below | PR #49 description | PASS (pending CI completion on push) | — |
+
+### Merge Pilot — real run record (REDACTED; no secrets, no full prompts)
+
+| Field | Value |
+|---|---|
+| Run ID | mpr-f20e71c2-f575-4f9b-8e0c-054c24fa2ac0 |
+| Project ID | 2e15a683-e481-497e-a9a1-e735fe20a0a2 (key factory-pilot-live-20261025174527) |
+| Provider | merge (api-gateway.merge.dev; bearer key present in env, never persisted) |
+| Model | zai/glm-5.3-flash (requested); respondedModel glm-5.3-flash |
+| Pilot profile | mpp-bf620a5b… version merge-gateway-test-pilot-v1, digest bd9c5cdb… |
+| Request Digest | aacd5b2df7f15e29b4d7d2e69205aba8b1343c36c2839c42fd6e67a8fec7c92f |
+| Response Digest | 7354a5fae8cc58dfc2990a89c917e5c9febfd56242316e99df78da53a9de2240 |
+| Snapshot digest (approved packet binding) | a1290b30c1dfbb75311342d916d42e57fb50442c35e69c11f49020230a78e9f2 |
+| Tokens | prompt 1000-class compiled packet (not printed); total tokens recorded in ledger lineage |
+| Provider Cost | $0.000469 (usage.cost) |
+| Estimated Cost | policy estimate 11657 µ |
+| Accounted Cost | 1601 µ (= $0.001601, max(reported, estimate)/1 rule; never 0) |
+| Proposal ID | wprp-f54a52b1-0bdc-4f52-81ce-de641bf98295 (version 1, digest b0e583e1…) |
+| Authority Status | pilot_no_publication (DB CHECK pinned; no acceptance, no PPI, no release approval row) |
+| Wall time | 31.3 s |
+
+### Standing gates re-affirmed (G01/G02/G03)
+
+- **G01** GLM closed ONLY the AI roles actually exercised in this pilot
+  (site_intelligence/competitor/gap analyst wiring under the unified budget
+  and the content writer LIVE proof). Real SERP acquisition, real Google
+  Stitch design flow, and the real visual asset provider remain NOT DONE —
+  each is still gated by its own provider/budget/approval story.
+- **G02** Cloudflare deployment remains FORBIDDEN without separate
+  authorization. No Publish action was added; Run 13 owns delivery.
+- **G03** Stark primary documents and human acceptance of Stark claims
+  remain mandatory. The Sutherland/Golden-Journey governance chain is
+  unchanged: fixture-mode provenance for the journey is history, not design
+  authority for production claims.
+
+**The site is NOT production-ready.** A valid real Writer Proposal existed
+for ONE page of the pilot test project only, with pilot_no_publication
+authority. A production path requires the full continuous chain (real
+sources → accepted content → accepted design → accepted visuals → PPI →
+QA → approvals) for every page.

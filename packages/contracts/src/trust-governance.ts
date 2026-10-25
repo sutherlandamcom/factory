@@ -791,10 +791,52 @@ function extractActorVerbPairsSentence(
       // Negation guard: «не»/« NOT» immediately before the verb occurrence
       // voids this occurrence as supporting evidence.
       const isNegated = /\b(?:не|нет)\b/i.test(norm.slice(Math.max(0, m.index - 12), m.index));
+      // Composite named subjects: "ООО X и ООО Y <verb>" — emit ONE pair per
+      // named entity so each subject is individually verified (unsupported
+      // side rejects; supported side may pass).
+      const beforeStr = normKey(norm.slice(0, m.index));
+      const compoundMatches = [...beforeStr.matchAll(/(?:ооо|ао|пао|зао|оао)\s+\S+/gi)];
+      if (compoundMatches.length >= 2) {
+        const entities = compoundMatches.map((cm) => cm[0]).map(attributionKey);
+        const between = beforeStr.slice(
+          (compoundMatches[0]!.index ?? 0) + compoundMatches[0]![0].length,
+          compoundMatches[compoundMatches.length - 1]!.index ?? 0,
+        );
+        const onlyConjunction = /^[\sа-яё]*и[\sа-яё]*$/iu.test(between.replace(/,\s*/g, " "));
+        if (onlyConjunction) {
+          for (const actor of entities) {
+            const postVerbal = sentence.slice((m.index ?? 0) + matched.length);
+            const quotedAfter = postVerbal.match(/[«"]([^«»"]{2,40})[»"]/);
+            const allQuoted = [...sentence.matchAll(/[«"]([^«»"]{2,40})[»"]/g)];
+            const lastQuoted = allQuoted.length > 0 ? allQuoted[allQuoted.length - 1]![1] : undefined;
+            const objectFallback = quotedAfter?.[1] ?? lastQuoted ?? undefined;
+            pairs.push({
+              actor,
+              family,
+              objectFallback,
+              tense: isNegated ? "intent" : families === RU_ACTIONAL_VERB_FAMILIES ? ruTenseClass(matched) : "past",
+            });
+          }
+          continue;
+        }
+      }
       const actorTokens: string[] = [];
-      for (let i = before.length - 1; i >= 0 && actorTokens.length < 4; i--) {
+      for (let i = before.length - 1; i >= 0 && actorTokens.length < 7; i--) {
         const tok = before[i]!;
-        if (RU_ACTOR_STOPWORDS.has(tok) || ACTOR_STOPWORDS.has(tok)) break;
+        if (RU_ACTOR_STOPWORDS.has(tok) || ACTOR_STOPWORDS.has(tok)) {
+          // Composite-subject conjunction: cross «и» ONLY when a legal-entity
+          // prefix follows it (a second company); any other stopword — or «и»
+          // not followed by an entity — terminates the window.
+          if (tok === "и") {
+            const j = i - 1;
+            const after = before[j];
+            if (after && isEntityPrefix(after)) {
+              actorTokens.unshift(tok);
+              continue;
+            }
+          }
+          break;
+        }
         actorTokens.unshift(tok);
         if (isEntityPrefix(tok)) break; // company name captured after gluing
       }
@@ -809,24 +851,44 @@ function extractActorVerbPairsSentence(
           glued.push(tok);
         }
       }
-      const actor = glued.reverse().reverse().join(" ");
-      // Bounded object fallback: quoted «...»/"..." name AFTER the verb
-      // (the object of the action); the actor itself is quoted first, so
-      // post-verbal position is required; fall back to the LAST quoted
-      // name in the sentence if the predicate carries no quotes. Search
-      // runs on the RAW sentence (guillemets intact; attributionKey would
-      // have stripped them).
-      const postVerbal = sentence.slice((m.index ?? 0) + matched.length);
-      const quotedAfter = postVerbal.match(/[«"]([^«»"]{2,40})[»"]/);
-      const allQuoted = [...sentence.matchAll(/[«"]([^«»"]{2,40})[»"]/g)];
-      const lastQuoted = allQuoted.length > 0 ? allQuoted[allQuoted.length - 1]![1] : undefined;
-      const objectFallback = quotedAfter?.[1] ?? lastQuoted ?? undefined;
-      const tense: AttributionPair["tense"] = isNegated
-        ? "intent"
-        : families === RU_ACTIONAL_VERB_FAMILIES
-          ? ruTenseClass(matched)
-          : "past";
-      pairs.push({ actor: attributionKey(actor), family, objectFallback, tense });
+      // Composite subjects: a coordinating conjunction («и») inside the
+      // actor window splits MULTIPLE actor candidates (each side is its own
+      // pair) so that attributing shared work to one of several subjects is
+      // individually verified (fail-closed for the unsupported side).
+      let actors: string[] = [glued.join(" ")];
+      if (glued.includes("и")) {
+        const sides: string[] = [];
+        let cur: string[] = [];
+        for (const tok of glued) {
+          if (tok === "и") {
+            if (cur.length > 0) sides.push(cur.join(" "));
+            cur = [];
+          } else {
+            cur.push(tok);
+          }
+        }
+        if (cur.length > 0) sides.push(cur.join(" "));
+        if (sides.length > 1) actors = sides;
+      }
+      for (const actor of actors) {
+        // Bounded object fallback: quoted «...»/"..." name AFTER the verb
+        // (the object of the action); the actor itself is quoted first, so
+        // post-verbal position is required; fall back to the LAST quoted
+        // name in the sentence if the predicate carries no quotes. Search
+        // runs on the RAW sentence (guillemets intact; attributionKey would
+        // have stripped them).
+        const postVerbal = sentence.slice((m.index ?? 0) + matched.length);
+        const quotedAfter = postVerbal.match(/[«"]([^«»"]{2,40})[»"]/);
+        const allQuoted = [...sentence.matchAll(/[«"]([^«»"]{2,40})[»"]/g)];
+        const lastQuoted = allQuoted.length > 0 ? allQuoted[allQuoted.length - 1]![1] : undefined;
+        const objectFallback = quotedAfter?.[1] ?? lastQuoted ?? undefined;
+        const tense: AttributionPair["tense"] = isNegated
+          ? "intent"
+          : families === RU_ACTIONAL_VERB_FAMILIES
+            ? ruTenseClass(matched)
+            : "past";
+        pairs.push({ actor: attributionKey(actor), family, objectFallback, tense });
+      }
     }
   }
   // RU composed-predicate reclassification: deliver-verb + engineering noun.

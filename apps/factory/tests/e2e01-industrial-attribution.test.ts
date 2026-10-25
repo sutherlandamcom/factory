@@ -325,6 +325,27 @@ test("P1-04 RU-15: ambiguous responsibility → unsupported specific contractual
   );
 });
 
+test("P1-04 RU-16: composite subject «A и B построили» — unsupported side FAILS individually", () => {
+  expectFamilyRejection(
+    ruAttributionProblems(
+      "ООО «ИнжПроект» и ООО «СтройГарант» построили завод «Орбита» в 2023 году.",
+      "ООО «СтройГарант» построило завод «Орбита» в 2023 году.",
+    ),
+    "construct",
+    "ИнжПроект",
+  );
+});
+
+test("P1-04 RU-17: composite subject positive control — SUPPORTED side passes", () => {
+  assert.deepEqual(
+    ruProblems(
+      "ООО «СтройГарант» и ООО «ИнжПроект» проектировали завод «Орбита» в 2024 году.",
+      "ООО «СтройГарант» и ООО «ИнжПроект» проектировали завод «Орбита» в 2024 году по контракту.",
+    ),
+    [],
+  );
+});
+
 test("P1-04 RUX-01: cross-excerpt fusion probe (object excerpt has no terminal punctuation) FAILS", () => {
   // The only supplied excerpt names the facility; construction must have no
   // supporting actor pairing and must not be silently ignored because the

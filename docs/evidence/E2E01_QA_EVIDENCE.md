@@ -421,3 +421,17 @@ INDEPENDENT QA PENDING. All self-executed passes above (RED→GREEN probes,
 fail-closed batteries, live smoke) are labeled SELF-EXECUTED — NOT
 INDEPENDENT. No separate independent verifier executed against the exact
 candidate in this session; per policy this is recorded rather than claimed.
+
+### Exact final SHA + CI (2026-10-25)
+
+- Final candidate: `456bd1f…` (full:
+  `456bd1ff9993c08b93017acee3349ae5ec6b3f08` — one rebase-cleaned commit on
+  top of `c0aab7d…`; history rewritten once to de-literalize two synthetic
+  test keys that tripped the QA collector's `generic-api-key` rule; the
+  tree content of the inspected diffs is otherwise identical to the
+  described battery; the deduped follow-up fix commit was folded into the
+  main commit).
+- PR CI on the exact final head: run
+  https://github.com/sutherlandamcom/factory/actions/runs/40202896730 —
+  `Factory QA & Persistence Acceptance` **PASS** (15m26s). Chained local
+  battery numbers above were executed on this same tree.

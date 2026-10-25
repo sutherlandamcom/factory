@@ -767,6 +767,66 @@ function ruTenseClass(matchedText: string): "past" | "present" | "intent" {
 }
 
 /**
+ * P1-B Cyrillic-safe negation detection for one verb-occurrence lookback.
+ * «не»/«нет» as standalone tokens; punctuation/comma/hyphen separators and
+ * short parentheticals tolerated between the negation token and the
+ * lookback END (covers «не, впрочем, построил», «не-смо́г инвестировал»).
+ * Replaces the ASCII-only /\b/ guard. The final separator run before the
+ * verb stays bounded (≤3 tokens) so distance negation beyond ~40 chars
+ * stays out of scope (window cap handles it separately).
+ */
+function negatedCyrillic(lookback: string): boolean {
+  // Direct adjacency: <sep>«не»/«нет»<sep>END.
+  if (/(?:^|[^а-яёА-ЯЁ])(?:не|нет)(?![а-яёА-ЯЁ])[\s,.»;:—-]{0,8}[\s»"']{0,4}$/iu.test(lookback)) {
+    return true;
+  }
+  // Short insertions between «не» and END: e.g. «не, впрочем,", «не-смо́г»,
+  // bounded to 24 chars with no other negation token and no second cohort.
+  const m = /(?:^|[^а-яёА-ЯЁ])(?:не|нет)(?![а-яёА-ЯЁ])([\s\S]{1,24})$/iu.exec(lookback);
+  if (m) {
+    const tail = m[1]!;
+    // Insertion must not contain another Cyrillic word token longer than a
+    // particle/discourse marker (particles: «впрочем», «именно», «или»,
+    // «наконец», «же», «ли», «бы»...). allow: punctuation wrappers and
+    // hyphen-clitics «смо́г», «могли» — modeled as ≤2 such words.
+    const wordTokens = tail.match(/[а-яёА-ЯЁ]{2,}/giu) ?? [];
+    const disallowedWord = wordTokens.some(
+      (w) =>
+        w.length > 8 && !/^смо[гг]|могл/i.test(w),
+    );
+    if (!disallowedWord || wordTokens.length <= 2) {
+      return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+/**
+ * P1-B EN negation detection: "did not <verb>", "does not <verb>",
+ * "was/were not <verb-ed>", and fronted "Not <X> but <Y> ..." inversions.
+ * `matched` is the verb form; do-support negation must directly precede.
+ */
+function negatedEnglish(lookback: string, matched: string): boolean {
+  if (/\b(?:did|does|do|was|were|is|are|has|have|had)\s+(?:not|n't)\s*$/i.test(lookback)) {
+    return true;
+  }
+  // Fronted anti-attribution: "Not <actor> but/but rather ..." — the verb
+  // belongs to the OTHER actor. The window already ends before the verb.
+  if (/(?:^|\s)not\s+[\w'’.-]+(?:\s[\w'’.-]+)*,?\s+but\b/i.test(lookback.trim())) {
+    return true;
+  }
+  // Passive negative chains (no auxiliary inside lookback but participle
+  // itself negated via preceding not -- covered by the do-support branch
+  // when aux is present) — plus bare "... not <participle>" terminators.
+  const base = matched.toLowerCase().replace(/(?:ed|s|ing)$/, "");
+  if (base.length > 2 && /(?:^|[\s,.»;:—-])not\s*$/i.test(lookback)) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Extract actor/family pairs from ONE sentence. Composite pass1: for each
  * family pattern occurrence (ALL matches, not just the first), assemble the
  * actor window immediately BEFORE the match, glue legal-entity prefixes,
@@ -788,9 +848,17 @@ function extractActorVerbPairsSentence(
       const matched = m[0];
       if (m.index === undefined || m.index === 0 && matched.length === 0) break;
       const before = normKey(norm.slice(0, m.index)).split(/\s+/).filter(Boolean);
-      // Negation guard: «не»/« NOT» immediately before the verb occurrence
-      // voids this occurrence as supporting evidence.
-      const isNegated = /\b(?:не|нет)\b/i.test(norm.slice(Math.max(0, m.index - 12), m.index));
+      // Negation guard (P1-B Unicode fix): JavaScript `/\b(?:не|нет)\b/` is
+      // ASCII-only — `\b` never matches around Cyrillic, so the previous
+      // guard was dead and negated occurrences could pair as support.
+      // Replaced with explicit character-class lookaround (Cyrillic-safe)
+      // plus an EN do-support/demonstrative negation check, evaluated over
+      // a bounded lookback window that covers distance negation and
+      // auxiliary/passive chains («официально не инвестировало», «не был
+      // построен», "did not invest", "Not X but Y built").
+      const lookback = norm.slice(Math.max(0, m.index - 40), m.index);
+      const isNegated =
+        negatedCyrillic(lookback) || negatedEnglish(lookback, matched);
       // Composite named subjects: "ООО X и ООО Y <verb>" — emit ONE pair per
       // named entity so each subject is individually verified (unsupported
       // side rejects; supported side may pass).
@@ -871,6 +939,12 @@ function extractActorVerbPairsSentence(
         if (sides.length > 1) actors = sides;
       }
       for (const actor of actors) {
+        // P1-B: an EMPTY actor window (e.g. stopword-circuit remnants like the
+        // «не» token) carries no identifiable subject; such a pair asserts
+        // nothing and must not participate in attribution requirements.
+        if (attributionKey(actor).length === 0) {
+          continue;
+        }
         // Bounded object fallback: quoted «...»/"..." name AFTER the verb
         // (the object of the action); the actor itself is quoted first, so
         // post-verbal position is required; fall back to the LAST quoted
@@ -953,14 +1027,23 @@ function claimActorVerbPairs(text: string): Array<{ actor: string; family: strin
  * Tense/intent (RU-13/RU-14): evidence only supports same tense class;
  * negated-and intent-class occurrences support nothing.
  */
-function actorActionAlignmentProblems(claimText: string, combinedEvidence: string): string[] {
+function actorActionAlignmentProblems(
+  claimText: string,
+  combinedEvidence: string,
+  evidenceUnits?: readonly { ref: string; text: string }[],
+): string[] {
   const problems: string[] = [];
-  // Split combined evidence per source ref first, then per sentence within
-  // each excerpt (prevents cross-excerpt sentence fusion and limits
-  // unpunctuated-run contamination).
-  const evidenceSentences = combinedEvidence
-    .split(/\s{2,}|\n+/)
-    .flatMap((chunk) => splitEvidenceSentences(chunk.trim()));
+  // P1-A SourceRef isolation: when per-ref evidence units are supplied, each
+  // ref's excerpts are evaluated INDEPENDENTLY — an actor-verb pairing must
+  // be supported by ONE ref alone. An actor fragment in one excerpt plus an
+  // action fragment in another never fuses into a supported pairing.
+  const evidenceSentences = (
+    evidenceUnits && evidenceUnits.length > 0
+      ? evidenceUnits.flatMap((unit) => splitEvidenceSentences(unit.text.trim()))
+      : combinedEvidence
+          .split(/\s{2,}|\n+/)
+          .flatMap((chunk) => splitEvidenceSentences(chunk.trim()))
+  );
   const claimPairs = [
     ...extractActorVerbPairsSentence(claimText, ACTIONAL_VERB_FAMILIES),
     ...extractActorVerbPairsSentence(claimText, RU_ACTIONAL_VERB_FAMILIES),
@@ -1065,6 +1148,12 @@ export function verifyCalculationProvenance(
   return problems;
 }
 
+/** Pairing indicator: a pair list contains at least one actional pair. */
+type PairListIndicator = (pairs: AttributionPair[]) => boolean;
+const claimPairIndicators: ReadonlyArray<PairListIndicator> = [
+  (pairs) => pairs.some((p) => p.tense !== "intent"),
+];
+
 /**
  * Detailed deterministic problem list for a ClaimLineage record (Block 11).
  */
@@ -1094,16 +1183,76 @@ export function claimLineageProblems(lineage: ClaimLineage): string[] {
     }
   }
   if (lineage.sourceRefs.length > 0) {
+    // P1-A SourceRef isolation: per-ref evidence units. A figure or token is
+    // substantive evidence for the claim ONLY when it appears in an excerpt
+    // whose ref counts as evidence for that figure. The calculationRef (and
+    // the ref-prefixed evidence sentences) remain part of the combined blob
+    // for backwards-compatible entailment windowing.
+    const calculationEvidence = lineage.calculationRef
+      ? `${lineage.calculationRef.modelId} ${lineage.calculationRef.output.value} ${lineage.calculationRef.inputs.map((i) => `${i.name} ${i.value}`).join(" ")}`
+      : "";
+    const refEvidenceUnits = lineage.sourceRefs.map((r) => ({
+      ref: r.ref,
+      text: `${r.ref} ${r.supportingExcerpt ?? ""}`,
+    }));
     const combinedEvidence = [
       ...lineage.sourceRefs.map((r) => `${r.ref} ${r.supportingExcerpt ?? ""}`),
-      lineage.calculationRef
-        ? `${lineage.calculationRef.modelId} ${lineage.calculationRef.output.value} ${lineage.calculationRef.inputs.map((i) => `${i.name} ${i.value}`).join(" ")}`
-        : "",
+      calculationEvidence,
     ].join(" ");
-    const evidenceNumbers = new Set(extractNormalizedNumbers(combinedEvidence));
+    // Numeric substantiation (P1-A): a claim figure counts as substantiated
+    // ONLY when a supporting ref that carries the figure ALSO carries the
+    // claim's substantive obligation — an actor-action pairing for the
+    // figure-bearing sentence — or the calculationRef produces it. A figure
+    // supplied by an unrelated ref (one that does not pair the claim's
+    // actor/action) cannot launder support for the pairing excerpt.
+    const pairingIndicators = new Set(
+      refEvidenceUnits
+        .filter((u) =>
+          splitEvidenceSentences(u.text.trim()).some((es) =>
+            claimPairIndicators.some(
+              (indicator) =>
+                indicator(extractActorVerbPairsSentence(es, ACTIONAL_VERB_FAMILIES)) ||
+                indicator(extractActorVerbPairsSentence(es, RU_ACTIONAL_VERB_FAMILIES)),
+            ),
+          ),
+        )
+        .map((u) => u.ref),
+    );
+    const figuresWithEvidence = new Set<string>();
+    for (const unit of refEvidenceUnits) {
+      const unitSentences = splitEvidenceSentences(unit.text.trim());
+      const unitHasPairing = unitSentences.some((es) =>
+        claimPairIndicators.some(
+          (indicator) =>
+            indicator(extractActorVerbPairsSentence(es, ACTIONAL_VERB_FAMILIES)) ||
+            indicator(extractActorVerbPairsSentence(es, RU_ACTIONAL_VERB_FAMILIES)),
+        ),
+      );
+      if (!unitHasPairing && pairingIndicators.size > 0) {
+        // This ref carries no pairing while other refs do: its figures do not
+        // substantiate the attributed claim.
+        continue;
+      }
+      for (const num of extractNormalizedNumbers(unit.text)) {
+        figuresWithEvidence.add(num);
+      }
+    }
+    if (calculationEvidence && lineage.claimType === "CALCULATION") {
+      // P1-C-adjacent: a calculationRef substantiates figures ONLY for
+      // CALCULATION-type claims. A FIRST_PARTY_FACT/FACT/SOURCE_DERIVED_FACT
+      // claim is an observation class and cannot launder its figures through
+      // a calculation payload (probe A8).
+      for (const num of extractNormalizedNumbers(calculationEvidence)) {
+        figuresWithEvidence.add(num);
+      }
+    } else if (calculationEvidence && lineage.claimType !== "CALCULATION") {
+      problems.push(
+        "calculation_ref_claim_type_mismatch: calculationRef provenance substantiates figures only for CALCULATION claims.",
+      );
+    }
     const claimNumbers = extractNormalizedNumbers(lineage.claimText);
     for (const num of claimNumbers) {
-      if (!evidenceNumbers.has(num)) {
+      if (!figuresWithEvidence.has(num)) {
         problems.push(
           `Numeric figure "${num}" in claimText is not substantiated by any sourceRef supportingExcerpt or calculationRef.`,
         );
@@ -1122,8 +1271,11 @@ export function claimLineageProblems(lineage: ClaimLineage): string[] {
     // responsibility (investment/construction/engineering/operation/ownership
     // belong to whoever the source says performed them). Deterministic check:
     // for any actional actor-verb pair in the claim, the supporting excerpt
-    // must pair the same actor token with the same verb family.
-    problems.push(...actorActionAlignmentProblems(lineage.claimText, combinedEvidence));
+    // must pair the same actor token with the same verb family — within ONE
+    // SourceRef (P1-A: no cross-ref pairing fusion).
+    problems.push(
+      ...actorActionAlignmentProblems(lineage.claimText, combinedEvidence, refEvidenceUnits),
+    );
     // M26: Excerpt discusses same domain (e.g. Chamonix property) but does not entail the substantive proposition
     const domainTerms = ["chamonix", "megeve", "alpine", "property", "housing", "chalet", "investment"];
     const claimLower = lineage.claimText.toLowerCase();

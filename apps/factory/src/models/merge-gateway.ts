@@ -8,9 +8,18 @@ import {
   type ModelCallResult,
   type ModelGatewayDeps,
 } from "./gateway.js";
+import {
+  isMergePilotGrant,
+  type MergePilotGrant,
+} from "./merge-pilot-guard.js";
+import { MERGE_PILOT_ALLOWED_ROLES, MERGE_PILOT_BUDGET_LIMIT_MICROS, MERGE_PILOT_MODEL, MERGE_PILOT_PROVIDER } from "./merge-policy.js";
+import { deterministicDigest } from "../intelligence/digest.js";
+import { lookupActivePilotProfile, lookupPilotRun } from "./merge-pilot-registry.js";
+import type { FactoryDb } from "../persistence/db.js";
 
 /**
- * FACTORY MERGE GATEWAY ADAPTER — bounded real-inference pilot (TEST ONLY).
+ * FACTORY MERGE GATEWAY ADAPTER — bounded real-inference pilot (TEST ONLY),
+ * guard-backed (P0-01 + P1-02).
  *
  * Routes one explicit-viewer chat completion through Merge Gateway
  * (https://api-gateway.merge.dev/v1/chat/completions, OpenAI-compatible
@@ -19,17 +28,131 @@ import {
  * call: the wire provider is `merge`.
  *
  * Policy rules enforced here (mirror of models/gateway.ts):
- * - The exact model id is ALWAYS explicit per call. No aliases, no
+ * - Authority: a call REQUIRES a valid MergePilotGrant issued by
+ *   MergePilotAuthorityGuard (module-private symbol-marked, registry-backed,
+ *   project/run-bound). Direct calls without a grant fail closed BEFORE any
+ *   network request — a syntactically valid but foreign model id, foreign
+ *   role, revoked run, or unregistered project is rejected pre-HTTP.
+ * - The exact model id is ALWAYS explicit per call and must equal the
+ *   grant's pinned model (zai/glm-5.3-flash). No aliases, no
  *   `priority_order` failover lists, no vendor fallbacks, no model-identity
- *   auto-selection: Factory's pilot profile pins `zai/glm-5.3-flash`.
+ *   auto-selection, no silent substitution when the gateway reports a
+ *   different responded model (respondedModel recorded for provenance only).
  * - Credentials fail closed: without MERGE_GATEWAY_API_KEY no call is made.
  * - The key never enters prompts, artifacts, logs, or error messages
  *   (scrubCredentials from gateway.ts is reused).
  * - Exact provenance (responded model, provider identity, token usage, cost,
- *   duration) is captured from the gateway response whenever available; the
- *   gateway's `usage.cost` field is USD.
+ *   duration, request/response digests) is captured from the gateway
+ *   response whenever available; the gateway's `usage.cost` field is USD.
  * - No tools, no agentic loop: system+user messages -> single completion.
  */
+
+/**
+ * Gateway-role mapping: Factory role ids that may serve a pilot call map to
+ * the exact grant role. The Content Gap runner shares the competitor analyst
+ * stage (`content_gap` -> `competitor_site_analysis` per the approved pilot).
+ */
+const GATEWAY_ROLE_TO_PILOT_ROLE: Readonly<Record<string, string>> = {
+  site_intelligence: "site_intelligence",
+  competitor_site_analysis: "competitor_site_analysis",
+  content_gap: "competitor_site_analysis",
+  content_writer: "content_writer",
+};
+
+/**
+ * Structural allowlist verification BEFORE any network request. Re-derives
+ * every claim of the grant against pinned constants and, when a db is
+ * available, the durable registry (cheap indexed reads): closes the
+ * post-issuance-revocation window for grants passed around by reference.
+ */
+async function assertGrantLiveForCall(
+  grant: unknown,
+  request: ModelCallRequest,
+  db?: FactoryDb,
+): Promise<MergePilotGrant> {
+  if (!isMergePilotGrant(grant)) {
+    throw new ModelCallError(
+      "policy_violation",
+      "Merge Gateway call requires a guard-issued MergePilotGrant (symbol-marked); direct/literal grant objects are rejected before any HTTP request (P0-01/P1-02).",
+      null, { requestSubmitted: false },
+    );
+  }
+  const g: MergePilotGrant = grant;
+  if (g.provider !== MERGE_PILOT_PROVIDER || g.model !== MERGE_PILOT_MODEL) {
+    throw new ModelCallError(
+      "policy_violation",
+      `Grant provider/model drifted from the pinned pilot constants (${g.provider}/${g.model}).`,
+      null, { requestSubmitted: false },
+    );
+  }
+  if (request.model !== g.model) {
+    throw new ModelCallError(
+      "policy_violation",
+      `Model id "${request.model.slice(0, 50)}" is not the pinned pilot model "${MERGE_PILOT_MODEL}"; foreign model ids are rejected BEFORE any HTTP request (P1-02).`,
+      null, { requestSubmitted: false },
+    );
+  }
+  const grantRole = GATEWAY_ROLE_TO_PILOT_ROLE[request.roleId];
+  if (grantRole !== g.role) {
+    throw new ModelCallError(
+      "policy_violation",
+      `Role "${request.roleId}" does not match the grant role "${g.role}" (permitted gateway roles: ${Object.keys(GATEWAY_ROLE_TO_PILOT_ROLE).join(", ")}).`,
+      null, { requestSubmitted: false },
+    );
+  }
+  if (!(MERGE_PILOT_ALLOWED_ROLES as readonly string[]).includes(g.role)) {
+    throw new ModelCallError(
+      "policy_violation",
+      `Grant role "${g.role}" is outside the pinned pilot role set.`,
+      null, { requestSubmitted: false },
+    );
+  }
+  if (g.budgetLimitMicros > MERGE_PILOT_BUDGET_LIMIT_MICROS) {
+    throw new ModelCallError(
+      "policy_violation",
+      `Grant budget ceiling ${g.budgetLimitMicros}µ exceeds the hard $2 pilot ceiling.`,
+      null, { requestSubmitted: false },
+    );
+  }
+  if (db && typeof db.transaction === "function") {
+    const profile = await lookupActivePilotProfile(db, g.projectId);
+    if (!profile || profile.id !== g.profileId || profile.state !== "ACTIVE") {
+      throw new ModelCallError(
+        "policy_violation",
+        "Pilot grant is no longer registry-live (profile revoked/mismatching); rejected before any HTTP request.",
+        null, { requestSubmitted: false },
+      );
+    }
+    const run = await lookupPilotRun(db, g.runId);
+    if (!run || run.state !== "ACTIVE" || run.profileId !== g.profileId || run.projectId !== g.projectId) {
+      throw new ModelCallError(
+        "policy_violation",
+        "Pilot grant run is no longer registry-live (closed/revoked/mismatching); rejected before any HTTP request.",
+        null, { requestSubmitted: false },
+      );
+    }
+  }
+  if (getModelPricing(g.model) === null) {
+    throw new ModelCallError(
+      "policy_violation",
+      `No trusted pricing for pilot model "${g.model}"; paid execution fails closed.`,
+      null, { requestSubmitted: false },
+    );
+  }
+  return g;
+}
+
+/** Wire request digest (P1-02 provenance): exact bytes of the request intent. */
+function computeRequestDigest(request: ModelCallRequest): string {
+  return deterministicDigest({
+    model: request.model,
+    roleId: request.roleId,
+    systemPrompt: request.systemPrompt,
+    prompt: request.prompt,
+    maxTokens: request.maxTokens ?? 16_000,
+    temperature: 0,
+  });
+}
 
 export const MERGE_GATEWAY_BASE_URL = "https://api-gateway.merge.dev/v1";
 
@@ -106,13 +229,19 @@ function boundedNumber(value: unknown): number | null {
 }
 
 /**
- * Invoke exactly ONE chat completion through Merge Gateway. Throws
- * ModelCallError on failure; never returns partial content.
+ * Invoke exactly ONE chat completion through Merge Gateway under a
+ * guard-issued pilot grant. Throws ModelCallError on failure; never returns
+ * partial content. The grant is verified structurally and (with a db)
+ * registry-live BEFORE any HTTP request; foreign model ids/roles are
+ * rejected pre-HTTP (P1-02).
  */
 export async function invokeModelViaMerge(
+  grant: MergePilotGrant,
   request: ModelCallRequest,
-  deps: ModelGatewayDeps = {},
+  deps: ModelGatewayDeps & { db?: FactoryDb } = {},
 ): Promise<ModelCallResult> {
+  await assertGrantLiveForCall(grant, request, deps.db);
+
   if (!/^[A-Za-z0-9._/-]{1,200}$/.test(request.model)) {
     throw new ModelCallError(
       "policy_violation",
@@ -134,6 +263,7 @@ export async function invokeModelViaMerge(
       null, { requestSubmitted: false },
     );
   }
+  const requestDigest = computeRequestDigest(request);
 
   const apiKey = (deps.loadApiKey ?? loadMergeApiKey)();
   if (apiKey === null) {
@@ -255,6 +385,12 @@ export async function invokeModelViaMerge(
     totalTokens: boundedNumber(parsed.usage?.total_tokens),
     costUsd: boundedNumber(parsed.usage?.cost),
     content,
+    requestDigest,
+    responseDigest: deterministicDigest({
+      respondedModel: typeof parsed.model === "string" ? parsed.model : null,
+      content,
+      usage: { promptTokens: boundedNumber(parsed.usage?.prompt_tokens), completionTokens: boundedNumber(parsed.usage?.completion_tokens), totalTokens: boundedNumber(parsed.usage?.total_tokens), costUsd: boundedNumber(parsed.usage?.cost) },
+    }),
   };
 }
 

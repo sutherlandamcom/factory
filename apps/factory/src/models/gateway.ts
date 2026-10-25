@@ -51,6 +51,12 @@ export interface ModelCallResult {
   costUsd: number | null;
   /** The completion content (expected to be a single strict JSON document). */
   content: string;
+  /**
+   * P1-02/P0-01 provenance (Merge pilot): deterministic digests of the exact
+   * request sent and the response received. OpenRouter path leaves null.
+   */
+  requestDigest?: string | null;
+  responseDigest?: string | null;
 }
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;

@@ -53,7 +53,7 @@ import {
 } from "../models/index.js";
 import type { BudgetReservationHandle } from "./competitor-store.js";
 import { ModelCallError } from "../models/gateway.js";
-import { isMergePilotEnabled, mergePilotModelForRole } from "../models/merge-policy.js";
+import { isMergePilotRequested, mergePilotModelForRole } from "../models/merge-policy.js";
 import { InvocationFailure } from "../models/invocation-failure.js";
 
 /**
@@ -1752,7 +1752,11 @@ export class CompetitorContentGapService {
 }
 
 /** Build the competitor/gap analyst pair per trusted mode (fixture, merge pilot, or production). */
-export function buildCompetitorAnalysts(env: NodeJS.ProcessEnv, invokeModelFn: typeof import("../models/gateway.js").invokeModel): {
+export function buildCompetitorAnalysts(
+  env: NodeJS.ProcessEnv,
+  invokeModelFn: typeof import("../models/gateway.js").invokeModel,
+  pilot?: { grantFactory: () => Promise<import("../models/merge-pilot-guard.js").MergePilotGrant>; db: import("../persistence/db.js").FactoryDb } | null,
+): {
   competitorAnalyst: CompetitorAnalystModel;
   gapAnalyst: GapAnalystModel;
 } {
@@ -1761,13 +1765,21 @@ export function buildCompetitorAnalysts(env: NodeJS.ProcessEnv, invokeModelFn: t
     return { competitorAnalyst: new FixtureCompetitorAnalyst(), gapAnalyst: new FixtureGapAnalyst() };
   }
   // Merge Gateway TEST PILOT: fixed pilot model/provenance for both analyst
-  // runners; same prompts, same budgets, same fail-closed semantics.
-  if (isMergePilotEnabled(env)) {
+  // runners; same prompts, SAME UNIFIED PILOT BUDGET, guard-issued grants,
+  // same fail-closed semantics.
+  if (isMergePilotRequested(env)) {
     const pilotModel = mergePilotModelForRole("competitor_site_analysis");
     if (pilotModel === null) {
       throw new ModelCallError(
         "policy_violation",
         "Merge Gateway pilot profile does not permit the competitor/gap analyst roles.",
+        null, { requestSubmitted: false },
+      );
+    }
+    if (!pilot) {
+      throw new ModelCallError(
+        "policy_violation",
+        "Merge Gateway competitor/gap analyst pilot requires a guard-issued grant factory and a durable DB (fail closed).",
         null, { requestSubmitted: false },
       );
     }
@@ -1782,27 +1794,78 @@ export function buildCompetitorAnalysts(env: NodeJS.ProcessEnv, invokeModelFn: t
           null, { requestSubmitted: false },
         );
       }
-      const result = await invokeModelViaMerge(
-        {
-          roleId: "competitor_site_analysis",
-          model: pilotModel,
-          systemPrompt,
-          prompt,
-          maxTokens: 8192,
-          timeoutMs: 120_000,
-        },
-        { loadApiKey: () => apiKey },
-      );
-      const costMicros = result.costUsd != null ? Math.round(result.costUsd * 1_000_000) : null;
-      return {
-        text: result.content,
-        usage: {
-          inputTokens: result.promptTokens,
-          outputTokens: result.completionTokens,
-          totalTokens: result.totalTokens,
-          costMicros,
-        },
+      const grant = await pilot.grantFactory();
+      const request = {
+        roleId: "competitor_site_analysis",
+        model: grant.model,
+        systemPrompt,
+        prompt,
+        maxTokens: 8192,
+        timeoutMs: 120_000,
       };
+      // P0-02: conservative authorization precedes the call; the shared-pilot
+      // ceiling is checked atomically across ALL pilot role ledgers.
+      const { reservePilotBudget } = await import("../models/pilot-budget.js");
+      const { calculateConservativeInvocationCostMicros } = await import("../models/pricing.js");
+      const authorizedMicros = calculateConservativeInvocationCostMicros({
+        model: grant.model,
+        provider: "merge",
+        systemPrompt,
+        userPrompt: prompt,
+        maxOutputTokens: 8192,
+      });
+      const reservation = await reservePilotBudget(
+        {
+          grant,
+          ledger: "competitor",
+          model: grant.model,
+          authorizedMicros,
+          invocationDigest: grant.profileDigest.slice(0, 32) + ":" + String(systemPrompt.length) + ":" + String(prompt.length),
+          role: "competitor_site_analysis",
+          lineage: { kind: "competitor_or_gap_analysis" },
+        },
+        { db: pilot.db },
+      );
+      try {
+        const result = await invokeModelViaMerge(grant, request, { loadApiKey: () => apiKey, db: pilot.db });
+        // P1-04: provider-reported cost dominates the estimate; unknown ->
+        // conservative full reservation (never 0).
+        const providerReportedMicros = result.costUsd != null ? Math.round(result.costUsd * 1_000_000) : null;
+        const accountedMicros = providerReportedMicros != null
+          ? Math.max(providerReportedMicros, authorizedMicros)
+          : authorizedMicros;
+        await reservation.account(accountedMicros);
+        return {
+          text: result.content,
+          usage: {
+            inputTokens: result.promptTokens,
+            outputTokens: result.completionTokens,
+            totalTokens: result.totalTokens,
+            costMicros: accountedMicros,
+          },
+          pilotProvenance: {
+            requestDigest: result.requestDigest ?? null,
+            responseDigest: result.responseDigest ?? null,
+            providerReportedCostMicros: providerReportedMicros,
+            policyEstimatedCostMicros: authorizedMicros,
+            accountedCostMicros: accountedMicros,
+          },
+        };
+      } catch (error) {
+        // Settlement semantics identical to settleReservationAfterInvocation:
+        // a provable pre-submission failure releases; every other failure
+        // (timeout, HTTP error, post-submission unknown) accounts the full
+        // authorized conservative amount — never released, never 0, never a
+        // smaller fixed fallback.
+        if (error instanceof InvocationFailure && !error.requestSubmitted) {
+          await reservation.releaseUnexecuted();
+        } else if (error instanceof InvocationFailure && error.trustedCostMicros != null) {
+          await reservation.account(error.trustedCostMicros);
+        } else {
+          await reservation.account(null);
+        }
+        throw error;
+      }
     };
     return {
       competitorAnalyst: new OpenRouterCompetitorAnalyst({
@@ -1816,8 +1879,7 @@ export function buildCompetitorAnalysts(env: NodeJS.ProcessEnv, invokeModelFn: t
         callModel: (prompt) => callMerge(GAP_ANALYST_SYSTEM_PROMPT, prompt),
       }),
     };
-  }
-  const callGemini = async (systemPrompt: string, prompt: string) => {
+  }  const callGemini = async (systemPrompt: string, prompt: string) => {
     const apiKey = env.OPENROUTER_API_KEY?.trim();
     if (!apiKey) {
       throw new ModelCallError(

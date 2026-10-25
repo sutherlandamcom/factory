@@ -54,13 +54,28 @@ export type MergePilotRoleId = (typeof MERGE_PILOT_ALLOWED_ROLES)[number];
 export const MERGE_PILOT_BUDGET_LIMIT_USD = 2.0;
 export const MERGE_PILOT_BUDGET_LIMIT_MICROS = Math.round(MERGE_PILOT_BUDGET_LIMIT_USD * 1_000_000);
 
-/** Env switch that activates the pilot (default: strictly off). */
+/** Env switch that REQUESTS the pilot (default: strictly off). */
 export const MERGE_PILOT_ENABLED_ENV = "FACTORY_LLM_PROVIDER";
 export const MERGE_PILOT_ENABLED_ENV_VALUE = "merge";
 
-/** Whether the merge pilot is active in the given environment. */
-export function isMergePilotEnabled(env: Record<string, string | undefined> = process.env): boolean {
+/**
+ * Env intent only — NEVER runtime authority. Requesting the pilot via env
+ * does NOT authorize anything: live authority is resolved exclusively by
+ * MergePilotAuthorityGuard from the durable registry (project-bound,
+ * revocable, run-bound).
+ */
+export function isMergePilotRequested(env: Record<string, string | undefined> = process.env): boolean {
   return (env[MERGE_PILOT_ENABLED_ENV] ?? "").trim() === MERGE_PILOT_ENABLED_ENV_VALUE;
+}
+
+/**
+ * BACKWARD-COMPATIBLE ALIAS (transition): older call sites checked env
+ * before the guard existed. New semantic: a plain `true` here means
+ * "requested" — callers must still resolve a grant through the guard for
+ * real authority. Keep the old name exported while call sites migrate.
+ */
+export function isMergePilotEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  return isMergePilotRequested(env);
 }
 
 /** Effective model for a role under the pilot profile (exact, no override seam). */

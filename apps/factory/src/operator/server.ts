@@ -20,7 +20,25 @@ import { FixtureGroundedSearchProvider } from "../search/grounded-types.js";
 import { FixtureSearchAnalyst, OpenRouterSearchAnalyst } from "../search/analyst.js";
 import { invokeModel } from "../models/gateway.js";
 import { invokeModelViaMerge, loadMergeApiKey, MERGE_GATEWAY_API_KEY_ENV } from "../models/merge-gateway.js";
-import { isMergePilotEnabled, mergePilotModelForRole, MERGE_PILOT_BUDGET_LIMIT_USD, MERGE_PILOT_PROVIDER } from "../models/merge-policy.js";
+import { isMergePilotRequested, mergePilotModelForRole, MERGE_PILOT_BUDGET_LIMIT_USD, MERGE_PILOT_PROVIDER } from "../models/merge-policy.js";
+import { InvocationFailure } from "../models/invocation-failure.js";
+
+/**
+ * Trusted pilot DB seam for operator server paths (search analyst pilot).
+ * The operator server constructs one durable FactoryDb per process; the
+ * pilot requires it for registry-backed authority — absent DB fail-closed.
+ */
+const operatorPilotDbHolder: { db: import("../persistence/db.js").FactoryDb | null } = { db: null };
+export function setOperatorPilotDb(db: import("../persistence/db.js").FactoryDb | null): void {
+  operatorPilotDbHolder.db = db;
+}
+function getOperatorPilotDb(_unused: null): import("../persistence/db.js").FactoryDb {
+  if (operatorPilotDbHolder.db) return operatorPilotDbHolder.db;
+  throw new FactoryError(
+    "search_analyst_not_configured",
+    "Merge pilot search analyst requires a durable FactoryDb for registry-backed authority (fail closed).",
+  );
+}
 import { calculateConservativeInvocationCostMicros } from "../models/pricing.js";
 import { assertOverrideStartupPolicy, logOverrideDiagnostics } from "../models/override-guard.js";
 import { CompetitorStore } from "../competitors/competitor-store.js";
@@ -76,9 +94,12 @@ export function buildSearchIntelligenceService(
   const analyst =
     mode === "fixture"
       ? new FixtureSearchAnalyst()
-      : isMergePilotEnabled(env)
+      : isMergePilotRequested(env)
         ? // Merge Gateway TEST PILOT: fixed pilot model, provider "merge".
           // Same bounded role, same strict JSON contract, recorded usage/cost.
+          // P0-01/P0-02: guard-issued grant + unified pilot budget BEFORE any
+          // paid call (search analyst spend counts against the SAME $2
+          // ceiling as writer/competitor roles).
           new OpenRouterSearchAnalyst({
             model: mergePilotModelForRole("site_intelligence") ?? "",
             provider: MERGE_PILOT_PROVIDER,
@@ -90,29 +111,73 @@ export function buildSearchIntelligenceService(
                   `${MERGE_GATEWAY_API_KEY_ENV} is required for the Merge Gateway search analyst pilot (fail closed).`,
                 );
               }
+              const { resolvePilotGrant } = await import("../models/merge-pilot-guard.js");
+              const { reservePilotBudget } = await import("../models/pilot-budget.js");
+              const { invokeModelViaMerge } = await import("../models/merge-gateway.js");
+              const { calculateConservativeInvocationCostMicros } = await import("../models/pricing.js");
               const systemPrompt =
                 "You are Factory's search analyst. Output only strict JSON matching the requested schema. Ground every claim in the provided evidence; never invent rankings, volumes, statistics, or business facts.";
-              const result = await invokeModelViaMerge(
-                {
-                  roleId: "site_intelligence",
-                  model: mergePilotModelForRole("site_intelligence") ?? "",
-                  systemPrompt,
-                  prompt,
-                  maxTokens: 4096,
-                  timeoutMs: 120_000,
-                },
-                { loadApiKey: () => apiKey },
-              );
-              return {
-                text: result.content,
-                usage: {
-                  inputTokens: result.promptTokens,
-                  outputTokens: result.completionTokens,
-                  totalTokens: result.totalTokens,
-                  costMicros:
-                    result.costUsd != null ? Math.round(result.costUsd * 1_000_000) : null,
-                },
+              // Registry-backed authority: project + run ids come from the
+              // trusted pilot env contract; resolution fail-closed.
+              const projectId = env["FACTORY_MERGE_PILOT_PROJECT_ID"]?.trim() ?? "";
+              const runId = env["FACTORY_MERGE_PILOT_RUN_ID"]?.trim() ?? "";
+              const db = getOperatorPilotDb(null);
+              const grant = await resolvePilotGrant({ db, projectId, runId, role: "site_intelligence", env });
+              const request = {
+                roleId: "site_intelligence",
+                model: grant.model,
+                systemPrompt,
+                prompt,
+                maxTokens: 4096,
+                timeoutMs: 120_000,
               };
+              const authorizedMicros = calculateConservativeInvocationCostMicros({
+                model: grant.model,
+                provider: "merge",
+                systemPrompt,
+                userPrompt: prompt,
+                maxOutputTokens: 4096,
+              });
+              const reservation = await reservePilotBudget(
+                {
+                  grant,
+                  ledger: "search",
+                  model: grant.model,
+                  authorizedMicros,
+                  invocationDigest: grant.profileDigest.slice(0, 32) + ":search:" + String(prompt.length),
+                  role: "site_intelligence",
+                  lineage: { kind: "search_analyst" },
+                },
+                { db },
+              );
+              try {
+                const result = await invokeModelViaMerge(grant, request, { loadApiKey: () => apiKey, db });
+                const providerReportedMicros =
+                  result.costUsd != null && Number.isFinite(result.costUsd) && result.costUsd >= 0
+                    ? Math.round(result.costUsd * 1_000_000)
+                    : null;
+                const accountedMicros =
+                  providerReportedMicros != null ? Math.max(providerReportedMicros, authorizedMicros) : authorizedMicros;
+                await reservation.account(accountedMicros);
+                return {
+                  text: result.content,
+                  usage: {
+                    inputTokens: result.promptTokens,
+                    outputTokens: result.completionTokens,
+                    totalTokens: result.totalTokens,
+                    costMicros: accountedMicros,
+                  },
+                };
+              } catch (error) {
+                if (error instanceof InvocationFailure && !error.requestSubmitted) {
+                  await reservation.releaseUnexecuted();
+                } else if (error instanceof InvocationFailure && error.trustedCostMicros != null) {
+                  await reservation.account(error.trustedCostMicros);
+                } else {
+                  await reservation.account(null);
+                }
+                throw error;
+              }
             },
           })
         : new OpenRouterSearchAnalyst({
@@ -362,12 +427,30 @@ export async function startOperatorServer(): Promise<http.Server> {
   logOverrideDiagnostics(assertOverrideStartupPolicy(process.env));
   const config = resolveDatabaseConfig(process.env);
   const dbInstance = createDatabaseInstance(config);
+  // P0-01: expose the durable DB to the pilot guard/budget paths (registry-
+  // backed authority). Without it, any pilot call fails closed.
+  setOperatorPilotDb(dbInstance.db);
   const store = new FactoryStore(dbInstance.db);
   const intake = new ProjectIntakeStore(dbInstance.db);
   const searchStore = new SearchStore(dbInstance.db);
   const search = buildSearchIntelligenceService({ intake, searchStore });
   const competitorStore = new CompetitorStore(dbInstance.db);
-  const { competitorAnalyst, gapAnalyst } = buildCompetitorAnalysts(process.env, invokeModel);
+  const competitorPilotGranted = isMergePilotRequested(process.env)
+    ? {
+        db: dbInstance.db,
+        grantFactory: async () => {
+          const { resolvePilotGrant } = await import("../models/merge-pilot-guard.js");
+          return await resolvePilotGrant({
+            db: dbInstance.db,
+            projectId: (process.env["FACTORY_MERGE_PILOT_PROJECT_ID"] ?? "").trim(),
+            runId: (process.env["FACTORY_MERGE_PILOT_RUN_ID"] ?? "").trim(),
+            role: "competitor_site_analysis",
+            env: process.env as Record<string, string | undefined>,
+          });
+        },
+      }
+    : null;
+  const { competitorAnalyst, gapAnalyst } = buildCompetitorAnalysts(process.env, invokeModel, competitorPilotGranted);
   const competitorMode = process.env.FACTORY_COMPETITOR_MODE === "fixture" ? "fixture" : "production";
   const competitors = new CompetitorContentGapService({
     intake,

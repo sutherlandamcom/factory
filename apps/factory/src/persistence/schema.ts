@@ -9,6 +9,7 @@ import {
   timestamp,
   jsonb,
   unique,
+  uniqueIndex,
   check,
   index,
   foreignKey,
@@ -927,6 +928,81 @@ export const writerBudgetReservations = pgTable(
 export type WriterBudgetReservationRecord = typeof writerBudgetReservations.$inferSelect;
 export type InsertWriterBudgetReservation = typeof writerBudgetReservations.$inferInsert;
 
+// ---------------------------------------------------------------------------
+// Merge Gateway TEST pilot authority (P0-01) — registry-backed TEST-ONLY
+// authority, revocable, bound to an exact project id. Registration is a
+// trusted application service, never a browser-selectable route.
+// ---------------------------------------------------------------------------
+
+export const mergePilotProfiles = pgTable(
+  "merge_pilot_profiles",
+  {
+    id: text("id").primaryKey(),
+    profileVersion: text("profile_version").notNull(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    /** Array of allowed role ids (subset of the pinned pilot roles). */
+    allowedRoles: jsonb("allowed_roles").$type<string[]>().notNull(),
+    /** Whole-pilot budget ceiling in USD micros (hard max $2 via check). */
+    budgetLimitMicros: integer("budget_limit_micros").notNull().default(2_000_000),
+    /** 'ACTIVE' | 'REVOKED' | 'BLOCKED' */
+    state: text("state").notNull().default("ACTIVE"),
+    /** Pinned false by a check constraint: pilot artifacts never publish. */
+    publicationAuthority: boolean("publication_authority").notNull().default(false),
+    approvedBy: text("approved_by").notNull(),
+    approvedAt: timestamp("approved_at", { withTimezone: true }).defaultNow().notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    /** RFC8785 digest over the authoritative fields. */
+    profileDigest: text("profile_digest").notNull(),
+  },
+  (table) => [
+    check("merge_pilot_profiles_state_valid", sql`${table.state} IN ('ACTIVE', 'REVOKED', 'BLOCKED')`),
+    check("merge_pilot_profiles_provider_valid", sql`${table.provider} = 'merge'`),
+    check("merge_pilot_profiles_model_valid", sql`${table.model} = 'zai/glm-5.3-flash'`),
+    check("merge_pilot_profiles_publication_authority_false", sql`${table.publicationAuthority} = false`),
+    check(
+      "merge_pilot_profiles_budget_limit_range",
+      sql`${table.budgetLimitMicros} > 0 AND ${table.budgetLimitMicros} <= 2000000`,
+    ),
+    uniqueIndex("merge_pilot_profiles_project_version_key")
+      .on(table.projectId, table.profileVersion)
+      .where(sql`${table.state} <> 'REVOKED'`),
+    index("merge_pilot_profiles_project_idx").on(table.projectId),
+  ],
+);
+
+export type MergePilotProfileRecord = typeof mergePilotProfiles.$inferSelect;
+export type InsertMergePilotProfile = typeof mergePilotProfiles.$inferInsert;
+
+export const mergePilotRuns = pgTable(
+  "merge_pilot_runs",
+  {
+    id: text("id").primaryKey(),
+    profileId: text("profile_id")
+      .notNull()
+      .references(() => mergePilotProfiles.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    /** 'ACTIVE' | 'CLOSED' | 'REVOKED' */
+    state: text("state").notNull().default("ACTIVE"),
+    note: text("note"),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+  },
+  (table) => [
+    check("merge_pilot_runs_state_valid", sql`${table.state} IN ('ACTIVE', 'CLOSED', 'REVOKED')`),
+    // Profile/project binding enforced by trigger (PG disallows CHECK subqueries).
+    index("merge_pilot_runs_profile_idx").on(table.profileId, table.state),
+  ],
+);
+
+export type MergePilotRunRecord = typeof mergePilotRuns.$inferSelect;
+export type InsertMergePilotRun = typeof mergePilotRuns.$inferInsert;
+
 // ---- Writer pipeline (Macro Run 4) -----------------------------------------
 
 /**
@@ -1068,11 +1144,33 @@ export const pageContentProposals = pgTable(
     overriddenChampion: text("overridden_champion"),
     data: jsonb("data").notNull(),
     proposalDigest: text("proposal_digest").notNull(),
+    // P0-01 pilot provenance (additive): champion rows keep null pilot cols.
+    pilotProfileId: text("pilot_profile_id"),
+    pilotProfileVersion: text("pilot_profile_version"),
+    pilotRunId: text("pilot_run_id"),
+    gatewayRole: text("gateway_role"),
+    requestDigest: text("request_digest"),
+    responseDigest: text("response_digest"),
+    providerReportedCostMicros: integer("provider_reported_cost_micros"),
+    policyEstimatedCostMicros: integer("policy_estimated_cost_micros"),
+    accountedCostMicros: integer("accounted_cost_micros"),
+    /** 'champion' | 'pilot_no_publication' */
+    authorityStatus: text("authority_status").notNull().default("champion"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     unique("page_content_proposals_project_version_unique").on(table.projectId, table.version),
     index("page_content_proposals_project_idx").on(table.projectId, table.version),
+    check(
+      "page_content_proposals_authority_valid",
+      sql`${table.authorityStatus} IN ('champion', 'pilot_no_publication')`,
+    ),
+    check(
+      "page_content_proposals_authority_provenance",
+      sql`(${table.authorityStatus} = 'pilot_no_publication' AND ${table.pilotProfileId} IS NOT NULL AND ${table.pilotRunId} IS NOT NULL)
+          OR (${table.authorityStatus} = 'champion' AND ${table.pilotProfileId} IS NULL AND ${table.pilotRunId} IS NULL)`,
+    ),
+    index("page_content_proposals_authority_idx").on(table.authorityStatus),
   ],
 );
 
